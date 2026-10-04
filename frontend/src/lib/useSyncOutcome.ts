@@ -4,11 +4,13 @@
  * covering the campaign); `useSyncOutcome({ brandId, jobId, campaignId? })` reads `GET …/sync-jobs/{id}` and its
  * `outcome` (scoped to `campaignId` when given). It reads at once, then every 3 s while the state is `running`, stops
  * when the read finished (found, empty, partial or failed), and aborts on unmount. `refresh()` reads once more (after
- * the caller requested a new read) and polls again while it runs.
+ * the caller requested a new read) and polls again while it runs; until that read answers the hook says `running`, so a
+ * screen that refreshes right after its POST never prints the previous read's `found` as this read's outcome (a failed
+ * outcome request then falls back to the last answered outcome, with `error`).
  *
  * This hook is the only reader of a sync job's status and error (`oneRuler.test.ts` forbids `.job.status`,
  * `.job.error` and `syncJob(` anywhere else): a screen prints `text` and branches on `state`／`code`. */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { syncJob, syncOutcome, type SyncOutcome } from "./adsExternalApi";
 
 export const SYNC_POLL_MS = 3000;
@@ -32,6 +34,9 @@ export interface SyncOutcomeRead {
 interface Snapshot { state: SyncOutcome["state"] | null; code: string | null; text: string; lastSuccessAt: string | null; error: string | null }
 
 const EMPTY: Snapshot = { state: null, code: null, text: "", lastSuccessAt: null, error: null };
+/** What `refresh()` shows until the new read answers: the server's own `running` sentence (`external_sync.SYNC_TEXT`
+ * arrives with the first answer and replaces it). */
+const REFRESHING_TEXT = "正在讀取平台資料";
 
 export function useSyncOutcome(target: SyncTarget): SyncOutcomeRead {
   const { brandId } = target;
@@ -39,6 +44,8 @@ export function useSyncOutcome(target: SyncTarget): SyncOutcomeRead {
   const campaignId = target.campaignId ?? null;
   const [snapshot, setSnapshot] = useState<Snapshot>(EMPTY);
   const [round, setRound] = useState(0);
+  /** The last outcome the server answered — what a failed outcome request falls back to after `refresh()`. */
+  const answered = useRef<Snapshot>(EMPTY);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -55,11 +62,12 @@ export function useSyncOutcome(target: SyncTarget): SyncOutcomeRead {
           next = { state: outcome.state, code: outcome.code, text: outcome.text, lastSuccessAt: outcome.last_success_at, error: null };
         } else return;
         if (controller.signal.aborted) return;
+        answered.current = next;
         setSnapshot(next);
         if (next.state === "running") timer = setTimeout(() => void read(), SYNC_POLL_MS);
       } catch (e) {
         if (controller.signal.aborted) return;
-        setSnapshot((prev) => ({ ...prev, error: e instanceof Error ? e.message : "讀取同步結果失敗。" }));
+        setSnapshot({ ...answered.current, error: e instanceof Error ? e.message : "讀取同步結果失敗。" });
       }
     }
     void read();
@@ -69,6 +77,9 @@ export function useSyncOutcome(target: SyncTarget): SyncOutcomeRead {
     };
   }, [brandId, jobId, campaignId, round]);
 
-  const refresh = useCallback(() => setRound((n) => n + 1), []);
+  const refresh = useCallback(() => {
+    setSnapshot((prev) => ({ ...prev, state: "running", code: null, text: REFRESHING_TEXT, error: null }));
+    setRound((n) => n + 1);
+  }, []);
   return { ...snapshot, refresh };
 }

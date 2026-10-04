@@ -74,6 +74,22 @@ describe("useSyncOutcome", () => {
     expect(mockJob).toHaveBeenCalledTimes(2);
   });
 
+  it("refresh() says running until the new read answers — never the previous read's found", async () => {
+    mockJob.mockResolvedValueOnce(jobRead("found", "已讀到平台資料"));
+    const { result } = renderHook(() => useSyncOutcome({ brandId: "b1", jobId: "aes_1" }));
+    await waitFor(() => expect(result.current.state).toBe("found"));
+    let answer: (value: ReturnType<typeof jobRead>) => void = () => {};
+    mockJob.mockImplementationOnce(() => new Promise((resolve) => { answer = resolve; }));
+    act(() => result.current.refresh());
+    expect(result.current.state).toBe("running");
+    expect(result.current.text).not.toBe("已讀到平台資料");
+    await waitFor(() => expect(mockJob).toHaveBeenCalledTimes(2));
+    expect(result.current.state).toBe("running");
+    await act(async () => { answer(jobRead("partial", "有部分平台資料沒讀到：平台暫時沒有回應，稍後會再試", "source_error")); });
+    await waitFor(() => expect(result.current.state).toBe("partial"));
+    expect(result.current.code).toBe("source_error");
+  });
+
   it("a failed outcome request keeps the last outcome and says the read failed", async () => {
     mockCampaign.mockResolvedValueOnce(campaignRead("empty", "沒有讀到資料：平台在這段期間沒有回傳任何資料", "no_rows"))
       .mockRejectedValueOnce(new Error("讀取同步結果失敗。"));

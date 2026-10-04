@@ -45,4 +45,4 @@ export { TreeRows, type TreeGroup, type TreeLeaf, type TreeNodeInfo } from "./Tr
 export { CHANGE_STATE_LABEL, CHANGE_STATE_TONE, ChangeTimeline, type ChangeRow, type ChangeState } from "./ChangeTimeline";
 export { PickCard, PickGroup } from "./PickCard";
 export { MoneyInput } from "./MoneyInput";
-export { CAMPAIGN_WORD, campaignWord, closedWord, nativeStatusWord } from "./campaignWords";
+export { campaignWord, closedWord } from "./campaignWords";

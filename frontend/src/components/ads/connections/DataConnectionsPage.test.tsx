@@ -17,7 +17,7 @@ vi.mock("@/lib/adsConnectionsApi", async () => {
   const actual = await vi.importActual<typeof import("@/lib/adsConnectionsApi")>("@/lib/adsConnectionsApi");
   return { ...actual, getConnections: vi.fn() };
 });
-vi.mock("@/lib/adsExternalApi", () => ({ refreshExisting: vi.fn(), syncJob: vi.fn() }));
+vi.mock("@/lib/adsExternalApi", () => ({ refreshExisting: vi.fn(), syncJob: vi.fn(), syncOutcome: vi.fn() }));
 
 const iso = (d: number) => `2026-09-${String(d).padStart(2, "0")}`;
 const range = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, i) => iso(from + i));
@@ -135,25 +135,61 @@ describe("重新讀取 (F47-I08, Contract H, drill-10 R6)", () => {
     expect(within(failed).getByText("Meta 暫時讀不到（代碼 2）；09/17、09/18 讀不到")).toBeTruthy();
   });
 
-  it("posts the refresh with the server's range, waits on the job, then reads the page again", async () => {
+  const job = { id: "aes_1", status: "pending", last_success_at: null };
+  const answer = (state: "running" | "found" | "partial" | "failed" | "empty", text: string, code: string | null = null) =>
+    ({ job, connected: true, outcome: { state, code, text } });
+
+  it("posts the refresh with the server's range, follows the job's outcome, then reads the page again", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
-      vi.mocked(refreshExisting).mockResolvedValue({ job: { id: "aes_1", status: "pending", last_success_at: null } });
-      vi.mocked(syncJob).mockResolvedValueOnce({ job: { id: "aes_1", status: "running", last_success_at: null }, connected: true })
-        .mockResolvedValueOnce({ job: { id: "aes_1", status: "succeeded", last_success_at: "2026-09-23T02:00:00Z" }, connected: true });
+      vi.mocked(refreshExisting).mockResolvedValue({ job });
+      vi.mocked(syncJob).mockResolvedValueOnce(answer("running", "正在讀取平台資料"))
+        .mockResolvedValueOnce(answer("found", "已讀到平台資料"));
       renderPage();
       await screen.findByText("Meta 廣告帳戶・示例品牌主帳戶");
       await userEvent.click(within(row("Meta 廣告帳戶・新品測試帳戶")).getByRole("button", { name: "重新讀取" }));
       expect(refreshExisting).toHaveBeenCalledWith("brd_1", "meta", "act_3", { start: "2026-08-26", end: "2026-09-22" });
-      expect(within(row("Meta 廣告帳戶・新品測試帳戶")).getByRole("button", { name: "讀取中…" }).hasAttribute("disabled")).toBe(true);
+      expect((await within(row("Meta 廣告帳戶・新品測試帳戶")).findByRole("button", { name: "讀取中…" })).hasAttribute("disabled")).toBe(true);
       expect(getConnections).toHaveBeenCalledTimes(1);
-      await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
       await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
       await waitFor(() => expect(getConnections).toHaveBeenCalledTimes(2));
       expect(syncJob).toHaveBeenCalledTimes(2);
+      expect(syncJob).toHaveBeenCalledWith("brd_1", "aes_1", expect.any(AbortSignal), undefined);
+      expect(within(row("Meta 廣告帳戶・新品測試帳戶")).getByText("已讀到平台資料")).toBeTruthy();
+      expect(screen.queryByTestId("connections-loading")).toBeNull();
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("a partial re-read prints its reason on the row and keeps it after the page reads again (F49-I14)", async () => {
+    const reason = "有部分平台資料沒讀到：資料量超過一次可讀的上限，這次沒有讀完";
+    vi.mocked(refreshExisting).mockResolvedValue({ job });
+    vi.mocked(syncJob).mockResolvedValue(answer("partial", reason, "page_limit"));
+    renderPage();
+    await screen.findByText("Meta 廣告帳戶・示例品牌主帳戶");
+    await userEvent.click(within(row("Meta 廣告帳戶・新品測試帳戶")).getByRole("button", { name: "重新讀取" }));
+    const said = await within(row("Meta 廣告帳戶・新品測試帳戶")).findByText(reason);
+    expect(said.getAttribute("data-state")).toBe("partial");
+    await waitFor(() => expect(getConnections).toHaveBeenCalledTimes(2));
+    expect(within(row("Meta 廣告帳戶・新品測試帳戶")).getByText(reason)).toBeTruthy();
+    expect(within(row("Meta 廣告帳戶・新品測試帳戶")).getByRole("button", { name: "重新讀取" })).toBeTruthy();
+  });
+
+  it("a failed re-read says why, even once the row no longer asks for a re-read", async () => {
+    const reason = "這次沒讀到平台資料：平台授權已失效或權限不足，請重新授權";
+    vi.mocked(refreshExisting).mockResolvedValue({ job });
+    vi.mocked(syncJob).mockResolvedValue(answer("failed", reason, "permission_denied"));
+    const after = fixture();
+    after.sources[2] = { ...after.sources[2], state: "auth_expired", reread: null, note: "授權已失效" };
+    vi.mocked(getConnections).mockResolvedValueOnce(fixture()).mockResolvedValueOnce(after);
+    renderPage();
+    await screen.findByText("Meta 廣告帳戶・示例品牌主帳戶");
+    await userEvent.click(within(row("Meta 廣告帳戶・新品測試帳戶")).getByRole("button", { name: "重新讀取" }));
+    await waitFor(() => expect(getConnections).toHaveBeenCalledTimes(2));
+    await within(row("Meta 廣告帳戶・新品測試帳戶")).findByText("授權已失效");
+    expect(within(row("Meta 廣告帳戶・新品測試帳戶")).getByText(reason)).toBeTruthy();
+    expect(within(row("Meta 廣告帳戶・新品測試帳戶")).queryByRole("button", { name: /重新讀取|讀取中/ })).toBeNull();
   });
 
   it("a refused refresh shows the server's sentence on the row and the button comes back", async () => {

@@ -3,11 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter, useLocation } from "react-router-dom";
 import type { CampaignDetail } from "@/lib/adsApi";
 import { patchCampaign } from "@/lib/adsApi";
-import { existingCampaigns, externalView, importExisting, refreshExisting, type ExistingPage, type ExternalView, type NativeEntity } from "@/lib/adsExternalApi";
+import { existingCampaigns, externalView, importExisting, refreshExisting, syncCampaign, syncJob, syncOutcome, type ExistingPage, type ExternalView, type NativeEntity, type SyncOutcome } from "@/lib/adsExternalApi";
 import { ExistingCampaignDialog } from "./ExistingCampaignDialog";
 import { ExternalCampaignPanel } from "./ExternalCampaignPanel";
 
-vi.mock("@/lib/adsExternalApi", () => ({ existingCampaigns: vi.fn(), externalView: vi.fn(), importExisting: vi.fn(), refreshExisting: vi.fn(), syncCampaign: vi.fn(), syncJob: vi.fn() }));
+vi.mock("@/lib/adsExternalApi", () => ({ existingCampaigns: vi.fn(), externalView: vi.fn(), importExisting: vi.fn(), refreshExisting: vi.fn(), syncCampaign: vi.fn(), syncJob: vi.fn(), syncOutcome: vi.fn() }));
 vi.mock("@/lib/adsApi", () => ({ patchCampaign: vi.fn() }));
 
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(r => { resolve = r; }); return { promise, resolve }; }
@@ -17,7 +17,17 @@ function view(overrides: Partial<ExternalView> = {}): ExternalView { return { en
 function campaign(id = "cmp_1"): CampaignDetail { return { id, name: id, origin: "imported", goal_text: "增加來店", objective: "增加來店", cap: { value: null, basis: null, own_value: null, break_even: null, price: null, product_id: null, result_kind: "purchase", result_label: "購買", missing: ["product"], revision: 0 }, start_date: null, end_date: null, status: "ready", budget_planned: null, budget_scenario: null, budget_basis_json: {}, budget_total: null, context_json: {}, constraints_json: {}, verdict: null, verdict_json: {}, closed_at: null, created_by: null, created_at: "2026-09-18", groups: [], actions: [], outcome: { spend: null, purchases: null, revenue: null }, asset_readiness: { ready_count: 0, total: 0, pack_id: null }, external_id: null, external_name: null, external_status: null, local_state: "unbound", bound_at: null }; }
 function Location() { return <output data-testid="location">{useLocation().pathname}</output>; }
 function openDialog() { const mounted = render(<MemoryRouter><ExistingCampaignDialog brandId="brand_1" /><Location /></MemoryRouter>); fireEvent.click(screen.getByRole("button", { name: "加入既有活動" })); return mounted; }
-beforeEach(() => { vi.resetAllMocks(); vi.mocked(existingCampaigns).mockResolvedValue(page()); vi.mocked(externalView).mockResolvedValue(view()); });
+const newJob = { id: "job_new", status: "pending", last_success_at: null };
+/** `GET …/sync-jobs/{id}` with the served outcome (F49 Contract O). */
+const jobAnswer = (state: SyncOutcome["state"], text: string, code: string | null = null) => ({ job: newJob, connected: true, outcome: { state, code, text } });
+const campaignAnswer = (state: SyncOutcome["state"], text: string, code: string | null = null) => ({ state, code, text, job_ids: ["job_new"], last_success_at: null });
+beforeEach(() => {
+  vi.resetAllMocks(); vi.mocked(existingCampaigns).mockResolvedValue(page()); vi.mocked(externalView).mockResolvedValue(view());
+  // Opening the list posts a read (the listing GET is read-only); it stays running unless a test answers otherwise.
+  vi.mocked(refreshExisting).mockResolvedValue({ job: newJob });
+  vi.mocked(syncJob).mockResolvedValue(jobAnswer("running", "正在讀取平台資料"));
+  vi.mocked(syncOutcome).mockResolvedValue(campaignAnswer("found", "已讀到平台資料"));
+});
 afterEach(cleanup);
 
 describe("既有活動來源與原始資料", () => {
@@ -44,18 +54,18 @@ describe("既有活動來源與原始資料", () => {
     expect(screen.queryByText("過期甲活動")).toBeNull(); expect(screen.queryByText("乙活動")).not.toBeNull();
   });
 
-  it("F47-I08：平台狀態說中文、日期與最近成功不印 ISO、已在工作區的活動標出來並改成打開", async () => {
+  it("F47-I08／F49-I14：平台狀態印伺服器給的 delivery_label、日期與最近成功不印 ISO、已在工作區的活動標出來並改成打開", async () => {
     const listed = page("101", ["已納入活動", "新活動"]);
-    listed.items[0] = { ...listed.items[0], campaign_id: "cmp_in", snapshot: { ...entity("已納入活動"), native_status: "ACTIVE", start_date: "2026-10-03", end_date: "2026-10-09" } };
-    listed.items[1] = { ...listed.items[1], snapshot: { ...entity("新活動"), native_status: "WITH_ISSUES" } };
+    listed.items[0] = { ...listed.items[0], campaign_id: "cmp_in", delivery_label: "投放中", snapshot: { ...entity("已納入活動"), native_status: "ACTIVE", start_date: "2026-10-03", end_date: "2026-10-09" } };
+    listed.items[1] = { ...listed.items[1], delivery_label: "有問題", snapshot: { ...entity("新活動"), native_status: "WITH_ISSUES" } };
     listed.job = { id: "job_1", status: "succeeded", last_success_at: "2026-10-01T15:10:33.055275+00:00" };
     vi.mocked(existingCampaigns).mockResolvedValue(listed);
     openDialog(); await screen.findByText("已納入活動");
-    expect(screen.getByText("開啟中 · 10/03 – 10/09")).not.toBeNull();
-    expect(screen.getByText("平台狀態不明 · 開始日未知 – 結束日未知")).not.toBeNull();
+    expect(screen.getByText("投放中 · 10/03 – 10/09")).not.toBeNull();
+    expect(screen.getByText("有問題 · 開始日未知 – 結束日未知")).not.toBeNull();
     expect(screen.queryByText(/ACTIVE|WITH_ISSUES|2026-10-01T/)).toBeNull();
     const d = new Date("2026-10-01T15:10:33.055275+00:00"); const pad = (n: number) => String(n).padStart(2, "0");
-    expect(screen.getByText(new RegExp(`最近成功：${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`))).not.toBeNull();
+    expect(await screen.findByText(new RegExp(`正在讀取平台資料 · 最近成功：${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`))).not.toBeNull();
     expect(screen.getByText("已在工作區")).not.toBeNull();
     expect(screen.getAllByRole("button", { name: "納入並開啟" })).toHaveLength(1);
     fireEvent.click(screen.getByRole("button", { name: "打開" }));
@@ -74,15 +84,19 @@ describe("既有活動來源與原始資料", () => {
     expect(existingCampaigns).toHaveBeenCalledTimes(1);
   });
 
-  it("unknown度量保持未知，購買收入與真正零值分開；同步失敗與涵蓋範圍獨立顯示", async () => {
+  it("unknown度量保持未知，購買收入與真正零值分開；讀取結果（served outcome）與涵蓋範圍獨立顯示", async () => {
+    vi.mocked(syncOutcome).mockResolvedValue(campaignAnswer("partial", "有部分平台資料沒讀到：資料量超過一次可讀的上限，這次沒有讀完", "page_limit"));
     vi.mocked(externalView).mockResolvedValue(view({ observations: [{ id: "day_1", entity_id: "活動根", day: "2026-09-17", metric_scope: "ad", attribution_key: "7d_click", currency: "TWD", spend: 0, impressions: null, clicks: null, purchases: null, revenue: null, availability: {} }], sync: { structure: { status: "success", last_success_at: "2026-09-18" }, observations: { status: "error", error: "分頁失敗，保留上次資料" } }, coverage: { structure: { complete: true }, observations: null } }));
     render(<ExternalCampaignPanel brandId="brand_1" campaign={campaign()} onCampaignChange={vi.fn()} />);
-    await screen.findByText("分頁失敗，保留上次資料");
+    await screen.findByText("有部分平台資料沒讀到：資料量超過一次可讀的上限，這次沒有讀完");
+    await screen.findByText(/^原始成效 ·/);
+    // The section rows carry no raw status code or task error of their own (Contract O: one outcome).
+    expect(screen.queryByText(/success|分頁失敗/)).toBeNull();
     fireEvent.click(screen.getByText(/^原始成效 ·/));
     const row = screen.getByText("2026-09-17").closest("tr")!; const cells = within(row).getAllByRole("cell");
     expect(cells.slice(4).map(c => c.textContent)).toEqual(["0", "未知", "未知", "未知", "未知"]);
     expect(screen.queryByText(/資料涵蓋範圍：未知／尚未完整/)).not.toBeNull();
-    expect(screen.queryByText(/原生結構：success/)).not.toBeNull();
+    expect(screen.queryByText(/原生結構：最近成功 2026-09-18/)).not.toBeNull();
   });
 
   it("總提示採用已保存的分區成功時間，即使原生節點沒有成功時間", async () => {
@@ -139,5 +153,62 @@ describe("既有活動來源與原始資料", () => {
     mounted.rerender(<ExternalCampaignPanel brandId="brand_2" campaign={campaign("cmp_2")} onCampaignChange={changed} />);
     await act(async () => pending.resolve(campaign()));
     expect(changed).not.toHaveBeenCalled();
+  });
+
+  it("F49-I14：打開清單就送出一次讀取，讀完印出伺服器的結果並重讀快取清單", async () => {
+    vi.mocked(syncJob).mockResolvedValueOnce(jobAnswer("found", "已讀到平台資料"));
+    vi.mocked(existingCampaigns).mockResolvedValueOnce(page("101", ["甲活動"])).mockResolvedValueOnce(page("101", ["甲活動", "剛讀到的活動"]));
+    openDialog(); await screen.findByText("甲活動");
+    await waitFor(() => expect(refreshExisting).toHaveBeenCalledWith("brand_1", "meta", "101"));
+    expect(await screen.findByText(/^已讀到平台資料 · 最近成功/)).not.toBeNull();
+    expect(await screen.findByText("剛讀到的活動")).not.toBeNull();
+    expect(syncJob).toHaveBeenCalledWith("brand_1", "job_new", expect.any(AbortSignal), undefined);
+    expect(existingCampaigns).toHaveBeenCalledTimes(2);
+  });
+
+  it("F49-I14：更新清單後部分沒讀到，說出原因（不是固定的「已排入」）", async () => {
+    openDialog(); await screen.findByText("甲活動");
+    await screen.findByText(/^正在讀取平台資料/);
+    vi.mocked(refreshExisting).mockResolvedValueOnce({ job: { ...newJob, id: "job_2" } });
+    vi.mocked(syncJob).mockResolvedValue(jobAnswer("partial", "有部分平台資料沒讀到：平台暫時沒有回應，稍後會再試", "source_error"));
+    fireEvent.click(screen.getByRole("button", { name: "更新清單" }));
+    const line = await screen.findByText(/^有部分平台資料沒讀到：平台暫時沒有回應，稍後會再試/);
+    expect(line.getAttribute("data-state")).toBe("partial");
+    expect(vi.mocked(syncJob).mock.calls.at(-1)?.[1]).toBe("job_2");
+  });
+
+  it("F49-I14：帳號讀不到時仍列出快取的活動與失敗原因，不另外送出讀取", async () => {
+    const cached: ExistingPage = { ...page("101", ["快取甲活動", "快取乙活動"]), job: null, outcome: { state: "failed", code: "disconnected", text: "這次沒讀到平台資料：廣告帳戶已解除連結或不屬於這個品牌，請到設定重新連接" } };
+    vi.mocked(existingCampaigns).mockResolvedValue(cached);
+    openDialog();
+    expect(await screen.findByText("快取甲活動")).not.toBeNull();
+    expect(screen.getByText("快取乙活動")).not.toBeNull();
+    const line = screen.getByText(/^這次沒讀到平台資料：廣告帳戶已解除連結或不屬於這個品牌，請到設定重新連接 · 最近成功：尚未成功讀回/);
+    expect(line.getAttribute("data-state")).toBe("failed");
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(refreshExisting).not.toHaveBeenCalled();
+  });
+
+  it("F49-I14：既有活動面板重新讀取後跟著讀取結果，失敗說出原因，讀完再載入原始資料", async () => {
+    vi.mocked(syncCampaign).mockResolvedValue({ job: newJob, jobs: [newJob] });
+    render(<ExternalCampaignPanel brandId="brand_1" campaign={campaign()} onCampaignChange={vi.fn()} />);
+    await screen.findByText("已讀到平台資料");
+    expect(externalView).toHaveBeenCalledTimes(1);
+    let answer: (value: ReturnType<typeof campaignAnswer>) => void = () => {};
+    vi.mocked(syncOutcome).mockImplementationOnce(() => new Promise(r => { answer = r; }));
+    fireEvent.click(screen.getByRole("button", { name: "重新讀取平台" }));
+    expect(await screen.findByRole("button", { name: "同步中…" })).not.toBeNull();
+    expect(screen.queryByText("已讀到平台資料")).toBeNull();
+    await act(async () => answer(campaignAnswer("failed", "這次沒讀到平台資料：平台授權已失效或權限不足，請重新授權", "permission_denied")));
+    expect(await screen.findByText("這次沒讀到平台資料：平台授權已失效或權限不足，請重新授權")).not.toBeNull();
+    await waitFor(() => expect(externalView).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole("button", { name: "重新讀取平台" })).not.toBeNull();
+  });
+
+  it("F49-I14：原生結構印 delivery_label，不印平台代碼", async () => {
+    vi.mocked(externalView).mockResolvedValue(view({ entities: [{ ...entity("活動根"), delivery_label: "已暫停" }] }));
+    render(<ExternalCampaignPanel brandId="brand_1" campaign={campaign()} onCampaignChange={vi.fn()} />);
+    await screen.findByText(/活動 · 活動根 · 已暫停/);
+    expect(screen.queryByText(/PAUSED/)).toBeNull();
   });
 });
