@@ -205,6 +205,8 @@ export interface QueuePauseProposal {
   change_set_id: string; campaign_id: string;
   status: "draft" | "approved" | "rejected" | "deferred";
   verification_state: "pending" | "reported" | "confirmed" | "deviated" | "unknown" | "stale";
+  /** F49 Contract B: the served word of `verification_state` (`change_control_data.VERIFICATION_LABELS`). */
+  verification_label?: string | null;
   reason: string | null; revisit_at: string | null; multi: boolean;
 }
 
@@ -216,6 +218,8 @@ export interface QueueBudgetProposal {
   change_set_id: string; campaign_id: string;
   status: "draft" | "approved" | "rejected" | "deferred";
   verification_state: "pending" | "reported" | "confirmed" | "deviated" | "unknown" | "stale";
+  /** F49 Contract B: the served word of `verification_state` (`change_control_data.VERIFICATION_LABELS`). */
+  verification_label?: string | null;
   reason: string | null; revisit_at: string | null; multi: boolean;
 }
 
@@ -238,6 +242,8 @@ export interface QueueReviewProposal {
   change_set_id: string | null;
   change_set_status: "draft" | "approved" | "rejected" | "deferred" | null;
   verification_state: "pending" | "reported" | "confirmed" | "deviated" | "unknown" | "stale" | null;
+  /** F49 Contract B: the served word of `verification_state`, `null` with it. */
+  verification_label?: string | null;
   multi: boolean;
 }
 
@@ -251,6 +257,8 @@ export interface QueueCleanupProposal {
   change_set_id: string; campaign_id: string;
   status: "draft" | "approved" | "rejected" | "deferred";
   verification_state: "pending" | "reported" | "confirmed" | "deviated" | "unknown" | "stale";
+  /** F49 Contract B: the served word of `verification_state` (`change_control_data.VERIFICATION_LABELS`). */
+  verification_label?: string | null;
   reason: string | null; revisit_at: string | null; multi: boolean;
 }
 
@@ -266,8 +274,11 @@ export type QueueProposal =
 // `proposalAction`/`isQueueItemDone` widen together with it (this issue's touch covers both).
 // F29-I03: the backend's brand-level `"settle"` row is NOT a `QueueKind` -- `splitQueue` takes it
 // out of `items` into `QueuePayload.settle`, so every ad-row consumer keeps a non-null `triage`.
+// F49 Contract Q: widened with `"closeout"` (an ended campaign's row). Like `"settle"`, a closeout row carries no ad
+// (`triage: null`), so `splitQueue` takes it out of `items` into `QueuePayload.closeouts`; the kind is in the union for
+// `decisions.kinds`. Which kinds are decisions, and their board order, is served (`decisions.kinds`), never listed here.
 export type QueueKind =
-  | "stop_loss" | "worse" | "scale_budget" | "refresh_creative" | "insufficient_data" | "cleanup";
+  | "stop_loss" | "worse" | "scale_budget" | "refresh_creative" | "insufficient_data" | "cleanup" | "closeout";
 
 /** F25-I01: the budget owner a `scale_budget` row proposes to raise -- an adset, or the campaign
  * when the campaign holds the budget (`app/ads/triage_scale.py::scale_candidates`). `ads_count`
@@ -353,6 +364,14 @@ export interface QueueCleanup {
  * counts the ads that will be written (划算／太貴／沒賣出); `buckets` is the month's spend by grade
  * (`app/ads/period_grades.py::summarize`, same as the month review). The page reads
  * `adsSettleApi.ts::getSettle(brand, month)`. Exposed as `QueuePayload.settle`, never in `items`. */
+/** F49 Contract Q: the `closeout` row's own payload -- one per internal campaign whose lifecycle is `ended`
+ * (`app/ads/triage.py::_closeout_candidates`). `running` = the campaign's ads still running at the platform read
+ * (`lifecycle.running_view`; `read_at` that read, `null` when never read). Never done: it leaves when the campaign
+ * closes. Exposed as `QueuePayload.closeouts`, never in `items`. */
+export interface QueueCloseout {
+  campaign_id: string; campaign_name: string; end_date: string | null;
+  running: { count: number; read_at: string | null };
+}
 export interface QueueSettle {
   month: string; start: string; end: string;
   campaign_count: number; imported_count: number; learnable_count: number;
@@ -376,6 +395,15 @@ export interface QueueItem {
   /** F47 Contract D (`app/ads/queue_done.py`): the row no longer waits on the user (decided,
    * deferred, or its change confirmed). The only done rule — read it, never recompute it. */
   done: boolean;
+  /** F49 Contract Q (`queue_done.stamp`): the row is a decision the user is asked to make (counted); `false` on a
+   * notice (`scale_budget` on the money card, `insufficient_data` on the campaign row), which is never in the inbox.
+   * Always served; optional only for older hand-written fixtures. */
+  decision?: boolean;
+  /** F49 Contract Q: 1-based place among the open decision rows in board order (settle and closeout rows
+   * included) — 「第 N 件」; `null` on a done row or a notice. */
+  position?: number | null;
+  /** F49 Contract Q: the campaign the row belongs to (`null` on the brand's settle row). */
+  campaign_id?: string | null;
   scale?: QueueScale; refresh?: QueueRefresh; insufficient?: QueueInsufficient;
   cleanup?: QueueCleanup;
 }
@@ -386,7 +414,20 @@ export interface SettleQueueRow {
   message: string; action_url: string | null; visible_from: string | null;
   status: string; created_at: string;
   settle: QueueSettle;
+  /** F49 Contract Q: see `QueueItem.decision`／`position`／`done`. Optional for older fixtures. */
+  decision?: boolean; position?: number | null; done?: boolean;
 }
+/** F49 Contract Q: an ended campaign's open closeout row (`kind_key: "closeout"` on the wire, `triage: null`). */
+export interface CloseoutQueueRow {
+  id: string; dedupe_key: string; category: string; severity: AlertSeverity;
+  message: string; action_url: string | null; visible_from: string | null;
+  status: string; created_at: string;
+  campaign_id: string; decision: boolean; position: number | null; done: boolean;
+  closeout: QueueCloseout;
+}
+/** F49 Contract Q: the queue's decision count (`queue_done.stamp`) — `kinds` are the decision kinds in board order,
+ * `open` the open decision rows: 「共 M 件」, the top bar's `open_items` and the inbox's ads rows are this number. */
+export interface QueueDecisions { kinds: QueueKind[]; open: number }
 export interface QueuePayload {
   /** Ad-level rows only (every one carries its `triage` item). */
   items: QueueItem[]; counts: Record<TriageClass, number>; total_ads: number;
@@ -396,20 +437,31 @@ export interface QueuePayload {
   settle?: SettleQueueRow | null;
   /** F48-I02: the owners whose raise is held back on sample size. Always served; optional for older fixtures. */
   scale_hold?: QueueScaleHold[];
+  /** F49 Contract Q: the open closeout rows (ended campaigns), split out of `items` by `splitQueue`. Always set by
+   * `getQueue`/`refreshQueue`; optional only so existing hand-written payload fixtures stay valid. */
+  closeouts?: CloseoutQueueRow[];
+  /** F49 Contract Q: the served decision count. Always served; optional for older fixtures. */
+  decisions?: QueueDecisions;
 }
-/** The backend's queue as it arrives: ad rows plus, at most, one brand-level settle row. */
+/** The backend's queue as it arrives: ad rows plus, at most, one brand-level settle row, and the ended campaigns'
+ * closeout rows. */
 type WireSettleRow = SettleQueueRow & { kind_key: "settle"; triage: null };
-export type WireQueuePayload = Omit<QueuePayload, "items" | "settle"> & {
-  items: (QueueItem | WireSettleRow)[];
+type WireCloseoutRow = CloseoutQueueRow & { kind_key: "closeout"; triage: null };
+type WireRow = QueueItem | WireSettleRow | WireCloseoutRow;
+export type WireQueuePayload = Omit<QueuePayload, "items" | "settle" | "closeouts"> & {
+  items: WireRow[];
 };
 
-const isWireSettle = (row: QueueItem | WireSettleRow): row is WireSettleRow =>
+const isWireSettle = (row: WireRow): row is WireSettleRow =>
   (row as { kind_key: string }).kind_key === "settle";
+const isWireCloseout = (row: WireRow): row is WireCloseoutRow =>
+  (row as { kind_key: string }).kind_key === "closeout";
 
-/** F29-I03: the one type boundary for the brand-level settle row -- split once here, so no screen
- * that scans `items` ever meets a row without an ad. */
+/** F29-I03, F49 Contract Q: the one type boundary for the rows without an ad (the brand-level settle row, the ended
+ * campaigns' closeout rows) -- split once here, so no screen that scans `items` ever meets a row without an ad. */
 export function splitQueue(wire: WireQueuePayload): QueuePayload {
   const items: QueueItem[] = [];
+  const closeouts: CloseoutQueueRow[] = [];
   let settle: SettleQueueRow | null = null;
   for (const row of wire.items) {
     if (isWireSettle(row)) {
@@ -417,12 +469,20 @@ export function splitQueue(wire: WireQueuePayload): QueuePayload {
         id: row.id, dedupe_key: row.dedupe_key, category: row.category, severity: row.severity,
         message: row.message, action_url: row.action_url, visible_from: row.visible_from,
         status: row.status, created_at: row.created_at, settle: row.settle,
+        decision: row.decision, position: row.position, done: row.done,
       };
+    } else if (isWireCloseout(row)) {
+      closeouts.push({
+        id: row.id, dedupe_key: row.dedupe_key, category: row.category, severity: row.severity,
+        message: row.message, action_url: row.action_url, visible_from: row.visible_from,
+        status: row.status, created_at: row.created_at, campaign_id: row.campaign_id,
+        decision: row.decision, position: row.position, done: row.done, closeout: row.closeout,
+      });
     } else {
       items.push(row);
     }
   }
-  return { ...wire, items, settle };
+  return { ...wire, items, settle, closeouts };
 }
 
 /** F45-I05 Contract P (ads.md §6.49, `app/ads/triage_pause.py::pause_view`): the pause page's own read
@@ -457,7 +517,12 @@ export interface AdsRules {
     flags: Record<"few" | "relative" | "relative_no_cap", string>;
   };
   glossary: Record<"cap" | "on_target" | "watch" | "over" | "wasted" | "thin" | "money" | "notebook" | "break_even", string>;
+  /** F49 Contract Q (`triage.reasons()`): every `reason_code` an ad can carry, with its title, sentence and what fixes
+   * it (`resync` read the platform again, `connections` fix the data connection, `cap` set the cap／result, `wait`
+   * give it time, `null` nothing to do here). Screens look a code up here; they keep no table of codes. */
+  reasons: Record<string, AdsReason>;
 }
+export interface AdsReason { title: string; text: string; fix: "resync" | "connections" | "cap" | "wait" | null }
 
 export interface CampaignTarget extends CapView {
   campaign_id: string; product_ids: string[]; result_kinds: ResultKindOption[];
