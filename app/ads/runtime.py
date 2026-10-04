@@ -255,7 +255,7 @@ def resolve_alerts(conn, org, brand, campaign, *, keep=()):
     prefix, keep = _alert_prefix(campaign), set(keep)
     if not keep:
         _patch_runtime(conn, org, brand, campaign, {"alert_since": {}})
-    for row in interrupts.list_open(conn, brand_id=brand, category=ALERT_CATEGORY,
+    for row in interrupts.list_open(conn, org_id=org, brand_id=brand, category=ALERT_CATEGORY,
                                     archive_stale=False):
         if row["dedupe_key"].startswith(prefix) and row["dedupe_key"] not in keep:
             interrupts.resolve(conn, row["id"], actor="system", org_id=org)
@@ -425,8 +425,8 @@ def _sweep_unmonitored_alerts(conn, now, by_brand):
     swept = 0
     for (org, brand), monitored in by_brand.items():
         stale = set()
-        for row in interrupts.list_open(conn, brand_id=brand, category=ALERT_CATEGORY,
-                                        archive_stale=False):
+        for row in interrupts.list_open(conn, org_id=org, brand_id=brand,
+                                        category=ALERT_CATEGORY, archive_stale=False):
             parts = row["dedupe_key"].split(":")
             if len(parts) > 2 and parts[0] == "ads-runtime" and parts[1] not in monitored:
                 stale.add(parts[1])

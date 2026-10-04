@@ -1224,7 +1224,8 @@ class ChangeControlTest(unittest.TestCase):
         from app.core import interrupts
 
         return [r["dedupe_key"] for r in interrupts.list_open(
-            self.conn, brand_id=self.brand, category="ads_triage_cleanup", archive_stale=False,
+            self.conn, org_id=self.org, brand_id=self.brand, category="ads_triage_cleanup",
+            archive_stale=False,
         )]
 
     def test_a_cleanup_pause_confirmed_by_readback_leaves_the_inbox_in_the_same_call(self):

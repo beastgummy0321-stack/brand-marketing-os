@@ -12,17 +12,21 @@ reaches `doing` again after something re-queued it, and the retry SQL
 `doing`. So a `doing` job with `attempts >= 1` has already been re-queued — by this recovery
 or by any other retry — and a second strand fails it. The count survives any number of
 restarts because it lives on the job row.
+
+Queue clock (F50 Contract K exception): a re-queue's `retry_at` is the queue's own clock, the
+database `now()` procrastinate compares `scheduled_at` with -- never `db.now_utc()`. The drill
+worker patches `db.now_utc` to a later drill date, so a product-clock `retry_at` would park the
+re-queued job until the real clock caught up (`_queue_now`).
 """
 
 import asyncio
 from collections.abc import Collection
+from datetime import datetime
 
 import procrastinate
 from procrastinate.exceptions import UniqueViolation
 from procrastinate.jobs import Status
 from procrastinate.manager import QUEUEING_LOCK_CONSTRAINT
-
-from app.core import db
 
 # No prefix matching: adding a read-only task requires checking its side effects first.
 # The legacy Meta handlers recompute their existing date window on restart;
@@ -60,6 +64,12 @@ def recover(
     return asyncio.run(_recover(dsn, retry, fail, limit))
 
 
+async def _queue_now(connector) -> datetime:
+    """The queue's own clock: the database `now()` its fetch compares `scheduled_at` with."""
+    row = await connector.execute_query_one_async("SELECT now() AS now")
+    return row["now"]
+
+
 async def _recover(dsn: str, retry: frozenset[str], fail: frozenset[str], limit: int) -> dict:
     receipt: dict[str, list] = {key: [] for key in RECEIPT_KEYS}
     # A short-lived async app avoids mixing the worker's later event loop with the
@@ -92,7 +102,8 @@ async def _recover(dsn: str, retry: frozenset[str], fail: frozenset[str], limit:
                 receipt["stranded_again"].append({"id": job.id, "task_name": job.task_name})
                 continue
             try:
-                await manager.retry_job_by_id_async(job.id, retry_at=db.now_utc())
+                retry_at = await _queue_now(app.connector)
+                await manager.retry_job_by_id_async(job.id, retry_at=retry_at)
             except UniqueViolation as exc:
                 # Enqueue can race the initial check; its transaction is separate.
                 if exc.constraint_name != QUEUEING_LOCK_CONSTRAINT or not job.queueing_lock:

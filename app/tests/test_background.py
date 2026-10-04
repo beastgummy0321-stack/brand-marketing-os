@@ -638,6 +638,23 @@ class OrphanRecoveryTest(unittest.TestCase):
         self.assertEqual(job.queueing_lock, self.lock)
         self.assertEqual(job.attempts, 1)
 
+    def test_requeue_is_scheduled_on_the_queue_clock_not_the_product_clock(self):
+        """F50 Contract K exception: the drill worker moves `db.now_utc` to a later drill date;
+        a re-queued job must still be due on the queue's own clock (database `now()`), not
+        parked until the real clock reaches the drill date."""
+        job_id = self.seed("background.ads_external_sync", lock=self.lock)
+        drill_day = db.now_utc() + timedelta(days=30)
+        with mock.patch.object(db, "now_utc", return_value=drill_day):
+            receipt = background_module.recover_interrupted_jobs()
+        self.assertIn(job_id, receipt["retried_ids"])
+        with psycopg.connect(self.dsn) as conn:
+            row = conn.execute(
+                "SELECT scheduled_at, scheduled_at <= now() AS due FROM procrastinate_jobs"
+                " WHERE id = %s", (job_id,)).fetchone()
+        assert row is not None
+        self.assertTrue(row[1], f"re-queued job is parked until {row[0]}")
+        self.assertLess(row[0], drill_day - timedelta(days=29))
+
     def test_non_read_only_task_is_requeued_once_then_failed_on_second_strand(self):
         paid = self.seed("background.workbench_generate", lock=self.lock)
         unknown = self.seed("background.unregistered_task")

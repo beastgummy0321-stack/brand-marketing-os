@@ -141,7 +141,7 @@ class CloseResolvesTheQueueRowsTest(CloseoutTestBase):
 
         still_open = {
             row["dedupe_key"]
-            for row in interrupts.list_open(self.conn, brand_id=self.brand_id,
+            for row in interrupts.list_open(self.conn, org_id=self.org_id, brand_id=self.brand_id,
                                             archive_stale=False)
         }
         self.assertEqual(still_open & set(rows), {f"ads-triage:cleanup:{other['id']}:{day}"})
@@ -363,7 +363,8 @@ class CloseResolvesRuntimeAlertsTest(CloseoutTestBase):
     def _open_runtime_keys(self) -> set[str]:
         return {
             row["dedupe_key"] for row in interrupts.list_open(
-                self.conn, brand_id=self.brand_id, category="ads_runtime_attention",
+                self.conn, org_id=self.org_id, brand_id=self.brand_id,
+                category="ads_runtime_attention",
                 archive_stale=False,
             )
         }

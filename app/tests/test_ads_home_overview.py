@@ -504,7 +504,7 @@ class MonthEndTimezoneTest(unittest.TestCase):
         _obs(self.conn, self.org, self.brand, campaign, ad, date(2026, 9, 30), spend=70,
              count=1)
         classify = mock.patch.object(triage, "classify", return_value={"items": []})
-        clock = mock.patch.object(coresettings, "datetime", _Clock)
+        clock = mock.patch.object(db, "now_utc", return_value=_Clock.now_utc)
         classify.start()
         clock.start()
         self.addCleanup(classify.stop)

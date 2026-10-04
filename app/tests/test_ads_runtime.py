@@ -570,7 +570,7 @@ class MonitoredOnlyTest(unittest.TestCase):
     def _open_keys(self):
         return {
             row["dedupe_key"] for row in interrupts.list_open(
-                self.conn, brand_id=self.brand, category=runtime.ALERT_CATEGORY,
+                self.conn, org_id=self.org, brand_id=self.brand, category=runtime.ALERT_CATEGORY,
                 archive_stale=False,
             )
         }
@@ -725,7 +725,7 @@ class MonitoredOnlyTest(unittest.TestCase):
         key = self._episode_key("budget_unknown")
         row = next(
             row for row in interrupts.list_open(
-                self.conn, brand_id=self.brand, category=runtime.ALERT_CATEGORY,
+                self.conn, org_id=self.org, brand_id=self.brand, category=runtime.ALERT_CATEGORY,
                 archive_stale=False,
             ) if row["dedupe_key"] == key
         )

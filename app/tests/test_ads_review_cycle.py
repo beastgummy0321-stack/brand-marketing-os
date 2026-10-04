@@ -212,7 +212,8 @@ class ReviewCycleTest(unittest.TestCase):
                              (db.now_utc() + timedelta(days=1)).isoformat())
         self.assertNotIn(key, {
             r["dedupe_key"] for r in interrupts.list_open(
-                self.conn, brand_id=self.brand, category="ads_triage_worse", archive_stale=False,
+                self.conn, org_id=self.org, brand_id=self.brand, category="ads_triage_worse",
+                archive_stale=False,
             )
         })
 

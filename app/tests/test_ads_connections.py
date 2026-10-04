@@ -483,7 +483,7 @@ class ConnectionsTest(unittest.TestCase):
             "end": "2026-09-28", "completed_at": "2026-09-29T01:00:00+00:00"}})
         self.today.stop()  # the real `today_for_org`, on a clock at 00:30 of the 1st locally
         try:
-            with patch.object(coresettings, "datetime", _Clock):
+            with patch.object(db, "now_utc", return_value=local.astimezone(UTC)):
                 result = self._read()
         finally:
             self.today.start()

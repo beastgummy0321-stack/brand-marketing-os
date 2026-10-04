@@ -17,6 +17,8 @@ complete" (`last_complete_day`, `today_in`). Which clock answers which question:
 |   totals, home month cutoff, closeout, A/B, review evidence,      |   (the ad-account zone); else    |
 |   tracked zeros, connections proof)                               |   `last_complete_day` here       |
 | Today for one ad account (Meta daily pull)                        | `today_in(account zone)`         |
+| When may a queued job run (procrastinate `retry_at`／`schedule_at`)| the queue's own clock, SQL       |
+|   -- the one exception: the drill moves `db.now_utc` forward      |   `now()` (`recovery._queue_now`)|
 
 Nothing outside `app/core/db.py` asks the machine (`date.today()`, `datetime.now()`,
 `datetime.utcnow()`, `datetime.today()`, `time.time()`); month starts are `org_month_start`, never
