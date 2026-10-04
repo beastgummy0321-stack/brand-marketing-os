@@ -7,11 +7,14 @@ results, currency, cap). The program decides 留下／換掉; the planners only 
 
 - Who enters: a row whose spend and results are both known in one currency. Sold (results >= 1)
   rows rank by cost per sale (spend ÷ results) ascending, then more sales first, then name;
-  沒賣出 rows (known 0 results, spend > 0) follow, cheapest spend first. Anything else (unknown
-  results or spend, mixed currency, nothing spent) is not ranked and writes nothing.
+  沒賣出 rows (known 0 results, spend >= `triage.STOP_LOSS_SPEND_MULTIPLE` × cap -- the line
+  `triage.grade_window` grades 沒賣出 by) follow, cheapest spend first. Anything else (unknown
+  results or spend, mixed currency, a known zero under that line or with no cap -- triage's
+  剛開始 -- nothing spent) is not ranked and writes nothing (`waiting` names the known-zero case).
 - Verdict: cap known and cost <= cap -> `keep` 「留下」. When no sold row is <= cap (or there is
   no cap): sold rows with cost <= best × 1.3 -> `keep_relative` 「留下」 flagged
-  「相對最好，仍高於上限」 (no cap: 「相對最好」). Every other row, 沒賣出 included -> `replace`.
+  「相對最好，仍高於上限」 (no cap: 「相對最好」). Every other ranked row, 沒賣出 included ->
+  `replace`.
 - 「樣本少」 = 1–4 sales (`SAMPLE_FEW`, the prototype's constant).
 
 Also the stored scope string (`scope` / `parse_scope`) the closeout writes and every reader
@@ -56,10 +59,37 @@ def _known(row: dict) -> bool:
     )
 
 
+def _unsold_line(cap) -> float | None:
+    """The 沒賣出 line: `triage.STOP_LOSS_SPEND_MULTIPLE` × cap (F48 Contract R, the same line
+    `triage.grade_window` grades 沒賣出 by); `None` with no cap (a zero is never judged then)."""
+    from app.ads import triage  # lazy: triage imports this module
+
+    return None if cap is None else triage.STOP_LOSS_SPEND_MULTIPLE * cap
+
+
+def _is_unsold(spend: float, cap) -> bool:
+    line = _unsold_line(cap)
+    return line is not None and spend > 0 and spend >= line
+
+
+def waiting(row: dict, cap=None) -> bool:
+    """A known-zero row the ranking leaves out because its spend has not reached the 沒賣出 line
+    yet (triage calls it 剛開始) -- the reason a settle skip names. `cap` defaults to the row's
+    own. No cap -> `False` (nothing to wait for: the row is simply not judged)."""
+    if not _known(row) or int(row["results"]) != 0:
+        return False
+    cap = row.get("cap") if cap is None else cap
+    if cap is None:
+        return False
+    return not _is_unsold(float(row["spend"]), float(cap))
+
+
 def rank(rows: list[dict]) -> list[dict]:
     """Contract B over one campaign's `grade_period` rows. Each result row is the input row plus
     `sales`, `cost_per_sale` (None for 沒賣出), `verdict`, `verdict_label`, `flags`, `few`,
-    `rank`, `of`. Unknown and no-spend rows are left out."""
+    `rank`, `of`. Unknown rows, and known-zero rows under the 沒賣出 line (or with no cap), are
+    left out (F48-I13: one answer to "is this ad judged yet?")."""
+    cap = _cap(rows)
     sold, unsold = [], []
     for row in rows:
         if not _known(row):
@@ -68,12 +98,11 @@ def rank(rows: list[dict]) -> list[dict]:
         spend = float(row["spend"])
         if sales >= 1:
             sold.append({**row, "sales": sales, "spend": spend, "cost_per_sale": spend / sales})
-        elif spend > 0:
+        elif _is_unsold(spend, cap):
             unsold.append({**row, "sales": 0, "spend": spend, "cost_per_sale": None})
     sold.sort(key=lambda r: (r["cost_per_sale"], -r["sales"], r.get("name") or ""))
     unsold.sort(key=lambda r: (r["spend"], r.get("name") or ""))
 
-    cap = _cap(rows)
     any_under = cap is not None and any(r["cost_per_sale"] <= cap for r in sold)
     near = sold[0]["cost_per_sale"] * NEAR_BEST if sold else None
     ranked = []

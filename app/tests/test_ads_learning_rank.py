@@ -6,8 +6,9 @@ round trip.
 """
 
 import unittest
+from unittest import mock
 
-from app.ads import learning_rank
+from app.ads import learning_rank, triage
 
 
 def _row(name, spend, results, *, cap=450.0, currency="TWD"):
@@ -68,7 +69,7 @@ class OrderAndEdgeTest(unittest.TestCase):
 
     def test_unsold_rows_follow_the_sold_ones_cheapest_spend_first(self):
         ranked = learning_rank.rank([
-            _row("沒賣大", 900.0, 0), _row("賣", 400.0, 1), _row("沒賣小", 300.0, 0),
+            _row("沒賣大", 1900.0, 0), _row("賣", 400.0, 1), _row("沒賣小", 1400.0, 0),
         ])
         self.assertEqual([r["name"] for r in ranked], ["賣", "沒賣小", "沒賣大"])
         self.assertEqual([r["verdict"] for r in ranked], ["keep", "replace", "replace"])
@@ -87,7 +88,7 @@ class OrderAndEdgeTest(unittest.TestCase):
         )
 
     def test_no_sold_row_replaces_everything(self):
-        ranked = learning_rank.rank([_row("A", 500.0, 0), _row("B", 200.0, 0)])
+        ranked = learning_rank.rank([_row("A", 1500.0, 0), _row("B", 1350.0, 0)])
         self.assertEqual([r["verdict"] for r in ranked], ["replace", "replace"])
         self.assertEqual(learning_rank.rule_text(ranked, 450.0), "沒有一則賣出 → 全部換掉")
 
@@ -99,6 +100,42 @@ class OrderAndEdgeTest(unittest.TestCase):
         ])
         self.assertEqual([(r["name"], r["rank"], r["of"]) for r in ranked], [("算數", 1, 1)])
         self.assertIsNone(learning_rank.rule_text([], 450.0))
+
+
+class UnsoldLineTest(unittest.TestCase):
+    """F48-I13: a known zero is 沒賣出 only at >= `triage.STOP_LOSS_SPEND_MULTIPLE` × cap (the
+    line triage grades by); under it, or with no cap, it is not ranked (triage's 剛開始)."""
+
+    def test_half_the_cap_is_not_ranked_and_waits(self):
+        half = _row("半倍", 225.0, 0)
+        ranked = learning_rank.rank([half, _row("賣", 400.0, 1)])
+        self.assertEqual([(r["name"], r["rank"], r["of"]) for r in ranked], [("賣", 1, 1)])
+        self.assertTrue(learning_rank.waiting(half))
+
+    def test_at_the_line_it_is_unsold_and_replaced(self):
+        line = triage.STOP_LOSS_SPEND_MULTIPLE * 450.0
+        at = _row("到線", line, 0)
+        under = _row("差一點", line - 1, 0)
+        ranked = learning_rank.rank([at, under])
+        self.assertEqual(
+            [(r["name"], r["verdict"], r["verdict_label"], r["cost_per_sale"]) for r in ranked],
+            [("到線", "replace", "換掉", None)],
+        )
+        self.assertFalse(learning_rank.waiting(at))
+        self.assertTrue(learning_rank.waiting(under))
+        self.assertEqual(learning_rank.rule_text(ranked, 450.0), "沒有一則賣出 → 全部換掉")
+
+    def test_no_cap_never_ranks_a_zero(self):
+        ranked = learning_rank.rank([
+            _row("沒上限沒賣", 99999.0, 0, cap=None), _row("賣", 400.0, 1, cap=None),
+        ])
+        self.assertEqual([r["name"] for r in ranked], ["賣"])
+        self.assertFalse(learning_rank.waiting(_row("沒上限沒賣", 99999.0, 0, cap=None)))
+
+    def test_the_line_follows_the_triage_constant(self):
+        with mock.patch.object(triage, "STOP_LOSS_SPEND_MULTIPLE", 4):
+            self.assertEqual(learning_rank.rank([_row("A", 1500.0, 0)]), [])
+        self.assertEqual(len(learning_rank.rank([_row("A", 1500.0, 0)])), 1)
 
 
 class ScopeRoundTripTest(unittest.TestCase):

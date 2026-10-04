@@ -6,7 +6,9 @@ Step 1 (這期成績) is `period_grades.grade_period` over the month -- the same
 of that month reads, grades untouched (no second grading rule). F48-I02 (Contract R): each
 campaign's rows are ranked by `learning_rank.rank` (the ruler a closeout ranks by) and the fate
 follows the verdict: 留下 -> effective, 換掉 -> ineffective, a row the ranking cannot place ->
-skip (「沒有可排名的數字」); each row shows its `rank, of, sales, few`. An ad whose campaign has
+skip (「沒有可排名的數字」, or 「還沒賣出，花費也還沒到門檻」 for a known zero under the 沒賣出
+line, F48-I13); each row shows its `rank, of, sales, few`, and rows are served in each
+campaign's rank order (unranked after, by name). An ad whose campaign has
 unsynced days inside the month keeps its grade but is skipped with a named `skip_reason` (its
 numbers could be the gap, so nothing is written from it). The written scope names the campaign
 and the ad's customer group (`ads;campaign=<id>;group=<customer_group_id|none>`).
@@ -50,6 +52,7 @@ RAISE_AFTER_DAYS = 2
 MAX_ANGLE_CHARS = 12
 MISSING_DAYS_REASON = "資料缺天，這期不記"
 UNRANKED_REASON = "沒有可排名的數字"
+WAITING_REASON = "還沒賣出，花費也還沒到門檻"
 _MONTH_RE = re.compile(r"\d{4}-\d{2}")
 _TEXT_RE = re.compile(r"^「(.+)」對這群受眾(有效|無效)$")
 _SCAN_LIMIT = 500  # same scan ceiling as `ads_learnings._SCAN_LIMIT` / `visual_learning.py`
@@ -153,12 +156,28 @@ def _place(ranked) -> dict:
             ("rank", "of", "sales", "few", "verdict", "verdict_label", "flags")}
 
 
-def _fate(ranked) -> tuple[str, str | None]:
+def _fate(row, ranked) -> tuple[str, str | None]:
     """F48 Contract R "derived rulers": 留下 (`keep`／`keep_relative`) -> effective, 換掉 ->
-    ineffective, a row the ranking cannot place -> skip."""
+    ineffective, a row the ranking cannot place -> skip; a known zero still under the 沒賣出 line
+    (`learning_rank.waiting`, F48-I13) names that as its reason."""
     if ranked is None:
-        return "skip", UNRANKED_REASON
+        return "skip", WAITING_REASON if learning_rank.waiting(row) else UNRANKED_REASON
     return ("effective" if learning_rank.is_keep(ranked["verdict"]) else "ineffective"), None
+
+
+def _rank_order(rows) -> list[dict]:
+    """F48-I13: each campaign's rows in its ranking order (rank asc, unranked after by name);
+    campaigns keep their first-appearance order. The page prints this order as served."""
+    by_campaign: dict[str, list] = {}
+    for row in rows:
+        by_campaign.setdefault(row["campaign_id"], []).append(row)
+    return [
+        row
+        for campaign_rows in by_campaign.values()
+        for row in sorted(campaign_rows, key=lambda r: (
+            r["rank"] is None, r["rank"] or 0, r.get("name") or "", r["entity_id"],
+        ))
+    ]
 
 
 def _graded(conn, org_id, brand_id, start, end):
@@ -177,9 +196,9 @@ def _graded(conn, org_id, brand_id, start, end):
         if row["campaign_id"] in missing:
             fate, skip_reason = "skip", MISSING_DAYS_REASON
         else:
-            fate, skip_reason = _fate(ranked)
+            fate, skip_reason = _fate(row, ranked)
         out.append({**row, **_place(ranked), "fate": fate, "skip_reason": skip_reason})
-    return out, missing
+    return _rank_order(out), missing
 
 
 def _known_total(values):
