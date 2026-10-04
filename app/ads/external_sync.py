@@ -5,7 +5,7 @@ from datetime import date, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app import background
-from app.ads import channels, tracked_zero
+from app.ads import channels, lifecycle, tracked_zero
 from app.ads import external_repository as repo
 from app.ads.adapters.external import SourceReadError
 from app.ads.external_models import ExternalObservation
@@ -204,8 +204,10 @@ def request_campaign_sync(conn, org_id, brand_id, campaign_id, *, start=None, en
     if not accounts:
         raise ValueError("此工作區沒有可同步的原生來源。")
     window = {"start": start, "end": end} if rooted else {}
+    # F49 Contract N: the campaign the user asked to re-read is read, monitored or not.
     return [
-        request_sync(conn, org_id, brand_id, platform, account, **window)
+        request_sync(conn, org_id, brand_id, platform, account, campaign_ids=(campaign_id,),
+                     **window)
         for platform, account in accounts
     ]
 
@@ -276,7 +278,13 @@ def monthly_supported(reader):
     return bool(getattr(reader, "monthly_supported", lambda: True)())
 
 
-def request_sync(conn, org_id, brand_id, platform, source_account, *, start=None, end=None):
+def request_sync(conn, org_id, brand_id, platform, source_account, *, start=None, end=None,
+                 campaign_ids=()):
+    """Request the account's read. Account tasks (`list`, `monthly:*`) always; per-campaign
+    sections (`SECTIONS`) only for the roots of campaigns `lifecycle.monitored` today, plus the
+    `campaign_ids` passed explicitly (a campaign the user asked to re-read or just imported,
+    monitored or not) -- F49 Contract N: a closed campaign, or one ended past the grace days, is
+    not re-read in the background."""
     reader, _ = account_reader(conn, org_id, brand_id, platform, source_account)
     today = settings.today_for_org(conn, org_id=org_id)
     month_request_start = start or end or today
@@ -303,6 +311,9 @@ def request_sync(conn, org_id, brand_id, platform, source_account, *, start=None
         "AND e.parent_native_id IS NULL",
         (org_id, brand_id, platform, source_account),
     ).fetchall()
+    if roots:
+        wanted = lifecycle.monitored_ids(conn, org_id, brand_id) | set(campaign_ids)
+        roots = [root for root in roots if root["campaign_id"] in wanted]
     requested = {"list": {"section": "list"}}
     # Explicit backfills cover each touched month; daily/default reads cover this month.
     month = month_request_start.replace(day=1)

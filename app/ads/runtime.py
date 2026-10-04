@@ -11,6 +11,7 @@ from app.core import db, interrupts, settings
 TASK = "background.ads_runtime_campaign"
 INTERVAL_SECONDS = 900
 SYNC_SECONDS = 21600
+ALERT_CATEGORY = "ads_runtime_attention"
 
 
 def _time(value):
@@ -146,13 +147,14 @@ def _sync_sources(conn, org, brand, campaign, now):
 def _readback(conn, org, brand, campaign):
     from app.ads import change_control_verify, handoff_check
 
-    # IDs must already be known; discovery never guesses the object a human changed.
+    # IDs must already be known; discovery never guesses the object a human changed. F49 Contract
+    # N: a `confirmed` item or action is final for the tick (the user's 重新核對 still reads it).
     failed = 0
     items = conn.execute(
         "SELECT h.* FROM ads_handoff_item h JOIN ads_change_set c ON c.id=h.change_set_id "
         "AND c.org_id=h.org_id AND c.brand_id=h.brand_id WHERE h.org_id=%s AND h.brand_id=%s "
         "AND h.campaign_id=%s AND c.status='approved' AND h.entity_id IS NOT NULL "
-        "AND h.status<>'stale' ORDER BY "
+        "AND h.status NOT IN ('confirmed','stale') ORDER BY "
         "COALESCE(h.evidence_json->>'runtime_checked_at',h.created_at::text),h.id LIMIT 3",
         (org, brand, campaign),
     ).fetchall()
@@ -191,7 +193,7 @@ def _readback(conn, org, brand, campaign):
         "SELECT a.id,a.change_set_id FROM ads_action a JOIN ads_change_set c "
         "ON c.id=a.change_set_id AND c.org_id=a.org_id AND c.brand_id=a.brand_id "
         "WHERE a.org_id=%s AND a.brand_id=%s AND a.campaign_id=%s AND c.status='approved' "
-        "AND a.verification_state<>'stale' AND NOT EXISTS "
+        "AND a.verification_state NOT IN ('confirmed','stale') AND NOT EXISTS "
         "(SELECT 1 FROM ads_handoff_item h WHERE h.action_id=a.id) "
         "ORDER BY COALESCE(a.evidence_json->>'runtime_checked_at',a.created_at::text),a.id LIMIT 3",
         (org, brand, campaign),
@@ -220,8 +222,30 @@ def _readback(conn, org, brand, campaign):
     return len(items) + len(actions)
 
 
+def _alert_key(campaign, code):
+    return f"{_alert_prefix(campaign)}{code}"
+
+
+def _alert_prefix(campaign):
+    return f"ads-runtime:{campaign}:"
+
+
+def resolve_alerts(conn, org, brand, campaign, *, keep=()):
+    """Resolve (`interrupts.resolve`, actor `system`) every open `ads_runtime_attention` row of
+    this campaign whose key is not in `keep` -- the old dated keys (`ads-runtime:{c}:{day}:{code}`)
+    included, by prefix. Called by the tick after raising (`keep` = what it raised), by a run that
+    finds the campaign no longer monitored, and by `closeout.close` (`keep=()`). Each resolve
+    commits (the public API's rule)."""
+    prefix, keep = _alert_prefix(campaign), set(keep)
+    for row in interrupts.list_open(conn, brand_id=brand, category=ALERT_CATEGORY,
+                                    archive_stale=False):
+        if row["dedupe_key"].startswith(prefix) and row["dedupe_key"] not in keep:
+            interrupts.resolve(conn, row["id"], actor="system", org_id=org)
+
+
+
 def _health(conn, org, brand, campaign, now):
-    value = changes.campaign(conn, org, brand, campaign)
+    changes.campaign(conn, org, brand, campaign)  # an unknown campaign raises
     today = settings.today_for_org(conn, org_id=org)
     budget = month_budget.view(conn, org, brand, today.strftime("%Y-%m"))
     health = []
@@ -234,11 +258,10 @@ def _health(conn, org, brand, campaign, now):
         add("budget_unknown", "本月餘額仍不確定；先補齊來源，暫不核准新增花費。", "unknown")
     elif budget["available"] < 0:
         add("budget_exceeded", "依目前整月花費與持續投放預估，已超出月總額。請檢視降低風險操作。")
-    if value.get("end_date") and value["end_date"] <= today:
-        add("plan_date_passed", "原計畫日期已到。活動與平台投放仍保留，請確認期限與下一步。")
     # F32-I01, F49 Contract L: the derived transitions (an internal live campaign past its end
     # date -> `ended`, an imported one following its root) are written by the one lifecycle
-    # writer. `ended` is not `closed`: dates prompt a review, never a close-out.
+    # writer. `ended` is not `closed`: dates prompt a review, never a close-out. Contract N: the
+    # passed end date is no alert here -- the decision queue's closeout row carries it.
     lifecycle.record(conn, org, brand, campaign)
     entities = conn.execute(
         "SELECT platform,native_status FROM ads_external_entity WHERE org_id=%s AND brand_id=%s "
@@ -252,13 +275,16 @@ def _health(conn, org, brand, campaign, now):
     sources = _sources(conn, org, brand, campaign)
     if any(s["error"] or s["status"] == "unknown" for s in sources):
         add("source_incomplete", "來源資料未完整讀回；保留舊紀錄，請檢視連線與缺漏。", "unknown")
-    for alert in health:
+    # F49 Contract N: one row per (campaign, code), no date -- an alert that persists stays one
+    # row; one whose condition cleared is resolved below by the same tick.
+    raised = [_alert_key(campaign, alert["code"]) for alert in health]
+    for key in raised:
         interrupts.enqueue(
-            conn, org_id=org, brand_id=brand, category="ads_runtime_attention",
-            dedupe_key=f"ads-runtime:{campaign}:{today}:{alert['code']}",
+            conn, org_id=org, brand_id=brand, category=ALERT_CATEGORY, dedupe_key=key,
             message="廣告追蹤有待確認項目，請檢視",
             action_url=f"/brands/{brand}/ads/campaigns/{campaign}?tab=performance",
         )
+    resolve_alerts(conn, org, brand, campaign, keep=raised)
     ready = conn.execute(
         "SELECT id FROM ads_review_round WHERE org_id=%s AND brand_id=%s AND campaign_id=%s "
         "AND status='ready' ORDER BY created_at DESC LIMIT 100", (org, brand, campaign),
@@ -290,6 +316,12 @@ def run_campaign(org_id, brand_id, campaign_id):
         try:
             now = db.now_utc()
             changes.campaign(conn, org_id, brand_id, campaign_id)
+            if not lifecycle.is_monitored(conn, org_id, brand_id, campaign_id):
+                # F49 Contract N: it left the monitored set between dispatch and run (closed, or
+                # past the grace days) -- no read; its alerts no longer apply.
+                resolve_alerts(conn, org_id, brand_id, campaign_id)
+                conn.commit()
+                return
             failures = []
             for function in (_sync_sources, _readback):
                 try:
@@ -366,12 +398,21 @@ def dispatch(timestamp, *, limit=100):
         recovered = review_jobs.recover(conn, timestamp, limit=limit)
         monitors = review_monitor.dispatch_due(conn, timestamp, limit=limit)
         accounts_enqueued = _sync_brand_accounts(conn, now)
+        # F49 Contract N: only campaigns the lifecycle still monitors (live, or ended within the
+        # grace days). Filtered before the LIMIT: a closed campaign's old `last_checked_at` would
+        # otherwise sort first forever and starve the live ones.
+        monitored = sorted(
+            campaign_id
+            for brand in lifecycle.brands(conn, lifecycle.NOT_CLOSED)
+            for campaign_id in lifecycle.monitored_ids(conn, brand["org_id"], brand["brand_id"])
+        )
         rows = conn.execute(
             "SELECT c.id,c.org_id,c.brand_id,c.context_json FROM ads_campaign c WHERE "
+            "c.id = ANY(%s) AND ("
             "EXISTS(SELECT 1 FROM ads_external_entity e WHERE e.campaign_id=c.id) "
-            "OR EXISTS(SELECT 1 FROM ads_review_monitor m WHERE m.campaign_id=c.id) "
+            "OR EXISTS(SELECT 1 FROM ads_review_monitor m WHERE m.campaign_id=c.id)) "
             "ORDER BY COALESCE(c.context_json->'runtime'->>'last_checked_at',''),c.id LIMIT %s",
-            (limit + 1,),
+            (monitored, limit + 1),
         ).fetchall()
     enqueued = 0
     for row in rows[:limit]:

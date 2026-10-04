@@ -395,7 +395,10 @@ class ExternalAssetsFlowTest(unittest.TestCase):
         self.assertFalse(saved["platform_written"])
         snapshot = copy.deepcopy(bound["creative_snapshot"])
         self.reader.creative_id = "creative-two"
-        self.refresh()
+        # F49 Contract N: this paused imported campaign has ended, so only the user's 重新讀取 of
+        # it (not an account refresh) reads its creatives again.
+        window = {"start": self.day, "end": self.day}
+        self.drain(self.ok("POST", path + "/sync", json=window)["job"])
         stale = next(
             b
             for b in self.ok("GET", ppath + "/handoff?revision=1")["bindings"]

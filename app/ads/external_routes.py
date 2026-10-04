@@ -130,6 +130,8 @@ def import_campaign(request: Request, brand_id: str, body: Import):
                 body.source_account,
                 start=body.start,
                 end=body.end,
+                # F49 Contract N: the campaign just imported is read even if it already ended.
+                campaign_ids=(campaign["id"],),
             )
             if campaign["origin"] == "imported"
             else None
@@ -149,7 +151,8 @@ class Window(BaseModel):
 def campaign_sync(request: Request, brand_id: str, campaign_id: str, body: Window):
     """Every job the re-read requested (`jobs`, drill-11 #14): each root account, or -- a campaign
     not yet on the platform (first launch handoff, drill 5) -- every bound account's listing.
-    `job` is the first, kept for callers not yet on `jobs`."""
+    `job` is the first, kept for callers not yet on `jobs`. The campaign is read monitored or
+    not (`request_campaign_sync` passes it as an explicit `campaign_ids`, F49 Contract N)."""
     actor = web.require_actor(request)
     try:
         repo._campaign(web.conn, actor.org_id, brand_id, campaign_id)

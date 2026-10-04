@@ -21,6 +21,7 @@ from app.ads import closeout, external_repository, jobs, plan
 from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi_repo
 from app.core import db as coredb
+from app.core import interrupts
 from app.core import settings as coresettings
 from app.shared import web
 from app.tests.fixtures.ads_external import outcome_seed
@@ -321,6 +322,41 @@ class ClosingTwiceDoesNotDuplicateLearningTest(CloseoutTestBase):
         self.assertEqual(first["closed_at"], second["closed_at"])
         learnings = bi_repo.list_learnings(self.conn, self.brand_id)
         self.assertEqual(len(learnings), 1)
+
+
+class CloseResolvesRuntimeAlertsTest(CloseoutTestBase):
+    """F49 Contract N: a closed campaign is no longer monitored -- closing it leaves none of its
+    runtime alerts open (old dated keys included); another campaign's stay."""
+
+    def _open_runtime_keys(self) -> set[str]:
+        return {
+            row["dedupe_key"] for row in interrupts.list_open(
+                self.conn, brand_id=self.brand_id, category="ads_runtime_attention",
+                archive_stale=False,
+            )
+        }
+
+    def test_close_resolves_the_campaigns_open_runtime_rows(self):
+        start = self.today - timedelta(days=2)
+        campaign = self._campaign(cap=300, start_date=start, end_date=self.today)
+        other = self._campaign(cap=300, start_date=start, end_date=self.today)
+        self._three_days(campaign, spend=1000.0, purchases=5, revenue=2500.0)
+        keys = [
+            f"ads-runtime:{campaign['id']}:budget_unknown",
+            f"ads-runtime:{campaign['id']}:{self.today}:plan_date_passed",
+            f"ads-runtime:{other['id']}:budget_unknown",
+        ]
+        for key in keys:
+            interrupts.enqueue(
+                self.conn, org_id=self.org_id, brand_id=self.brand_id,
+                category="ads_runtime_attention", dedupe_key=key,
+                message="廣告追蹤有待確認項目，請檢視",
+            )
+        self.conn.commit()
+
+        closeout.close(self.conn, self.org_id, self.brand_id, campaign["id"], actor=ACTOR)
+
+        self.assertEqual(self._open_runtime_keys(), {keys[2]})
 
 
 class CapResolutionTest(CloseoutTestBase):

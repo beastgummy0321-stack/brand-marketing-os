@@ -28,6 +28,7 @@ from app.ads import (
     lifecycle,
     outcome,
     repository,
+    runtime,
     simulation_mode,
     targets,
     visual_learning,
@@ -203,6 +204,9 @@ def close(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, *, actor
         " closed_at = now() WHERE org_id = %s AND brand_id = %s AND id = %s",
         (verdict, jsonb(verdict_json), org_id, brand_id, campaign_id),
     )
+    # F49 Contract N: a closed campaign is no longer monitored -- its open runtime alerts resolve
+    # with the close (each `interrupts.resolve` commits, so the close lands with the first one).
+    runtime.resolve_alerts(conn, org_id, brand_id, campaign_id)
     row = repository.get_campaign(conn, org_id, brand_id, campaign_id)
     assert row is not None  # 剛更新過的那一列，一定讀得到
     return row

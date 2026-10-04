@@ -7,10 +7,17 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 from app.ads import external_repository as external
-from app.ads import external_sync, handoff_check, handoff_data, repository, runtime
+from app.ads import (
+    external_sync,
+    handoff_check,
+    handoff_data,
+    lifecycle,
+    repository,
+    runtime,
+)
 from app.ads.adapters.external import SourceReadError
 from app.brand_intelligence import repository as brands
-from app.core import db, settings
+from app.core import db, interrupts, settings
 
 
 class RuntimeTest(unittest.TestCase):
@@ -351,7 +358,9 @@ class RuntimeTest(unittest.TestCase):
         # F32-I01: nothing wrote `ended`, so a hand-launched campaign never reached 結案.
         campaign = self._internal_campaign("live", -1)
         health, _ = runtime._health(self.conn, self.org, self.brand, campaign, db.now_utc())
-        self.assertIn("plan_date_passed", [item["code"] for item in health])
+        # F49 Contract N: the passed end date is no runtime alert (the queue's closeout row
+        # carries it).
+        self.assertNotIn("plan_date_passed", [item["code"] for item in health])
         self.assertEqual(self._campaign_status(campaign), "ended")
         # The beat is idempotent: `ended` stays `ended`, never advances to `closed`.
         runtime._health(self.conn, self.org, self.brand, campaign, db.now_utc())
@@ -365,7 +374,7 @@ class RuntimeTest(unittest.TestCase):
         self.assertEqual(self._campaign_status(closed), "closed")
         self.assertEqual(self._campaign_status(running), "live")
 
-    def _confirmed_handoffs(self):
+    def _handoffs(self, status):
         old = db.now_utc() - timedelta(days=2)
         change = db.new_id("acs")
         self.conn.execute(
@@ -389,8 +398,8 @@ class RuntimeTest(unittest.TestCase):
             self.conn.execute(
                 "INSERT INTO ads_action(id,org_id,brand_id,campaign_id,target_kind,target_id,"
                 "kind,change_set_id,verification_state,first_observed_at,verified_at) "
-                "VALUES(%s,%s,%s,%s,'ad',%s,'pause',%s,'confirmed',%s,%s)",
-                (action, self.org, self.brand, self.campaign, ad["id"], change, old, old),
+                "VALUES(%s,%s,%s,%s,'ad',%s,'pause',%s,%s,%s,%s)",
+                (action, self.org, self.brand, self.campaign, ad["id"], change, status, old, old),
             )
             item = handoff_data.insert(
                 self.conn,
@@ -405,10 +414,11 @@ class RuntimeTest(unittest.TestCase):
                 {},
             )
             self.conn.execute(
-                "UPDATE ads_handoff_item SET entity_id=%s,status='confirmed',observed_at=%s,"
+                "UPDATE ads_handoff_item SET entity_id=%s,status=%s,observed_at=%s,"
                 "created_at=%s,updated_at=%s,evidence_json=%s WHERE id=%s",
                 (
                     ad["id"],
+                    status,
                     old,
                     old + timedelta(seconds=index),
                     old,
@@ -428,7 +438,7 @@ class RuntimeTest(unittest.TestCase):
         return old, result
 
     def test_failed_first_three_handoffs_rotate_and_keep_history_as_unknown(self):
-        old, items = self._confirmed_handoffs()
+        old, items = self._handoffs("reported")
         # Exercise real handoff.check: account_reader raises before its HTTP try block.
         with (
             patch.object(
@@ -463,6 +473,23 @@ class RuntimeTest(unittest.TestCase):
             self.assertEqual(fourth["status"], "unknown")
             self.assertEqual(fourth["observed_at"], old)
 
+    def test_confirmed_handoffs_are_not_reread_by_the_tick(self):
+        # F49 Contract N: a confirmed item or action is final for the tick (the user's 重新核對
+        # still reads it); only the unconfirmed ones are read.
+        _, items = self._handoffs("confirmed")
+        with patch.object(handoff_check, "check") as check, patch(
+            "app.ads.change_control_verify.check"
+        ) as verify:
+            self.assertEqual(
+                runtime._readback(self.conn, self.org, self.brand, self.campaign), 0
+            )
+        check.assert_not_called()
+        verify.assert_not_called()
+        for item, _action in items:
+            value = handoff_data.get(self.conn, self.org, self.brand, self.campaign, item)
+            self.assertEqual(value["status"], "confirmed")
+            self.assertNotIn("runtime_checked_at", value["evidence_json"])
+
     def test_bootstrap_scans_past_unchanged_unknowns_to_dead_running_review(self):
         ids = []
         for index in range(3):
@@ -489,3 +516,173 @@ class RuntimeTest(unittest.TestCase):
         self.assertEqual(row["status"], "unknown")
         self.assertIsNotNone(row["recovery_checked_at"])
         self.assertEqual(row["reservation_state"], "held")
+
+
+ALERT_MESSAGE = "廣告追蹤有待確認項目，請檢視"
+
+
+class MonitoredOnlyTest(unittest.TestCase):
+    """F49 Contract N: the runtime follows the lifecycle -- a closed campaign and one ended past
+    `ENDED_GRACE_DAYS` are never enqueued nor re-read in the background (an explicit 重新讀取 still
+    reads them); one ended inside the grace days still is. Health alerts are one row per
+    (campaign, code), resolved by the tick once the condition clears."""
+
+    def setUp(self):
+        self.conn, self.org = db.current(), db.DEV_ORG_ID
+        self.brand = brands.create_brand(
+            self.conn, org_id=self.org, name="只讀還在監測的活動", actor="test", client_name=None,
+        )["id"]
+        self.today = settings.today_for_org(self.conn, org_id=self.org)
+        grace = lifecycle.ENDED_GRACE_DAYS
+        self.live = self._campaign("live", 3, "live-root")
+        self.in_grace = self._campaign("live", -grace, "grace-root")
+        self.past_grace = self._campaign("ended", -(grace + 1), "past-root")
+        self.closed = self._campaign("closed", -1, "closed-root")
+        self.conn.commit()
+
+    def _campaign(self, status, end_offset_days, native_id):
+        campaign = repository.create_campaign(
+            self.conn, self.org, self.brand,
+            {
+                "name": f"監測 {native_id}", "goal_text": "監測範圍", "objective": "awareness",
+                "start_date": self.today - timedelta(days=30),
+                "end_date": self.today + timedelta(days=end_offset_days), "status": status,
+            },
+            created_by="test",
+        )["id"]
+        external.upsert_entity(
+            self.conn, self.org, self.brand, campaign,
+            {
+                "platform": "fixture", "source_account": "account", "native_kind": "campaign",
+                "native_id": native_id, "native_status": "ACTIVE",
+            },
+        )
+        return campaign
+
+    def _raise(self, *keys):
+        for key in keys:
+            interrupts.enqueue(
+                self.conn, org_id=self.org, brand_id=self.brand,
+                category=runtime.ALERT_CATEGORY, dedupe_key=key, message=ALERT_MESSAGE,
+            )
+        self.conn.commit()
+
+    def _open_keys(self):
+        return {
+            row["dedupe_key"] for row in interrupts.list_open(
+                self.conn, brand_id=self.brand, category=runtime.ALERT_CATEGORY,
+                archive_stale=False,
+            )
+        }
+
+    def _only_this_brand(self):
+        return patch.object(runtime.lifecycle, "brands",
+                            return_value=[{"org_id": self.org, "brand_id": self.brand}])
+
+    def test_dispatch_enqueues_only_monitored_campaigns(self):
+        empty = dict(reviews_recovered=0, reviews_unknown=0, reviews_failed=0,
+                     reviews_enqueued=0, has_more=False)
+        with (
+            self._only_this_brand(),
+            patch("app.ads.review_jobs.recover", return_value=empty),
+            patch("app.ads.review_monitor.dispatch_due",
+                  return_value={"reviews_enqueued": 0, "monitors_checked": 0, "has_more": False}),
+            patch.object(runtime, "_sync_brand_accounts", return_value=0),
+            patch.object(runtime.background, "is_active", return_value=False),
+            patch.object(runtime.background, "enqueue", return_value=1) as enqueue,
+        ):
+            runtime.dispatch(int(db.now_utc().timestamp()))
+        self.assertEqual(
+            {c.kwargs["campaign_id"] for c in enqueue.call_args_list}, {self.live, self.in_grace}
+        )
+
+    def test_compatibility_handler_enqueues_only_monitored_campaigns(self):
+        from app.ads import jobs
+
+        with (
+            self._only_this_brand(),
+            patch.object(jobs.background, "is_active", return_value=False),
+            patch.object(jobs.background, "enqueue", return_value=1) as enqueue,
+        ):
+            jobs.close_expired_campaigns(self.org)
+        self.assertEqual(
+            {c.kwargs["campaign_id"] for c in enqueue.call_args_list}, {self.live, self.in_grace}
+        )
+
+    def test_run_returns_without_a_read_for_a_campaign_no_longer_monitored(self):
+        key = f"ads-runtime:{self.past_grace}:source_incomplete"
+        self._raise(key)
+        with (
+            patch.object(runtime, "_sync_sources") as sync,
+            patch.object(runtime, "_readback") as readback,
+            patch.object(runtime, "_health") as health,
+        ):
+            runtime.run_campaign(self.org, self.brand, self.past_grace)
+        sync.assert_not_called()
+        readback.assert_not_called()
+        health.assert_not_called()
+        self.assertNotIn(key, self._open_keys())
+
+    def _task_campaigns(self, job):
+        return {
+            task["campaign_id"] for task in job["tasks"].values() if task.get("campaign_id")
+        }
+
+    def test_request_sync_builds_sections_only_for_monitored_roots(self):
+        with (
+            patch.object(external_sync, "account_reader", return_value=(object(), {})),
+            patch.object(external_sync, "_enqueue"),
+        ):
+            job = external_sync.request_sync(self.conn, self.org, self.brand, "fixture", "account")
+            self.assertEqual(self._task_campaigns(job), {self.live, self.in_grace})
+            # Account tasks are unchanged: the month budget keeps reading the account.
+            self.assertIn("list", job["tasks"])
+            self.assertTrue(any(key.startswith("monthly:") for key in job["tasks"]))
+            # The user's 重新讀取 of a closed campaign still reads it.
+            jobs = external_sync.request_campaign_sync(
+                self.conn, self.org, self.brand, self.closed
+            )
+        self.assertIn(self.closed, self._task_campaigns(jobs[0]))
+        self.assertNotIn(self.past_grace, self._task_campaigns(jobs[0]))
+
+    def test_campaign_sync_route_reads_a_campaign_past_the_grace_days(self):
+        from app.main import app
+
+        client = TestClient(app)
+        with (
+            patch.object(external_sync, "account_reader", return_value=(object(), {})),
+            patch.object(external_sync, "_enqueue"),
+        ):
+            response = client.post(
+                f"/api/ads/brands/{self.brand}/campaigns/{self.past_grace}/sync", json={}
+            )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertIn(self.past_grace, self._task_campaigns(response.json()["job"]))
+
+    def test_two_ticks_on_the_same_alert_leave_one_open_row_without_a_date(self):
+        for _ in range(2):
+            health, _ = runtime._health(self.conn, self.org, self.brand, self.live, db.now_utc())
+        codes = {item["code"] for item in health}
+        self.assertIn("budget_unknown", codes)
+        self.assertEqual(
+            self._open_keys(), {f"ads-runtime:{self.live}:{code}" for code in codes}
+        )
+
+    def test_a_cleared_alert_and_old_dated_keys_resolve_on_the_next_tick(self):
+        stale = [
+            f"ads-runtime:{self.live}:source_date_passed",
+            f"ads-runtime:{self.live}:{self.today}:budget_unknown",
+            f"ads-runtime:{self.live}:{self.today}:plan_date_passed",
+        ]
+        other = f"ads-runtime:{self.in_grace}:source_date_passed"
+        self._raise(*stale, other)
+        health, _ = runtime._health(self.conn, self.org, self.brand, self.live, db.now_utc())
+        codes = {item["code"] for item in health}
+        self.assertNotIn("source_date_passed", codes)
+        open_keys = self._open_keys()
+        self.assertFalse(set(stale) & open_keys)
+        self.assertIn(other, open_keys)  # another campaign's row is not this tick's
+        self.assertEqual(
+            {key for key in open_keys if key.startswith(f"ads-runtime:{self.live}:")},
+            {f"ads-runtime:{self.live}:{code}" for code in codes},
+        )

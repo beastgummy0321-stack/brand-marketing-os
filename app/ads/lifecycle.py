@@ -17,7 +17,8 @@ Explicit transitions stay where they are (adopt -> ready, `bind_campaign` -> liv
 closed); the derived ones are written only by `record`. Readers call `state`, never the stored
 derived value alone.
 
-Selection: `campaigns`／`campaign_ids`／`brands` are the only "which campaigns" selectors -- the
+Selection: `campaigns`／`campaign_ids`／`brands`／`monitored_ids` are the only "which campaigns"
+selectors (`monitored_ids` = what the background runtime reads, F49 Contract N) -- the
 campaign-status selection SQL lives here and nowhere else in `app/ads`
 (`app/tests/test_ads_one_ruler.py`).
 """
@@ -262,6 +263,38 @@ def campaigns(conn, org_id: str, brand_id: str, states) -> list[dict]:
 
 def campaign_ids(conn, org_id: str, brand_id: str, states) -> list[str]:
     return [row["id"] for row in campaigns(conn, org_id, brand_id, states)]
+
+
+def monitored_ids(conn, org_id: str, brand_id: str) -> set[str]:
+    """The brand's campaigns `monitored` today (live, or ended within the grace days) -- what the
+    background runtime reads and syncs (F49 Contract N). Two reads: the campaigns, their roots."""
+    rows = conn.execute(
+        "SELECT * FROM ads_campaign WHERE org_id=%s AND brand_id=%s"
+        + _stored_filter(frozenset({"live", "ended"})),
+        (org_id, brand_id),
+    ).fetchall()
+    if not rows:
+        return set()
+    by_campaign = roots(conn, org_id, brand_id)
+    today = settings.today_for_org(conn, org_id=org_id)
+    return {
+        row["id"] for row in rows
+        if monitored(dict(row), today, root=by_campaign.get(row["id"]))
+    }
+
+
+def is_monitored(conn, org_id: str, brand_id: str, campaign_id: str) -> bool:
+    """`monitored` for one campaign (False for an unknown one), reading its root and today."""
+    row = conn.execute(
+        "SELECT * FROM ads_campaign WHERE org_id=%s AND brand_id=%s AND id=%s",
+        (org_id, brand_id, campaign_id),
+    ).fetchone()
+    if row is None:
+        return False
+    return monitored(
+        dict(row), settings.today_for_org(conn, org_id=org_id),
+        root=root(conn, org_id, brand_id, campaign_id),
+    )
 
 
 def brands(conn, states) -> list[dict]:
