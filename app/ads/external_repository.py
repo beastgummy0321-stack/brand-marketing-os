@@ -187,27 +187,48 @@ def upsert_observation(
 
 
 def record_sync(conn, org_id, brand_id, campaign_id, *, section, state):
-    """Merge one section atomically; failed attempts retain prior coverage/success timestamps."""
+    """Merge one section atomically; failed attempts retain prior ranges/success timestamps.
+
+    F49 Contract V: a clean read's range (the `coverage` key of `state`, `{start, end}`) joins
+    the section's stored `ranges` -- the merged union `coverage.with_range` keeps -- instead of
+    replacing the last one; the legacy single `coverage` key is folded into `ranges` and no
+    longer stored."""
+    from app.ads import coverage  # lazy: coverage imports this module
+
     if section not in {"structure", "creatives", "observations"}:
         raise ValueError("sync_section_unknown")
     _campaign(conn, org_id, brand_id, campaign_id)
     state = dict(state)
+    read = state.pop("coverage", None)
     if state.get("status") in {"success", "syncing"} and not state.get("error"):
         state["error_code"] = None
-    if state.get("status") in {"error", "failed", "unavailable", "partial"} or state.get("error"):
+    failed = state.get("status") in {"error", "failed", "unavailable", "partial"} or state.get(
+        "error"
+    )
+    if failed:
         state.pop("last_success_at", None)
-        state.pop("coverage", None)
+    elif isinstance(read, dict) and read.get("start") and read.get("end"):
+        stored = conn.execute(
+            "SELECT context_json->'external_sync'->%s AS section FROM ads_campaign "
+            "WHERE org_id=%s AND brand_id=%s AND id=%s FOR UPDATE",
+            (section, org_id, brand_id, campaign_id),
+        ).fetchone()
+        state["ranges"] = coverage.with_range(
+            stored["section"] if stored else None, read["start"], read["end"]
+        )
     state = {
         key: value
         for key, value in state.items()
         if value is not None or key in {"error", "error_code"}
     }
+    # Writing `ranges` drops the legacy `coverage` key it was folded into.
+    drop = "coverage" if "ranges" in state else ""
     conn.execute(
         "UPDATE ads_campaign SET context_json=jsonb_set(context_json,'{external_sync}', "
         "COALESCE(context_json->'external_sync','{}'::jsonb) || jsonb_build_object(%s::text, "
-        "COALESCE(context_json->'external_sync'->%s,'{}'::jsonb) || %s::jsonb)) "
+        "(COALESCE(context_json->'external_sync'->%s,'{}'::jsonb) - %s::text) || %s::jsonb)) "
         "WHERE org_id=%s AND brand_id=%s AND id=%s",
-        (section, section, jsonb(state), org_id, brand_id, campaign_id),
+        (section, section, drop, jsonb(state), org_id, brand_id, campaign_id),
     )
 
 
@@ -223,6 +244,8 @@ def external_view(
     observation_after=None,
     limit=100,
 ):
+    from app.ads import coverage  # lazy: coverage imports this module
+
     campaign = _campaign(conn, org_id, brand_id, campaign_id)
     limit = min(max(int(limit), 1), 100)
     end = end or settings.today_for_org(conn, org_id=org_id)
@@ -271,7 +294,8 @@ def external_view(
         else None,
         "window": {"start": start, "end": end},
         "connections": connections,
-        "coverage": {key: value.get("coverage") for key, value in sync.items()},
+        # F49 Contract V: the observations read ranges (`coverage.served`), the one reader.
+        "coverage": {"observations": coverage.served(campaign)},
         "sync": sync,
     }
 

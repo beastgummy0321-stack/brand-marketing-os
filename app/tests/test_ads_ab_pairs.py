@@ -9,7 +9,7 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 import app.main as main
-from app.ads import ab_pairs, external_sync, live_creative, plan
+from app.ads import ab_pairs, coverage, external_sync, live_creative, plan
 from app.ads import change_control as service
 from app.ads import change_control_verify as verification
 from app.ads import external_repository as external
@@ -219,10 +219,10 @@ class AbPairsTest(SimulatedPublishTestBase):
                          ("judged", "b", 10.0))
 
     def cover(self, start, end):
-        """The campaign's recorded observations sync coverage (triage's known-days source)."""
+        """The campaign's recorded observations read range (F49 Contract V `ranges`)."""
         context = ads_repo.get_campaign(*self.args)["context_json"] or {}
         context["external_sync"] = {
-            "observations": {"coverage": {"start": str(start), "end": str(end)}}
+            "observations": {"ranges": [{"start": str(start), "end": str(end)}]}
         }
         web.conn.execute(
             "UPDATE ads_campaign SET context_json=%s WHERE id=%s", (jsonb(context), self.cid)
@@ -263,9 +263,13 @@ class AbPairsTest(SimulatedPublishTestBase):
         # sources exist today, so the rule is proven on the function itself), and the padded day
         # carries that ad's own source, never a platform literal.
         rows = [{"entity_id": self.b["id"], "day": self.yesterday, "source": "other_platform"}]
+        self.cover(self.yesterday - timedelta(days=30), self.yesterday)
+        read = coverage.load(
+            web.conn, self.org_id, self.brand_id, ads_repo.get_campaign(*self.args),
+            self.yesterday - timedelta(days=1), self.yesterday,
+        )
         padded = ab_pairs._covered_zero_rows(
-            rows, (self.b["id"],), self.yesterday - timedelta(days=1), self.yesterday,
-            (self.yesterday - timedelta(days=30), self.yesterday),
+            rows, (self.b["id"],), self.yesterday - timedelta(days=1), self.yesterday, read,
         )
         self.assertEqual([(r["day"], r["source"]) for r in padded],
                          [(self.yesterday - timedelta(days=1), "other_platform")])

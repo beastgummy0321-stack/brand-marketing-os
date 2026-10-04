@@ -81,6 +81,13 @@ class ReviewCycleTest(unittest.TestCase):
         self.conn.commit()
 
     def set_coverage(self, start, end):
+        """The recorded read ranges become exactly `[start, end]` (F49 Contract V keeps a union
+        in `record_sync`, so the earlier ranges are cleared first)."""
+        self.conn.execute(
+            "UPDATE ads_campaign SET context_json = context_json "
+            "#- '{external_sync,observations,ranges}' WHERE id=%s",
+            (self.campaign,),
+        )
         external_repository.record_sync(
             self.conn,
             self.org,
@@ -604,8 +611,9 @@ class ReviewCycleTest(unittest.TestCase):
         )
 
     def test_unsynced_day_inside_window_or_prior_period_is_refused(self):
-        self.observation()
         prior_start = self.start - timedelta(days=3)
+        # A row proves its own day (F49 Contract V): keep it outside the window under test.
+        self.observation(prior_start - timedelta(days=1))
         # Last day of the window never synced: refused, and the refusal names that day.
         self.set_coverage(prior_start, self.end - timedelta(days=1))
         with self.assertRaisesRegex(
@@ -630,7 +638,7 @@ class ReviewCycleTest(unittest.TestCase):
 
     def test_never_synced_campaign_is_refused_not_passed(self):
         # F37 Contract Q (ruling 4): no recorded read is not "nothing missing" (F36 as-built gap).
-        self.observation()
+        # F49 Contract V: nothing read = no recorded range and no row at all.
         self.conn.execute(
             "UPDATE ads_campaign SET context_json = context_json - 'external_sync'"
             " WHERE org_id = %s AND brand_id = %s AND id = %s",

@@ -7,10 +7,11 @@ never a second, divergent definition of "known".
 """
 
 from collections import defaultdict
-from datetime import date, timedelta
+from datetime import timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.ads import (
+    coverage,
     external_sync,
     learning_rank,
     lifecycle,
@@ -78,8 +79,8 @@ def classify(conn, org_id: str, brand_id: str, campaign_id: str) -> dict:
     if campaign is None:
         raise ValueError("campaign_unknown")
     target = targets.resolve(conn, org_id, brand_id, campaign)
-    coverage = _coverage(campaign)
-    cutoff = _account_cutoff(conn, org_id, brand_id, campaign_id)
+    cutoff = _judged_cutoff(conn, org_id, brand_id, campaign)
+    read = _read_days(conn, org_id, brand_id, campaign, cutoff)
     ads = conn.execute(
         "SELECT * FROM ads_external_entity WHERE org_id=%s AND brand_id=%s AND campaign_id=%s "
         "AND native_kind='ad' ORDER BY name,id",
@@ -104,7 +105,7 @@ def classify(conn, org_id: str, brand_id: str, campaign_id: str) -> dict:
     # ads, joined here by `native_id` -- never per item.
     bound_ad_by_native = _bound_ad_by_native_id(conn, org_id, brand_id, campaign_id)
     items = [
-        _item(dict(ad), campaign["name"], campaign_objective, target, cutoff, coverage,
+        _item(dict(ad), campaign["name"], campaign_objective, target, cutoff, read,
               rows_by_entity, bound_ad_by_native)
         for ad in active_ads
     ]
@@ -114,14 +115,14 @@ def classify(conn, org_id: str, brand_id: str, campaign_id: str) -> dict:
     # never a second, divergent "active ad" query.
     owner_by_entity = triage_scale.owner_lookup(conn, org_id, brand_id)
     capacity = triage_capacity.capacity_view(items, target["value"], owner_by_entity)
-    data = _data_view(conn, org_id, brand_id, campaign, cutoff, coverage, capacity)
+    data = _data_view(conn, org_id, brand_id, campaign, cutoff, read, capacity)
     # F29 Contract D: the one data status, over the same judged window `missing_days` covers and
     # the rows this call already read (never a second query).
-    window_start = cutoff - timedelta(days=WINDOW_STEPS[-1] - 1)
+    window_start, window_end = read.window(cutoff, WINDOW_STEPS[-1])
     data["status"] = repository.campaign_data_status(
         conn, org_id, brand_id, campaign, sync=data["sync"], missing_days=data["missing_days"],
         has_rows=any(
-            window_start <= row["day"] <= cutoff
+            window_start <= row["day"] <= window_end
             for entity_rows in rows_by_entity.values() for row in entity_rows
         ),
     )
@@ -139,14 +140,14 @@ def ad_item(conn, org_id, brand_id, campaign, entity) -> dict:
     read of this ad's own lookback rows. Never a second definition of a grade or a window."""
     campaign_id = campaign["id"]
     target = targets.resolve(conn, org_id, brand_id, campaign)
-    coverage = _coverage(campaign)
-    cutoff = _account_cutoff(conn, org_id, brand_id, campaign_id)
+    cutoff = _judged_cutoff(conn, org_id, brand_id, campaign)
+    read = _read_days(conn, org_id, brand_id, campaign, cutoff)
     rows_by_entity = _lookback_rows_by_entity(
         conn, org_id, brand_id, campaign_id, [entity["id"]], cutoff,
     )
     campaign_objective = repository.campaign_objective_family(conn, org_id, brand_id, campaign)
     bound_ad_by_native = _bound_ad_by_native_id(conn, org_id, brand_id, campaign_id)
-    item = _item(dict(entity), campaign["name"], campaign_objective, target, cutoff, coverage,
+    item = _item(dict(entity), campaign["name"], campaign_objective, target, cutoff, read,
                  rows_by_entity, bound_ad_by_native)
     # The item shape is the same for a closed ad (Contract P), so the ladder attaches either way.
     triage_ladder.attach(conn, org_id, brand_id, campaign_id, [item])
@@ -159,11 +160,11 @@ def _delivery_fields(entity) -> dict:
     return {"delivery": view, "delivery_label": view["label"]}
 
 
-def _item(entity, campaign_name, campaign_objective, target, cutoff, coverage, rows_by_entity,
+def _item(entity, campaign_name, campaign_objective, target, cutoff, read, rows_by_entity,
           bound_ad_by_native) -> dict:
     """One ad's triage item before the ladder -- shared by `classify()` and `ad_item()`."""
     return {
-        **_classify_ad(entity, campaign_name, campaign_objective, target, cutoff, coverage,
+        **_classify_ad(entity, campaign_name, campaign_objective, target, cutoff, read,
                        rows_by_entity.get(entity["id"], [])),
         "bound_ad_id": bound_ad_by_native.get(entity["native_id"]),
         **_delivery_fields(entity),
@@ -253,77 +254,39 @@ def _closed_block(closed_ads, rows_by_entity, cutoff, bound_ad_by_native):
     }
 
 
-def _data_view(conn, org_id, brand_id, campaign, cutoff, coverage, capacity):
+def _data_view(conn, org_id, brand_id, campaign, cutoff, read, capacity):
     """The read-only `data` enrichment (F24-I01, feature Decisions) -- `sync` reuses
     `repository.campaign_sync_state` (same DB-only bound-accounts check `external_repository
-    .external_view`'s own `connections` list makes); `coverage`/`missing_days` reuse this same
-    call's own `cutoff`/`coverage` (never re-derived), so they can never disagree with what
-    `classify()` above actually judged every ad against. `capacity` (F27-I06 Contract F) is passed
-    in already computed -- `classify()`'s own `items`/`target` are the source, never re-derived
-    here."""
-    window_start = cutoff - timedelta(days=WINDOW_STEPS[-1] - 1)
+    .external_view`'s own `connections` list makes); `coverage`/`missing_days`/`days` read this
+    same call's own `cutoff` and day states (`read`, F49 Contract V -- never re-derived), so they
+    can never disagree with what `classify()` above actually judged every ad against. The judged
+    window is the widest step clipped to the campaign (`coverage.window`); `coverage` keeps its
+    `{start, end}` shape = the first and last read day inside it (null when none), `days` serves
+    every day's state. `capacity` (F27-I06 Contract F) is passed in already computed --
+    `classify()`'s own `items`/`target` are the source, never re-derived here."""
+    window_start, window_end = read.window(cutoff, WINDOW_STEPS[-1])
     return {
         "sync": repository.campaign_sync_state(conn, org_id, brand_id, campaign),
-        "coverage": (
-            {"start": coverage[0].isoformat(), "end": coverage[1].isoformat()}
-            if coverage else None
-        ),
-        "missing_days": _missing_days(coverage, window_start, cutoff),
+        "coverage": read.read_span(window_start, window_end),
+        "missing_days": read.missing(window_start, window_end),
+        "days": read.days(window_start, window_end),
         "capacity": capacity,
     }
 
 
-def _missing_days(coverage, start, end):
-    """The days of `[start, end]` outside the recorded `coverage` range, oldest first, capped at
-    31 (F24-I01, feature Decisions) -- empty when `coverage` is `None` (never synced), since a
-    campaign that has never synced says so through `sync.state == "never"`, not a wall of missing
-    dates."""
-    if coverage is None:
-        return []
-    coverage_start, coverage_end = coverage
-    days = []
-    day = start
-    while day <= end:
-        if day < coverage_start or day > coverage_end:
-            days.append(day.isoformat())
-        day += timedelta(days=1)
-    return days[:31]
+def _read_days(conn, org_id, brand_id, campaign, cutoff):
+    """F49 Contract V: the campaign's day states (`coverage.load`) over every window any ad of it
+    can be judged on -- `[cutoff - _MAX_LOOKBACK_DAYS, cutoff]`, one read per campaign."""
+    return coverage.load(
+        conn, org_id, brand_id, campaign, cutoff - timedelta(days=_MAX_LOOKBACK_DAYS), cutoff,
+    )
 
 
-def _coverage(campaign):
-    """This campaign's own recorded `observations` sync coverage (`external_repository
-    .record_sync`, written by `external_sync.py::run_sync` when the observations section
-    completes cleanly) -- `ads_campaign.context_json->'external_sync'->'observations'->'coverage'`,
-    read once per campaign, never a per-ad query. `None` when never synced."""
-    sync = (campaign.get("context_json") or {}).get("external_sync") or {}
-    coverage = (sync.get("observations") or {}).get("coverage") or {}
-    start, end = coverage.get("start"), coverage.get("end")
-    if not start or not end:
-        return None
-    return date.fromisoformat(start), date.fromisoformat(end)
-
-
-def coverage_gap(campaign, start, end):
-    """F37 Contract Q: the unread days of `[start, end]` against this campaign's recorded
-    observations coverage -- the one rule the performance tab, closeout and review share with
-    triage (`_coverage` / `_missing_days`, so it is capped at 31 the same way). Never synced is
-    its own answer (`never_synced: True`, `missing_days: []`), never a wall of dates."""
-    coverage = _coverage(campaign)
-    if coverage is None:
-        return {"never_synced": True, "missing_days": []}
-    return {"never_synced": False, "missing_days": _missing_days(coverage, start, end)}
-
-
-def _window_covered(coverage, start, end):
-    """A user can request any <=31-day sync range, so a 28-day judgement window may rest on far
-    fewer actually-synced days -- `_result_view` only ever judges rows that exist, so an unsynced
-    day would silently read as "no row, so it doesn't count against known days", never surfacing
-    as the missing evidence it is (review-arbitrated blocker). `[start, end]` must sit entirely
-    inside the recorded coverage range, or this window can't be trusted at all."""
-    if coverage is None:
-        return False
-    coverage_start, coverage_end = coverage
-    return start >= coverage_start and end <= coverage_end
+def _judged_cutoff(conn, org_id, brand_id, campaign):
+    """The last day this campaign is judged on: the account's last complete day, never past the
+    campaign's own end date (`coverage.window`) -- an ended campaign is judged up to its end."""
+    cutoff = _account_cutoff(conn, org_id, brand_id, campaign["id"])
+    return coverage.window(campaign, cutoff, 1)[1]
 
 
 def _account_cutoff(conn, org_id, brand_id, campaign_id):
@@ -590,7 +553,10 @@ def _thumbnail_url(entity):
     return fields.get("thumbnail_url") or fields.get("image_url") or None
 
 
-def _classify_ad(entity, campaign_name, campaign_objective, target, cutoff, coverage, entity_rows):
+def _classify_ad(entity, campaign_name, campaign_objective, target, cutoff, read, entity_rows):
+    """One ad's grade. Every window is `read.window` (F49 Contract V: ends at the judged cutoff,
+    starts no earlier than the campaign's start) and must be read on every campaign day
+    (`read.covered`: `data` or `empty`) before it proves anything."""
     base = {
         "entity_id": entity["id"], "native_id": entity["native_id"], "name": entity.get("name"),
         "campaign_id": entity["campaign_id"], "campaign_name": campaign_name,
@@ -607,7 +573,7 @@ def _classify_ad(entity, campaign_name, campaign_objective, target, cutoff, cove
         # F29-I01 Contract A: the previous equal-length window graded by the same ruler -- null
         # when it isn't fully synced, not graded (剛開始／資料不足), or when this ad isn't judged.
         previous_grade = None
-        if grade[0] != "no_target" and _window_covered(coverage, previous_start, previous_end):
+        if grade[0] != "no_target" and read.covered(previous_start, previous_end):
             prev_grade = grade_window(prev_view, prev_spend, target["value"], days)[0]
             previous_grade = prev_grade if prev_grade in GRADED else None
         return {
@@ -622,9 +588,8 @@ def _classify_ad(entity, campaign_name, campaign_objective, target, cutoff, cove
         }
 
     if target["value"] is None:
-        first_days = WINDOW_STEPS[0]
-        first_end = cutoff
-        first_start = first_end - timedelta(days=first_days - 1)
+        first_start, first_end = read.window(cutoff, WINDOW_STEPS[0])
+        first_days = max((first_end - first_start).days + 1, 0)
         first_view, first_spend = _ad_window(entity_rows, first_start, first_end)
         return finish("no_target", "target_unresolved", _NOT_JUDGED, first_start, first_end,
                       first_days, None, first_view, first_spend)
@@ -633,10 +598,18 @@ def _classify_ad(entity, campaign_name, campaign_objective, target, cutoff, cove
     extended_from = None
     graded = None
     for step_idx, step_days in enumerate(WINDOW_STEPS):
-        days = step_days
-        end = cutoff
-        start = end - timedelta(days=days - 1)
-        if not _window_covered(coverage, start, end):
+        step_start, step_end = read.window(cutoff, step_days)
+        if start is not None and step_start == start:
+            # Clipped at the campaign's start: a longer step reads the same days again.
+            break
+        if start is not None:
+            extended_from = days
+        start, end = step_start, step_end
+        days = (end - start).days + 1
+        if days <= 0:
+            # The campaign starts after the judged cutoff: nothing ran yet.
+            return finish("insufficient", "too_new", _TOO_NEW, start, end, 0, None, None, None)
+        if not read.covered(start, end):
             # Review blocker: an unsynced part of the window must never read as a proven
             # anything. Stop here -- a longer window is covered even less, so extending past a
             # coverage gap can only make the evidence worse, never better.
@@ -656,7 +629,6 @@ def _classify_ad(entity, campaign_name, campaign_objective, target, cutoff, cove
         # cost stops at the first covered window, whatever its sample size.
         if graded[0] != "insufficient" or step_idx == len(WINDOW_STEPS) - 1:
             break
-        extended_from = days
 
     # `graded` is always set (WINDOW_STEPS is never empty); a graded window always has a view.
     if graded is None or view is None or graded[0] not in GRADED:
@@ -668,7 +640,7 @@ def _classify_ad(entity, campaign_name, campaign_objective, target, cutoff, cove
     # trend note (`class`) insufficient, it never blocks the grade.
     grade = graded[:2]
     previous_start, previous_end = _previous_range(start, days)
-    if not _window_covered(coverage, previous_start, previous_end):
+    if not read.covered(previous_start, previous_end):
         return finish("insufficient", "no_previous_window", grade, start, end, days,
                       extended_from, view, spend)
     prev_view, prev_spend = _ad_window(entity_rows, previous_start, previous_end)
@@ -775,21 +747,21 @@ def _month_view_fn(conn, org_id, brand_id):
 
 def _campaign_insufficiency(conn, org_id, brand_id, campaign_id):
     """This one campaign's own `data` block plus its name (F26-I01, feature Decisions "I01") --
-    reuses `classify()`'s own `_coverage`/`_account_cutoff`/`_data_view` seam, which never touches
-    `ads_external_daily` (only the campaign's own `context_json` and its bound account), so this
-    stays cheap alongside the per-campaign `classify()` call `_classify_brand` already makes.
+    reuses `classify()`'s own `_judged_cutoff`/`_read_days`/`_data_view` seam (one read of the
+    campaign's row days, F49 Contract V), so this stays cheap alongside the per-campaign
+    `classify()` call `_classify_brand` already makes.
     `None` when the campaign no longer exists (defensive -- `_non_closed_campaign_ids` only just
     listed live ids, but nothing here holds that row locked in between)."""
     campaign = repository.get_campaign(conn, org_id, brand_id, campaign_id)
     if campaign is None:
         return None
-    coverage = _coverage(campaign)
-    cutoff = _account_cutoff(conn, org_id, brand_id, campaign_id)
+    cutoff = _judged_cutoff(conn, org_id, brand_id, campaign)
+    read = _read_days(conn, org_id, brand_id, campaign, cutoff)
     # `capacity=None`: this helper only ever reads `missing_days`/`sync`/`coverage` back off
     # `data` (never serialised to a caller as `TriageData` itself) -- computing a real capacity
     # here would need `items`/`target`/an owner lookup this lightweight helper doesn't have.
-    data = _data_view(conn, org_id, brand_id, campaign, cutoff, coverage, capacity=None)
-    return {"campaign_name": campaign["name"], "data": data, "cutoff": cutoff, "coverage": coverage}
+    data = _data_view(conn, org_id, brand_id, campaign, cutoff, read, capacity=None)
+    return {"campaign_name": campaign["name"], "data": data, "cutoff": cutoff, "read": read}
 
 
 # F27-I09 correction 2: `auth_expired` is a failing-to-sync state exactly like `failed`/
@@ -874,9 +846,9 @@ def _cleanup_candidates(conn, org_id, brand_id, by_campaign, scale_owner_by_camp
         info = _campaign_insufficiency(conn, org_id, brand_id, campaign_id)
         if info is None:
             continue
-        cutoff, coverage = info["cutoff"], info["coverage"]
+        cutoff, read = info["cutoff"], info["read"]
         window_start = cutoff - timedelta(days=6)
-        if not _window_covered(coverage, window_start, cutoff):
+        if not read.covered(window_start, cutoff):
             continue
         target_value = campaign_items[0]["target"].get("value")
         capacity = triage_capacity.capacity_view(campaign_items, target_value, owner_by_entity)

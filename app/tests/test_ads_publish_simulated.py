@@ -13,7 +13,7 @@ from datetime import timedelta
 from unittest.mock import patch
 
 import app.shared.web as web
-from app.ads import channels, external_repository, external_sync, outcome, plan
+from app.ads import channels, coverage, external_repository, external_sync, outcome, plan
 from app.ads import repository as ads_repo
 from app.ads.adapters import simulated, simulated_read
 from app.ads.adapters.external import SourceReadError
@@ -88,10 +88,11 @@ class SimulatedPublishTestBase(unittest.TestCase):
         ).fetchall()
         return [dict(r) for r in rows]
 
-    def _coverage(self, campaign_id: str) -> dict | None:
+    def _coverage(self, campaign_id: str) -> list | None:
+        """The campaign's recorded read ranges (F49 Contract V, `coverage.served`); `None` when
+        nothing was recorded."""
         campaign = ads_repo.get_campaign(web.conn, self.org_id, self.brand_id, campaign_id)
-        sync = (campaign.get("context_json") or {}).get("external_sync") or {}
-        return (sync.get("observations") or {}).get("coverage")
+        return coverage.served(campaign) or None
 
     def _meta_entity_spend_count(self) -> int:
         row = web.conn.execute("SELECT COUNT(*) AS n FROM meta_entity_spend").fetchone()
@@ -206,7 +207,7 @@ class PublishFillsOutcomeWithoutFurtherCallTest(SimulatedPublishTestBase):
             len([r for r in self._outcome_rows(detail["id"]) if r["entity_kind"] == "group"]), 10,
         )
         self.assertEqual(self._coverage(detail["id"]),
-                         {"start": start.isoformat(), "end": self.today.isoformat()})
+                         [{"start": start.isoformat(), "end": self.today.isoformat()}])
         campaign = ads_repo.get_campaign(web.conn, self.org_id, self.brand_id, detail["id"])
         observations = campaign["context_json"]["external_sync"]["observations"]
         self.assertEqual(observations["status"], "success")
@@ -253,8 +254,8 @@ class GenerateOutcomesIdempotentTest(SimulatedPublishTestBase):
         simulated.generate_outcomes(web.conn, self.org_id, self.brand_id, detail["id"], seed=3)
 
         self.assertEqual(self._coverage(detail["id"]),
-                         {"start": (start - timedelta(days=1)).isoformat(),
-                          "end": self.today.isoformat()})
+                         [{"start": (start - timedelta(days=1)).isoformat(),
+                           "end": self.today.isoformat()}])
         group_days = {r["day"] for r in self._outcome_rows(detail["id"])
                       if r["entity_kind"] == "group"}
         self.assertEqual(len(group_days), 4)
@@ -372,7 +373,7 @@ class ReReadThroughTheSyncPipelineTest(SimulatedPublishTestBase):
         task = job["tasks"][f"{detail['id']}:observations:{window[0]}:{window[1]}"]
         self.assertEqual(task["status"], "succeeded")
         self.assertEqual(self._coverage(detail["id"]),
-                         {"start": window[0].isoformat(), "end": window[1].isoformat()})
+                         [{"start": window[0].isoformat(), "end": window[1].isoformat()}])
         campaign = ads_repo.get_campaign(web.conn, self.org_id, self.brand_id, detail["id"])
         self.assertEqual(
             campaign["context_json"]["external_sync"]["observations"]["status"], "success",

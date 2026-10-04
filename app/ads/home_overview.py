@@ -29,6 +29,7 @@ from decimal import Decimal
 
 from app.ads import (
     change_control_launch,
+    coverage,
     handoff_assignment,
     lifecycle,
     month_budget,
@@ -422,15 +423,11 @@ def _daily_budget(conn, org_id, brand_id, campaign, active_ads, draft,
     return triage_capacity.capacity_view(items, None, owner_by_entity or {})["daily_budget"]
 
 
-def _missing_days(campaign, win) -> list:
+def _missing_days(conn, org_id, brand_id, campaign, win) -> list:
+    """This month's unread days up to the cutoff, clipped to the campaign (F49 Contract V)."""
     if win["data_days"] <= 0:
         return []
-    start = win["start"]
-    if campaign.get("start_date") and campaign["start_date"] > start:
-        start = campaign["start_date"]
-    if start > win["cutoff"]:
-        return []
-    return triage._missing_days(triage._coverage(campaign), start, win["cutoff"])
+    return coverage.missing_days(conn, org_id, brand_id, campaign, win["start"], win["cutoff"])
 
 
 _HANDOFF_CHECK_STATES = frozenset({"reported", "unknown", "deviated"})
@@ -519,7 +516,7 @@ def _campaigns_block(conn, org_id, brand_id, win, campaigns, caps, entities, row
         sync = repository.campaign_sync_state(
             conn, org_id, brand_id, campaign, accounts_cache=accounts_cache,
         )
-        missing_days = [] if draft else _missing_days(campaign, win)
+        missing_days = [] if draft else _missing_days(conn, org_id, brand_id, campaign, win)
         entry = {
             "campaign_id": campaign_id, "name": campaign["name"], "origin": campaign["origin"],
             "status": campaign["status"], "lifecycle": state, "running": running,

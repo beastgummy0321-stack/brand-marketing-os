@@ -87,6 +87,13 @@ def _obs(conn, org, brand, campaign_id, ad_id, day, *, spend, count=0):
 
 
 def _synced(conn, org, brand, campaign_id, start, end):
+    """The campaign's recorded read ranges become exactly `[start, end]` (F49 Contract V:
+    `record_sync` keeps a union, so the earlier ranges are cleared first)."""
+    conn.execute(
+        "UPDATE ads_campaign SET context_json = context_json "
+        "#- '{external_sync,observations,ranges}' WHERE id=%s",
+        (campaign_id,),
+    )
     external.record_sync(
         conn, org, brand, campaign_id, section="observations",
         state={"status": "success", "last_success_at": db.now_utc().isoformat(),

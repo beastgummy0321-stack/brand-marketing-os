@@ -4,6 +4,7 @@ import unittest
 from datetime import date
 from unittest.mock import patch
 
+from app.ads import external_repository as external
 from app.ads import month_budget as budget
 from app.brand_intelligence import repository as brands
 from app.core import db
@@ -346,3 +347,59 @@ class FreshnessClockTest(unittest.TestCase):
         with patch.object(budget, "now_utc", return_value=stamp + timedelta(hours=23)):
             self.assertTrue(budget._fresh(stamp.replace(tzinfo=None).isoformat() + "Z"))
         self.assertFalse(budget._fresh(None))
+
+
+class ImportedCampaignMonthCoverageTest(unittest.TestCase):
+    """F49 Contract V: an imported campaign with no account-month proof is complete for the month
+    only when every campaign day so far was read (`coverage.covered`) -- a range read in two
+    parts counts, a gap does not."""
+
+    GAP = "本月成效仍有缺日，已知花費不是完整月累計。"
+
+    def setUp(self):
+        self.conn, self.org = db.current(), db.DEV_ORG_ID
+        self.brand = brands.create_brand(
+            self.conn, org_id=self.org, name="月額缺日", actor="test", client_name=None
+        )["id"]
+        self.campaign = external.create_imported_campaign(
+            self.conn, self.org, self.brand, name="既有活動"
+        )["id"]
+        external.upsert_entity(
+            self.conn, self.org, self.brand, self.campaign,
+            {"platform": "meta", "source_account": "act_1", "native_kind": "campaign",
+             "native_id": "c1"},
+        )
+        self.conn.commit()
+
+        class Reader:
+            def accounts(self, conn, org, brand):
+                return [{"account_id": "act_1", "currency": "TWD", "timezone_name": "Asia/Taipei"}]
+
+        patcher = patch.object(
+            budget.channels, "external_reader",
+            side_effect=lambda key: Reader() if key == "meta" else None,
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def read(self, start, end):
+        external.record_sync(
+            self.conn, self.org, self.brand, self.campaign, section="observations",
+            state={"status": "success", "coverage": {"start": str(start), "end": str(end)}},
+        )
+        self.conn.commit()
+
+    def issues(self):
+        return budget._inventory(self.conn, self.org, self.brand, date(2026, 9, 1),
+                                 date(2026, 9, 10))[2]
+
+    def test_a_fully_read_month_has_no_missing_days(self):
+        # Two clean reads finishing in either order: the union covers the month so far.
+        self.read(date(2026, 9, 6), date(2026, 9, 10))
+        self.read(date(2026, 9, 1), date(2026, 9, 5))
+        self.assertNotIn(self.GAP, self.issues())
+
+    def test_a_gap_is_missing_days(self):
+        self.read(date(2026, 9, 1), date(2026, 9, 4))
+        self.read(date(2026, 9, 6), date(2026, 9, 10))
+        self.assertIn(self.GAP, self.issues())

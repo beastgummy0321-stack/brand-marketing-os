@@ -92,9 +92,10 @@ def _missing_sentence(gap: dict) -> str:
 
 def _coverage_check(campaign: dict, coverage: dict, skip_missing: bool) -> dict | None:
     """F37 Contract Q (ruling 3): refuse a window the platform read does not cover. `coverage` is
-    `outcome.summary()`'s block -- `triage.coverage_gap` over `start_date … min(end_date, org
-    yesterday)`, the one rule the performance tab and review share. The skip opens only after the
-    last observations read ended `error` (every successful read resets the status), or for an
+    `outcome.summary()`'s block -- `coverage.gap` (F49 Contract V) over `start_date …
+    min(end_date, org yesterday)`, the one rule the performance tab and review share. The skip
+    opens only after the last observations read ended `error` (every successful read resets the
+    status), or for an
     isolated simulation recovery, whose only "read" is the user typing days in. Returns the gap
     when a permitted skip goes ahead, `None` when the window is fully covered."""
     gap = {"never_synced": coverage["never_synced"], "missing_days": coverage["missing_days"]}

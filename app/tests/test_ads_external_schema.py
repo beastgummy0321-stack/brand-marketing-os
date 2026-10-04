@@ -194,7 +194,8 @@ class ExternalSchemaTest(unittest.TestCase):
             self.brand,
             self.campaign,
             section="observations",
-            state={"last_success_at": "2026-01-01", "coverage": ["2025-12-01", "2026-01-01"]},
+            state={"last_success_at": "2026-01-01",
+                   "coverage": {"start": "2025-12-01", "end": "2026-01-01"}},
         )
         external.record_sync(
             self.conn,
@@ -212,7 +213,9 @@ class ExternalSchemaTest(unittest.TestCase):
         )
         view = external.external_view(self.conn, self.org, self.brand, self.campaign)
         self.assertEqual(view["sync"]["observations"]["last_success_at"], "2026-01-01")
-        self.assertEqual(view["coverage"]["observations"], ["2025-12-01", "2026-01-01"])
+        # F49 Contract V: the clean range is kept in the stored union through the failure.
+        self.assertEqual(view["coverage"]["observations"],
+                         [{"start": "2025-12-01", "end": "2026-01-01"}])
 
     def test_non_finite_values_and_false_availability_rejected(self):
         for value in (float("nan"), float("inf"), float("-inf")):

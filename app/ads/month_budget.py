@@ -10,6 +10,7 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 
 from app.ads import channels, lifecycle
+from app.ads import coverage as read_coverage
 from app.ads.external_repository import is_monthly_budget_row
 from app.brand_intelligence import repository as brands
 from app.core import db, input_rules, settings
@@ -361,11 +362,9 @@ def _inventory(conn, org, brand, start, today):
             }
             if campaign_accounts and campaign_accounts <= covered_accounts.keys():
                 continue
-            sync = (campaign["context_json"] or {}).get("external_sync", {})
-            coverage = (sync.get("observations") or {}).get("coverage") or {}
-            if (_date(coverage.get("start")) or date.max) > start or (
-                _date(coverage.get("end")) or date.min
-            ) < min(today, start.replace(day=calendar.monthrange(start.year, start.month)[1])):
+            # F49 Contract V: every campaign day of the month so far is read (a row, or a clean
+            # read range with no row), clipped to the campaign's own dates.
+            if not read_coverage.covered(conn, org, brand, campaign, start, coverage_end):
                 issues.append("本月成效仍有缺日，已知花費不是完整月累計。")
         elif campaign.get("external_id") and not any(
             e["native_id"] == campaign["external_id"] and not e.get("parent_native_id")

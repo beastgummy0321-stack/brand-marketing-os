@@ -141,14 +141,19 @@ export interface CampaignDataStatus {
 }
 /** F24-I01: the read-only `data` enrichment of `CampaignTriage` (`app/ads/triage.py::_data_view`)
  * — `sync` is the same `CampaignSyncState` shape `CampaignCard.data.sync` carries (`adsApi.ts`).
- * `coverage` is this campaign's own recorded sync coverage, `null` when never synced.
- * `missing_days` are the days of the SAME window `classify()` judges every ad with (`window_days`
- * back from the account cutoff) that fall outside `coverage` — always `[]` when `coverage` is
- * `null` (that case reads through `sync.state === "never"`, not a wall of missing dates). */
+ * F49 Contract V: the judged window is the SAME window `classify()` judges every ad with
+ * (`window_days` back from the cutoff, ended at the campaign's end date, starting no earlier than
+ * its start date). `coverage` is the first and last read day inside it, `null` when none.
+ * `missing_days` are its unread days — `[]` when nothing was ever read (that case reads through
+ * `sync.state === "never"`, not a wall of missing dates). `days` is every day of the window with
+ * its state: `data` (a row), `empty` (read cleanly, no row) or `missing`. */
+export type TriageDayState = "data" | "empty" | "missing";
 export interface TriageData {
   sync: CampaignSyncState;
   coverage: { start: string; end: string } | null;
   missing_days: string[];
+  // Optional: existing hand-written `data` fixtures predate it (F49-I10 paints it on /wait).
+  days?: { day: string; state: TriageDayState }[];
   /** F29 Contract D: the one "has data / why not" state of this window (`campaign_data_status`). */
   status: CampaignDataStatus;
   // F27-I06: optional for the same `do_not_touch`-vs-`touch` scope conflict `CampaignData

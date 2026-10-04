@@ -31,6 +31,12 @@ comparison outside `lifecycle.py`／`adapters/`; and campaign-selection SQL on `
 F49-I02 (Contract O, one sync outcome): an SQL write of `ads_external_sync_job` (its
 `status`／`error`) outside `external_sync.py`, and a read of a sync task's `errors`／`error_code`
 outside `external_sync.py`, each fail, naming file and line.
+
+F49-I03 (Contract V, coverage): a read of a `coverage`／`ranges` key (`x["coverage"]`,
+`x.get("ranges")`, an SQL path `->'coverage'`) outside `coverage.py` and the writer
+`external_repository.record_sync` fails, naming file, function and line -- unless the
+`(file, function, key)` is listed with why it is not the stored observations read range (the
+monthly task's own proof, a served block's key).
 """
 
 import ast
@@ -722,6 +728,99 @@ class OneSyncOutcomeTest(unittest.TestCase):
         self.assertEqual(
             sorted((f, line, k) for f, line, k in _task_error_reads(tree)),
             [("fallback", 6, "error_code"), ("fallback", 6, "errors")],
+        )
+
+
+# -- F49 Contract V: one coverage reader -----------------------------------------------------------
+
+# The one reader of a campaign's recorded observations ranges, and its one writer (which takes
+# the clean read's `{start, end}` as its `coverage` input).
+COVERAGE_FILE = "coverage.py"
+COVERAGE_WRITER = ("external_repository.py", "record_sync", "coverage")
+COVERAGE_KEYS = {"coverage", "ranges"}
+_COVERAGE_SQL = re.compile(r"->>?\s*'(coverage|ranges)'|observations,(coverage|ranges)\}")
+# (file relative to app/ads, function, key) -> why that read is not the stored observations
+# range. Never widen this to hide a range read: call `coverage.load`／`gap`／`covered` instead.
+NOT_THE_READ_RANGE = {
+    ("external_sync.py", "_save_monthly", "coverage"):
+        "the monthly task's own account-month proof (`account_campaign_day`)",
+    ("month_budget.py", "_inventory", "coverage"):
+        "the monthly task's own account-month proof (`account_campaign_day`)",
+    ("asset_binding.py", "_eligible", "coverage"):
+        "an asset-binding interval's own `continuous` flag",
+    ("closeout.py", "close", "coverage"): "the `coverage` block `outcome.summary` serves",
+    ("triage.py", "_insufficient_candidates", "coverage"):
+        "the triage `data.coverage` read span this call serves",
+}
+
+
+def _coverage_reads(tree):
+    """Yield `(function_name, lineno, key)` for every `x["coverage"／"ranges"]` load,
+    `x.get(...)`／`x.pop(...)` of those keys, and SQL string reading them as a jsonb path."""
+    parents = _parents(tree)
+    for node in ast.walk(tree):
+        key = None
+        if isinstance(node, ast.Subscript) and isinstance(node.ctx, ast.Load) \
+                and isinstance(node.slice, ast.Constant):
+            key = node.slice.value
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
+                and node.func.attr in {"get", "pop"} and node.args \
+                and isinstance(node.args[0], ast.Constant):
+            key = node.args[0].value
+        if key in COVERAGE_KEYS:
+            yield _enclosing(parents, node), node.lineno, key
+    skip = _docstrings(tree)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str) and node not in skip:
+            match = _COVERAGE_SQL.search(node.value)
+            if match:
+                yield _enclosing(parents, node), node.lineno, match.group(1) or match.group(2)
+
+
+class OneCoverageReaderTest(unittest.TestCase):
+    """F49 Contract V: "which days were read" has one reader, `coverage.py`; everything else
+    calls it (`load`／`missing_days`／`covered`／`gap`)."""
+
+    def test_read_ranges_are_read_only_by_the_coverage_module(self):
+        offenders, seen, writer = [], set(), []
+        for path in _ads_files():
+            relative = path.relative_to(ADS_DIR).as_posix()
+            if relative == COVERAGE_FILE:
+                continue
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for function, line, key in _coverage_reads(tree):
+                entry = (relative, function, key)
+                if entry == COVERAGE_WRITER:
+                    writer.append(line)
+                    continue
+                if entry in NOT_THE_READ_RANGE:
+                    seen.add(entry)
+                    continue
+                offenders.append(f"app/ads/{relative}:{line} in {function}(): {key}")
+        self.assertEqual(
+            offenders, [],
+            "a read of the stored coverage／ranges outside coverage.py -- call coverage.load／"
+            "missing_days／covered／gap (F49 V)",
+        )
+        # The writer still takes the read's range; an allow entry whose read is gone must go too.
+        self.assertTrue(writer)
+        self.assertEqual(set(NOT_THE_READ_RANGE), seen)
+
+    def test_the_coverage_scan_sees_each_planted_shape(self):
+        source = "\n".join([
+            '"""context_json->\'coverage\' in prose is fine."""',
+            "def gap(campaign, sync):",
+            "    obs = sync['observations']",
+            "    a = obs.get('coverage') or obs['ranges']",
+            "    q = \"SELECT context_json->'external_sync'->'observations'->'ranges' FROM t\"",
+            "    r = \"UPDATE t SET c = c #- '{external_sync,observations,coverage}'\"",
+            "    built = {'coverage': None, 'ranges': []}",
+            "    return a, q, r, built",
+        ])
+        self.assertEqual(
+            sorted((f, line, k) for f, line, k in _coverage_reads(ast.parse(source))),
+            [("gap", 4, "coverage"), ("gap", 4, "ranges"), ("gap", 5, "ranges"),
+             ("gap", 6, "coverage")],
         )
 
 

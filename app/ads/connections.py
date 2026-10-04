@@ -18,16 +18,17 @@ Sources, in screen order:
 An account's days come from pull coverage, never from spend rows (a day read with no spend is
 `ok`). Coverage is the union of the account's `monthly:*` reads in `ads_external_sync_job`
 (account-wide, one month each: a succeeded task, and the `last_covered` range a reset task carries
-from its last good read, so a read in flight or failed never un-proves days) and the recorded
-observations coverage of each of its campaigns (`triage._coverage`, kept on a failed read, so a
-failure after a good read leaves only the unread days missing). A read proves a day only once the
-day was over when the read finished: each range ends at most the day before its finish moment
-(`completed_at` for a month task, the section's `last_success_at` for a campaign) in the
-account's timezone, so a day read while still running is never `ok`. A campaign misses the
-days after its own coverage that no monthly read covered either (`triage._missing_days`), from
-its first covered day on; an account without campaign coverage misses the days its monthly reads
-did not cover, from its first monthly day on. Days before any read are `none`; an account never
-read at all misses every day (its note says 「還沒讀取過」, not a list of dates).
+from its last good read, so a read in flight or failed never un-proves days) and the read days of
+each of its campaigns (`coverage.load`, F49 Contract V: a day with a row, or inside one of the
+campaign's clean read ranges -- kept on a failed read, so a failure after a good read leaves only
+the unread days missing). A read proves a day only once the day was over when the read finished:
+each range ends at most the day before its finish moment (`completed_at` for a month task, the
+section's `last_success_at` for a campaign) in the account's timezone, so a day read while still
+running is never `ok`. A campaign misses its unread days that no monthly read covered either,
+from its first read day on and inside its own dates; an account without campaign coverage misses
+the days its monthly reads did not cover, from its first monthly day on. Days before any read are
+`none`; an account never read at all misses every day (its note says 「還沒讀取過」, not a list of
+dates).
 
 Account state, first match: `auth_expired` / `failed` (the latest account-wide read -- the `list`
 task, the newest `monthly` task or a read that could not be requested, judged by
@@ -50,10 +51,10 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from app.ads import (
     adapters,
     channels,
+    coverage,
     external_sync,
     lifecycle,
     repository,
-    triage,
     wizard_options,
 )
 from app.core import settings as coresettings
@@ -85,6 +86,13 @@ def _moment(value):
         except ValueError:
             return None
     return value if isinstance(value, datetime) else None
+
+
+def _proven_until(finished, zone):
+    """The last day a read finished at `finished` proves (the day before, in `zone`); `None` when
+    there is no finish moment (the ranges as recorded)."""
+    moment = _moment(finished)
+    return None if moment is None else moment.astimezone(zone).date() - timedelta(days=1)
 
 
 def _proven(start, end, finished, zone):
@@ -204,24 +212,24 @@ def _account(conn, org_id, brand_id, channel, account, span, accounts_cache):
     affected = []
     campaign_covered = False
     for campaign in _account_campaigns(conn, org_id, brand_id, platform, account_id):
-        coverage = triage._coverage(campaign)
-        if coverage is not None:
-            observed = ((campaign.get("context_json") or {}).get("external_sync") or {}).get(
-                "observations"
-            ) or {}
-            coverage = _proven(*coverage, observed.get("last_success_at"), zone)
+        observed = ((campaign.get("context_json") or {}).get("external_sync") or {}).get(
+            "observations"
+        ) or {}
+        read = coverage.load(
+            conn, org_id, brand_id, campaign, window_start, yesterday,
+            proven_until=_proven_until(observed.get("last_success_at"), zone),
+        ) if window_start <= yesterday else None
         sync = repository.campaign_sync_state(
             conn, org_id, brand_id, campaign, accounts_cache=accounts_cache,
         )
         moments.append(sync["last_success_at"])
         own: set[date] = set()
-        if coverage is not None:
+        if read is not None and read.first_read is not None and read.first_read <= yesterday:
             campaign_covered = True
-            ranges.append(coverage)
-            start = max(window_start, coverage[0])
+            ranges.extend((day, day) for day in read.read_days(window_start, yesterday))
+            start = max(window_start, read.first_read)
             own = {
-                day for day in map(date.fromisoformat,
-                                   triage._missing_days(coverage, start, yesterday))
+                day for day in map(date.fromisoformat, read.missing(start, yesterday, cap=None))
                 if not _covered(monthly, day)
             }
         if sync["state"] in _FAILING:

@@ -4,13 +4,13 @@ Nothing is scheduled at approve: the review monitor only takes ads, only "now", 
 future date there would trigger paid LLM rounds on a timer no one asked for. `next_review_at`,
 `spend_stopped` and `delivery_started` are instead derived fresh, on every read, from the item's
 own stored `approved_at` (the change set's) / `verified_at` (the item's own `ads_action` row) and
-the campaign's own synced coverage (`triage._coverage`). The daily queue refresh re-judging the ad
-once `next_review_at` arrives is a different issue's concern; this module only ever reports facts.
+the campaign's own read days (`coverage.load`, F49 Contract V). The daily queue refresh
+re-judging the ad once `next_review_at` arrives is a different issue's concern; this module only
+ever reports facts.
 
-Read-only, no platform call, no LLM call (ARCHITECTURE.md §0 「程式整理，LLM 判斷」). `triage` is
-imported lazily inside `attach()` -- `change_control_data.get` (this module's only caller) already
-imports this module lazily for the same reason: `change_timeline -> triage -> review_evidence ->
-change_control_data` would be an import-time cycle if either import were module-level.
+Read-only, no platform call, no LLM call (ARCHITECTURE.md §0 「程式整理，LLM 判斷」). `coverage` is
+imported lazily inside `attach()`, as `triage` was -- `change_control_data.get` (this module's only
+caller) already imports this module lazily to keep import-time cycles out.
 """
 
 from datetime import timedelta
@@ -61,40 +61,53 @@ def _daily_rows(conn, org, brand, campaign_id, entity_ids):
     return by_entity
 
 
-def _spend_stopped(rows, coverage, verified_at):
+def _spend_stopped(rows, read, verified_at):
     """Correction 1: only the FIRST full day after `verified_at` -- true once that single day is
-    synced with no row or zero spend, false once it shows real spend, null until that day itself
-    is inside the campaign's recorded coverage (`triage._coverage`)."""
-    if verified_at is None or coverage is None:
+    read with no row or zero spend, false once it shows real spend, null until that day itself
+    is read for the campaign (`data` or `empty`, F49 Contract V)."""
+    if verified_at is None or read is None:
         return None
     day = verified_at.date() + timedelta(days=1)
-    coverage_start, coverage_end = coverage
-    if day < coverage_start or day > coverage_end:
+    if read.states.get(day, read.MISSING) == read.MISSING:
         return None
     total = sum(float(r["spend"]) for r in rows if r["day"] == day and r["spend"] is not None)
     return total <= 0
 
 
-def _delivery_started(rows, coverage, verified_at):
-    """Contract H: any day after `verified_at` with impressions > 0 -- null while the campaign's
-    recorded coverage has not yet reached a day past `verified_at` (nothing to judge yet)."""
-    if verified_at is None or coverage is None:
+def _delivery_started(rows, read, verified_at):
+    """Contract H: any day after `verified_at` with impressions > 0 -- null while no day past
+    `verified_at` has been read for the campaign yet (nothing to judge yet)."""
+    if verified_at is None or read is None:
         return None
-    _, coverage_end = coverage
-    if coverage_end <= verified_at.date():
+    first = verified_at.date() + timedelta(days=1)
+    if not any(day >= first and state != read.MISSING for day, state in read.states.items()):
         return None
     return any(row["day"] > verified_at.date() and (row["impressions"] or 0) > 0 for row in rows)
+
+
+def _read(conn, org, brand, campaign_row, items):
+    """The campaign's day states (`coverage.load`, not clipped: these are facts about single
+    days) from the first day after the earliest verification through the last recorded read day
+    (or yesterday, whichever is later) -- `None` when no item is verified."""
+    from app.ads import coverage  # Lazy: see module docstring for the import cycle this avoids.
+    from app.core import settings
+
+    verified = [item["verified_at"] for item in items if item.get("verified_at")]
+    if not verified:
+        return None
+    start = min(verified).date() + timedelta(days=1)
+    yesterday = settings.today_for_org(conn, org_id=org) - timedelta(days=1)
+    end = max([start, yesterday, *(e for _, e in coverage.recorded(campaign_row))])
+    return coverage.load(conn, org, brand, campaign_row, start, end)
 
 
 def attach(conn, org, brand, campaign_id, campaign_row, approved_at, items):
     """Mutates `items` (the `view` dicts `change_control_data.get` builds for one change set),
     adding each item's own `timeline`. One extra query for any `new_ad` item's created entity, one
     for the daily rows any item could need -- never one query per item."""
-    from app.ads import triage  # Lazy: see module docstring for the import cycle this avoids.
-
     if not items:
         return items
-    coverage = triage._coverage(campaign_row)
+    read = _read(conn, org, brand, campaign_row, items)
     new_ad_item_ids = [item["id"] for item in items if item["kind"] == "new_ad"]
     new_ad_entities = _new_ad_entities(conn, org, brand, campaign_id, new_ad_item_ids)
     entity_ids = set()
@@ -109,12 +122,12 @@ def attach(conn, org, brand, campaign_id, campaign_row, approved_at, items):
         spend_stopped = delivery_started = None
         if kind == "pause":
             spend_stopped = _spend_stopped(
-                rows_by_entity.get(item["target_id"], []), coverage, verified_at
+                rows_by_entity.get(item["target_id"], []), read, verified_at
             )
         elif kind in ("copy", "new_ad"):
             entity = item["target_id"] if kind == "copy" else new_ad_entities.get(item["id"])
             delivery_started = _delivery_started(
-                rows_by_entity.get(entity, []) if entity else [], coverage, verified_at
+                rows_by_entity.get(entity, []) if entity else [], read, verified_at
             )
         item["timeline"] = {
             "spend_stopped": spend_stopped,
