@@ -108,8 +108,8 @@ class CoordinateLearningTestBase(unittest.TestCase):
         self.conn.commit()
 
     def _drill_ten(self, name="三盒組・第一期") -> tuple[dict, dict]:
-        """Drill-10 P1: 555 × 6 sales, 1,643 × 2, 1,769 × 2 and one ad that sold nothing on 900,
-        all under cap 450 -- nothing under the cap."""
+        """Drill-10 P1: 555 × 6 sales, 1,643 × 2, 1,769 × 2 and one ad that sold nothing on
+        1,500 (past the 沒賣出 line 3 × 450, F48-I13), all over cap 450 -- nothing under the cap."""
         campaign = self._campaign(name)
         group = self._group(campaign["id"])
         students, commuters = self.groups[0]["id"], self.groups[1]["id"]
@@ -129,7 +129,7 @@ class CoordinateLearningTestBase(unittest.TestCase):
         self._observe(campaign["id"], ids[ads["metro"]["id"]], days=2, spend=1643.0, results=1)
         self._observe(campaign["id"], ids[ads["overtime"]["id"]], days=2, spend=1769.0,
                       results=1)
-        self._observe(campaign["id"], ids[ads["nap"]["id"]], days=3, spend=300.0, results=0)
+        self._observe(campaign["id"], ids[ads["nap"]["id"]], days=3, spend=500.0, results=0)
         return campaign, ads
 
     def _close(self, campaign: dict) -> dict:
@@ -167,10 +167,10 @@ class CloseWritesRankedRowsTest(CoordinateLearningTestBase):
         overtime = rows[f"{campaign['id']}:{ads['overtime']['id']}"]
         self.assertIn("rank=3；of=4", overtime["applicability_scope"])
         nap = rows[f"{campaign['id']}:{ads['nap']['id']}"]
-        self.assertIn("verdict=replace；rank=4；of=4；sales=0；spend=900；cpr=none；cap=450；few=0"
+        self.assertIn("verdict=replace；rank=4；of=4；sales=0；spend=1500；cpr=none；cap=450；few=0"
                       "；group=none", nap["applicability_scope"])
         self.assertTrue(nap["learning_text"].startswith(
-            "第 4／4 名「會議前・午休五分鐘」沒賣出（花 900；上限 450）＝換掉；顧客群：未指定；",
+            "第 4／4 名「會議前・午休五分鐘」沒賣出（花 1,500；上限 450）＝換掉；顧客群：未指定；",
         ))
         self.assertEqual(nap["sample_size"], "低")
         self.assertEqual(
@@ -243,6 +243,45 @@ class CloseWritesRankedRowsTest(CoordinateLearningTestBase):
         (row,) = self._coordinate_rows()
         self.assertIn("group=pcg_gone", row["applicability_scope"])
         self.assertIn("；顧客群：已刪除的顧客群；", row["learning_text"])
+
+    def test_a_zero_under_the_unsold_line_writes_nothing_and_is_never_carried(self):
+        """F48-I13: 0 sales at 0.5 × cap is not ranked (triage's 剛開始) -- no coordinate row,
+        so `keep_ads` (which reads only stored 留下 rows) never carries it; the ranked ads' `of`
+        does not count it."""
+        campaign = self._campaign()
+        group = self._group(campaign["id"])
+        sold = self._ad(campaign["id"], group["id"], name="有賣", angle="box", pain="effort",
+                        customer_group_id=self.groups[0]["id"])
+        waiting = self._ad(campaign["id"], group["id"], name="半倍上限沒賣", angle="metro",
+                           pain="experience", customer_group_id=self.groups[1]["id"])
+        ids = outcome_seed.bind_platform(self.conn, self.org_id, self.brand_id, campaign["id"])
+        self.conn.commit()
+        self._observe(campaign["id"], ids[sold["id"]], days=2, spend=100.0, results=1)
+        self._observe(campaign["id"], ids[waiting["id"]], days=1, spend=CAP / 2, results=0)
+
+        self._close(campaign)
+
+        (row,) = self._coordinate_rows()
+        self.assertEqual(row["source_cycle_id"], f"{campaign['id']}:{sold['id']}")
+        self.assertIn("verdict=keep；rank=1；of=1", row["applicability_scope"])
+        carried = coordinate_learning.keep_ads(self.conn, self.org_id, self.brand_id,
+                                               self.product_id)
+        self.assertEqual([entry["ad"]["id"] for entry in carried], [sold["id"]])
+
+    def test_a_zero_at_the_unsold_line_is_written_as_replace(self):
+        campaign = self._campaign()
+        group = self._group(campaign["id"])
+        ad = self._ad(campaign["id"], group["id"], name="三倍上限沒賣", angle="metro",
+                      pain="experience", customer_group_id=None)
+        ids = outcome_seed.bind_platform(self.conn, self.org_id, self.brand_id, campaign["id"])
+        self.conn.commit()
+        self._observe(campaign["id"], ids[ad["id"]], days=3, spend=CAP, results=0)
+
+        self._close(campaign)
+
+        (row,) = self._coordinate_rows()
+        self.assertIn("verdict=replace；rank=1；of=1；sales=0；spend=1350；cpr=none",
+                      row["applicability_scope"])
 
     def test_partial_data_writes_no_ranked_row(self):
         campaign, _ads = self._drill_ten()

@@ -33,8 +33,9 @@ ACCOUNT_TZ = "Asia/Taipei"
 MONTH = "2026-08"
 START, END = date(2026, 8, 1), date(2026, 8, 31)
 AFTER = date(2026, 9, 10)  # a day well after August ended
-# F48-I02: every fixture ad the ranking places (留下 or 換掉) is written; none is a skip.
-LEARNABLE = ("p1", "p2", "p3", "p4", "p5", "i1", "i2", "i3")
+# F48-I02: every fixture ad the ranking places (留下 or 換掉) is written. F48-I13: p5 (a known
+# zero under 3 x cap -- triage's 剛開始) is not ranked, so it is a skip.
+LEARNABLE = ("p1", "p2", "p3", "p4", "i1", "i2", "i3")
 
 
 class _Reader:
@@ -173,21 +174,24 @@ class SettleViewTest(SettleFixture):
         expected = {
             "p1": ("on_target", "effective"), "p2": ("watch", "ineffective"),
             "p3": ("over", "ineffective"), "p4": ("wasted", "ineffective"),
-            "p5": ("insufficient", "ineffective"), "i1": ("on_target", "effective"),
+            "p5": ("insufficient", "skip"), "i1": ("on_target", "effective"),
             "i2": ("over", "ineffective"), "i3": ("wasted", "ineffective"),
         }
         self.assertEqual(
             {key: (rows[eid]["grade"], rows[eid]["fate"]) for key, eid in self.ads.items()},
             expected,
         )
-        # Ranked per campaign: sold by cost per sale, 沒賣出 after (cheapest spend first).
+        # Ranked per campaign: sold by cost per sale, 沒賣出 after (cheapest spend first);
+        # F48-I13: p5 (0 sales, 700 < 3 x 450) is not ranked.
         self.assertEqual(
             {key: (rows[eid]["rank"], rows[eid]["of"], rows[eid]["sales"], rows[eid]["few"])
              for key, eid in self.ads.items()},
-            {"p1": (1, 5, 26, False), "p2": (2, 5, 12, False), "p3": (3, 5, 7, False),
-             "p5": (4, 5, 0, False), "p4": (5, 5, 0, False),
+            {"p1": (1, 4, 26, False), "p2": (2, 4, 12, False), "p3": (3, 4, 7, False),
+             "p4": (4, 4, 0, False), "p5": (None, None, None, False),
              "i1": (1, 3, 14, False), "i2": (2, 3, 5, False), "i3": (3, 3, 0, False)},
         )
+        self.assertEqual(rows[self.ads["p5"]]["skip_reason"], "還沒賣出，花費也還沒到門檻")
+        self.assertIsNone(rows[self.ads["p5"]]["verdict"])
         self.assertEqual(rows[self.ads["p1"]]["verdict_label"], "留下")
         self.assertEqual(rows[self.ads["p2"]]["verdict_label"], "換掉")
         self.assertEqual(rows[self.ads["p5"]]["grade_label"], "剛開始、數字還不夠")
@@ -233,6 +237,40 @@ class SettleViewTest(SettleFixture):
                 fate = rows[ranked["entity_id"]]["fate"]
                 self.assertEqual(fate == "effective", learning_rank.is_keep(ranked["verdict"]))
 
+    def test_a_zero_under_the_unsold_line_is_skipped_and_at_the_line_is_replaced(self):
+        # F48-I13: one answer to "is this ad judged yet?" -- 0 sales at 0.5 x cap (225 of 450)
+        # is not ranked (triage's 剛開始), 0 sales at 3 x cap (1,350) is 沒賣出／換掉.
+        half = self.add("h", self.daily, "半倍上限沒賣", days=5, spend=225, results=0,
+                        copy="還在跑。")
+        line = self.add("l", self.daily, "三倍上限沒賣", days=5, spend=1350, results=0,
+                        copy="花到門檻。")
+        self.conn.commit()
+        rows = self.rows()
+        self.assertEqual(
+            (rows[half]["grade"], rows[half]["rank"], rows[half]["fate"],
+             rows[half]["skip_reason"]),
+            ("insufficient", None, "skip", "還沒賣出，花費也還沒到門檻"),
+        )
+        self.assertEqual(
+            (rows[line]["grade"], rows[line]["verdict"], rows[line]["fate"],
+             rows[line]["skip_reason"]),
+            ("wasted", "replace", "ineffective", None),
+        )
+
+    def test_rows_are_served_in_each_campaigns_rank_order_unranked_last(self):
+        # F48-I13: the page prints served order -- rank asc, unranked after by name.
+        served = [row["entity_id"] for row in self.view()["rows"]]
+        by_campaign = {
+            self.daily: [self.ads[k] for k in ("p1", "p2", "p3", "p4", "p5")],
+            self.imp: [self.ads[k] for k in ("i1", "i2", "i3")],
+        }
+        for expected in by_campaign.values():
+            self.assertEqual([eid for eid in served if eid in expected], expected)
+        # each campaign's rows are contiguous
+        first = served[0] in by_campaign[self.daily]
+        split = len(by_campaign[self.daily if first else self.imp])
+        self.assertTrue(all((eid in by_campaign[self.daily]) == first for eid in served[:split]))
+
     def test_totals_are_program_sums_and_unknown_never_zero(self):
         self.conn.execute(
             "INSERT INTO ads_month_budget (id,org_id,brand_id,month,currency,amount,confirmed_by) "
@@ -257,11 +295,11 @@ class SettleViewTest(SettleFixture):
         rows = self.rows()
         queued = {call.args[3] for call in self.enqueue.call_args_list}
         self.assertEqual(queued,
-                         {self.ads[k] for k in ("p1", "p2", "p3", "p4", "p5", "i1", "i2")})
-        self.assertEqual(self.enqueue.call_count, 7)
+                         {self.ads[k] for k in ("p1", "p2", "p3", "p4", "i1", "i2")})
+        self.assertEqual(self.enqueue.call_count, 6)
         self.assertEqual(rows[self.ads["p1"]]["angles"], {"status": "pending", "candidates": []})
-        # the imported ad with no copy never asks the model
-        for key in ("i3",):
+        # the imported ad with no copy, and the unranked p5, never ask the model
+        for key in ("i3", "p5"):
             self.assertEqual(rows[self.ads[key]]["angles"],
                              {"status": "not_needed", "candidates": []})
 
@@ -357,7 +395,8 @@ class SettleWriteTest(SettleFixture):
         picks = [
             *self.picks("p1", angle="保溫到公司"), *self.picks("p2", angle="桌面質感"),
             *self.picks("p3", angle="運動後保冷"), *self.picks("p4", angle="新色搶先看"),
-            *self.picks("p5", angle="單手開蓋"), *self.picks("i1", angle="保冷一整天"),
+            *self.picks("p5", angle="單手開蓋"),  # not ranked (F48-I13): a skip, ignored
+            *self.picks("i1", angle="保冷一整天"),
             *self.picks("i2", angle="限時折扣"), *self.picks("i3", angle="  多種用法 "),
             *self.picks("g1", angle="缺天"),  # a skip row (its campaign has gaps): ignored
         ]
@@ -387,16 +426,16 @@ class SettleWriteTest(SettleFixture):
         self.assertEqual(result["status"], "written")
         self.assertEqual({k: result["written"][k] for k in ("count", "effective", "ineffective",
                                                             "by")},
-                         {"count": 8, "effective": 2, "ineffective": 6, "by": "user_1"})
-        self.assertEqual(result["notebook"], {"count": 8})
+                         {"count": 7, "effective": 2, "ineffective": 5, "by": "user_1"})
+        self.assertEqual(result["notebook"], {"count": 7})
         view_rows = self.rows(result)
         self.assertEqual(view_rows[self.ads["i3"]]["written_angle"], "多種用法")
         self.assertIsNone(view_rows[self.ads["g1"]]["written_angle"])
         self.assertTrue(all(row["angles"]["status"] == "not_needed" for row in result["rows"]))
 
         again = self.write(picks)  # a repeated POST writes nothing twice
-        self.assertEqual(len(self.learnings()), 8)
-        self.assertEqual(again["written"]["count"], 8)
+        self.assertEqual(len(self.learnings()), 7)
+        self.assertEqual(again["written"]["count"], 7)
 
     def test_each_row_carries_its_campaigns_sell_way(self):
         """F48 Contract W: entity -> its campaign -> that campaign's sell-way; the imported
@@ -422,14 +461,14 @@ class SettleWriteTest(SettleFixture):
             applicability_scope="ads;campaign=x", confidence="observed", sample_size="1",
             source_cycle_id="act_old", source_track="ads",
         )
-        replaced = ("p2", "p3", "p4", "p5", "i2", "i3")
+        replaced = ("p2", "p3", "p4", "i2", "i3")
         picks = [*self.picks("p1", "i1", angle="保溫"), *self.picks(*replaced, angle="保冷")]
         self.write(picks)
         by_entity = {row["source_cycle_id"].rsplit(":", 1)[1]: row for row in self.learnings()}
         effective = sorted(by_entity[self.ads[k]]["confidence"] for k in ("p1", "i1"))
         self.assertEqual(effective, ["likely", "observed"])
         ineffective = sorted(by_entity[self.ads[k]]["confidence"] for k in replaced)
-        self.assertEqual(ineffective, ["likely"] + ["validated"] * 5)
+        self.assertEqual(ineffective, ["likely"] + ["validated"] * 4)
 
     def test_missing_or_too_long_pick_writes_nothing(self):
         with self.assertRaises(settle.SettleError) as caught:
@@ -529,8 +568,13 @@ class SettleQueueTest(SettleFixture):
             )
         self.conn.commit()
         rows = self.settle_rows(triage.refresh_queue(self.conn, self.org, self.brand))
-        self.assertEqual(rows[0]["settle"]["learnable_count"], len(LEARNABLE))
-        p1 = self.rows()[self.ads["p1"]]
+        # F48-I13: with no cap a known zero is not judged -- only the five sold ads are ranked.
+        self.assertEqual(rows[0]["settle"]["learnable_count"], 5)
+        view_rows = self.rows()
+        for key in ("p4", "p5", "i3"):
+            self.assertEqual((view_rows[self.ads[key]]["fate"], view_rows[self.ads[key]]["rank"]),
+                             ("skip", None))
+        p1 = view_rows[self.ads["p1"]]
         self.assertEqual((p1["grade"], p1["verdict"], p1["flags"], p1["fate"]),
                          ("no_target", "keep_relative", ["相對最好"], "effective"))
 
