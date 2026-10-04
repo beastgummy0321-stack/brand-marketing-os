@@ -2,13 +2,18 @@
  * (prototype v10 `csvSettle()`), built in the browser from the numbers the screen already shows (Feature F29
  * decisions: no endpoint). Unknown numbers stay empty cells / 「未知」, never 0. */
 import type { SettleCampaign, SettleFate, SettleRow, SettleView } from "@/lib/adsSettleApi";
-import { downloadCsv, formatAmount, type CsvCell } from "../patterns";
+import { downloadCsv, formatAmount, type AdsRules, type CsvCell } from "../patterns";
 import { perSaleAmount } from "../patterns/csv";
 
 /** The origin tag of a campaign read from the platform instead of built here (prototype `FROM_META`). */
 export const FROM_META = "從 Meta 帶進來";
-/** The one sentence of what gets written (prototype `SETTLE_RULE`). */
-export const SETTLE_RULE = "划算記成有效、太貴和沒賣出記成無效；偏貴和數字不夠的不記";
+/** The one sentence of what gets written (prototype `SETTLE_RULE`), from the served verdict words (F48 Contract R
+ * "derived rulers": 留下 → 有效, 換掉 → 無效, a row the ranking cannot place → 不記). `null` until the rules load. */
+export function settleRule(rules: AdsRules | null): string | null {
+  if (!rules) return null;
+  const { keep, replace } = rules.labels.verdict;
+  return `排名${keep}的記成有效、${replace}的記成無效；排不上名的不記`;
+}
 
 export const FATE_WORD: Record<SettleFate, string> = { effective: "有效", ineffective: "無效", skip: "不記" };
 
@@ -55,15 +60,21 @@ export function campaignOf(view: SettleView, row: SettleRow): SettleCampaign {
   };
 }
 
-/** The step-1 table, one line per ad, columns as the prototype `csvSettle()`. */
+/** 「2／5」, the row's served place in its campaign's ranking; `null` when it is not ranked. */
+export function rankText(row: Pick<SettleRow, "rank" | "of">): string | null {
+  return row.rank === null || row.of === null ? null : `${row.rank}／${row.of}`;
+}
+
+/** The step-1 table, one line per ad, columns as the prototype `csvSettle()` plus the served rank and sales (F48-I09);
+ * rows in the served order. */
 export function settleCsvRows(view: SettleView): CsvCell[][] {
   return [
-    ["活動", "來源", "廣告組", "廣告", "花費", "購買", "每賣一筆", "上限", "等級", "寫進筆記本"],
+    ["活動", "來源", "廣告組", "廣告", "花費", "購買", "每賣一筆", "上限", "等級", "排名", "成交", "寫進筆記本"],
     ...view.rows.map((row) => {
       const campaign = campaignOf(view, row);
       return [
         campaign.name, isImported(campaign.origin) ? FROM_META : "本系統", row.group_name, row.name,
-        row.spend, row.results, row.cost_per_result, row.cap, row.grade_label, FATE_WORD[row.fate],
+        row.spend, row.results, row.cost_per_result, row.cap, row.grade_label, rankText(row), row.sales, FATE_WORD[row.fate],
       ];
     }),
   ];

@@ -5,13 +5,13 @@ import { Skeleton } from "@/components/layout/Skeleton";
 import { getSettle, writeSettle, SettleRequestRejected, type SettleView } from "@/lib/adsSettleApi";
 import { getQueue, type QueuePayload } from "@/lib/adsTriageApi";
 import { fetchActiveJobs } from "@/lib/jobsApi";
-import { Chip, FlowHeader, ReadFailed, type FlowStep } from "../patterns";
+import { Chip, FlowHeader, ReadFailed, useAdsRules, type FlowStep } from "../patterns";
 import { homeAction } from "../home/QueueRow";
 import { homeDecisions } from "../home/TodayDecisions";
 import { SettleAngles, angleOf, learnRows, type AnglePick, type AnglePicks, type JobsRead } from "./SettleAngles";
 import { SettleNote } from "./SettleNote";
 import { SettleResult } from "./SettleResult";
-import { FROM_META, SETTLE_RULE, isImported } from "./settleCsv";
+import { FROM_META, isImported, settleRule } from "./settleCsv";
 
 /** F29-I12: the three-step period settle 這期成績 → 確認每則主打什麼 → 寫進筆記本 (prototype v10 `stepRes()`,
  * `stepAngle()`, `stepNote()`; Feature F29 Contract E). One period is one calendar month. The page reads
@@ -45,6 +45,7 @@ export function SettlePage({ brandId, month }: { brandId: string; month: string 
   const [queue, setQueue] = useState<QueuePayload | null>(null);
   const [busy, setBusy] = useState(false);
   const [writeError, setWriteError] = useState<string | null>(null);
+  const rule = settleRule(useAdsRules());
 
   const homeHref = `/brands/${encodeURIComponent(brandId)}/ads`;
   const path = (s: SettleStep) => settlePath(brandId, month, s);
@@ -176,7 +177,7 @@ export function SettlePage({ brandId, month }: { brandId: string; month: string 
       <SettleAngles
         view={view} picks={picks} onPick={pick} jobs={jobs} onRetry={retry}
         header={header("確認每則主打什麼", "AI 從文案挑了 3 個說法，第一個是它的建議",
-          skipCount > 0 ? <span className="text-sm text-muted-foreground">偏貴和數字還不夠的 {skipCount} 則不用選</span> : undefined)}
+          skipCount > 0 ? <span className="text-sm text-muted-foreground">不記的 {skipCount} 則不用選</span> : undefined)}
         homeHref={homeHref} resultHref={path("result")} noteHref={path("note")}
       />,
     );
@@ -188,7 +189,7 @@ export function SettlePage({ brandId, month }: { brandId: string; month: string 
       view={view} picks={picks} busy={busy} error={writeError} onWrite={() => void write()}
       header={written
         ? header("寫進筆記本了", "下一個新活動的策略會先讀這本筆記本")
-        : header("寫進筆記本", `確認後一次寫進筆記本 ${count} 條`, <span className="text-sm text-muted-foreground">{SETTLE_RULE}</span>)}
+        : header("寫進筆記本", `確認後一次寫進筆記本 ${count} 條`, rule ? <span className="text-sm text-muted-foreground">{rule}</span> : undefined)}
       homeHref={homeHref} angleHref={path("angle")} newHref={`${homeHref}/new`} next={nextHref ? { href: nextHref } : null}
     />,
   );

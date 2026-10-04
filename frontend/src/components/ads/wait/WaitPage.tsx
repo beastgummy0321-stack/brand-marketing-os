@@ -10,7 +10,7 @@ import { getTriage, type TriageItem } from "@/lib/adsTriageApi";
 import { syncCampaign, syncJob } from "@/lib/adsExternalApi";
 import { getConnections, type AdsConnections } from "@/lib/adsConnectionsApi";
 import { useOrgClock } from "@/lib/orgClock";
-import { ActionBar, Chip, DayTiles, ResultHero, TodoRow } from "../patterns";
+import { ActionBar, Chip, DayTiles, ResultHero, TodoRow, useAdsRules, type AdsRules } from "../patterns";
 
 /** 本機日曆日期小工具（同 `connections/DataConnectionsPage.tsx` 的先例，各自留一份，見那個
  * 檔案頂端的註解）——這頁在 `do_not_touch` 之外，沒有共用 lib 可以進出。 */
@@ -28,10 +28,19 @@ function addDaysLocal(iso: string, days: number): string {
   dt.setDate(dt.getDate() + days);
   return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
 }
-function last7Days(endIso: string): string[] {
+function lastDays(endIso: string, count: number): string[] {
   const days: string[] = [];
-  for (let i = 6; i >= 0; i -= 1) days.push(addDaysLocal(endIso, -i));
+  for (let i = count - 1; i >= 0; i -= 1) days.push(addDaysLocal(endIso, -i));
   return days;
+}
+
+/** The days the page shows: the window the ads were graded on (the longest item `window` of this triage read — every
+ * item ends on the same cutoff), else the served first grading window (`rules.grade.min_days`) ending on the coverage
+ * end or the org's today. `days` is `null` while neither is known (no item and the rules not loaded yet). */
+function shownWindow(items: TriageItem[], coverageEnd: string | null, today: string, rules: AdsRules | null): { end: string; days: number | null } {
+  const graded = items.reduce<TriageItem | null>((best, item) => (best === null || item.window.days > best.window.days ? item : best), null);
+  if (graded) return { end: graded.window.end, days: graded.window.days };
+  return { end: coverageEnd ?? today, days: rules?.grade.min_days ?? null };
 }
 
 /** `TodoRow` 的 `no` 只收數字（`patterns/**` 是這張票的 `do_not_touch`）——原型這幾列的「編號」
@@ -41,13 +50,16 @@ function iconSlot(icon: string): number {
   return icon as unknown as number;
 }
 
-const REASON_TEXT: Record<string, { title: string; subtitle: string }> = {
-  below_sample_gate: { title: "樣本還不夠", subtitle: "每則廣告的花費或成果數還沒過門檻，累積中" },
-  result_unknown_days: { title: "成果數未知", subtitle: "平台沒回報這幾天的成果" },
-};
+/** One row per waiting `reason_code`. F48 Contract R: `too_new` (was `below_sample_gate`) = a known zero under the
+ * 沒賣出 line — its title is the served grade word (剛開始、數字還不夠; empty until the rules load). */
+function reasonText(code: string, rules: AdsRules | null): { title: string; subtitle: string } | null {
+  if (code === "too_new") return { title: rules?.labels.grade.too_new ?? "", subtitle: "還沒賣出，花費也還沒到門檻" };
+  if (code === "result_unknown_days") return { title: "成果數未知", subtitle: "平台沒回報這幾天的成果" };
+  return null;
+}
 // Feature Decisions 列出的順序——固定，不是後端回傳順序。F29-I01（一把尺）：「缺前一期可比資料」
 // 只是趨勢註腳，那則廣告已經對上限分級，不是在等資料，所以不列。
-const REASON_ORDER = ["below_sample_gate", "result_unknown_days"] as const;
+const REASON_ORDER = ["too_new", "result_unknown_days"] as const;
 
 interface Row {
   key: string;
@@ -60,7 +72,7 @@ interface Row {
 /** 三個一定存在的事實列 + 「全部資料不足」時每個 `reason_code` 一列（Feature Decisions
  * 「Wait page」）——沒有 missing_days 才會顯示 reason_code 列，`missing_days` 本身已經解釋了
  * 「資料不足」的原因，兩邊不重複列。 */
-function buildRows(brandId: string, sync: CampaignSyncState, coverage: { start: string; end: string } | null, missingDays: string[], items: TriageItem[], ordersMissing: string[]): Row[] {
+function buildRows(brandId: string, sync: CampaignSyncState, coverage: { start: string; end: string } | null, missingDays: string[], items: TriageItem[], ordersMissing: string[], rules: AdsRules | null): Row[] {
   const rows: Row[] = [];
   if (sync.state === "disconnected") {
     rows.push({
@@ -100,10 +112,8 @@ function buildRows(brandId: string, sync: CampaignSyncState, coverage: { start: 
   if (missingDays.length === 0 && items.length > 0 && items.every((item) => item.grade === "insufficient")) {
     const present = new Set(items.map((item) => item.reason_code));
     for (const code of REASON_ORDER) {
-      if (present.has(code)) {
-        const text = REASON_TEXT[code];
-        rows.push({ key: code, emoji: "⏳", title: text.title, subtitle: text.subtitle });
-      }
+      const text = present.has(code) ? reasonText(code, rules) : null;
+      if (text) rows.push({ key: code, emoji: "⏳", title: text.title, subtitle: text.subtitle });
     }
   }
   return rows;
@@ -112,10 +122,10 @@ function buildRows(brandId: string, sync: CampaignSyncState, coverage: { start: 
 /** F47-I06: the title follows what the data says, not a fixed 「資料不足」 (the drill saw it over seven filled days):
  * a listed gap keeps 資料不足; no gap and some ad already graded says the numbers are in; never synced or nothing to
  * grade yet says that instead. */
-function waitHero(sync: CampaignSyncState, rows: Row[], items: TriageItem[]): { tone: "warn" | "ok" | "neutral"; mark: string; title: string; note?: string } {
+function waitHero(sync: CampaignSyncState, rows: Row[], items: TriageItem[], days: number | null): { tone: "warn" | "ok" | "neutral"; mark: string; title: string; note?: string } {
   if (rows.length > 0) return { tone: "warn", mark: "…", title: "資料不足，這個活動先不判斷" };
   if (sync.state === "never") return { tone: "neutral", mark: "…", title: "還沒同步過，先不判斷", note: "按「重新檢查」讀一次平台的數字" };
-  if (items.some((item) => item.grade !== "insufficient")) return { tone: "ok", mark: "✓", title: "資料齊了，可以回活動看判讀", note: "最近 7 天都有資料" };
+  if (items.some((item) => item.grade !== "insufficient")) return { tone: "ok", mark: "✓", title: "資料齊了，可以回活動看判讀", note: days === null ? "最近都有資料" : `最近 ${days} 天都有資料` };
   if (items.length === 0) return { tone: "neutral", mark: "…", title: "還沒有廣告數字，先不判斷", note: "平台開始花錢後，下次同步會出現第一筆數字" };
   return { tone: "warn", mark: "…", title: "資料不足，這個活動先不判斷" };
 }
@@ -145,6 +155,7 @@ export function WaitPage({ brandId, campaignId }: { brandId: string; campaignId:
   const [syncId, setSyncId] = useState<string | null>(null);
   const [syncActionError, setSyncActionError] = useState<string | null>(null);
   const clock = useOrgClock(); // F36-I09 (ruling G): the tiles end on the org's today when coverage is unknown
+  const rules = useAdsRules();
   const lifetime = useRef(new AbortController());
   useEffect(() => {
     lifetime.current = new AbortController();
@@ -267,11 +278,12 @@ export function WaitPage({ brandId, campaignId }: { brandId: string; campaignId:
   }
 
   const { campaignName, sync, coverage, missingDays, items, ordersMissing } = state;
-  const rows = buildRows(brandId, sync, coverage, missingDays, items, ordersMissing);
-  const tiles = last7Days(coverage?.end ?? clock.today);
+  const rows = buildRows(brandId, sync, coverage, missingDays, items, ordersMissing, rules);
+  const shown = shownWindow(items, coverage?.end ?? null, clock.today, rules);
+  const tiles = shown.days === null ? [] : lastDays(shown.end, shown.days);
   const missingSet = new Set(missingDays);
   const hint = sync.state !== "never" && sync.last_success_at ? `最近同步 ${formatSyncTime(sync.last_success_at)}` : "尚未同步";
-  const hero = waitHero(sync, rows, items);
+  const hero = waitHero(sync, rows, items, shown.days);
 
   return (
     <div className="flex max-w-[1180px] flex-col gap-4">
@@ -309,7 +321,7 @@ export function WaitPage({ brandId, campaignId }: { brandId: string; campaignId:
 
       <div className="surface p-5">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h2 className="text-[15px] font-semibold">最近 7 天</h2>
+          <h2 className="text-[15px] font-semibold">{shown.days === null ? "最近幾天" : `最近 ${shown.days} 天`}</h2>
           <Link to={campaignHref} className="text-xs text-muted-foreground underline-offset-4 hover:underline">之前的紀錄仍可查看</Link>
         </div>
         <div className="mt-3">

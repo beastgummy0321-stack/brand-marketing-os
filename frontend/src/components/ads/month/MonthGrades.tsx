@@ -1,12 +1,13 @@
 import type { MonthGrades as Grades, PeriodGradeBucket } from "@/lib/adsMonthApi";
 import type { TriageGrade } from "@/lib/adsTriageApi";
-import { Chip, GradeBar, ThumbTiles, type ChipTone, type GradeBarBucket } from "../patterns";
+import {
+  Chip, GradeBar, ThumbTiles, figure, useAdsRules, watchTenths, type AdsRules, type ChipTone, type GradeBarBucket,
+} from "../patterns";
 import { countWord, mmdd, money } from "./monthCsv";
 
 /** F29-I15: the month's spend split by the one cap ruler (prototype v10 `month()` split card + `bucket()` cards;
  * Feature F29 Contract C `grades`, the same rows a settle of this month reads). 有效 counts 划算 only. */
 
-const THIN = "剛開始、數字還不夠";
 // A real brand often has 20+ ads in one bucket; the rest fold into ThumbTiles' 「＋N 則」.
 const TILE_LIMIT = 12;
 
@@ -52,14 +53,22 @@ export function GradeSplit({ month, grades }: { month: number; grades: Grades })
   );
 }
 
-interface BucketSpec { title: string; tone: ChipTone; grades: TriageGrade[]; caption: string }
+interface BucketSpec { key: string; title: string; tone: ChipTone; grades: TriageGrade[]; caption: string }
 
-const BUCKETS: BucketSpec[] = [
-  { title: "有效（只算划算）", tone: "ok", grades: ["on_target"], caption: "每筆在上限內" },
-  { title: "偏貴", tone: "warn", grades: ["watch"], caption: "超過上限 2 成內" },
-  { title: "太貴・沒賣出", tone: "bad", grades: ["over", "wasted"], caption: "超過 2 成，或花了錢沒賣出" },
-  { title: THIN, tone: "neutral", grades: ["insufficient"], caption: "還沒花到上限 × 3" },
-];
+/** The four bucket cards' words: titles are the served grade words, captions the served bands (F48 Contract R-API —
+ * the 偏貴 band in 成, the 沒賣出 spend multiple). While the rules are not loaded the titles and captions print empty
+ * (no number and no word is written down here). */
+function bucketSpecs(rules: AdsRules | null): BucketSpec[] {
+  const word = rules?.labels.grade;
+  const tenths = rules ? watchTenths(rules) : null;
+  const unsold = rules ? figure(rules.grade.unsold_spend_multiple) : null;
+  return [
+    { key: "on_target", title: word ? `有效（只算${word.on_target}）` : "", tone: "ok", grades: ["on_target"], caption: rules ? "每筆在上限內" : "" },
+    { key: "watch", title: word?.watch ?? "", tone: "warn", grades: ["watch"], caption: tenths ? `超過上限 ${tenths} 成內` : "" },
+    { key: "over", title: word ? `${word.over}・${word.wasted}` : "", tone: "bad", grades: ["over", "wasted"], caption: tenths ? `超過 ${tenths} 成，或花了錢沒賣出` : "" },
+    { key: "insufficient", title: word?.too_new ?? "", tone: "neutral", grades: ["insufficient"], caption: unsold ? `還沒花到上限 × ${unsold}` : "" },
+  ];
+}
 
 function merge(buckets: PeriodGradeBucket[], grades: TriageGrade[]) {
   const own = buckets.filter((b) => grades.includes(b.grade));
@@ -72,18 +81,19 @@ function merge(buckets: PeriodGradeBucket[], grades: TriageGrade[]) {
 
 /** The four bucket cards (prototype `bucket()`); `withAmounts` adds 「・花 X 元」 to each caption. */
 export function GradeBuckets({ grades, withAmounts }: { grades: Grades; withAmounts: boolean }) {
+  const specs = bucketSpecs(useAdsRules());
   return (
     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-      {BUCKETS.map((spec) => {
+      {specs.map((spec) => {
         const b = merge(grades.buckets, spec.grades);
         const spend = b.amount === null ? "花費未知" : `花 ${money(b.amount)}`;
         return (
-          <section key={spec.title} aria-label={spec.title} data-bucket={spec.grades.join(",")} className="surface px-[22px] py-5">
+          <section key={spec.key} aria-label={spec.title || undefined} data-bucket={spec.grades.join(",")} className="surface px-[22px] py-5">
             <div className="flex items-center justify-between gap-3">
               <h2 className="text-[15px] font-semibold">{spec.title}</h2>
               <Chip tone={spec.tone}>{b.count} 則</Chip>
             </div>
-            <div className="text-xs text-muted-foreground">{spec.caption}{withAmounts && `・${spend}`}</div>
+            <div className="text-xs text-muted-foreground" data-part="caption">{spec.caption}{withAmounts && `${spec.caption ? "・" : ""}${spend}`}</div>
             {b.count > 0
               ? <div className="mt-1"><ThumbTiles items={b.thumbs} size={44} max={TILE_LIMIT} /></div>
               : <p className="mt-3 text-sm text-muted-foreground">0 則</p>}

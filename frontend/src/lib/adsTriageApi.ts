@@ -313,6 +313,14 @@ export interface QueueCleanupAd {
   // F29-I01 Contract B: null unless this ad was rejected before and its grade got worse since
   // (always null on `keep` entries).
   rejected_before: RejectedBefore | null;
+  // F48-I02 (Contract R "ordering／verdict"): the ad's place in the campaign's `learning_rank` ranking -- `rank` of
+  // `of` (`rank` null for an ungraded ad), `sales`, `few` (「樣本少」), `verdict`／`verdict_label` 留下／換掉, `flags`
+  // the served flag words, and `reason_text` the program's sentence built from this ad's own grade and numbers.
+  // `ads` and `keep` arrive in rank order: print them in that order, never re-sort. Always served; optional only for
+  // older hand-written fixtures.
+  rank?: number | null; of?: number | null; sales?: number | null; few?: boolean;
+  verdict?: "keep" | "keep_relative" | "replace" | null; verdict_label?: string | null; flags?: string[];
+  reason_text?: string | null;
 }
 export interface QueueCleanup {
   campaign_id: string; campaign_name: string; can_support: number | null; active_ads: number;

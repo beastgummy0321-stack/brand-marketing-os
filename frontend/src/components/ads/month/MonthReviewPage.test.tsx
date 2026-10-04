@@ -15,6 +15,8 @@ import type { TriageGrade } from "@/lib/adsTriageApi";
 import { downloadCsv, toCsv } from "../patterns";
 import { currentBudgetMonth } from "../MonthlyBudgetPanel";
 import { MonthReviewPage } from "./MonthReviewPage";
+import { seedAdsRules, watchTenths } from "../patterns/rules";
+import { RULES_FIXTURE } from "../patterns/rulesFixture";
 import { monthCsvName, monthCsvRows, shiftMonth, weekBars } from "./monthCsv";
 
 // F37-I05 (ruling 4c): the page reads the budget month from the org clock (`useWorkspace().identity.org`);
@@ -271,6 +273,29 @@ describe("MonthReviewPage — current month", () => {
     expect(within(good).getByText("0 則", { selector: "[data-slot=chip]" })).toBeTruthy();
     expect(within(bucket("剛開始、數字還不夠")).getByText("2 則")).toBeTruthy();
     expect(within(bucket("剛開始、數字還不夠")).getByText("還沒花到上限 × 3・花 420 元")).toBeTruthy();
+  });
+
+  it("bucket titles and captions are the served grade words and bands (F48 Contract R-API), none written down", async () => {
+    renderPage();
+    const tenths = watchTenths(RULES_FIXTURE);
+    const caption = (title: string) => within(bucket(title)).getByText((_, el) => el?.getAttribute("data-part") === "caption").textContent;
+    await screen.findByRole("region", { name: `有效（只算${RULES_FIXTURE.labels.grade.on_target}）` });
+    expect(caption(RULES_FIXTURE.labels.grade.watch)).toMatch(new RegExp(`^超過上限 ${tenths} 成內・`));
+    expect(caption(`${RULES_FIXTURE.labels.grade.over}・${RULES_FIXTURE.labels.grade.wasted}`)).toMatch(new RegExp(`^超過 ${tenths} 成，或花了錢沒賣出・`));
+    expect(caption(RULES_FIXTURE.labels.grade.too_new)).toMatch(new RegExp(`^還沒花到上限 × ${RULES_FIXTURE.grade.unsold_spend_multiple}・`));
+  });
+
+  it("a different served ruler changes the captions with no frontend edit", async () => {
+    seedAdsRules({ ...RULES_FIXTURE, grade: { ...RULES_FIXTURE.grade, watch_band: 1.3, unsold_spend_multiple: 4 } });
+    try {
+      renderPage();
+      await screen.findByRole("region", { name: "偏貴" });
+      expect(within(bucket("偏貴")).getByText(/^超過上限 3 成內/)).toBeTruthy();
+      expect(within(bucket("太貴・沒賣出")).getByText(/^超過 3 成，或花了錢沒賣出/)).toBeTruthy();
+      expect(within(bucket("剛開始、數字還不夠")).getByText(/^還沒花到上限 × 4/)).toBeTruthy();
+    } finally {
+      seedAdsRules(RULES_FIXTURE);
+    }
   });
 
   it("mixed currencies: unknown spend reads as unknown, never 0", async () => {

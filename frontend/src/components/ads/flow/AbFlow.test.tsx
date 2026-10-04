@@ -16,6 +16,8 @@ import type { CampaignTriage, QueuePayload, TriageItem } from "@/lib/adsTriageAp
 import { ConfirmPage } from "./ConfirmPage";
 import { HandoffPage } from "./HandoffPage";
 import { VerifyPage } from "./VerifyPage";
+import { seedAdsRules } from "../patterns/rules";
+import { RULES_FIXTURE } from "../patterns/rulesFixture";
 
 vi.mock("@/components/layout/WorkspaceContext", () => ({ useWorkspace: () => ({ scope: "u:o", identity: { user: { id: "u", email: "a@example.com" }, org: { id: "o", name: "測試", kind: "personal", role: "owner", timezone: "Asia/Taipei", today: "2026-09-28" }, orgs: [] } }) }));
 vi.mock("@/lib/adsChangeApi", async (importOriginal) => ({
@@ -169,6 +171,21 @@ describe("A/B 關掉輸家（F29-I14）確認", () => {
     expect(await screen.findByText(/縮圖、A／B 標記或打平線讀不到/)).toBeTruthy();
     expect(screen.getByText("「出門情境」每筆便宜 20%，兩則都跑滿 7 天、各賣到 10 筆以上")).toBeTruthy();
     expect(screen.getByRole("button", { name: "核准關掉較貴的一則 →" })).toBeTruthy();
+  });
+
+  it("比較讀不到時用伺服器給的 A/B 規則（F48 Contract R-API），規則也還沒讀到就只說話不寫數字", async () => {
+    vi.mocked(abApi.getAbPairs).mockRejectedValue(new Error("down"));
+    seedAdsRules({ ...RULES_FIXTURE, ab: { min_days: 14, min_conversions_each: 20, relative_difference: 0.1 } });
+    try {
+      const first = renderAt(`${base}/confirm`);
+      expect(await screen.findByText("「出門情境」每筆便宜 20%，兩則都跑滿 14 天、各賣到 20 筆以上")).toBeTruthy();
+      first.unmount();
+      seedAdsRules(null);
+      renderAt(`${base}/confirm`);
+      expect(await screen.findByText("「出門情境」每筆便宜 20%，兩則都跑滿天數、各賣到足夠的筆數")).toBeTruthy();
+    } finally {
+      seedAdsRules(RULES_FIXTURE);
+    }
   });
 
   it("已拒絕的清單：只顯示決定，沒有核准；核對頁也導回確認", async () => {

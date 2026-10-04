@@ -8,7 +8,7 @@ export { StepIndicator } from "./StepIndicator";
 export { FieldCard } from "./FieldCard";
 export { Disclosure } from "./Disclosure";
 export { ReadinessList } from "./ReadinessList";
-export { Chip, GradeChip, GRADE_FILL, GRADE_LABEL, GRADE_TEXT, GRADE_TONE, formatAmount, type ChipTone, type Grade } from "./Chip";
+export { Chip, GradeChip, GRADE_FILL, GRADE_TEXT, GRADE_TONE, formatAmount, type ChipTone, type Grade } from "./Chip";
 export { ActionBar, type BarLink, DecisionSheet, FlowHeader, KindMark, Meter, ResultHero, Segmented, StatusRail, TodoRow, type FlowStep, type RailCell, type TodoState } from "./FlowPieces";
 export { EvidenceRow, Ladder, OptionCard, CopyBlock, DayTiles } from "./ReviewPieces";
 export { CampaignChip, FlowTo, LearnCard, LearnLine, OriginTag, RecoverSteps, TagToggle, Thumb, ThumbTiles, type FlowToEnd, type ObjectiveKey, type RecoverStep } from "./LoopPieces";

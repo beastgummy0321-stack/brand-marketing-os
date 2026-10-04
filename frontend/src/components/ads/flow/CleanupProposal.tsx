@@ -2,10 +2,10 @@ import { useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { Button } from "@/components/layout/ui/button";
 import { useApiRead } from "@/lib/useApiRead";
-import { getTriage, type QueueCleanup, type QueueCleanupAd, type QueueItem, type TriageGrade, type TriageTargetView } from "@/lib/adsTriageApi";
+import { getTriage, type QueueCleanup, type QueueCleanupAd, type QueueItem, type TriageTargetView } from "@/lib/adsTriageApi";
 import {
-  ActionBar, CampaignChip, CapDots, Chip, FlowHeader, GRADE_LABEL, GradeRules, GradeTermChip, MoneyTag, PickRow, ReadFailed, ResultHero,
-  TargetRuler, formatAmount, type FlowStep, type RulerAd, type RulerCap,
+  ActionBar, CampaignChip, CapDots, Chip, FlowHeader, GradeRules, GradeTermChip, MoneyTag, PickRow, ReadFailed, ResultHero,
+  TargetRuler, formatAmount, gradeWord, sampleWords, useAdsRules, type AdsRules, type FlowStep, type RulerAd, type RulerCap,
 } from "../patterns";
 import { proposeBudgetPath } from "./changeFlow";
 import type { CleanupPick } from "./cleanupDraft";
@@ -22,37 +22,69 @@ export function cleanupSteps(proposeHref?: string): FlowStep[] {
   return [{ label: "提議", to: proposeHref }, { label: "確認" }, { label: "到平台完成" }, { label: "核對結果" }];
 }
 
-/** Close order (ads.md §6.32): 沒賣出 → 太貴 → 偏貴 → 划算 → 剛開始, the most expensive first inside a grade; an unknown
- * cost sorts first (prototype `cost ?? 1e9`), then higher spend. */
-const RANK: Record<TriageGrade, number> = { wasted: 0, over: 1, watch: 2, on_target: 3, insufficient: 4, no_target: 5 };
-const desc = (v: number | null) => (v === null ? Number.POSITIVE_INFINITY : v);
-export function rankCleanupAds(ads: QueueCleanupAd[]): QueueCleanupAd[] {
-  return [...ads].sort((x, y) =>
-    RANK[x.grade] - RANK[y.grade]
-    || desc(y.cost_per_result) - desc(x.cost_per_result)
-    || desc(y.spend) - desc(x.spend));
+/** The close list as served (F48 Contract R "ordering／verdict"): the backend ranks the campaign's ads with the one
+ * ruler and serves `ads` (closing) and `keep` each in rank order — the screen prints `ads` then `keep` and never
+ * re-sorts. */
+export function servedCleanupAds(cleanup: Pick<QueueCleanup, "ads" | "keep">): QueueCleanupAd[] {
+  return [...cleanup.ads, ...cleanup.keep];
+}
+
+/** The ad's grade word: the served word of its grade, 剛開始 vs 資料不足 split by the triage item's `reason_code`. */
+export function cleanupWord(rules: AdsRules | null, ad: QueueCleanupAd, reasonCode?: string | null): string {
+  return gradeWord(rules, ad.grade, reasonCode) ?? "";
+}
+
+/** 「4／5」: the served place in the campaign's ranking, 「—」 for an ad the ranking does not place (ungraded). */
+export function placeText(ad: QueueCleanupAd): string {
+  return ad.rank == null || ad.of == null ? "—" : `${ad.rank}／${ad.of}`;
+}
+
+/** The row's name block: the name, the program's reason sentence (`reason_text`, built from this ad's own grade and
+ * numbers), and the rejected-before note. `withName={false}` leaves the name to the caller (the confirm card prints
+ * its own, struck through when dropped). */
+export function CleanupName({ ad, word, withName = true }: { ad: QueueCleanupAd; word: string; withName?: boolean }) {
+  return (
+    <>
+      {withName && <p>{ad.name ?? "（未命名廣告）"}</p>}
+      {ad.reason_text && <p data-part="reason" className="mt-0.5 text-xs font-normal text-muted-foreground">{ad.reason_text}</p>}
+      <RejectedBeforeNote ad={ad} label={word} />
+    </>
+  );
+}
+
+/** The grade chip and, beside it, 「樣本少」 when the served sample is few (never 「還太新」). */
+export function CleanupGrade({ ad, reasonCode }: { ad: QueueCleanupAd; reasonCode?: string | null }) {
+  const rules = useAdsRules();
+  return (
+    <span className="flex flex-wrap items-center justify-end gap-1">
+      <GradeTermChip grade={ad.grade} reasonCode={reasonCode} />
+      {sampleWords(rules, ad).map((w) => <Chip key={w} tone="warn">{w}</Chip>)}
+    </span>
+  );
 }
 
 // F47-I06: a cost per sale prints through the one per-sale rule (whole yuan).
 const money = (v: number | null) => (perSaleAmount(v) === null ? "未知" : `${perSaleAmount(v)} 元`);
 
-/** The number cell of a row: 沒賣出 prints its result count, 剛開始 is not a cost yet, the rest print cost per result
- * with its money tag against break-even (v10 `mt(a)`; hidden when either number is unknown). */
-export function CostCell({ ad, label, withCaption = false, breakEven = null }: {
-  ad: QueueCleanupAd; label: string; withCaption?: boolean; breakEven?: number | null;
+/** The number cell of a row: 沒賣出 prints its result count, an ungraded ad prints its grade word (`word`, from
+ * `reason_code`; not a cost yet), the rest print cost per result with its money tag against break-even (v10 `mt(a)`;
+ * hidden when either number is unknown) and the served sales count. */
+export function CostCell({ ad, word, withCaption = false, breakEven = null }: {
+  ad: QueueCleanupAd; word: string; withCaption?: boolean; breakEven?: number | null;
 }): ReactNode {
   if (ad.grade === "wasted") {
     const count = ad.result_count === null ? "未知" : `${ad.result_count} 筆`;
     return <>{withCaption && <span className="block text-[11.5px] text-muted-foreground">購買</span>}<b className="text-[15px]">{count}</b></>;
   }
   if (ad.grade === "insufficient" || ad.grade === "no_target") {
-    return <span className="font-medium text-muted-foreground">{label === "資料不足" ? "資料不足" : ad.grade === "no_target" ? "未判斷" : "剛開始、數字還不夠"}</span>;
+    return <span className="font-medium text-muted-foreground">{word}</span>;
   }
   return (
     <>
       {withCaption && <span className="block text-[11.5px] text-muted-foreground">每賣一筆</span>}
       <b className="text-[15px]">{money(ad.cost_per_result)}</b>
       <MoneyTag cost={ad.cost_per_result} breakEven={breakEven} className="block" />
+      {ad.sales != null && <span data-part="sales" className="block text-[11.5px] text-muted-foreground">成交 {ad.sales} 筆</span>}
     </>
   );
 }
@@ -69,13 +101,13 @@ function capOf(target: TriageTargetView): RulerCap | null {
 
 /** 「每日 1,200 撐 6 則」: the daily budget is only on the campaign triage (`data.capacity`), read on its own so a
  * failure leaves the words without the amount, never the page blank — and says so (Contract K, `ReadFailed` + 重試).
- * Grade words of 剛開始 vs 資料不足 come from the same read (the cleanup payload carries `grade` only). */
+ * 剛開始 vs 資料不足 come from the same read's `reason_code` (the cleanup payload carries `grade` only). */
 function useCampaignExtras(brandId: string, campaignId: string) {
   const read = useApiRead((signal) => getTriage(brandId, campaignId, signal), [brandId, campaignId]);
   const t = read.data;
   return {
     daily: t?.data?.capacity?.daily_budget ?? null,
-    labels: new Map((t?.items ?? []).map((i) => [i.entity_id, i.grade_label])),
+    reasons: new Map((t?.items ?? []).map((i) => [i.entity_id, i.reason_code])),
     failed: read.status === "error",
     retry: read.reload,
   };
@@ -106,14 +138,17 @@ export function CleanupProposal({ brandId, campaignId, item, position, homeHref,
 }) {
   const { cleanup, triage } = item;
   const extras = useCampaignExtras(brandId, campaignId);
+  const rules = useAdsRules();
   // The fold opens by itself when the user comes back with a pick already made (prototype `S.open.cleanAdv`).
   const [advOpen, setAdvOpen] = useState(pick.changed);
   const closeIds = new Set(pick.ticked.map((ad) => ad.entity_id));
   const declined = new Set(pick.declined);
-  const all = rankCleanupAds([...cleanup.ads, ...cleanup.keep]);
+  const all = servedCleanupAds(cleanup);
   const nClose = closeIds.size;
   const nKeep = all.length - nClose;
-  const label = (ad: QueueCleanupAd) => extras.labels.get(ad.entity_id) || GRADE_LABEL[ad.grade];
+  const reason = (ad: QueueCleanupAd) => extras.reasons.get(ad.entity_id);
+  const label = (ad: QueueCleanupAd) => cleanupWord(rules, ad, reason(ad));
+  const verdict = rules?.labels.verdict;
   const cap = capOf(triage.target);
   const breakEven = triage.target.break_even ?? null;
   const rulerAds: RulerAd[] = all.map((ad) => ({
@@ -213,22 +248,23 @@ export function CleanupProposal({ brandId, campaignId, item, position, homeHref,
         <section className="surface px-[22px] py-5" aria-label="關的順序">
           <div className="mb-3.5 flex flex-wrap items-center justify-between gap-3">
             <h2 className="text-[15px] font-semibold">關的順序</h2>
-            <span className="text-xs text-muted-foreground">沒賣出 → 太貴 → 偏貴，同級先關最貴的；划算不關</span>
+            {verdict && (
+              <span className="text-xs text-muted-foreground">照每筆成本排名；{verdict.replace}的從最後一名往前關，{verdict.keep}的不關</span>
+            )}
           </div>
           <ol>
-            {all.map((ad, i) => {
+            {all.map((ad) => {
               const closing = closeIds.has(ad.entity_id);
               const mine = declined.has(ad.entity_id);
               return (
-                <li key={ad.entity_id} className="grid grid-cols-[24px_32px_minmax(0,1fr)_auto_minmax(90px,auto)_auto] items-center gap-3.5 border-t border-border py-[11px] first:border-t-0">
-                  <span className="text-right text-xs text-muted-foreground">{i + 1}</span>
+                <li key={ad.entity_id} data-ad={ad.entity_id} className="grid grid-cols-[36px_32px_minmax(0,1fr)_auto_minmax(90px,auto)_auto] items-center gap-3.5 border-t border-border py-[11px] first:border-t-0">
+                  <span data-part="rank" className="text-right text-xs text-muted-foreground tabular-nums">{placeText(ad)}</span>
                   <Tile url={ad.thumbnail_url} size="sm" />
                   <div className="text-sm font-medium [overflow-wrap:anywhere]">
-                    <p>{ad.name ?? "（未命名廣告）"}</p>
-                    <RejectedBeforeNote ad={ad} label={label(ad)} />
+                    <CleanupName ad={ad} word={label(ad)} />
                   </div>
-                  <GradeTermChip grade={ad.grade} label={label(ad)} />
-                  <div className="numeric text-right"><CostCell ad={ad} label={label(ad)} breakEven={breakEven} /></div>
+                  <CleanupGrade ad={ad} reasonCode={reason(ad)} />
+                  <div className="numeric text-right"><CostCell ad={ad} word={label(ad)} breakEven={breakEven} /></div>
                   <Chip tone={closing ? "bad" : mine ? "accent" : "ok"}>{closing ? "關" : mine ? "留・你改的" : "留"}</Chip>
                 </li>
               );

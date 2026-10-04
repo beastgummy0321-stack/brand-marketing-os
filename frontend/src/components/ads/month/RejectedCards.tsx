@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { Button } from "@/components/layout/ui/button";
 import { dismissSuggestion, type MonthRejectedCard } from "@/lib/adsMonthApi";
-import { CampaignChip, GRADE_LABEL, GradeTermChip, type ObjectiveKey } from "../patterns";
+import { CampaignChip, GradeTermChip, gradeWord, useAdsRules, type ObjectiveKey } from "../patterns";
 import { cleanupHref, mmdd } from "./monthCsv";
 
 /** F29-I15: a cleanup the user rejected comes back only when one of its ads now grades worse than when the user
@@ -15,6 +15,7 @@ export function RejectedCard({ brandId, month, card, objective, onDismissed }: {
   brandId: string; month: string; card: MonthRejectedCard; objective: ObjectiveKey; onDismissed: () => void;
 }) {
   const many = card.ads.length > 1;
+  const rules = useAdsRules();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const skip = () => {
@@ -39,7 +40,9 @@ export function RejectedCard({ brandId, month, card, objective, onDismissed }: {
             <span aria-hidden="true" className="text-muted-foreground">→</span>
             <GradeTermChip grade={ad.now} />
           </div>
-          <div className="mt-1.5 text-[13px] font-semibold">上次你拒絕時是{GRADE_LABEL[ad.was]}，現在變{GRADE_LABEL[ad.now]}</div>
+          {rules && (
+            <div className="mt-1.5 text-[13px] font-semibold">上次你拒絕時是{gradeWord(rules, ad.was)}，現在變{gradeWord(rules, ad.now)}</div>
+          )}
         </div>
       ))}
       <div className="mt-0.5 mb-3.5 text-xs text-muted-foreground">

@@ -31,18 +31,6 @@ export function Chip({ tone = "neutral", className, ...props }: ComponentProps<"
 /** Feature F28 contract: a triage item's `grade` against the campaign's one cap. */
 export type Grade = "on_target" | "watch" | "over" | "wasted" | "insufficient" | "no_target";
 
-/** @deprecated F48 Contract R-API: grade words are served (`useAdsRules().labels.grade`, `gradeWord` in `rules.ts`).
- * Kept only for the importers outside F48-I08's scope — `flow/CleanupEvidence.tsx`, `flow/CleanupProposal.tsx`,
- * `review/ReviewEvidencePage.tsx` (F48-I09) and `month/RejectedCards.tsx` (unassigned); delete it with the last one. */
-export const GRADE_LABEL: Record<Grade, string> = {
-  on_target: "划算",
-  watch: "偏貴",
-  over: "太貴",
-  wasted: "沒賣出",
-  insufficient: "剛開始、數字還不夠",
-  no_target: "未判斷",
-};
-
 export const GRADE_TONE: Record<Grade, ChipTone> = {
   on_target: "ok",
   watch: "warn",
