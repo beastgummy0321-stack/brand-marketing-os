@@ -28,7 +28,19 @@ export interface NativeObservation {
   result_kind?: string | null; result_count?: number | null;
   result_action?: string | null; result_attribution?: string | null;
 }
-export interface SyncJob { id: string; status: string; last_success_at: string | null; error?: string | null }
+export interface SyncJob { id: string; status: string; last_success_at: string | null; error?: string | null; platform?: string; source_account?: string }
+/** F49 Contract O: a platform read's one outcome (`app/ads/external_sync.py` `outcome`). `code` names why (a reason
+ * code, `no_rows`, `not_read`); `text` is the sentence to print. Read it through `useSyncOutcome`. */
+export interface SyncOutcome {
+  state: "running" | "failed" | "partial" | "empty" | "found";
+  code: string | null;
+  text: string;
+}
+/** `GET …/campaigns/{c}/sync-outcome`: the worst outcome over the jobs covering the campaign. */
+export interface CampaignSyncOutcome extends SyncOutcome {
+  job_ids: string[];
+  last_success_at: string | null;
+}
 export interface ExistingPage {
   /** `campaign_id`: the workspace campaign this platform campaign is
    * already in, so the join dialog marks it 「已在工作區」 instead of offering to add it again. */
@@ -39,6 +51,9 @@ export interface ExistingPage {
   }[];
   sources: SourceAccount[]; platform?: string; source_account?: string;
   next_cursor: string | null; job: SyncJob | null;
+  /** F49 Contract O: the account read's outcome; null when the brand has no bound account. The listing is read-only —
+   * an unreadable account still lists its cached rows, with `job: null` and a failed outcome. */
+  outcome?: SyncOutcome | null;
 }
 export interface ExternalView {
   entities: NativeEntity[]; observations: NativeObservation[];
@@ -96,9 +111,15 @@ export async function completeExternalView(brand: string, campaign: string, sign
   result.next_observation_cursor = null;
   return result;
 }
-export async function syncCampaign(brand: string, campaign: string): Promise<{ job: SyncJob }> {
+/** `jobs`: every job the re-read requested (each account it covers); `job` is the first. */
+export async function syncCampaign(brand: string, campaign: string): Promise<{ job: SyncJob; jobs?: SyncJob[] }> {
   return parseJsonOrThrow(await apiFetch(`${brandPath(brand)}/campaigns/${encodeURIComponent(campaign)}/sync`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }), "同步失敗。");
 }
-export async function syncJob(brand: string, id: string, signal?: AbortSignal): Promise<{ job: SyncJob; connected: boolean }> {
-  return parseJsonOrThrow(await apiFetch(`${brandPath(brand)}/sync-jobs/${encodeURIComponent(id)}`, { signal }), "讀取同步狀態失敗。");
+/** `campaignId` scopes `outcome` to that campaign's tasks (plus the account's own). */
+export async function syncJob(brand: string, id: string, signal?: AbortSignal, campaignId?: string): Promise<{ job: SyncJob; connected: boolean; outcome?: SyncOutcome }> {
+  const scope = query({ campaign_id: campaignId });
+  return parseJsonOrThrow(await apiFetch(`${brandPath(brand)}/sync-jobs/${encodeURIComponent(id)}${scope ? `?${scope}` : ""}`, { signal }), "讀取同步狀態失敗。");
+}
+export async function syncOutcome(brand: string, campaign: string, signal?: AbortSignal): Promise<CampaignSyncOutcome> {
+  return parseJsonOrThrow(await apiFetch(`${brandPath(brand)}/campaigns/${encodeURIComponent(campaign)}/sync-outcome`, { signal }), "讀取同步結果失敗。");
 }

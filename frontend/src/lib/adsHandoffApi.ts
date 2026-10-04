@@ -1,7 +1,7 @@
 import { apiFetch } from "./http";
 import { BASE, parseJsonOrThrow } from "./adsApi";
 import type { ChangeSet } from "./adsChangeApi";
-import type { NativeEntity } from "./adsExternalApi";
+import type { NativeEntity, SyncJob } from "./adsExternalApi";
 import type { SettingsReadback } from "./adsLaunchSettingsApi";
 
 export interface HandoffEvidence {
@@ -94,7 +94,8 @@ export async function reconsiderHandoff(brand: string, campaign: string, id: str
 export const reapproveLaunch = (brand: string, campaign: string, body: LaunchDecision, signal?: AbortSignal) => request<HandoffWorkspace>(`${path(brand, campaign)}/handoff/launch/reapprove`, "POST", body, signal);
 /** Write the approved values back to the plan; the original approval stands. */
 export const revertLaunch = (brand: string, campaign: string, body: LaunchDecision, signal?: AbortSignal) => request<HandoffWorkspace>(`${path(brand, campaign)}/handoff/launch/revert`, "POST", body, signal);
-export const refreshHandoffSources = (brand: string, campaign: string, signal?: AbortSignal) => request(`${path(brand, campaign)}/sync`, "POST", {}, signal);
+/** Every job the re-read requested (`jobs`, one per account it covers); `job` is the first. */
+export const refreshHandoffSources = (brand: string, campaign: string, signal?: AbortSignal) => request<{ job: SyncJob; jobs: SyncJob[] }>(`${path(brand, campaign)}/sync`, "POST", {}, signal);
 
 export interface PlannedMaterialAd {
   id: string; name: string; group_id: string; group_name: string;
