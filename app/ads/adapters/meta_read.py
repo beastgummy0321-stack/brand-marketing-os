@@ -580,6 +580,45 @@ def launch_settings_observed(adset: dict, campaign: dict | None = None) -> dict:
     return result
 
 
+def creative_links(entity: dict) -> list[str] | None:
+    """F49 Contract B (`adapters.creative_links`): the destination URLs of one read ad's creative
+    -- a link ad's `object_story_spec.link_data.link`, a video ad's
+    `video_data.call_to_action.value.link`, a dynamic ad's
+    `asset_feed_spec.link_urls[].website_url`.
+    `[]` when the creative was read and carries none; None when no creative fields were read."""
+    fields = (entity.get("creative") or {}).get("fields")
+    if not isinstance(fields, dict) or not fields:
+        return None
+
+    def part(value, key):
+        return value.get(key) if isinstance(value, dict) else None
+
+    spec = part(fields, "object_story_spec")
+    call = part(part(spec, "video_data"), "call_to_action")
+    feed_links = part(part(fields, "asset_feed_spec"), "link_urls")
+    feed_links = feed_links if isinstance(feed_links, list) else []
+    found = [
+        part(part(spec, "link_data"), "link"),
+        part(part(call, "value"), "link"),
+        *(part(item, "website_url") for item in feed_links),
+    ]
+    return [url for url in found if isinstance(url, str) and url.strip()]
+
+
+def audience_ids(entity: dict) -> list[str] | None:
+    """F49 Contract B (`adapters.audience_ids`): the custom audience ids one read ad set targets
+    (`targeting.custom_audiences[].id`, kept on the verified ad set by `verify_native`). `[]` when
+    the targeting was read and holds none; None when no targeting was read."""
+    targeting = entity.get("targeting")
+    if not isinstance(targeting, dict):
+        return None
+    return [
+        str(audience["id"])
+        for audience in targeting.get("custom_audiences") or []
+        if isinstance(audience, dict) and audience.get("id") is not None
+    ]
+
+
 def launch_settings_observed_ad(ad: dict) -> dict:
     creative = ad.get("creative")
     if not isinstance(creative, dict):
@@ -824,6 +863,10 @@ class MetaReader:
                 entity["launch_settings"] = launch_settings_observed_ad(raw)
             elif native_kind == "adset":
                 entity["launch_settings"] = launch_settings_observed(raw, campaign)
+                # F49 Contract B: the ad set's targeting as read, for `audience_ids` (readback
+                # only -- not an `ExternalEntity` column, so it is never stored).
+                if isinstance(raw.get("targeting"), dict):
+                    entity["targeting"] = raw["targeting"]
             return {
                 "entity": entity,
                 "parents": parents,

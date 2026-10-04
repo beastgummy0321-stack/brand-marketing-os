@@ -258,8 +258,10 @@ class HandoffTest(unittest.TestCase):
         self.assertEqual(root["status"], "confirmed")
         group = self.check(nodes["group"], "adset", "group")
         self.assertTrue(group["entity_exists"], group["evidence_json"])
-        self.assertEqual(group["status"], "unknown")
-        self.assertTrue(group["evidence_json"]["unknown_fields"])
+        # F49 Contract B: the landing URL is compared on the group's ads, never asked of the
+        # user on the ad set -- and this plan has none to compare.
+        self.assertEqual(group["status"], "confirmed", group["evidence_json"])
+        self.assertEqual(group["evidence_json"]["unreadable"], [])
         ad = self.check(nodes["ad"], "ad", "B2", user_verified=True)
         self.assertTrue(ad["entity_exists"], ad["evidence_json"])
         self.assertEqual(ad["status"], "confirmed", ad["evidence_json"])
@@ -288,8 +290,9 @@ class HandoffTest(unittest.TestCase):
         return TestClient(app), f"/api/ads/brands/{self.brand}/campaigns/{self.campaign}"
 
     def _read_back_with_unreadable_fields(self):
-        """A read-back launch whose ad set cannot see 2 launch settings and whose items cannot see
-        3 fields: the group's landing URL, the ad's description and its material."""
+        """A read-back launch whose ad set cannot see 2 launch settings and whose ad cannot see its
+        description. The ad's material is declared unreadable (F49 decision 5): confirmed at
+        approval; the landing URL is compared on the ads (Contract B), never asked by eye."""
         _, nodes = self.launch()
         frozen = nodes["group"]["expected_json"]["launch_settings"]
         audience = frozen["audience"]
@@ -313,7 +316,7 @@ class HandoffTest(unittest.TestCase):
         self.check(nodes["campaign"], "campaign", "root")
         group = self.check(nodes["group"], "adset", "group")
         ad = self.check(nodes["ad"], "ad", "B2")
-        self.assertEqual(group["status"], "unknown", group["evidence_json"])
+        self.assertEqual(group["status"], "confirmed", group["evidence_json"])
         self.assertEqual(ad["status"], "unknown", ad["evidence_json"])
         return group, ad
 
@@ -340,17 +343,17 @@ class HandoffTest(unittest.TestCase):
         )
         self.assertEqual(
             unreadable(before),
-            {
-                ("計畫投放組", "manual_settings.landing_url"): False,
-                ("原廣告", "copy.description"): False,
-                ("原廣告", "material"): False,
-            },
+            {("原廣告", "copy.description"): False},
+        )
+        ad_view = next(i for i in before["items"] if i["name"] == "原廣告")
+        self.assertEqual(
+            ad_view["confirmed_at_approval"], [{"key": "material", "label": "圖片或影片版本"}]
         )
 
         first = client.post(base + "/handoff/launch/confirm-all")
         self.assertEqual(first.status_code, 200, first.text)
         result = first.json()
-        self.assertEqual(result["confirmed_items"], 3)
+        self.assertEqual(result["confirmed_items"], 1)
         self.assertEqual(result["confirmed_settings"], 2)
         view = result["view"]
         self.assertEqual(set(view), set(before), "the same payload GET …/launch returns")
@@ -362,10 +365,9 @@ class HandoffTest(unittest.TestCase):
         self.assertEqual({i["state"] for i in view["items"]}, {"verified"})
         # A readable field is untouched: only the unreadable keys are recorded as confirmed.
         item = handoff_data.get(self.conn, self.org, self.brand, self.campaign, ad["id"])
-        self.assertEqual(set(item["evidence_json"]["confirmed"]), {"copy.description", "material"})
-        self.assertEqual(item["evidence_json"]["material_evidence"], "user_verified")
-        item = handoff_data.get(self.conn, self.org, self.brand, self.campaign, group["id"])
-        self.assertEqual(set(item["evidence_json"]["confirmed"]), {"manual_settings.landing_url"})
+        self.assertEqual(set(item["evidence_json"]["confirmed"]), {"copy.description"})
+        # The material is not eye-confirmed after launch: its evidence stays what the read proved.
+        self.assertEqual(item["evidence_json"]["material_evidence"], "unknown")
         launch = change_control_launch.launch_set(self.conn, self.org, self.brand, self.campaign)
         self.assertEqual(set(launch["plan_json"]["settings_confirmed"]), {"pixel_id", "placement"})
 
@@ -461,7 +463,14 @@ class HandoffTest(unittest.TestCase):
         observed = self.check(item, "ad", "B2")
         self.assertTrue(observed["entity_exists"], observed["evidence_json"])
         self.assertEqual(observed["material_evidence"], "unknown")
-        self.assertEqual(observed["status"], "unknown")
+        # F49 decision 5: the material no read proved was confirmed at approval -- the item is
+        # confirmed on its readable fields, the material filed under `confirmed_at_approval`.
+        self.assertEqual(observed["status"], "confirmed", observed["evidence_json"])
+        self.assertEqual(
+            observed["evidence_json"]["confirmed_at_approval"],
+            [{"key": "material", "label": "圖片或影片版本"}],
+        )
+        self.assertEqual(observed["evidence_json"]["unreadable"], [])
         verified = self.check(item, "ad", "B2", user_verified=True)
         self.assertEqual(verified["status"], "confirmed", verified["evidence_json"])
         self.assertEqual(verified["material_evidence"], "user_verified")
@@ -492,6 +501,11 @@ class HandoffTest(unittest.TestCase):
         failed = self.check(nodes["campaign"], "campaign", "root")
         self.assertEqual(failed["status"], "unknown")
         self.assertIsNone(failed["entity_id"])
+        # F49 Contract B: the evidence names why -- the object belongs to another brand.
+        self.assertEqual(failed["evidence_json"]["reason_code"], "owned_elsewhere")
+        self.assertEqual(
+            failed["evidence_json"]["message"], handoff_check.READBACK_REASONS["owned_elsewhere"]
+        )
         self.assertIsNone(
             campaigns.get_campaign(self.conn, self.org, self.brand, self.campaign)["external_id"]
         )
@@ -1252,6 +1266,266 @@ class HandoffTest(unittest.TestCase):
         after = change_control_launch.snapshot(self.conn, self.org, self.brand, self.campaign)
         self.assertEqual(change_control_data.digest(before), change_control_data.digest(after))
 
+    # -- F49 Contract B: reason codes, one aggregate, declared fields ----------------------------
+
+    def _refused(self, item, kind, native_id, **extra):
+        with self.assertRaises(handoff_check.Refused) as caught:
+            self.check(item, kind, native_id, **extra)
+        self.assertEqual(str(caught.exception), handoff_check.reason_text(caught.exception.code))
+        return caught.exception.code
+
+    def _bind(self, item_id, entity_id):
+        self.conn.execute(
+            "UPDATE ads_handoff_item SET entity_id=%s WHERE id=%s", (entity_id, item_id)
+        )
+        self.conn.commit()
+
+    def test_each_refusal_before_the_read_carries_its_own_code(self):
+        _, nodes = self.launch()
+        self.assertEqual(self._refused(nodes["group"], "adset", "group"), "parent_unread")
+        self.check(nodes["campaign"], "campaign", "root")
+        self.assertEqual(
+            self._refused(nodes["group"], "adset", "group", source_account="another"),
+            "account_mismatch",
+        )
+        self.assertEqual(self._refused(nodes["campaign"], "campaign", "root-2"), "identity_taken")
+        self.check(nodes["group"], "adset", "group")
+        self.assertEqual(self._refused(nodes["ad"], "adset", "group"), "wrong_level")
+        self.conn.execute(
+            "UPDATE ads_change_set SET status='deferred' WHERE id=%s",
+            (nodes["ad"]["change_set_id"],),
+        )
+        self.conn.commit()
+        self.assertEqual(self._refused(nodes["ad"], "ad", "B2"), "not_approved")
+
+    def test_new_ad_refusals_carry_their_codes(self):
+        _, item = self.approve(self.new_ad())
+        self.assertEqual(self._refused(item, "ad", "B"), "preexisting_ad")
+        self.conn.execute(
+            "UPDATE ads_handoff_item SET expected_json=expected_json || %s::jsonb WHERE id=%s",
+            (db.jsonb({"source_entity_id": self.existing_ad_id}), item["id"]),
+        )
+        self.conn.commit()
+        self.assertEqual(self._refused(item, "ad", "B"), "original_as_new")
+
+    def test_each_refusal_inside_the_read_is_stored_with_its_code(self):
+        _, nodes = self.launch()
+        # The chain the platform returns does not end at the object chosen as the root.
+        chain = self.check(nodes["campaign"], "adset", "group")
+        self.assertEqual(chain["status"], "unknown")
+        self.assertEqual(chain["evidence_json"]["reason_code"], "chain_mismatch")
+        root = self.check(nodes["campaign"], "campaign", "root")
+        group = self.check(nodes["group"], "adset", "group")
+        ad = self.check(nodes["ad"], "ad", "B2")
+        self.assertEqual(ad["status"], "confirmed", ad["evidence_json"])
+        # Another item already answers for this platform ad.
+        self._bind(nodes["ad"]["id"], None)
+        self._bind(nodes["campaign"]["id"], ad["entity_id"])
+        taken = self.check(nodes["ad"], "ad", "B2")
+        self.assertEqual(taken["evidence_json"]["reason_code"], "item_taken")
+        self.assertEqual(
+            taken["evidence_json"]["message"], handoff_check.READBACK_REASONS["item_taken"]
+        )
+        # The ad's platform parent is not the object its planned parent was read back as.
+        self._bind(nodes["campaign"]["id"], root["entity_id"])
+        self._bind(nodes["group"]["id"], ad["entity_id"])
+        moved = self.check(nodes["ad"], "ad", "B2")
+        self.assertEqual(moved["evidence_json"]["reason_code"], "parent_mismatch")
+        self._bind(nodes["group"]["id"], group["entity_id"])
+        # A read that succeeds drops the old reason.
+        again = self.check(nodes["ad"], "ad", "B2")
+        self.assertNotIn("reason_code", again["evidence_json"])
+
+    def test_a_code_bug_in_the_readback_propagates(self):
+        _, nodes = self.launch()
+        with (
+            patch.object(handoff_check, "_settings", side_effect=AttributeError("a bug")),
+            self.assertRaises(AttributeError),
+        ):
+            self.check(nodes["campaign"], "campaign", "root")
+
+    def test_one_deviated_item_makes_the_action_deviated(self):
+        result, nodes = self.launch()
+        self.check(nodes["campaign"], "campaign", "root")
+        self.native_group["budget_amount"] = 999
+        group = self.check(nodes["group"], "adset", "group")
+        self.assertEqual(group["status"], "deviated", group["evidence_json"])
+        ad = self.check(nodes["ad"], "ad", "B2")
+        self.assertEqual(ad["status"], "confirmed", ad["evidence_json"])
+        action = change_control_data.get(
+            self.conn, self.org, self.brand, self.campaign, result["change_set_id"]
+        )["items"][0]
+        self.assertEqual(action["verification_state"], "deviated")
+        self.assertEqual(action["verification_label"], "與核准內容不同")
+        items = handoff_data.workspace(self.conn, self.org, self.brand, self.campaign)["items"]
+        self.assertEqual(
+            {i["status"]: i["status_label"] for i in items},
+            {
+                "confirmed": change_control_data.VERIFICATION_LABELS["confirmed"],
+                "deviated": change_control_data.VERIFICATION_LABELS["deviated"],
+            },
+        )
+
+    # -- F49 Contract B (rescope): the landing URL and the audience ID are compared ---------------
+
+    PLANNED_URL = "https://shop.example.com/gift?ref=a"
+
+    def _compared_launch(self, *, landing=None, audience=None):
+        """A launch whose group saved a landing URL and／or an audience ID, read through the Meta
+        adapter's own link and audience readers; the campaign is read back."""
+        from app.ads import manual_settings
+
+        values = {k: v for k, v in (("landing_url", landing), ("audience_id", audience)) if v}
+        manual_settings.save(
+            self.conn, self.org, self.brand, self.campaign, self.group, values, actor="test"
+        )
+        self.conn.commit()
+        patch.object(adapters, "_read_module", side_effect=lambda platform: meta_read).start()
+        _, nodes = self.launch()
+        self.check(nodes["campaign"], "campaign", "root")
+        return nodes
+
+    def _read_ad(self, nodes, spec):
+        if spec is not None:
+            self.native_ad["creative"]["fields"]["object_story_spec"] = spec
+        self.check(nodes["group"], "adset", "group")
+        return self.check(nodes["ad"], "ad", "B2")
+
+    def test_the_same_landing_page_matches_without_tracking_scheme_www_or_trailing_slash(self):
+        nodes = self._compared_launch(landing=self.PLANNED_URL)
+        link = "http://www.SHOP.example.com/gift/?utm_source=fb&ref=a&fbclid=x&gclid=y"
+        ad = self._read_ad(nodes, {"link_data": {"link": link}})
+        self.assertEqual(ad["status"], "confirmed", ad["evidence_json"])
+        self.assertIn("landing_url", ad["evidence_json"]["matched_fields"])
+        self.assertEqual(ad["evidence_json"]["unreadable"], [])
+
+    def test_a_utm_only_difference_is_the_same_page(self):
+        nodes = self._compared_launch(landing=self.PLANNED_URL + "&utm_campaign=autumn")
+        ad = self._read_ad(
+            nodes,
+            {"link_data": {"link": "https://shop.example.com/gift?utm_campaign=spring&ref=a"}},
+        )
+        self.assertEqual(ad["status"], "confirmed", ad["evidence_json"])
+
+    def test_another_landing_page_is_a_deviation_with_its_reason(self):
+        nodes = self._compared_launch(landing=self.PLANNED_URL)
+        other = "https://shop.example.com/sale?ref=a"
+        ad = self._read_ad(nodes, {"link_data": {"link": other}})
+        self.assertEqual(ad["status"], "deviated", ad["evidence_json"])
+        evidence = ad["evidence_json"]
+        self.assertEqual(evidence["reason_code"], "landing_url_mismatch")
+        reasons = handoff_check.READBACK_REASONS
+        self.assertEqual(evidence["message"], reasons["landing_url_mismatch"])
+        self.assertEqual(
+            evidence["mismatches"],
+            [{"key": "landing_url", "label": "落地頁網址", "expected": self.PLANNED_URL,
+              "observed": other}],
+        )
+        action = self.conn.execute(
+            "SELECT verification_state FROM ads_action WHERE id=%s", (ad["action_id"],)
+        ).fetchone()
+        self.assertEqual(action["verification_state"], "deviated")
+
+    def test_a_video_ads_link_is_read_from_its_call_to_action(self):
+        nodes = self._compared_launch(landing=self.PLANNED_URL)
+        video = {"video_data": {"video_id": "v1", "call_to_action": {
+            "type": "SHOP_NOW", "value": {"link": "https://shop.example.com/gift/?ref=a"}}}}
+        ad = self._read_ad(nodes, video)
+        self.assertEqual(ad["status"], "confirmed", ad["evidence_json"])
+        video["video_data"]["call_to_action"]["value"]["link"] = "https://elsewhere.example.com/"
+        ad = self.check(nodes["ad"], "ad", "B2")
+        self.assertEqual(ad["status"], "deviated", ad["evidence_json"])
+        self.assertEqual(ad["evidence_json"]["reason_code"], "landing_url_mismatch")
+
+    def test_no_link_read_leaves_the_ad_unknown_with_a_reason_and_no_eye_check(self):
+        nodes = self._compared_launch(landing=self.PLANNED_URL)
+        ad = self._read_ad(nodes, None)  # the creative carries no story spec
+        self.assertEqual(ad["status"], "unknown", ad["evidence_json"])
+        evidence = ad["evidence_json"]
+        self.assertEqual(evidence["reason_code"], "landing_url_unread")
+        self.assertEqual(evidence["message"], handoff_check.READBACK_REASONS["landing_url_unread"])
+        self.assertEqual(evidence["unreadable"], [])
+        self.assertEqual(
+            evidence["unproven"],
+            [{"key": "landing_url", "label": "落地頁網址", "reason_code": "landing_url_unread"}],
+        )
+        # Nothing to confirm by eye: confirm-all leaves it to the next read.
+        handoff_check.confirm_all(self.conn, self.org, self.brand, self.campaign, "human")
+        again = handoff_data.get(self.conn, self.org, self.brand, self.campaign, ad["id"])
+        self.assertEqual(again["status"], "unknown")
+
+    def test_the_audience_id_is_compared_with_the_ad_sets_audiences(self):
+        nodes = self._compared_launch(audience="123")
+        self.assertEqual(nodes["group"]["expected_json"]["manual_settings"]["audience_id"], "123")
+        self.native_group["targeting"] = {"custom_audiences": [{"id": "9"}, {"id": "123"}]}
+        group = self.check(nodes["group"], "adset", "group")
+        self.assertEqual(group["status"], "confirmed", group["evidence_json"])
+        self.native_group["targeting"] = {"custom_audiences": [{"id": "9"}]}
+        group = self.check(nodes["group"], "adset", "group")
+        self.assertEqual(group["status"], "deviated", group["evidence_json"])
+        self.assertEqual(group["evidence_json"]["reason_code"], "audience_mismatch")
+        del self.native_group["targeting"]
+        group = self.check(nodes["group"], "adset", "group")
+        self.assertEqual(group["status"], "unknown", group["evidence_json"])
+        self.assertEqual(group["evidence_json"]["reason_code"], "audience_unread")
+        self.assertEqual(group["evidence_json"]["unreadable"], [])
+
+    def test_identical_upserts_leave_updated_at_alone(self):
+        external_repository.upsert_entity(self.conn, self.org, self.brand, self.campaign, self.root)
+        first = external_repository.upsert_entity(
+            self.conn, self.org, self.brand, self.campaign, self.native_group
+        )
+        self.conn.commit()
+        # A re-read of the same object: only the read bookkeeping moves.
+        again = dict(self.native_group, last_success_at=db.now_utc(), last_attempt_at=db.now_utc())
+        second = external_repository.upsert_entity(
+            self.conn, self.org, self.brand, self.campaign, again
+        )
+        self.conn.commit()
+        self.assertEqual(second["updated_at"], first["updated_at"])
+        self.assertEqual(second["status_changed_at"], first["status_changed_at"])
+        self.assertNotEqual(second["last_success_at"], first["last_success_at"])
+        # A creative re-read differs only in its own read time.
+        ad = dict(self.native_ad, creative={**self.native_ad["creative"], "observed_at": "a"})
+        upsert = external_repository.upsert_entity
+        before = upsert(self.conn, self.org, self.brand, self.campaign, ad)
+        self.conn.commit()
+        ad["creative"] = {**ad["creative"], "observed_at": "b"}
+        after = upsert(self.conn, self.org, self.brand, self.campaign, ad)
+        self.conn.commit()
+        self.assertEqual(after["updated_at"], before["updated_at"])
+        # A real change moves it (and an off／not-off change moves status_changed_at too).
+        changed = external_repository.upsert_entity(
+            self.conn, self.org, self.brand, self.campaign,
+            dict(self.native_group, native_status="PAUSED"),
+        )
+        self.conn.commit()
+        self.assertGreater(changed["updated_at"], first["updated_at"])
+        self.assertIsNotNone(changed["status_changed_at"])
+
+    def test_destination_by_ad_names_the_ad_set_of_a_launched_ad(self):
+        _, nodes = self.launch()
+        root = self.check(nodes["campaign"], "campaign", "root")
+        group = self.check(nodes["group"], "adset", "group")
+        ad = self.check(nodes["ad"], "ad", "B2")
+        self.assertTrue(root["entity_id"])
+        workspace = handoff_data.workspace(self.conn, self.org, self.brand, self.campaign)
+        self.assertEqual(workspace["destination_by_ad"], {ad["entity_id"]: group["entity_id"]})
+        self.assertIsNone(workspace["destinations_note"])
+
+    def test_destinations_note_on_an_internal_draft(self):
+        workspace = handoff_data.workspace(self.conn, self.org, self.brand, self.campaign)
+        self.assertEqual(workspace["destinations"], [])
+        self.assertEqual(workspace["destination_by_ad"], {})
+        self.assertEqual(workspace["destinations_note"], handoff_data.DESTINATIONS_NOTE_DRAFT)
+        # An imported campaign whose structure was not read says so.
+        imported = external_repository.create_imported_campaign(
+            self.conn, self.org, self.brand, name="匯入的活動"
+        )["id"]
+        self.conn.commit()
+        note = handoff_data.workspace(self.conn, self.org, self.brand, imported)
+        self.assertEqual(note["destinations_note"], handoff_data.DESTINATIONS_NOTE_UNREAD)
+
     def test_an_ad_without_ready_material_is_deferred_from_the_batch(self):
         # F30 Unresolved 1: no workbench output or copy stands in for the material any more.
         deferred = []
@@ -1263,3 +1537,54 @@ class HandoffTest(unittest.TestCase):
         self.assertEqual(
             deferred, [{"ad_id": self.ad, "name": "原廣告", "group_name": "計畫投放組"}]
         )
+
+
+class LinkAndAudienceReaderTest(unittest.TestCase):
+    """F49 Contract B: the platform's creative and targeting shapes live in its adapter; the
+    readback's landing-page rule is platform-neutral."""
+
+    def test_meta_reads_link_video_and_dynamic_destinations(self):
+        def ad(fields):
+            return {"platform": "meta", "creative": {"kind": "image", "fields": fields}}
+
+        self.assertEqual(
+            adapters.creative_links(ad({"object_story_spec": {"link_data": {"link": "https://a/"}}})),
+            ["https://a/"],
+        )
+        video = {"video_data": {"call_to_action": {"value": {"link": "https://v/"}}}}
+        self.assertEqual(adapters.creative_links(ad({"object_story_spec": video})), ["https://v/"])
+        feed = {"link_urls": [{"website_url": "https://d1/"}, {"display_url": "x"}]}
+        self.assertEqual(adapters.creative_links(ad({"asset_feed_spec": feed})), ["https://d1/"])
+        self.assertEqual(adapters.creative_links(ad({"title": "t"})), [])
+        self.assertIsNone(adapters.creative_links({"platform": "meta", "creative": {}}))
+        self.assertIsNone(adapters.creative_links({"platform": "unknown-platform"}))
+
+    def test_meta_reads_the_ad_sets_custom_audiences(self):
+        targeting = {"custom_audiences": [{"id": 123, "name": "買過"}, {"id": "9"}]}
+        self.assertEqual(
+            adapters.audience_ids({"platform": "meta", "targeting": targeting}), ["123", "9"]
+        )
+        self.assertEqual(adapters.audience_ids({"platform": "meta", "targeting": {}}), [])
+        self.assertIsNone(adapters.audience_ids({"platform": "meta"}))
+
+    def test_simulated_reads_its_own_fields(self):
+        self.assertIsNone(adapters.creative_links({"platform": "simulated", "creative": {}}))
+        self.assertEqual(
+            adapters.creative_links(
+                {"platform": "simulated", "creative": {"fields": {"links": ["https://s/"]}}}
+            ),
+            ["https://s/"],
+        )
+        self.assertEqual(
+            adapters.audience_ids({"platform": "simulated", "audience_ids": ["1"]}), ["1"]
+        )
+
+    def test_the_landing_page_rule(self):
+        same = handoff_check.same_landing
+        planned = "https://shop.example.com/gift?ref=a&b=2"
+        self.assertTrue(same(planned, "http://WWW.shop.example.com/gift/?b=2&ref=a&utm_x=1"))
+        self.assertTrue(same(planned, "shop.example.com/gift?ref=a&b=2&fbclid=1#top"))
+        self.assertFalse(same(planned, "https://shop.example.com/gift?ref=b&b=2"))
+        self.assertFalse(same(planned, "https://shop.example.com/Gift?ref=a&b=2"))
+        self.assertFalse(same(planned, "https://other.example.com/gift?ref=a&b=2"))
+        self.assertFalse(same(planned, "https://shop.example.com:8443/gift?ref=a&b=2"))

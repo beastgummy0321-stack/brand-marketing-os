@@ -1,9 +1,17 @@
 """Approved handoff nodes and their evidence, without another native-object registry."""
 
 from app.ads import change_control_data as changes
-from app.ads import launch_settings, manual_settings
+from app.ads import launch_settings, lifecycle, manual_settings
 from app.ads import user_assets_repository as assets
 from app.core import db
+
+# The manual settings frozen per ad set for readback (`install_launch`): the required ones, plus
+# the platform audience ID when the group has one (F49 Contract B: the readback compares it).
+LAUNCH_MANUAL_KEYS = tuple(f["key"] for f in manual_settings.FIELDS if f["required"])
+LAUNCH_MANUAL_KEYS_IF_SET = ("audience_id",)
+# F49 Contract D: why a campaign's handoff has no platform destination to offer a new ad.
+DESTINATIONS_NOTE_DRAFT = "這個活動還沒上架，平台上還沒有投放組；新廣告請到投放結構加"
+DESTINATIONS_NOTE_UNREAD = "還沒讀到這個活動的平台結構，按重新讀取"
 
 
 def insert(
@@ -63,16 +71,14 @@ def install_launch(conn, org, brand, campaign, set_id, action_id, frozen):
     )
     manual = {g["id"]: g["values"] for g in frozen.get("manual_settings", [])}
     for group in frozen["groups"]:
+        values = manual.get(group["id"], {})
         expected = {
             "budget_type": "daily",
             "budget_amount": group.get("daily_budget"),
             "start_date": group.get("start_date") or frozen.get("start_date"),
             "end_date": group.get("end_date") or frozen.get("end_date"),
-            "manual_settings": {
-                f["key"]: manual.get(group["id"], {}).get(f["key"])
-                for f in manual_settings.FIELDS
-                if f["required"]
-            },
+            "manual_settings": {key: values.get(key) for key in LAUNCH_MANUAL_KEYS}
+            | {key: values[key] for key in LAUNCH_MANUAL_KEYS_IF_SET if values.get(key)},
         }
         # F29 Contract I: each ad set is read back against the frozen launch settings (a launch
         # approved before they existed froze none and compares none).
@@ -94,7 +100,12 @@ def install_launch(conn, org, brand, campaign, set_id, action_id, frozen):
         for ad in group.get("ads", []):
             material = ad.get("material_assignment") or {}
             copy = material.get("copy_fields") or {}
-            expected = {"copy_text": ad.get("copy_text"), "material_required": True}
+            # F49 Contract B: the group's landing URL is compared on each of its ads' links.
+            expected = {
+                "copy_text": ad.get("copy_text"),
+                "material_required": True,
+                "landing_url": values.get("landing_url"),
+            }
             if frozen.get("launch_settings") is not None:
                 expected["launch_settings"] = launch_settings.ad_subset(frozen["launch_settings"])
             if material:
@@ -209,8 +220,38 @@ def get(conn, org, brand, campaign, item_id):
         entity_exists=evidence.get("entity_exists", False),
         setting_matches=evidence.get("setting_matches"),
         material_evidence=evidence.get("material_evidence", "unknown"),
+        # F49 Contract B: the one word for the item's verification state.
+        status_label=changes.verification_label(result["status"]),
     )
     return result
+
+
+def _destination_by_ad(conn, org, brand, campaign):
+    """F49 Contract D: `{ad entity id: its parent (ad set) entity id}` for the campaign's platform
+    ads -- read from the campaign's own platform objects, whatever its origin."""
+    rows = conn.execute(
+        "SELECT a.id,p.id AS destination_id FROM ads_external_entity a "
+        "JOIN ads_external_entity p ON p.org_id=a.org_id AND p.brand_id=a.brand_id "
+        "AND p.campaign_id=a.campaign_id AND p.platform=a.platform "
+        "AND p.source_account=a.source_account AND p.native_kind=a.parent_native_kind "
+        "AND p.native_id=a.parent_native_id "
+        "WHERE a.org_id=%s AND a.brand_id=%s AND a.campaign_id=%s AND a.native_kind='ad' "
+        "ORDER BY a.id",
+        (org, brand, campaign),
+    ).fetchall()
+    return {r["id"]: r["destination_id"] for r in rows}
+
+
+def _destinations_note(conn, org, brand, campaign_row, destinations):
+    """None when there are destinations; an internal campaign not on a platform yet says so,
+    any other says its structure was not read yet."""
+    if destinations:
+        return None
+    if campaign_row.get("origin") != "imported" and (
+        lifecycle.of(conn, org, brand, campaign_row)["state"] == "draft"
+    ):
+        return DESTINATIONS_NOTE_DRAFT
+    return DESTINATIONS_NOTE_UNREAD
 
 
 def workspace(conn, org, brand, campaign):
@@ -218,7 +259,7 @@ def workspace(conn, org, brand, campaign):
     # `handoff_check` imports this module.
     from app.ads import change_control_launch, handoff_check
 
-    changes.campaign(conn, org, brand, campaign)
+    campaign_row = changes.campaign(conn, org, brand, campaign)
     rows = conn.execute(
         # A re-approved launch leaves its superseded set's items as history, not work.
         "SELECT h.id FROM ads_handoff_item h JOIN ads_change_set c ON c.id=h.change_set_id "
@@ -243,6 +284,8 @@ def workspace(conn, org, brand, campaign):
         ],
         "destinations": [dict(r) for r in destinations[:500]],
         "destinations_truncated": len(destinations) > 500,
+        "destination_by_ad": _destination_by_ad(conn, org, brand, campaign),
+        "destinations_note": _destinations_note(conn, org, brand, campaign_row, destinations),
         "launch_stale": change_control_launch.stale(conn, org, brand, campaign),
         "settings_readback": handoff_check.settings_readback(conn, org, brand, campaign),
         "notice": "物件存在、設定相符與素材核對分別記錄；人工交接不代表平台已投遞。",
@@ -276,14 +319,15 @@ def unreport(conn, org, brand, campaign, item_id):
     return get(conn, org, brand, campaign, item_id)
 
 
-def note_readback(conn, org, brand, campaign, item_id, reason):
+def note_readback(conn, org, brand, campaign, item_id, reason, reason_code=None):
     """A batch readback that found no single platform object for this item leaves it as it was,
-    with the reason and the time of the attempt."""
+    with the reason (and, F49 Contract B, its code) and the time of the attempt."""
+    note = {"at": db.now_utc().isoformat(), "reason": reason, "reason_code": reason_code}
     conn.execute(
         "UPDATE ads_handoff_item SET evidence_json=evidence_json || %s::jsonb,updated_at=now() "
         "WHERE org_id=%s AND brand_id=%s AND campaign_id=%s AND id=%s",
         (
-            db.jsonb({"readback": {"at": db.now_utc().isoformat(), "reason": reason}}),
+            db.jsonb({"readback": note}),
             org,
             brand,
             campaign,

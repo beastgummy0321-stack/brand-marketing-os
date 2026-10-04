@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from app.ads import asset_binding_repository as repo
 from app.ads import external_repository as external
 from app.ads import external_sync
+from app.ads.adapters.external import SourceReadError
 from app.ads.external_models import ExternalEntity
 from app.core import db
 
@@ -119,11 +120,16 @@ def verify(
             original=original,
         )
         _validate_chain(proof, leaf, root)
-    except (ValueError, AttributeError):
+    except ValueError as exc:
+        # F49 Contract B: a refusal only (a code bug propagates), re-raised with its reason code
+        # -- the source read's own, else the chain's.
         conn.rollback()
         repo.record_failure(conn, org, brand, campaign, placement_id, revision, leaf)
         conn.commit()
-        raise ValueError("指定廣告與完整父鏈無法重新核對，未新增平台確認。") from None
+        raise SourceReadError(
+            "指定廣告與完整父鏈無法重新核對，未新增平台確認。",
+            getattr(exc, "code", None) or "chain_mismatch",
+        ) from None
     # Facades may commit. Re-read connection/account/placement after all HTTP has finished.
     external_sync.account_reader(conn, org, brand, leaf["platform"], leaf["source_account"])
     current, asset = repo.confirmed(conn, org, brand, campaign, placement_id, revision, write=True)

@@ -1,5 +1,7 @@
 """Fresh read-only native verification with scoped ownership and late-response protection."""
 
+from urllib.parse import parse_qsl, urlsplit
+
 from app.ads import (
     adapters,
     asset_binding,
@@ -16,6 +18,83 @@ from app.ads import repository as campaigns
 from app.ads.external_models import ExternalEntity
 from app.core import db
 
+# F49 Contract B: why a readback could not prove an item -- one sentence per reason code. Every
+# refusal raised here carries its code (`Refused`), a source read its `SourceReadError.code`; the
+# evidence stores `reason_code` and this sentence, and the launch view prints it.
+READBACK_REASONS = {
+    # Refusals raised by the readback itself.
+    "not_approved": "此交接尚未核准。",
+    "parent_unread": "上一層還沒讀回，這一項先不比對。",
+    "root_unread": "活動還沒讀回，這一項先不比對。",
+    "account_mismatch": "來源帳號必須與已讀回父層一致。",
+    "identity_taken": "此交接已對應另一個平台物件，不能覆寫既有身分。",
+    "original_as_new": "新測試必須使用獨立廣告，不能把原廣告當成新廣告。",
+    "preexisting_ad": "此廣告在建立新測試前已存在，請選新增廣告的獨立身分。",
+    "wrong_level": "請選擇可對應素材的廣告層級。",
+    "parent_mismatch": "平台直接父層與交接計畫不符。",
+    "root_required": "活動交接必須選擇來源根層級。",
+    "owned_elsewhere": "此平台物件已屬於另一個品牌或活動，不可重新掛接。",
+    "owned_by_plan": "此平台活動已有其他內部計畫歸屬，不可重新掛接。",
+    "item_taken": "此平台物件已對應另一個交接項目。",
+    "source_changed": "核對期間來源已更新，保留較新的資料，請再核對。",
+    "plan_changed": "核准後計畫或素材已變更，請重新檢視交接。",
+    # What a read compared and found different, or could not read (never a 「請到平台看」).
+    "landing_url_mismatch": "廣告連到的網址跟核准的落地頁不一樣。",
+    "landing_url_unread": "這次讀回沒讀到廣告連到的網址，請稍後再讀回一次。",
+    "audience_mismatch": "廣告組的受眾裡沒有核准的平台受眾 ID。",
+    "audience_unread": "這次讀回沒讀到廣告組的受眾設定，請稍後再讀回一次。",
+    "chain_mismatch": "平台回讀的上下層跟選的物件對不起來，請重新選擇後再讀回。",
+    "material_unverified": "素材對應沒能核對（素材版本或對應已改變），請重新讀回。",
+    # The batch readback's name match (`launch_view._match`).
+    "not_found": "平台上找不到名稱是「{name}」的{kind}；名稱要一字不差。",
+    "ambiguous": (
+        "平台上有 {count} 個名稱都是「{name}」的{kind}，請把平台上的名稱改成不重複再讀回。"
+    ),
+    "platform_split": "這個活動的投放組不在同一個平台，無法自動比對名稱。",
+    # A source read's own codes (`SourceReadError.code`).
+    "disconnected": "廣告帳號已解除連線或不屬於這個品牌，請到資料連線重新連上。",
+    "permission_denied": "這個廣告帳號沒有讀取權限，請到資料連線檢查授權。",
+    "unsupported": "這個平台還不能讀回這種物件。",
+    "page_limit": "平台上的物件太多，這次沒有讀完，請稍後再讀回一次。",
+    "invalid_source_page": "平台回的資料不完整，請再讀回一次。",
+    "source_error": "平台這次沒有回應，請稍後再讀回。",
+    # Anything else: the read could not prove the item, nothing more is known.
+    "unverifiable": "來源、物件歸屬或完整設定無法核對，未確認完成；請核對選擇後重試。",
+}
+
+
+def reason_text(code, **params) -> str:
+    """The sentence for `code` (unknown codes read as `unverifiable`)."""
+    return READBACK_REASONS.get(code, READBACK_REASONS["unverifiable"]).format(**params)
+
+
+class Refused(ValueError):
+    """A readback refusal carrying its reason code; the message is the code's sentence."""
+
+    def __init__(self, code, **params):
+        super().__init__(reason_text(code, **params))
+        self.code = code
+
+
+def refusal(exc: ValueError) -> tuple[str, str]:
+    """`(reason_code, sentence)` of a caught refusal: the code it carries (`Refused`／
+    `SourceReadError`), else `unverifiable`; the sentence always from `READBACK_REASONS` (a
+    `Refused` message already is one, with its names filled in) -- a source's own message never
+    reaches the user."""
+    code = getattr(exc, "code", None) or "unverifiable"
+    return code, str(exc) if isinstance(exc, Refused) else reason_text(code)
+
+
+def _coded(code, call, *args, **kwargs):
+    """Run `call`; a plain `ValueError` from it (another module's refusal without a code) becomes
+    `Refused(code)`. A coded one passes through as raised."""
+    try:
+        return call(*args, **kwargs)
+    except ValueError as exc:
+        if getattr(exc, "code", None):
+            raise
+        raise Refused(code) from exc
+
 
 def _launch_current(conn, org, brand, campaign, change_set):
     original = change_set["plan_json"].get("launch_snapshot")
@@ -30,7 +109,7 @@ def _parent(conn, org, brand, campaign, item):
     if item["parent_item_id"]:
         parent = handoff_data.get(conn, org, brand, campaign, item["parent_item_id"])
         if not parent["entity_id"]:
-            raise ValueError("請先讀回上一層物件，才能核對這一項。")
+            raise Refused("parent_unread")
         return bindings.entity(conn, org, brand, campaign, parent["entity_id"])
     destination = item["expected_json"].get("destination_entity_id")
     return bindings.entity(conn, org, brand, campaign, destination) if destination else None
@@ -44,7 +123,7 @@ def _ownership(conn, org, brand, campaign, node):
         (org, node["platform"], node["source_account"], node["native_kind"], node["native_id"]),
     ).fetchall()
     if any(r["brand_id"] != brand or r["campaign_id"] != campaign for r in occupied):
-        raise ValueError("此平台物件已屬於另一個品牌或活動，不可重新掛接。")
+        raise Refused("owned_elsewhere")
     if node["parent_native_id"] is None:
         legacy = conn.execute(
             "SELECT c.id,c.brand_id FROM ads_campaign c WHERE c.org_id=%s AND c.origin='internal' "
@@ -55,7 +134,7 @@ def _ownership(conn, org, brand, campaign, node):
             (org, node["native_id"], node["platform"], node["source_account"]),
         ).fetchall()
         if any(r["id"] != campaign or r["brand_id"] != brand for r in legacy):
-            raise ValueError("此平台活動已有其他內部計畫歸屬，不可重新掛接。")
+            raise Refused("owned_by_plan")
 
 
 def _source_versions(conn, org, platform, account, native_ids):
@@ -78,10 +157,57 @@ _FIELD_LABELS = {
     "end_date": "結束日期",
 }
 _SETTING_LABELS = {f["key"]: f["label"] for f in manual_settings.FIELDS}
+# F49 Contract B (decision 5): the ad's material is declared `readable: False` -- a read proves it
+# only through the media evidence (`media_verified`, the exact／equivalent media match); otherwise
+# approving the launch was its confirmation, never a per-field eye check after launch.
+MATERIAL_KEY, MATERIAL_LABEL = "material", "圖片或影片版本"
+_PROVEN_MATERIAL = frozenset({"media_verified"})
+# F49 Contract B: a group's manual setting the readback compares on each of the group's ads (the
+# ad's creative carries the link), not on the ad set.
+_COMPARED_ON_ADS = frozenset({"landing_url"})
+
+
+def approval_confirms(snapshot) -> list[dict]:
+    """`[{key, label}]` -- the declared-unreadable fields a launch of `snapshot` (a launch
+    snapshot, `change_control_launch.snapshot`) carries: approving it is their one confirmation
+    (decision 5). The group keys are the ones `handoff_data.install_launch` freezes for readback."""
+    groups = snapshot.get("groups") or []
+    found = []
+    if groups:
+        found.extend(
+            {"key": "manual_settings." + key, "label": _SETTING_LABELS.get(key, key)}
+            for key in handoff_data.LAUNCH_MANUAL_KEYS
+            if key in manual_settings.DECLARED_UNREADABLE
+        )
+    if any(group.get("ads") for group in groups):
+        found.append({"key": MATERIAL_KEY, "label": MATERIAL_LABEL})
+    return found
 
 
 def _plain(value):
     return value if value is None or isinstance(value, (str, int, float, bool)) else str(value)
+
+
+_CLICK_IDS = frozenset({"fbclid", "gclid"})
+
+
+def same_landing(planned, link) -> bool:
+    """F49 Contract B: one landing page -- same host (lowercased, `www.` ignored, port kept) and
+    path (trailing slash ignored), the query compared without `utm_*`／`fbclid`／`gclid` and in
+    any order; the scheme and fragment are ignored."""
+
+    def normal(value):
+        text = str(value).strip()
+        parts = urlsplit(text if "//" in text else "//" + text)
+        host = (parts.hostname or "").removeprefix("www.")
+        query = sorted(
+            (key, val)
+            for key, val in parse_qsl(parts.query, keep_blank_values=True)
+            if not key.lower().startswith("utm_") and key.lower() not in _CLICK_IDS
+        )
+        return host, parts.port, parts.path.rstrip("/"), query
+
+    return normal(planned) == normal(link)
 
 
 def _settings(item, node, material, observed=None, pixels=None):
@@ -89,12 +215,25 @@ def _settings(item, node, material, observed=None, pixels=None):
     known, missing, differences = {}, [], []
     # F30 Contract G: the same results keyed for the launch view -- a required field the read
     # cannot see (`unreadable`, confirmed by eye per key) and a differing one with the value the
-    # platform showed (`mismatches`, stored with the check).
-    unreadable, mismatches = [], []
+    # platform showed (`mismatches`, stored with the check). F49 Contract B: a field declared
+    # unreadable (decision 5) is never `unreadable` -- it goes to `confirmed_at_approval`, and the
+    # item's state is computed over the readable fields only.
+    unreadable, mismatches, at_approval = [], [], []
+    # F49 Contract B: a compared field the read did not carry this time (`unproven`, the item
+    # stays `unknown` with the reason, no eye check) and the first reason code met.
+    unproven, codes = [], []
 
     def unread(key, label, text):
         missing.append(text)
         unreadable.append({"key": key, "label": label})
+
+    def approved(key, label):
+        at_approval.append({"key": key, "label": label})
+
+    def not_read(key, label, code):
+        missing.append(label)
+        unproven.append({"key": key, "label": label, "reason_code": code})
+        codes.append(code)
 
     def differ(key, label, text, want, got):
         differences.append(text)
@@ -134,17 +273,49 @@ def _settings(item, node, material, observed=None, pixels=None):
                 known[key] = value
         if not any(expected_fields.values()):
             unread("copy", "核准文案內容", "核准文案內容")
-        if material == "unknown":
-            unread("material", "圖片或影片版本", "圖片或影片版本等價")
+        if material in _PROVEN_MATERIAL:
+            known[MATERIAL_KEY] = material
+        else:
+            approved(MATERIAL_KEY, MATERIAL_LABEL)
+        # F49 Contract B: the group's planned landing URL against every link the creative sends
+        # people to (the platform's creative shape is the adapter's).
+        planned_url = expected.get("landing_url")
+        if planned_url:
+            key, label = "landing_url", _SETTING_LABELS["landing_url"]
+            links = adapters.creative_links(node)
+            if not links:
+                not_read(key, label, "landing_url_unread")
+            elif other := next((u for u in links if not same_landing(planned_url, u)), None):
+                differ(key, label, label, planned_url, other)
+                codes.append("landing_url_mismatch")
+            else:
+                known[key] = planned_url
     else:
         for key, value in expected.items():
             if key == "launch_settings":
                 continue
             label = _FIELD_LABELS.get(key, key)
             if key == "manual_settings":
-                # No existing reader contract proves these semantic/manual fields.
-                for k in value:
-                    unread("manual_settings." + k, _SETTING_LABELS.get(k, k), "人工設定：" + k)
+                # No existing reader contract proves these semantic/manual fields: a declared one
+                # was confirmed at approval, any other is confirmed by eye.
+                for k, planned in value.items():
+                    setting = "manual_settings." + k
+                    if k in _COMPARED_ON_ADS:
+                        continue
+                    if k == "audience_id":
+                        ids = adapters.audience_ids(node)
+                        name = _SETTING_LABELS[k]
+                        if ids is None:
+                            not_read(setting, name, "audience_unread")
+                        elif str(planned) not in ids:
+                            differ(setting, name, name, planned, "、".join(ids) or None)
+                            codes.append("audience_mismatch")
+                        else:
+                            known[k] = planned
+                    elif k in manual_settings.DECLARED_UNREADABLE:
+                        approved(setting, _SETTING_LABELS.get(k, k))
+                    else:
+                        unread(setting, _SETTING_LABELS.get(k, k), "人工設定：" + k)
             elif value is None or node.get(key) is None:
                 unread(key, label, key)
             elif str(node[key]) != str(value):
@@ -169,17 +340,23 @@ def _settings(item, node, material, observed=None, pixels=None):
                 known[key] = value
     state = "deviated" if differences else "unknown" if missing else "confirmed"
     extra = {"launch_settings": compared} if compared else {}
+    if codes:
+        extra |= {"reason_code": codes[0]}
     return state, extra | {
         "setting_matches": False if differences else None if missing else True,
         "matched_fields": list(known),
         "unknown_fields": missing,
         "deviated_fields": differences,
         "unreadable": unreadable,
+        "confirmed_at_approval": at_approval,
+        "unproven": unproven,
         "mismatches": mismatches,
         "material_evidence": material,
         "entity_exists": True,
         "delivery_confirmed": False,
-        "message": "只記本次物件與設定核對；不代表已投遞、素材因果或成效改善。",
+        "message": reason_text(codes[0])
+        if codes and state != "confirmed"
+        else "只記本次物件與設定核對；不代表已投遞、素材因果或成效改善。",
     }
 
 
@@ -192,6 +369,7 @@ def _resolve(status, evidence):
         status == "unknown"
         and evidence.get("entity_exists") is True
         and not evidence.get("deviated_fields")
+        and not evidence.get("unproven")
         and unreadable
         and all(u["key"] in confirmed for u in unreadable)
     ):
@@ -206,7 +384,8 @@ def _aggregate(conn, org, action_id, item_id, message, observed):
     peers = conn.execute(
         "SELECT status FROM ads_handoff_item WHERE org_id=%s AND action_id=%s", (org, action_id)
     ).fetchall()
-    aggregate = "confirmed" if all(r["status"] == "confirmed" for r in peers) else "unknown"
+    # F49 Contract B: the one aggregate -- a deviated item makes its action deviated.
+    aggregate = changes.worst_state(r["status"] for r in peers)
     conn.execute(
         "UPDATE ads_action SET verification_state=%s,evidence_json=%s,"
         "first_observed_at=CASE WHEN %s THEN COALESCE(first_observed_at,now()) "
@@ -309,20 +488,20 @@ def check(conn, org, brand, campaign, item_id, payload, actor):
     item = handoff_data.get(conn, org, brand, campaign, item_id)
     change_set = changes.get(conn, org, brand, campaign, item["change_set_id"])
     if change_set["status"] != "approved":
-        raise ValueError("此交接尚未核准。")
+        raise Refused("not_approved")
     parent = _parent(conn, org, brand, campaign, item)
     if parent and (payload["platform"], payload["source_account"]) != (
         parent["platform"],
         parent["source_account"],
     ):
-        raise ValueError("來源帳號必須與已讀回父層一致。")
+        raise Refused("account_mismatch")
     if item["entity_id"] and (
         payload["platform"],
         payload["source_account"],
         payload["native_kind"],
         payload["native_id"],
     ) != (item["platform"], item["source_account"], item["native_kind"], item["native_id"]):
-        raise ValueError("此交接已對應另一個平台物件，不能覆寫既有身分。")
+        raise Refused("identity_taken")
     if item["expected_json"].get("source_entity_id"):
         source = bindings.entity(
             conn, org, brand, campaign, item["expected_json"]["source_entity_id"]
@@ -338,14 +517,14 @@ def check(conn, org, brand, campaign, item_id, payload, actor):
             source["native_kind"],
             source["native_id"],
         ):
-            raise ValueError("新測試必須使用獨立廣告，不能把原廣告當成新廣告。")
+            raise Refused("original_as_new")
     if payload["native_id"] in item["expected_json"].get("existing_native_ids", []):
-        raise ValueError("此廣告在建立新測試前已存在，請選新增廣告的獨立身分。")
+        raise Refused("preexisting_ad")
     reader, account = external_sync.account_reader(
         conn, org, brand, payload["platform"], payload["source_account"]
     )
     if item["planned_kind"] == "ad" and payload["native_kind"] not in reader.binding_kinds():
-        raise ValueError("請選擇可對應素材的廣告層級。")
+        raise Refused("wrong_level")
     root = bindings.root(conn, org, brand, campaign, parent) if parent else payload
     source_ids = list(
         {payload["native_id"], root["native_id"], *([parent["native_id"]] if parent else [])}
@@ -369,16 +548,16 @@ def check(conn, org, brand, campaign, item_id, payload, actor):
             root_id=root["native_id"],
             original={},
         )
-        asset_binding._validate_chain(proof, payload, root)
+        _coded("chain_mismatch", asset_binding._validate_chain, proof, payload, root)
         node = proof["entity"]
         observed = node.get("launch_settings")
         if parent and (node.get("parent_native_kind"), node.get("parent_native_id")) != (
             parent["native_kind"],
             parent["native_id"],
         ):
-            raise ValueError("平台直接父層與交接計畫不符。")
+            raise Refused("parent_mismatch")
         if not parent and node.get("parent_native_id") is not None:
-            raise ValueError("活動交接必須選擇來源根層級。")
+            raise Refused("root_required")
         external_sync.account_reader(
             conn, org, brand, payload["platform"], payload["source_account"]
         )
@@ -399,7 +578,8 @@ def check(conn, org, brand, campaign, item_id, payload, actor):
                 attempt,
                 "unknown",
                 {
-                    "message": "核對期間來源已更新，保留較新的資料，請再核對。",
+                    "message": reason_text("source_changed"),
+                    "reason_code": "source_changed",
                     "entity_exists": False,
                 },
             )
@@ -412,7 +592,11 @@ def check(conn, org, brand, campaign, item_id, payload, actor):
                 item_id,
                 attempt,
                 "stale",
-                {"message": "核准後計畫或素材已變更，請重新檢視交接。", "entity_exists": False},
+                {
+                    "message": reason_text("plan_changed"),
+                    "reason_code": "plan_changed",
+                    "entity_exists": False,
+                },
             )
         nodes = [
             ExternalEntity.model_validate(
@@ -431,7 +615,7 @@ def check(conn, org, brand, campaign, item_id, payload, actor):
             (org, entity_id, item_id),
         ).fetchone()
         if occupied:
-            raise ValueError("此平台物件已對應另一個交接項目。")
+            raise Refused("item_taken")
         if change_set["plan_json"].get("launch_snapshot"):
             bind = {
                 "campaign": campaigns.bind_campaign,
@@ -454,7 +638,9 @@ def check(conn, org, brand, campaign, item_id, payload, actor):
         conn.commit()
         material = "user_verified" if payload.get("user_verified") else "unknown"
         if item["placement_id"]:
-            binding = asset_binding.verify(
+            binding = _coded(
+                "material_unverified",
+                asset_binding.verify,
                 conn,
                 org,
                 brand,
@@ -478,8 +664,11 @@ def check(conn, org, brand, campaign, item_id, payload, actor):
             attempt_id=attempt,
         )
         return _finish(conn, org, brand, campaign, item_id, attempt, status, evidence, entity_id)
-    except (ValueError, AttributeError):
+    except ValueError as exc:
+        # F49 Contract B: a refusal only -- a code bug (AttributeError, …) propagates instead of
+        # reading as "wrong object picked". The evidence names why, by code and sentence.
         conn.rollback()
+        code, text = refusal(exc)
         return _finish(
             conn,
             org,
@@ -489,7 +678,8 @@ def check(conn, org, brand, campaign, item_id, payload, actor):
             attempt,
             "unknown",
             {
-                "message": "來源、物件歸屬或完整設定無法核對，未確認完成；請核對選擇後重試。",
+                "message": text,
+                "reason_code": code,
                 "entity_exists": False,
                 "setting_matches": None,
                 "material_evidence": "unknown",

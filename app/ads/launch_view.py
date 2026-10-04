@@ -28,6 +28,16 @@ _STATES = {
     "unknown": "unknown",
     "stale": "changed",
 }
+# F49 Contract B: the one word per launch-item state, served as `state_label` beside `state`.
+# `unknown` (read, not provable yet) is not `built` (reported, not read yet).
+STATE_LABELS = {
+    "todo": "還沒建",
+    "built": "待讀回",
+    "unknown": "待確認",
+    "verified": "相符",
+    "mismatch": "不符",
+    "changed": "有變更",
+}
 # Items a batch readback reads (again): the user said they are built and they are not verified.
 _READABLE = {"reported", "unknown", "deviated"}
 _KIND_ORDER = {"campaign": 0, "group": 1, "ad": 2}
@@ -241,9 +251,12 @@ def _planned_items(snapshot, hints, formats=None):
             "parent_name": parent_name,
             "fields": _fields(kind, node, parent_name, snapshot, hints, formats),
             "state": "todo",
+            "state_label": STATE_LABELS["todo"],
             "mismatches": [],
             "unreadable": [],
+            "confirmed_at_approval": [],
             "reason": None,
+            "reason_code": None,
         }
         for (kind, planned_id), (node, parent_name) in _nodes(snapshot).items()
     ]
@@ -271,6 +284,18 @@ def _reason(row, state):
     if state == "unknown":
         return note or evidence.get("message")
     return None
+
+
+def _reason_code(row, state):
+    """F49 Contract B: the code of the reason `_reason` prints (`handoff_check.READBACK_REASONS`),
+    None when there is none or it predates reason codes."""
+    if _reason(row, state) is None:
+        return None
+    evidence = row["evidence_json"] or {}
+    readback = evidence.get("readback") or {}
+    if readback.get("reason"):
+        return readback.get("reason_code")
+    return evidence.get("reason_code")
 
 
 def _reason_at(row, state):
@@ -303,6 +328,7 @@ def _item(row, state, snapshot, nodes, hints, formats=None):
         "parent_name": row["parent_name"],
         "fields": fields,
         "state": state,
+        "state_label": STATE_LABELS.get(state),
         "mismatches": list(evidence.get("mismatches") or []) if checked else [],
         "unreadable": [
             {"key": u["key"], "label": u["label"], "confirmed": u["key"] in confirmed}
@@ -310,7 +336,12 @@ def _item(row, state, snapshot, nodes, hints, formats=None):
         ]
         if checked
         else [],
+        # F49 Contract B (decision 5): the fields no reader can see, confirmed by the approval.
+        "confirmed_at_approval": list(evidence.get("confirmed_at_approval") or [])
+        if checked
+        else [],
         "reason": _reason(row, state),
+        "reason_code": _reason_code(row, state),
         "reason_at": _reason_at(row, state),
     }
 
@@ -388,6 +419,8 @@ def view(conn, org, brand, campaign_id):
             "read_at": None,
             "settings_readback": None,
             "month_budget": launch.month_fit(conn, org, brand, campaign_id, current),
+            # F49 Contract B: printed on the approval screen before 核准 -- approving confirms them.
+            "approval_confirms": handoff_check.approval_confirms(current),
         }
     frozen = change_set["plan_json"]["launch_snapshot"]
     format_rows = formats(conn, org, brand, campaign_id, frozen, detail)
@@ -419,6 +452,7 @@ def view(conn, org, brand, campaign_id):
         "read_at": read_at,
         "settings_readback": handoff_check.settings_readback(conn, org, brand, campaign_id),
         "month_budget": None,
+        "approval_confirms": handoff_check.approval_confirms(frozen),
     }
 
 
@@ -449,7 +483,7 @@ def _pages(fetch):
         cursor = page.cursor
         if not cursor:
             return items
-    raise ValueError("平台上的物件太多，這次沒有讀完，請稍後再讀回一次。")
+    raise handoff_check.Refused("page_limit")
 
 
 def _identity(entity):
@@ -472,7 +506,7 @@ def _platform(conn, org, brand, campaign_id):
         ).fetchall()
     ]
     if len(keys) != 1:
-        raise ValueError("這個活動的投放組不在同一個平台，無法自動比對名稱。")
+        raise handoff_check.Refused("platform_split")
     return keys[0]
 
 
@@ -481,7 +515,7 @@ def _roots(conn, org, brand, campaign_id, name):
     platform = _platform(conn, org, brand, campaign_id)
     reader = channels.external_reader(platform)
     if reader is None:
-        raise ValueError("這個平台還不能讀回。")
+        raise handoff_check.Refused("unsupported")
     found = []
     for account in reader.accounts(conn, org, brand):
         found.extend(
@@ -500,14 +534,14 @@ def _children(conn, org, brand, campaign_id, item, cache):
     """Platform objects named exactly like `item` directly under its read-back parent."""
     parent = handoff_data.get(conn, org, brand, campaign_id, item["parent_item_id"])
     if not parent["entity_id"]:
-        raise ValueError("上一層還沒讀回，這一項先不比對。")
+        raise handoff_check.Refused("parent_unread")
     root = (
         parent
         if item["planned_kind"] == "group"
         else handoff_data.get(conn, org, brand, campaign_id, parent["parent_item_id"])
     )
     if not root["entity_id"]:
-        raise ValueError("活動還沒讀回，這一項先不比對。")
+        raise handoff_check.Refused("root_unread")
     reader, account = external_sync.account_reader(
         conn, org, brand, parent["platform"], parent["source_account"]
     )
@@ -541,12 +575,9 @@ def _match(conn, org, brand, campaign_id, item, cache):
     )
     label = _KIND_LABELS[kind]
     if not found:
-        raise ValueError(f"平台上找不到名稱是「{item['name']}」的{label}；名稱要一字不差。")
+        raise handoff_check.Refused("not_found", name=item["name"], kind=label)
     if len(found) > 1:
-        raise ValueError(
-            f"平台上有 {len(found)} 個名稱都是「{item['name']}」的{label}，"
-            "請把平台上的名稱改成不重複再讀回。"
-        )
+        raise handoff_check.Refused("ambiguous", count=len(found), name=item["name"], kind=label)
     return _identity(found[0])
 
 
@@ -569,7 +600,8 @@ def readback(conn, org, brand, campaign_id, actor):
             handoff_check.check(conn, org, brand, campaign_id, item["id"], payload, actor)
         except ValueError as exc:
             conn.rollback()
-            handoff_data.note_readback(conn, org, brand, campaign_id, item["id"], str(exc))
+            code, text = handoff_check.refusal(exc)
+            handoff_data.note_readback(conn, org, brand, campaign_id, item["id"], text, code)
     return view(conn, org, brand, campaign_id)
 
 

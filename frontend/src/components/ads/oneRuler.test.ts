@@ -21,6 +21,8 @@
  *    hits are listed in `LIFECYCLE_PENDING`, each naming the issue that removes it.
  * 7. F49-I02 (Contract O, one sync outcome): no `.job.status`／`.job.error` read and no `syncJob(` call outside
  *    `lib/useSyncOutcome.ts` — screens print the served `outcome`. Today's hits are listed in `SYNC_PENDING`.
+ * 8. F49-I06 (Contract B): no local word table for verification or launch-item states — screens print the served
+ *    `verification_label`／`status_label`／`state_label`. Today's hits are listed in `STATE_WORDS_PENDING`.
  *
  * Comments are not code: every scan reads the source with comments blanked out (line numbers kept); the numeric
  * literals are read in code only (a class name such as `gap-1.5` is a string). A hit that is not a served fact is
@@ -580,5 +582,104 @@ describe("one sync outcome (F49 Contract O)", () => {
     expect(syncJobReads("<p>{outcome.text}</p>")).toEqual([]);
     expect(syncJobReads('if (read.state === "running") x();')).toEqual([]);
     expect(syncJobReads("// was: result.job.error")).toEqual([]);
+  });
+});
+
+/** F49-I06 (Contract B, decision 11): a verification state's word is served (`verification_label`, `status_label`,
+ * `state_label`) — no ads source keeps its own word table for the verification states
+ * (`pending|reported|unknown|confirmed|deviated|stale`) or the launch-item states (`todo|built|verified|mismatch|changed`):
+ * no object literal keyed by two or more codes of one of those vocabularies, and no `switch` with two or more such
+ * `case`s, that holds a Chinese literal (a map onto colours or segment kinds is not a word table). Today's hits are
+ * listed in `STATE_WORDS_PENDING`, each naming the issue that
+ * moves the screen onto the served label and deletes the entry; a line that is not a word table is excused in
+ * `STATE_WORDS_NOT_A_TABLE` with the reason. An entry whose file no longer hits fails the stale-entry test. */
+const STATE_VOCABULARIES = [
+  ["pending", "reported", "unknown", "confirmed", "deviated", "stale"],
+  ["todo", "built", "verified", "mismatch", "changed"],
+];
+const STATE_KEY = /(?:^|[\s{,;])(?<!\bcase\s+)["']?([a-z_]+)["']?\s*:/g;
+const STATE_CASE = /\bcase\s+["'`]([a-z_]+)["'`]\s*:/g;
+const CJK = /[一-鿿]/;
+const twoOfOneVocabulary = (codes: string[]) =>
+  STATE_VOCABULARIES.some((vocabulary) => new Set(codes.filter((c) => vocabulary.includes(c))).size >= 2);
+
+/** Each `{…}` block (no nested braces, comments blanked) keyed by two or more codes of one state vocabulary, and each
+ * `switch` whose body has two or more `case`s of one vocabulary and a Chinese literal, at its first line. */
+function stateWordTables(text: string): number[] {
+  const code = strip(text, false);
+  const lineOf = (index: number) => code.slice(0, index).split("\n").length;
+  const lines: number[] = [];
+  for (const m of code.matchAll(/\{[^{}]*\}/g)) {
+    if (CJK.test(m[0]) && twoOfOneVocabulary([...m[0].matchAll(STATE_KEY)].map((k) => k[1]))) {
+      lines.push(lineOf(m.index ?? 0));
+    }
+  }
+  for (const m of code.matchAll(/\bswitch\s*\(/g)) {
+    const open = code.indexOf("{", m.index ?? 0);
+    if (open === -1) continue;
+    let depth = 0;
+    let end = open;
+    for (; end < code.length; end++) {
+      if (code[end] === "{") depth++;
+      else if (code[end] === "}" && --depth === 0) break;
+    }
+    const body = code.slice(open, end + 1);
+    if (CJK.test(body) && twoOfOneVocabulary([...body.matchAll(STATE_CASE)].map((k) => k[1]))) {
+      lines.push(lineOf(m.index ?? 0));
+    }
+  }
+  return [...new Set(lines)].sort((a, b) => a - b);
+}
+
+const STATE_WORDS_PENDING: { file: string; issue: string }[] = [
+  { file: "components/ads/flow/CleanupVerifyRows.tsx", issue: "F49-I11" },
+  { file: "components/ads/home/status.ts", issue: "F49-I08" },
+  { file: "components/ads/publish/PublishVerify.tsx", issue: "F49-I12" },
+  { file: "components/ads/ChangeSetView.tsx", issue: "F49-I14" },
+  { file: "components/ads/ManualHandoffPanel.tsx", issue: "F49-I14" },
+];
+const STATE_WORDS_NOT_A_TABLE: { file: string; text: string; why: string }[] = [
+  { file: "components/ads/PlannedMaterialAssignments.tsx", text: "const statusLabel = { unassigned:",
+    why: "a placement's `assignment_status` (unassigned|confirmed|stale), another vocabulary that shares two words" },
+];
+
+describe("one verification vocabulary (F49 Contract B)", () => {
+  it("no ads source keeps its own word table for verification or launch-item states", () => {
+    const files = FILES();
+    expect(files.length).toBeGreaterThan(20);
+    const offenders = files.flatMap((full) => {
+      const text = readFileSync(full, "utf-8");
+      const lines = text.split("\n");
+      if (STATE_WORDS_PENDING.some((x) => x.file === rel(full))) return [];
+      const excused = (line: number) =>
+        STATE_WORDS_NOT_A_TABLE.some((x) => x.file === rel(full) && lines[line - 1].includes(x.text));
+      return stateWordTables(text).filter((line) => !excused(line)).map((line) => `${rel(full)}:${line}`);
+    });
+    expect(offenders).toEqual([]);
+  });
+
+  it("every pending or excused entry still hits (an issue that moved its screen deletes its entry)", () => {
+    const present = new Set(FILES().map(rel));
+    const read = (file: string) => readFileSync(join(SRC_DIR, file), "utf-8");
+    const stalePending = STATE_WORDS_PENDING.filter((x) => !present.has(x.file) || stateWordTables(read(x.file)).length === 0);
+    const staleExcuses = STATE_WORDS_NOT_A_TABLE.filter((x) => {
+      if (!present.has(x.file)) return true;
+      const lines = read(x.file).split("\n");
+      return !stateWordTables(read(x.file)).some((line) => lines[line - 1].includes(x.text));
+    });
+    expect([...stalePending, ...staleExcuses]).toEqual([]);
+  });
+
+  it("the state-word scan sees maps and switches of one vocabulary and leaves the rest alone", () => {
+    expect(stateWordTables('const W = { pending: "尚未回報", confirmed: "已核對" };')).toEqual([1]);
+    expect(stateWordTables('const W: Record<string, string> = {\n  "reported": "已回報",\n  unknown: "待確認",\n};')).toEqual([1]);
+    expect(stateWordTables('const T = { verified: ["ok", "相符"], mismatch: ["warn", "不符"] };')).toEqual([1]);
+    expect(stateWordTables('function w(s: string) {\n  switch (s) {\n    case "built": return "待讀回";\n    case "todo": return "還沒建";\n    default: return "";\n  }\n}')).toEqual([2]);
+    expect(stateWordTables('switch (s) { case "built": return 1; case "todo": return 2; }')).toEqual([]);
+    expect(stateWordTables('const one = { pending: "尚未回報" }; const mixed = { stale: 1, verified: 2 };')).toEqual([]);
+    expect(stateWordTables('const SEGMENT = { verified: "ok", built: "built", mismatch: "mismatch" };')).toEqual([]);
+    expect(stateWordTables("interface R { count: number; unknown: number; stale: boolean }")).toEqual([]);
+    expect(stateWordTables("<Chip>{item.verification_label}</Chip>")).toEqual([]);
+    expect(stateWordTables('// const W = { pending: "a", confirmed: "b" };')).toEqual([]);
   });
 });

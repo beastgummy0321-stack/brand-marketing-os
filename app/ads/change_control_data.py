@@ -32,6 +32,39 @@ _TARGET = (
 )
 
 
+# F49 Contract B: the one word per verification state (`ads_action.verification_state`, and the
+# same vocabulary on `ads_handoff_item.status`), served as `verification_label`／`status_label`
+# beside every served state. `unknown` (read, but not provable) is not `reported` (not read yet).
+# `legacy` is the column's default for actions older than change control.
+VERIFICATION_LABELS = {
+    "pending": "尚未回報",
+    "reported": "已回報，待讀回",
+    "unknown": "讀到了，還不能確認",
+    "confirmed": "已核對相符",
+    "deviated": "與核准內容不同",
+    "stale": "設定已變，需要重新檢視",
+    "legacy": "舊紀錄，沒有核對",
+}
+# Worst first. `stale` (the approved premise changed) outranks every state short of a deviation.
+_WORST_FIRST = ("deviated", "stale", "unknown", "reported", "pending")
+
+
+def worst_state(states) -> str:
+    """F49 Contract B: the one aggregate of several verification states -- `confirmed` only when
+    every one is, else the worst present (`deviated` > `stale` > `unknown` > `reported` >
+    `pending`); a value outside the vocabulary reads `unknown`, no states read `pending`."""
+    states = list(states)
+    if not states:
+        return "pending"
+    if all(state == "confirmed" for state in states):
+        return "confirmed"
+    return next((state for state in _WORST_FIRST if state in states), "unknown")
+
+
+def verification_label(state) -> str | None:
+    return VERIFICATION_LABELS.get(state) if state is not None else None
+
+
 def digest(value):
     return hashlib.sha256(
         json.dumps(
@@ -411,7 +444,11 @@ def get(conn, org, brand, campaign_id, set_id):
                 **view["evidence_json"],
                 "message": "執行月份已改變，新增花費需重新核對月預算與核准。",
             }
+        view["verification_label"] = verification_label(view["verification_state"])
         result["items"].append(view)
+    # F49 Contract B: the set's one state is the worst of its items' (read-time only).
+    result["verification_state"] = worst_state(i["verification_state"] for i in result["items"])
+    result["verification_label"] = verification_label(result["verification_state"])
     # Contract H / correction 1: read-time only, nothing written or scheduled here -- lazy import,
     # same seam as `adapters` above (`change_timeline` -> `triage` -> `review_evidence` -> this
     # module would be an import-time cycle if this were a module-level import).
