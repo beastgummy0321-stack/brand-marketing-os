@@ -212,6 +212,30 @@ describe("確認上架清單・本月預算 (F41-I05)", () => {
     expect(screen.getByText("核准不會改動平台")).toBeTruthy();
   });
 
+  it("F48-I11 month portion: with `extra_basis` the card says which month's days the launch spends, and the whole period", async () => {
+    vi.mocked(fetchLaunchView).mockResolvedValue(view({ month_budget: monthBlock({
+      extra_basis: { month: 10, days: 6, period_total: 18200 },
+    }) }));
+    renderAt("list");
+    await approveButton();
+    const card = monthCard();
+    expect(within(card).getByText("10 月的 6 天要花 10,000（整期 18,200）", { exact: false })).toBeTruthy();
+    expect(within(card).queryByText(/這期要花/)).toBeNull();
+  });
+
+  it("F48-I11 month portion when short: the shortfall sentence names the month's days too; no 整期 without a total", async () => {
+    vi.mocked(fetchLaunchView).mockResolvedValue(view({ month_budget: monthBlock({
+      amount: 21000, available: 932, blocker: "short", blocker_text: "10 月預算不夠這期花",
+      extra_basis: { month: 10, days: 6, period_total: null },
+    }) }));
+    renderAt("list");
+    expect(await screen.findByText("⚠ 10 月預算不夠這期花")).toBeTruthy();
+    const card = monthCard();
+    expect(card.textContent).toContain("），10 月的 6 天要花 10,000");
+    expect(card.textContent).not.toContain("整期");
+    expect(card.textContent).not.toContain("這期要花");
+  });
+
   it("unset: a link to set the month budget, and approval waits with the backend's sentence", async () => {
     vi.mocked(fetchLaunchView).mockResolvedValue(view({ month_budget: monthBlock({
       amount: null, revision: 0, available: null, confirmed_at: null, blocker: "unset", blocker_text: "要先設 10 月月預算",

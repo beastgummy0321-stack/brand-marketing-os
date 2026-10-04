@@ -139,9 +139,15 @@ export function campaignChangesPath(brandId: string, campaignId: string): string
   return `${campaignPath(brandId, campaignId)}?tab=changes`;
 }
 
-/** Feature Decisions "Agent choice — the draft is created lazily": the one fixed reason this
- * batch's single kind (`pause`) proposes. F29-I14: v10 wording — a cap is 上限, never 目標. */
-export const PAUSE_REASON = "花到上限 3 倍的錢，還一筆都沒賣出（上限 × 3）";
+/** F48 Contract R "reason texts": a draft's reason is the sentence the backend built from that ad's (or owner's) own
+ * grade and numbers — `pause_view.reason_text`, a cleanup entry's `reason_text`, `scale.reason_text`. The frontend
+ * never writes a reason of its own (drill 11 c3-09: a 太貴 ad was paused 「花到上限 3 倍…還一筆都沒賣出」). A missing
+ * sentence (an older backend) refuses the write instead of inventing one. */
+export function servedReason(text: string | null | undefined): string {
+  const trimmed = text?.trim();
+  if (!trimmed) throw new Error("這件提議的理由還沒讀到，請重新整理後再試。");
+  return trimmed;
+}
 
 export function truncate(value: string, max: number): string {
   return value.length > max ? `${value.slice(0, max)}…` : value;
@@ -165,18 +171,13 @@ export function itemAngle(item: ChangeItem | undefined | null): string | null {
   return (item as ChangeItemAngle).angle ?? null;
 }
 
-export function buildPauseDraftItem(entityId: string, reason: string = PAUSE_REASON, angle?: string | null): ChangeInput {
+export function buildPauseDraftItem(entityId: string, reason: string, angle?: string | null): ChangeInput {
   const trimmed = angle?.trim();
   return {
     kind: "pause", target_id: entityId, after: { status: "PAUSED" }, reason,
     ...(trimmed ? { angle: trimmed } : {}),
   } as ChangeInput;
 }
-
-/** F27-I15 Contract F: the one fixed reason every pause item of a lazily-created cleanup set
- * proposes (same "one fixed reason per lazy-create kind" convention `PAUSE_REASON`/`BUDGET_REASON`
- * already follow). */
-export const CLEANUP_PAUSE_REASON = "沒賣出的先關，再關超過上限、每筆成本最高的幾則；划算的不動";
 
 /** `title = 清理「<campaign name, cut to 60 chars; null → 未命名活動>」`，同 `pauseTitle`／
  * `budgetTitle` 的做法。 */
@@ -187,22 +188,20 @@ export function cleanupTitle(campaignName: string | null): string {
 /** F27-I15 Contract F: the lazily-created cleanup set's own items — one `pause` item per proposed
  * ad, in the order the queue row's own `cleanup.ads` already carries (F28-I02, ads.md §6.32:
  * every 沒賣出 ad first, then the over-cap ads 太貴 before 偏貴, most expensive per result first;
- * 划算 and ungraded ads are never in the list). */
+ * 划算 and ungraded ads are never in the list). F48 Contract R: each item's reason is that ad's own served
+ * `reason_text` (「第 r／n 名，每筆 X 對上限 Y（太貴）」／「花了 X，一筆都沒賣出」). */
 export function buildCleanupDraftItems(ads: QueueCleanupAd[]): ChangeInput[] {
-  return ads.map((ad) => buildPauseDraftItem(ad.entity_id, CLEANUP_PAUSE_REASON));
+  return ads.map((ad) => buildPauseDraftItem(ad.entity_id, servedReason(ad.reason_text)));
 }
-
-/** F25-I03: the one fixed reason a `scale_budget` row proposes (feature Decisions "Confirm page
- * budget propose mode" — "Lazy create on first write"). */
-export const BUDGET_REASON = "近兩期每筆都沒超過上限，加碼 20% 擴量";
 
 /** `title = 加碼「<owner name, cut to 60 chars; null → 未命名投放組>」`，同 `pauseTitle` 的做法。 */
 export function budgetTitle(ownerName: string | null): string {
   return `加碼「${truncate(ownerName ?? "未命名投放組", 60)}」`;
 }
 
-export function buildBudgetDraftItem(ownerId: string, to: number): ChangeInput {
-  return { kind: "budget", target_id: ownerId, after: { daily_amount: to }, reason: BUDGET_REASON };
+/** F48 Contract R: the reason is the scale row's served `scale.reason_text`. */
+export function buildBudgetDraftItem(ownerId: string, to: number, reason: string): ChangeInput {
+  return { kind: "budget", target_id: ownerId, after: { daily_amount: to }, reason };
 }
 
 // F25-I03: `app/ads/change_control.py::approve` maps every `ValueError` it raises to the same

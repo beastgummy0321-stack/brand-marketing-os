@@ -8,7 +8,7 @@ import type { ChangeItem, MonthlyBudget, OngoingOwner } from "@/lib/adsChangeApi
 import type { QueueScale, TriageItem } from "@/lib/adsTriageApi";
 import type { AnglesStatus } from "@/lib/adsAnglesApi";
 import type { ApiRead } from "@/lib/useApiRead";
-import { Chip, GradeChip, KindMark, LearnCard, Meter, ReadFailed, TagToggle, Term } from "../patterns";
+import { Chip, GradeChip, KindMark, LearnCard, Meter, ReadFailed, TagToggle, Term, figure, rulerScale, unsoldLine, useAdsRules } from "../patterns";
 import { Tile } from "./Tile";
 import { formatAmount, formatTargetAmount } from "./changeFlow";
 import { perSaleAmount } from "../patterns/csv";
@@ -20,13 +20,17 @@ import { perSaleAmount } from "../patterns/csv";
 const nt = (value: number | null) => (value === null ? formatCurrency(null) : `NT$ ${perSaleAmount(value)}`);
 
 /** The stop-loss meter (prototype F45 `evidence()`): with sales, the cost per sale against the cap; without, the
- * spend against the 「上限 × 3」 line. No cap → captions only (the kit `Meter` draws no guessed bar). */
+ * spend against the served 沒賣出 line (`unsoldLine`, F48 Contract R-API). The axis is the kit's cost axis around a
+ * mark (`rulerScale`). No cap → captions only (the kit `Meter` draws no guessed bar); while the rules load the
+ * no-sales meter shows the cap alone — no line is drawn from a copy of the rule. */
 function PauseMeter({ triage }: { triage: TriageItem }) {
+  const rules = useAdsRules();
   const cap = triage.target.value;
   const count = triage.current.result_count;
   const cost = triage.current.cost_per_result;
+  const spend = triage.current.spend;
   if (count !== null && count > 0) {
-    const max = cap === null || cost === null ? null : Math.max(cost, cap * 1.5) * 1.1;
+    const max = cap === null || cost === null ? null : rulerScale(cap, [cost]).max;
     return (
       <Meter
         value={cost} max={max} marker={cap} tone="danger"
@@ -35,14 +39,16 @@ function PauseMeter({ triage }: { triage: TriageItem }) {
       />
     );
   }
-  const line = cap === null ? null : cap * 3;
+  const line = cap === null || !rules ? null : unsoldLine(rules, cap);
   return (
     <Meter
-      value={triage.current.spend} max={line === null ? null : line * 1.5} marker={line} tone="danger"
-      left={<>已花 <b className="text-foreground">{nt(triage.current.spend)}</b>・{count === null ? "成交累積中" : "還沒有成交"}</>}
-      right={line === null
+      value={spend} max={line === null ? null : rulerScale(line, spend === null ? [] : [spend]).max} marker={line} tone="danger"
+      left={<>已花 <b className="text-foreground">{nt(spend)}</b>・{count === null ? "成交累積中" : "還沒有成交"}</>}
+      right={cap === null
         ? <><Term k="cap">上限</Term>還沒設定</>
-        : <>花到 {nt(line)} 還一筆都沒賣，就算「<Term k="wasted">沒賣出</Term>」（上限 × 3）</>}
+        : line === null || !rules
+          ? <><Term k="cap">上限</Term> {nt(cap)}</>
+          : <>花到 {nt(line)} 還一筆都沒賣，就算「<Term k="wasted">{rules.labels.grade.wasted}</Term>」（上限 × {figure(rules.grade.unsold_spend_multiple)}）</>}
     />
   );
 }
@@ -58,9 +64,11 @@ function Stat({ label, children }: { label: string; children: ReactNode }) {
 
 /** 暫停提議的證據卡（F45-I06，prototype F45 `evidence()`）：這則廣告自己的花費／成交／每筆成本／評級、量尺與
  * 「這則廣告自己的數字・〈window〉」。`closed`（已經停了）把右上的「✓ 不會新增花費」換成「已暫停・…」並淡化縮圖。
- * triage 讀不到（:setId 進來、廣告已離開佇列）就退回只有名稱與理由的版本（feature Decisions「Confirm (pause)」）。 */
-export function PauseEvidence({ triage, fallbackName, fallbackReason, closed = null, windowLine = null }: {
-  triage: TriageItem | null; fallbackName: string; fallbackReason: string;
+ * triage 讀不到（:setId 進來、廣告已離開佇列）就退回只有名稱與理由的版本（feature Decisions「Confirm (pause)」）。
+ * F48 Contract R：`reason` 是後端從這則自己的評級與數字組出的句子（草稿已存的、或 `pause_view.reason_text`），
+ * 照印；`null` 不印。 */
+export function PauseEvidence({ triage, fallbackName, reason, closed = null, windowLine = null }: {
+  triage: TriageItem | null; fallbackName: string; reason: string | null;
   /** The 已暫停 chip text when the ad is already closed; `null` = still running. */
   closed?: string | null;
   /** 「〈MM/DD〉～〈MM/DD〉・N 天」 — the ad's own window. */
@@ -76,7 +84,7 @@ export function PauseEvidence({ triage, fallbackName, fallbackReason, closed = n
             <p className="mt-1.5 truncate text-[15px] font-semibold">{fallbackName}</p>
           </div>
         </div>
-        <p className="mt-3 text-sm text-muted-foreground">{fallbackReason}</p>
+        {reason && <p className="mt-3 text-sm text-muted-foreground">{reason}</p>}
       </div>
     );
   }
@@ -101,6 +109,7 @@ export function PauseEvidence({ triage, fallbackName, fallbackReason, closed = n
       </div>
       <div className="mt-3.5 max-w-[560px]"><PauseMeter triage={triage} /></div>
       {windowLine && <p className="mt-3 text-xs text-muted-foreground">這則廣告自己的數字・{windowLine}</p>}
+      {reason && <p className="mt-2 text-sm">原因：{reason}</p>}
     </div>
   );
 }
@@ -235,6 +244,17 @@ function ReserveTerm() {
   );
 }
 
+/** F48 Contract M "month portion" (`change_control_launch.month_fit`'s `extra_basis`): the launch's days inside the
+ * month and the campaign's whole-period total. */
+export interface ExtraBasis { month: number; days: number; period_total: number | null }
+/** The launch's spend words: 「{N} 月的 {days} 天要花 X（整期 Y）」 with a basis (no 整期 part without a total), else the
+ * plain 「這期要花 X」 (an older backend). Every number is served; nothing is recomputed here. */
+function extraSpendText(extra: number, basis: ExtraBasis | null): string {
+  if (!basis) return `這期要花 ${money(extra)}`;
+  const whole = basis.period_total === null ? "" : `（整期 ${money(basis.period_total)}）`;
+  return `${basis.month} 月的 ${basis.days} 天要花 ${money(extra)}${whole}`;
+}
+
 const RESERVE_OWNERS_SHOWN = 3;
 /** The 預留 explanation under the bar (issue Done 1): one clause per running budget owner, largest commitment
  * first, at most three named, the rest counted as 「等 N 項」. No owner → no line (nothing is reserved for). */
@@ -253,7 +273,11 @@ function reserveLine(owners: OngoingOwner[]): string | null {
  * 沒有 `extra` 的既有（非 scale）預算變更清單維持三段。總額未知時長條只畫灰階，數字仍照實印
  * （design-system §7「誠實的空狀態」）。`launch`（F41-I05 第一次上架清單，原型 `#/publish` 的 `budgetBar()`）：
  * 這段叫「這期要花」，放不下時截到剩下的額度、改畫危險色，最後一格印「不夠 X」。 */
-function BudgetBar({ budget, extra = 0, launch = false }: { budget: MonthlyBudget; extra?: number; launch?: boolean }) {
+function BudgetBar({ budget, extra = 0, launch = false, extraText }: {
+  budget: MonthlyBudget; extra?: number; launch?: boolean;
+  /** The extra segment's legend words (`extraSpendText`); default 「這次要花 X」. */
+  extraText?: string;
+}) {
   const { amount, known_spend, ongoing_estimate, reserved_increases, available } = budget;
   const reserved = ongoing_estimate === null ? null : ongoing_estimate + reserved_increases;
   const known = amount !== null && amount > 0 && known_spend !== null && reserved !== null && available !== null;
@@ -277,7 +301,7 @@ function BudgetBar({ budget, extra = 0, launch = false }: { budget: MonthlyBudge
       <div className="numeric flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
         <span className="inline-flex items-center gap-1.5"><Swatch tone="chart-rest" />已花 {money(known_spend)}</span>
         <span className="inline-flex items-center gap-1.5"><Swatch tone="border" /><ReserveTerm /> {money(reserved)}</span>
-        {extra > 0 && <span className="inline-flex items-center gap-1.5"><Swatch tone={extraTone} />{launch ? "這期要花" : "這次要花"} {money(extra)}</span>}
+        {extra > 0 && <span className="inline-flex items-center gap-1.5"><Swatch tone={extraTone} />{extraText ?? `這次要花 ${money(extra)}`}</span>}
         <span className="inline-flex items-center gap-1.5"><Swatch tone="primary" />{short ? `不夠 ${money(-(left as number))}` : `還剩 ${money(left)}`}</span>
       </div>
     </div>
@@ -290,15 +314,18 @@ function BudgetBar({ budget, extra = 0, launch = false }: { budget: MonthlyBudge
  * 四段長條、`ongoing_owners` 的預留說明。`uncertainties` 三態都照印在標題下（後端 `preflight` 的原句）。
  * 核准鈕該不該灰、旁邊的原因，由 `ConfirmPage` 從同一份 `read` 判斷（`approveBlock`），不在這裡另算一份。
  * `launch`（F41-I05，原型 `#/publish`）只給第一次上架清單：多一個 (iv) 放不下——「N 月只剩 X」、「這期要花 Y」、
- * 「提高 N 月月預算」（`budgetHref`）與「改這期總預算」（`launch.strategyHref`）；沒給時 `ConfirmPage` 照舊。 */
+ * 「提高 N 月月預算」（`budgetHref`）與「改這期總預算」（`launch.strategyHref`）；沒給時 `ConfirmPage` 照舊。
+ * F48 Contract M：`launch.extraBasis`（後端 `month_fit.extra_basis`）在時，「這期要花 X」改印「{N} 月的 {days} 天要花 X
+ * （整期 Y）」——數字照後端給的印，瀏覽器不換算。加預算頁的「這次要花」不變。 */
 export function BudgetFitCard({ read, month, extra = 0, premiseChanged, busy, onRecheck, budgetHref, launch }: {
   read: ApiRead<MonthlyBudget | null>; month: string; extra?: number;
   premiseChanged: boolean; busy: boolean; onRecheck: () => void; budgetHref: string;
-  launch?: { strategyHref: string };
+  launch?: { strategyHref: string; extraBasis?: ExtraBasis | null };
 }) {
   const id = useId();
   const budget = read.data;
   const n = monthOf(budget?.month ?? month);
+  const launchText = launch ? extraSpendText(extra, launch.extraBasis ?? null) : undefined;
   const fits = budget?.available !== null && budget?.available !== undefined && budget.available - extra >= 0;
   const state = premiseChanged ? "recheck" : budget && budget.amount === null ? "unset"
     : launch && budget && budget.available !== null && !fits ? "short" : "fit";
@@ -317,9 +344,9 @@ export function BudgetFitCard({ read, month, extra = 0, premiseChanged, busy, on
         <>
           <p className="mt-3 text-sm">
             <b>{n} 月只剩 {money(budget.available)}</b>
-            <span className="text-muted-foreground">（月預算 {money(budget.amount)} − 已花 {money(budget.known_spend)} − <ReserveTerm /> {money(reserved)}），這期要花 {money(extra)}</span>
+            <span className="text-muted-foreground">（月預算 {money(budget.amount)} − 已花 {money(budget.known_spend)} − <ReserveTerm /> {money(reserved)}），{launchText}</span>
           </p>
-          <BudgetBar budget={budget} extra={extra} launch />
+          <BudgetBar budget={budget} extra={extra} launch extraText={launchText} />
           {line && <p className="mt-1.5 text-xs text-muted-foreground">{line}</p>}
           <div className="mt-2.5 flex flex-wrap items-center gap-2.5">
             <Button variant="outline" size="sm" asChild><Link to={budgetHref}>提高 {n} 月月預算</Link></Button>
@@ -352,7 +379,7 @@ export function BudgetFitCard({ read, month, extra = 0, premiseChanged, busy, on
             <b>{n} 月還能花 {money(budget.available)}</b>
             <span className="text-muted-foreground">（月預算 {money(budget.amount)} − 已花 {money(budget.known_spend)} − <ReserveTerm /> {money(reserved)}）</span>
           </p>
-          <BudgetBar budget={budget} extra={extra} launch={launch !== undefined} />
+          <BudgetBar budget={budget} extra={extra} launch={launch !== undefined} extraText={launchText} />
           {line && <p className="mt-1.5 text-xs text-muted-foreground">{line}</p>}
         </>
       )}
@@ -367,7 +394,7 @@ export function BudgetFitCard({ read, month, extra = 0, premiseChanged, busy, on
 
 /** 加預算提議的證據卡（F25-I03，v7 原型 `confirmPage()` 的 budget 分支）。`scale` 有值（propose
  * 網址進來，或 `:setId` 進來但這個提議的擁有者還在佇列裡）畫完整版：同組則數、購買成本量尺、
- * 主力廣告穩定 2 期、本月預算放得下（含這次加碼段）；`scale` 是 `null`（提議的擁有者已經離開
+ * 後端組好的加碼理由（`scale.reason_text`，F48 Contract R）、本月預算放得下（含這次加碼段）；`scale` 是 `null`（提議的擁有者已經離開
  * 佇列，同 `PauseEvidence` 的 fallback）就退回只有名稱／金額／原因的版本——`item` 這時才派上用場
  * （`scale` 有值時一律讀 `scale`/`triage` 這組即時資料，不讀凍結在 `item.before/after` 的舊值，
  * 這樣第一次進頁面、`item` 都還沒建立時也能完整顯示提議內容）。 */
@@ -381,7 +408,8 @@ export function BudgetEvidence({ item, scale, bestAdThumbnailUrl, fit }: {
   const pct = before !== null && after !== null && before > 0 ? Math.round(((after - before) / before) * 100) : null;
   const extra = scale?.month.extra_needed ?? 0;
   const targetValue = scale?.target.value ?? null;
-  const meterMax = targetValue !== null && targetValue > 0 ? targetValue * 1.5 : null;
+  const cost = scale?.cost_per_result ?? null;
+  const meterMax = targetValue !== null && targetValue > 0 ? rulerScale(targetValue, cost === null ? [] : [cost]).max : null;
   return (
     <>
       <div className="rounded-xl border border-border bg-card p-5">
@@ -415,9 +443,9 @@ export function BudgetEvidence({ item, scale, bestAdThumbnailUrl, fit }: {
             />
             <div className="flex items-center gap-2">
               <Tile url={bestAdThumbnailUrl} size="sm" />
-              <span className="text-sm">主力穩定 2 個觀察期</span>
+              <span className="text-sm">{scale.reason_text ?? "—"}</span>
             </div>
-            <div className="flex items-center text-sm text-muted-foreground">加碼後等 3–5 天再看</div>
+            <div className="flex items-center text-sm text-muted-foreground">核准後會排一次檢查</div>
           </div>
         )}
         {!scale && <p className="mt-3 text-sm text-muted-foreground">原因：{item?.reason}</p>}

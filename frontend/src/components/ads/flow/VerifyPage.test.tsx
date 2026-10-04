@@ -158,7 +158,7 @@ describe("VerifyPage（F22-I04）confirmed", () => {
     expect(screen.queryByText(/再出現/)).toBeNull();
   });
 
-  it("budget：學習期固定文字＋成效回看讀 timeline.next_review_at", async () => {
+  it("budget（F48-I11）：「下次檢查 M/D」讀 timeline.next_review_at，不再印固定的「學習期 3–5 天」", async () => {
     vi.mocked(changeApi.getChangeControl).mockResolvedValue({
       targets: [], change_sets: [changeSet({ items: [changeItem({
         kind: "budget", before: { daily_amount: 1000 }, after: { daily_amount: 1200 },
@@ -167,10 +167,26 @@ describe("VerifyPage（F22-I04）confirmed", () => {
     });
     renderAt(verifyPath());
     await screen.findByText("平台上的每日預算已經是 1,200");
-    expect(screen.getByText("學習期")).toBeTruthy();
-    expect(screen.getByText("3–5 天")).toBeTruthy();
-    expect(screen.getByText("成效回看")).toBeTruthy();
+    expect(screen.getByText("下次檢查")).toBeTruthy();
     expect(screen.getByText("9/25")).toBeTruthy();
+    expect(screen.queryByText("學習期")).toBeNull();
+    expect(screen.queryByText(/3–5 天/)).toBeNull();
+    // One cell for the one date — 成效回看 would print the same 9/25 twice.
+    expect(screen.queryByText("成效回看")).toBeNull();
+  });
+
+  it("budget（F48-I11）：還沒排檢查就沒有「下次檢查」格，只照實寫「尚未排定」", async () => {
+    vi.mocked(changeApi.getChangeControl).mockResolvedValue({
+      targets: [], change_sets: [changeSet({ items: [changeItem({
+        kind: "budget", before: { daily_amount: 1000 }, after: { daily_amount: 1200 },
+        timeline: { spend_stopped: null, delivery_started: null, next_review_at: null },
+      })] })],
+    });
+    renderAt(verifyPath());
+    await screen.findByText("平台上的每日預算已經是 1,200");
+    expect(screen.queryByText("下次檢查")).toBeNull();
+    expect(screen.getByText("成效回看")).toBeTruthy();
+    expect(screen.getByText("尚未排定")).toBeTruthy();
   });
 
   it("copy：開始投遞＋成效累積，未讀到 delivery 前不是 ok", async () => {

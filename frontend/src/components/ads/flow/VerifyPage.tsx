@@ -74,7 +74,7 @@ const DEVIATED_TITLE: Record<Kind, string> = {
   new_ad: "平台上這則新廣告和核准的內容不一樣",
 };
 /** StatusRail「設定相符」格：讀 `evidence_json.setting_matches`（省略整格，不是空字串，當這個
- * 布林不是 `true` 時——feature Decisions「Gaps」）。其餘格子（花費停止／學習期／成效回看／
+ * 布林不是 `true` 時——feature Decisions「Gaps」）。其餘格子（花費停止／下次檢查／成效回看／
  * 開始投遞／已記入品牌學習）現在有 Contract H／D 的 `timeline`／`learning` 撐著，見
  * `timelineRailCells` 下面。 */
 function confirmedRailNote(item: ChangeItem, kind: Kind): string {
@@ -95,7 +95,7 @@ function formatReviewDate(date: string | null): string | null {
 /** Contract H（correction 1）／D：confirmed 狀態下 `設定相符` 之外的格子，v7 原型 `verify()`
  * 的固定文案，數字讀 `item.timeline`／`item.learning`（都是讀時計算，見 `app/ads/change_timeline
  * .py`／`app/ads/ads_learnings.py`）。`pause` 多一格「花費停止」＋一格品牌學習；`budget` 是
- * 「學習期」固定文字＋「成效回看」；`copy`／`new_ad` 是「開始投遞」＋「成效累積」。 */
+ * 「下次檢查 M/D」（`timeline.next_review_at`；還沒排定就是「成效回看・尚未排定」）；`copy`／`new_ad` 是「開始投遞」＋「成效累積」。 */
 function timelineRailCells(item: ChangeItem, kind: Kind): RailCell[] {
   const t = item.timeline;
   if (kind === "pause") {
@@ -109,10 +109,10 @@ function timelineRailCells(item: ChangeItem, kind: Kind): RailCell[] {
     ];
   }
   if (kind === "budget") {
-    return [
-      { title: "學習期", note: "3–5 天" },
-      { title: "成效回看", note: formatReviewDate(t?.next_review_at ?? null) ?? "尚未排定" },
-    ];
+    // F48-I11: the scheduled check is the backend's `timeline.next_review_at` (no fixed 「學習期 N 天」 here); one
+    // cell, so the same date is not printed twice. Not scheduled yet → the honest 「尚未排定」.
+    const review = formatReviewDate(t?.next_review_at ?? null);
+    return [review ? { title: "下次檢查", note: review } : { title: "成效回看", note: "尚未排定" }];
   }
   const nextReview = formatReviewDate(t?.next_review_at ?? null);
   return [

@@ -126,7 +126,7 @@ export function PublishList({ brandId, campaignId, name, campaign, campaignFaile
       {month && (
         <BudgetFitCard read={monthRead(month)} month={month.month} extra={month.extra} premiseChanged={false} busy={false}
           onRecheck={() => {}} budgetHref={monthlyBudgetHref(brandId)}
-          launch={{ strategyHref: `${campaignPath(brandId, campaignId)}?tab=strategy` }} />
+          launch={{ strategyHref: `${campaignPath(brandId, campaignId)}?tab=strategy`, extraBasis: month.extra_basis ?? null }} />
       )}
 
       {campaign ? (

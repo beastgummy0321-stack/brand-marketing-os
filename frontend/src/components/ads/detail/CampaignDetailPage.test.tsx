@@ -821,8 +821,8 @@ describe("這期狀態列 (F40-I06, prototype #/perf)", () => {
     await within(row()).findByText("10,081 元");
     await user.click(within(row()).getByRole("button", { name: "結案這一期 →" }));
     const dialog = await screen.findByRole("dialog");
-    // The six planned ads of the fixture's one group.
-    expect(dialog.textContent).toContain("結案後會把這期 6 則廣告照每筆成本排名、判定留下或換掉，寫進品牌智庫「投放學到的」。");
+    // F48-I11: no ad count (the planned ads are not the platform ads closeout ranks; that count is not on this payload).
+    expect(dialog.textContent).toContain("結案後會把這期的廣告照每筆成本排名、判定留下或換掉，寫進品牌智庫「投放學到的」。");
     expect(within(dialog).getByText(/提前結案會用到目前為止的成效判定/)).toBeTruthy(); // live: the early-close sentence
     await user.click(within(dialog).getByRole("button", { name: "確認結案" }));
     expect(closeCampaign).toHaveBeenCalledWith("brd_1", "cmp_1");
