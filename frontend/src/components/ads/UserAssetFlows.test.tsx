@@ -13,7 +13,8 @@ import { NewCampaignPage } from "./NewCampaignPage";
 import { createCampaignFromPicks, getWizardOptions } from "@/lib/adsWizardApi";
 import { listUserAssets, createUploadBatch, putUpload, retryUpload, getUploadBatch, attachUpload, assetBlob, listPlacements, listSuggestionBatches, suggestAssets, getSuggestionBatch, revisePlacement, confirmPlacement, assetHandoff, AssetApiError, type AssetLibrary, type Placement, type AssetUpload, type SuggestionBatch } from "@/lib/adsUserAssetsApi";
 import * as materialApi from "@/lib/adsMaterialApi";
-import { existingCampaigns, externalView } from "@/lib/adsExternalApi";
+import { existingCampaigns, externalView, type NativeEntity } from "@/lib/adsExternalApi";
+import { getHandoff, type HandoffWorkspace } from "@/lib/adsHandoffApi";
 import type { CampaignDetail } from "@/lib/adsApi";
 
 vi.mock("@/lib/http", () => ({ apiFetch: vi.fn(), errorMessageFrom: () => "error" }));
@@ -21,6 +22,7 @@ vi.mock("@/components/layout/WorkspaceContext", () => ({ useWorkspace: () => ({ 
 vi.mock("@/lib/adsWizardApi", () => ({ getWizardOptions: vi.fn(), createCampaignFromPicks: vi.fn() }));
 vi.mock("@/lib/adsUserAssetsApi", async importOriginal => ({ ...await importOriginal<object>(), listUserAssets: vi.fn(), createUploadBatch: vi.fn(), putUpload: vi.fn(), retryUpload: vi.fn(), getUploadBatch: vi.fn(), attachUpload: vi.fn(), assetBlob: vi.fn(), listPlacements: vi.fn(), listSuggestionBatches: vi.fn(), suggestAssets: vi.fn(), getSuggestionBatch: vi.fn(), revisePlacement: vi.fn(), confirmPlacement: vi.fn(), assetHandoff: vi.fn() }));
 vi.mock("@/lib/adsExternalApi", () => ({ existingCampaigns: vi.fn(), externalView: vi.fn() }));
+vi.mock("@/lib/adsHandoffApi", async importOriginal => ({ ...await importOriginal<object>(), getHandoff: vi.fn() }));
 vi.mock("@/lib/adsSlotsApi", async importOriginal => ({ ...await importOriginal<object>(), getSlots: vi.fn().mockResolvedValue({ ready: 0, total: 0, groups: [], requests: [], requests_truncated: false }) }));
 vi.mock("@/lib/adsMaterialApi", async original => ({ ...await original<typeof materialApi>(), listMaterialTasks: vi.fn(), saveMaterialOperation: vi.fn(), materialOptions: vi.fn() }));
 const library = (): AssetLibrary => ({ assets: [], uploads: [], next_cursor: null, next_upload_cursor: null });
@@ -32,7 +34,10 @@ const campaign: CampaignDetail = {
   start_date: null, end_date: null, status: "draft", budget_planned: null, budget_scenario: null, budget_basis_json: {}, budget_total: null, context_json: {}, constraints_json: {}, verdict: null, verdict_json: {}, closed_at: null, created_by: null, created_at: "2026-01-01", groups: [], actions: [], outcome: { spend: null, purchases: null, revenue: null }, asset_readiness: { total: 0, ready_count: 0 }, external_id: null, external_name: null, external_status: null, local_state: "unbound", bound_at: null,
 };
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(r => { resolve = r; }); return { promise, resolve }; }
-function viewPlacements() { return render(<MemoryRouter><UserAssetPlacements brandId="b1" campaign={campaign} /></MemoryRouter>); }
+function viewPlacements(c: CampaignDetail = campaign) { return render(<MemoryRouter><UserAssetPlacements brandId="b1" campaign={c} /></MemoryRouter>); }
+/** The handoff read (`GET …/handoff`) the placements read their 目的節點 from (F49 Contract D). */
+const handoffRead = (overrides: Partial<HandoffWorkspace> = {}): HandoffWorkspace => ({ items: [], items_truncated: false, ready_placements: [], destinations: [], destinations_truncated: false, launch_stale: null, notice: "", settings_readback: null, destination_by_ad: {}, destinations_note: null, ...overrides });
+const adSet = (id: string, name: string): NativeEntity => ({ id, platform: "meta", source_account: "act_1", native_kind: "adset", native_id: `n_${id}`, native_label: "廣告組", name, parent_native_id: "root", native_status: "ACTIVE", start_date: null, end_date: null, budget_amount: null, budget_type: "daily", budget_raw: {}, currency: "TWD", last_success_at: null, sync_error: null, creative: {} });
 beforeEach(() => {
   vi.clearAllMocks();
   sessionStorage.clear();
@@ -42,6 +47,7 @@ beforeEach(() => {
   vi.mocked(listSuggestionBatches).mockResolvedValue({ batches: [], next_cursor: null });
   vi.mocked(existingCampaigns).mockResolvedValue({ items: [], sources: [], next_cursor: null, job: null });
   vi.mocked(externalView).mockResolvedValue({ entities: [], observations: [], next_entity_cursor: null, next_observation_cursor: null, window: { start: "2026-01-01", end: "2026-01-30" }, connections: [], coverage: {}, sync: {} });
+  vi.mocked(getHandoff).mockResolvedValue(handoffRead());
 });
 describe("durable upload UI", () => {
   it("keeps the upload library mounted while creating and retries attach without creating twice", async () => {
@@ -234,6 +240,40 @@ describe("placement and evidence UI", () => {
     vi.mocked(getSuggestionBatch).mockResolvedValueOnce({ batch: queued }).mockResolvedValue({ batch: { ...queued, status: "succeeded", results: [], remaining_count: 0 } });
     viewPlacements(); const user = userEvent.setup(); await user.click(await screen.findByText(/先前建議批次/)); await user.click(await screen.findByRole("button", { name: "查看本批" }));
     expect(await screen.findByText(/建議已備妥，請逐件核對/, {}, { timeout: 4000 })).toBeTruthy();
+  });
+  it("F49-I14: an internal draft's placement says why it has no 目的節點 (destinations_note) instead of an empty picker", async () => {
+    const note = "這個活動還沒上架，平台上還沒有投放組；新廣告請到投放結構加";
+    vi.mocked(getHandoff).mockResolvedValue(handoffRead({ destinations_note: note }));
+    vi.mocked(listPlacements).mockResolvedValue({ placements: [placement("p1")] });
+    viewPlacements({ ...campaign, origin: "internal", capabilities: undefined, external_view: null, lifecycle: { state: "draft", label: "草稿", can_close: false } });
+    expect(await screen.findByText(`安排目的：${note}`)).toBeTruthy();
+    expect(screen.queryByLabelText("p1.png目的節點")).toBeNull();
+    expect(screen.queryByRole("button", { name: /載入本活動目的節點/ })).toBeNull();
+    expect(getHandoff).toHaveBeenCalledWith("b1", "c1");
+    expect(externalView).not.toHaveBeenCalled();
+  });
+  it("F49-I14: the 目的節點 options are the handoff read's destinations, for any origin", async () => {
+    vi.mocked(getHandoff).mockResolvedValue(handoffRead({ destinations: [adSet("aes_1", "既有投放組"), adSet("aes_2", "新客投放組")] }));
+    vi.mocked(listPlacements).mockResolvedValue({ placements: [placement("p1")] });
+    viewPlacements({ ...campaign, origin: "internal", capabilities: undefined, external_view: null, lifecycle: { state: "live", label: "投放中", can_close: true } });
+    const picker = await screen.findByLabelText("p1.png目的節點");
+    expect([...picker.querySelectorAll("option")].map(o => o.textContent)).toEqual(["未指定（沿活動安排）", "廣告組 · 既有投放組", "廣告組 · 新客投放組"]);
+    expect(externalView).not.toHaveBeenCalled();
+  });
+  it("F49-I14: a closed campaign (served lifecycle) is read-only", async () => {
+    vi.mocked(listPlacements).mockResolvedValue({ placements: [placement("p1")] });
+    viewPlacements({ ...campaign, lifecycle: { state: "closed", label: "已結案", can_close: false } });
+    await screen.findByText(/p1.png · 第 1 版/);
+    expect(screen.queryByRole("button", { name: "只用我的文案，檢查並確認" })).toBeNull();
+  });
+  it("F49-I14: with no candidates, the handoff panel says the origin-aware note, never 「請先同步本活動的原始結構」", async () => {
+    const p = { ...placement(), confirmed_at: "2026-01-01" };
+    vi.mocked(existingCampaigns).mockResolvedValue({ items: [], sources: [{ platform: "meta", label: "Meta", account_id: "act_1" }], next_cursor: null, job: null });
+    vi.mocked(assetHandoff).mockResolvedValue({ original_copy: p.copy_fields, suggested_copy: {}, effective_copy: p.copy_fields, tracking_name: "MOS-p1-v1", notice: "內部確認不代表已上架", destination_entity_id: null, download_url: "/api/private", purpose: "產品介紹", start_date: null, end_date: null, bindings: [] });
+    render(<AssetHandoffPanel brandId="b1" campaignId="c1" placement={p} readOnly={false} destinationsNote="這個活動還沒上架，平台上還沒有投放組；新廣告請到投放結構加" />);
+    await userEvent.setup().selectOptions(await screen.findByLabelText("核對平台帳號"), "0");
+    expect(screen.getByText("尚無已載入候選；這個活動還沒上架，平台上還沒有投放組；新廣告請到投放結構加。")).toBeTruthy();
+    expect(screen.queryByText(/請先同步本活動的原始結構/)).toBeNull();
   });
   it("separates platform existence from user-checked media and unknown attribution", async () => {
     const p = { ...placement(), confirmed_at: "2026-01-01" };

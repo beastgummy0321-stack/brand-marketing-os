@@ -64,6 +64,10 @@ function Control({ brandId, campaignId }: { brandId: string; campaignId: string 
   // The handoff below may list launch items even when this campaign has no change targets yet; the empty
   // state speaks only when neither has anything to verify.
   const [handoffWork, setHandoffWork] = useState(false);
+  // F49-I14 (Contract D): why there is no platform object to change yet, from the handoff read (origin-aware: a draft
+  // not on a platform says so; otherwise the structure was not read yet). Null when destinations exist.
+  const [destinationsNote, setDestinationsNote] = useState<string | null>(null);
+  const noTargetsReason = destinationsNote ?? "這個活動在平台上還沒有讀到可改的廣告或投放組";
   const lifetime = useRef(new AbortController());
   useEffect(() => { lifetime.current = new AbortController(); return () => lifetime.current.abort(); }, []);
   useEffect(() => {
@@ -167,7 +171,7 @@ function Control({ brandId, campaignId }: { brandId: string; campaignId: string 
   return <div className="space-y-4">
     <ChangesTab brandId={brandId} campaignId={campaignId} refreshKey={budgetRefresh} inFold={inFold} onOpenInFold={openInFold} />
     <Disclosure label="進階：自己建一份變更" open={advancedOpen} onOpenChange={setAdvancedOpen}><div id="changes-advanced" className="space-y-4">
-    <div className="flex flex-wrap items-start justify-between gap-3"><p className="text-sm text-muted-foreground">確認清單 → 手動操作平台 → 逐項讀回。每一步都保留證據。</p>{data && !composing && <div className="flex flex-col items-end gap-1"><Button variant="outline" disabled={busy || data.targets.length === 0} disabledReason={!busy && data.targets.length === 0 ? "這個活動還沒有可改的平台對象：先帶入既有活動或完成廣告對應" : undefined} onClick={() => { setInitialDraft(undefined); setSupersedesId(undefined); setComposing(true); revealComposer(); }}>建立變更清單</Button></div>}</div>
+    <div className="flex flex-wrap items-start justify-between gap-3"><p className="text-sm text-muted-foreground">確認清單 → 手動操作平台 → 逐項讀回。每一步都保留證據。</p>{data && !composing && <div className="flex flex-col items-end gap-1"><Button variant="outline" disabled={busy || data.targets.length === 0} disabledReason={!busy && data.targets.length === 0 ? noTargetsReason : undefined} onClick={() => { setInitialDraft(undefined); setSupersedesId(undefined); setComposing(true); revealComposer(); }}>建立變更清單</Button></div>}</div>
     <MonthlyBudgetPanel brandId={brandId} month={selected?.month ?? currentBudgetMonth(timezone)} refresh={budgetRefresh} compact />
     {error && <div role="alert" className="rounded-md bg-destructive/5 p-3 text-sm space-y-2"><p className="text-destructive">{error}</p><Button variant="outline" size="sm" disabled={busy} onClick={() => setReload(value => value + 1)}>重新讀取清單</Button></div>}
     {!data && !error && <p role="status" className="surface p-6 text-sm text-muted-foreground">正在讀取清單與平台對象…</p>}
@@ -177,8 +181,8 @@ function Control({ brandId, campaignId }: { brandId: string; campaignId: string 
       onDecision={value => void mutate(signal => decideChangeSet(brandId, campaignId, selected.id, value, signal))}
       onItem={(item, action) => void mutate(signal => actOnChangeItem(brandId, campaignId, selected.id, item.id, action, signal))}
       onReconsider={() => void reconsider()} />}
-    {data && !composing && !selected && !handoffWork && <EmptyState title={data.targets.length ? "先整理這次需要調整的內容" : "還沒有可核對的廣告對象"} description={data.targets.length ? "可只修改文案、調整預算或暫停指定對象。保存清單後再一次核准。" : "先從投放中心帶入既有活動，或完成廣告對應；原有平台物件與歷史會保留。"} {...(data.targets.length ? { actionLabel: "建立變更清單", onAction: () => { setComposing(true); revealComposer(); } } : {})} />}
-    {!composing && <div id="manual-handoff"><ManualHandoffPanel brandId={brandId} campaignId={campaignId} mode="items" refreshKey={budgetRefresh} onHandoffWork={setHandoffWork} /></div>}
+    {data && !composing && !selected && !handoffWork && <EmptyState title={data.targets.length ? "先整理這次需要調整的內容" : "還沒有可核對的廣告對象"} description={data.targets.length ? "可只修改文案、調整預算或暫停指定對象。保存清單後再一次核准。" : noTargetsReason} {...(data.targets.length ? { actionLabel: "建立變更清單", onAction: () => { setComposing(true); revealComposer(); } } : {})} />}
+    {!composing && <div id="manual-handoff"><ManualHandoffPanel brandId={brandId} campaignId={campaignId} mode="items" refreshKey={budgetRefresh} onHandoffWork={setHandoffWork} onDestinationsNote={setDestinationsNote} /></div>}
     {data && data.change_sets.length > 1 && <Disclosure label={`其他清單與歷史紀錄（${data.change_sets.length - 1}）`}><div className="space-y-2">{data.change_sets.filter(set => set.id !== selectedId).map(set => <button key={set.id} className="flex w-full items-center justify-between rounded-md border border-border p-3 text-left text-sm hover:bg-muted" disabled={busy || Boolean(pending)} onClick={() => { select(set.id); setComposing(false); }}><span>{set.title}</span><span className="text-xs text-muted-foreground">{new Date(set.created_at).toLocaleDateString("zh-TW")}</span></button>)}</div></Disclosure>}
     </div></Disclosure>
   </div>;

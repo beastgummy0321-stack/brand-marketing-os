@@ -9,11 +9,13 @@ import { ChangeControl } from "./ChangeControl";
 import { MonthlyBudgetPanel } from "./MonthlyBudgetPanel";
 
 // The handoff panel reports whether it lists anything to verify (`onHandoffWork`); tests set what it reports.
-const handoff = vi.hoisted(() => ({ work: false }));
+const handoff = vi.hoisted(() => ({ work: false, note: null as string | null }));
 vi.mock("@/components/layout/WorkspaceContext", () => ({ useWorkspace: () => ({ scope: "u:o", identity: { user: { id: "u", email: "a@example.com" }, org: { id: "o", name: "測試", kind: "personal", role: "owner", timezone: "Asia/Taipei", today: "2026-09-28" }, orgs: [] } }) }));
 vi.mock("./ManualHandoffPanel", async () => {
   const { useEffect } = await import("react");
-  return { ManualHandoffPanel: ({ onHandoffWork }: { onHandoffWork?: (hasWork: boolean) => void }) => { useEffect(() => { onHandoffWork?.(handoff.work); }, [onHandoffWork]); return null; } };
+  return { ManualHandoffPanel: ({ onHandoffWork, onDestinationsNote }: { onHandoffWork?: (hasWork: boolean) => void; onDestinationsNote?: (note: string | null) => void }) => {
+    useEffect(() => { onHandoffWork?.(handoff.work); onDestinationsNote?.(handoff.note); }, [onHandoffWork, onDestinationsNote]); return null;
+  } };
 });
 vi.mock("@/lib/auth", () => ({ getOrgId: () => "org_test" }));
 vi.mock("@/lib/adsWorkspaceApi", async importOriginal => ({ ...await importOriginal<typeof workspaceApi>(), getCampaignTimeline: vi.fn() }));
@@ -30,7 +32,7 @@ function change(overrides: Partial<api.ChangeSet> = {}): api.ChangeSet {
   return { id: "change_1", campaign_id: "campaign_1", title: "保留圖片，調整文案", month: "2026-09", operation_id: "operation_saved", content_hash: "hash_saved", status: "draft", reason: null, revisit_at: null, approval_id: null, created_at: "2026-09-19T00:00:00Z", approved_at: null, items: [{ id: "item_1", kind: "copy", target_id: target.id, target, before: { body: "舊內文" }, after: { body: "新內文" }, reason: "測試不同訴求", verification_state: "pending", evidence_json: {}, reported_at: null, first_observed_at: null, verified_at: null, platform_url: null }], ...overrides };
 }
 beforeEach(() => {
-  vi.resetAllMocks(); sessionStorage.clear(); handoff.work = false;
+  vi.resetAllMocks(); sessionStorage.clear(); handoff.work = false; handoff.note = null;
   vi.mocked(api.getMonthlyBudget).mockResolvedValue(budget);
   vi.mocked(api.getChangeControl).mockResolvedValue({ targets: [target], change_sets: [change()] });
   vi.mocked(workspaceApi.getCampaignTimeline).mockResolvedValue({ rows: [], truncated: false });
@@ -44,7 +46,7 @@ describe("ChangeControl 核准與逐項核對", () => {
     const user = userEvent.setup();
     const approved = change({ status: "approved", approval_id: "approval_1" });
     vi.mocked(api.approveChangeSet).mockResolvedValue(approved);
-    vi.mocked(api.actOnChangeItem).mockResolvedValue({ ...approved, items: [{ ...approved.items[0], verification_state: "reported", reported_at: "2026-09-19T01:00:00Z" }] });
+    vi.mocked(api.actOnChangeItem).mockResolvedValue({ ...approved, items: [{ ...approved.items[0], verification_state: "reported", verification_label: "已自行回報，待核對", reported_at: "2026-09-19T01:00:00Z" }] });
     render(page()); await openAdvanced();
     await user.click(await screen.findByRole("button", { name: "核准這份變更清單" }));
     expect(api.approveChangeSet).toHaveBeenCalledWith("brand_a", "campaign_1", expect.objectContaining({ content_hash: "hash_saved" }), expect.any(AbortSignal));
@@ -81,9 +83,12 @@ describe("ChangeControl 核准與逐項核對", () => {
     await waitFor(() => expect(document.activeElement).toBe(within(composer).getAllByRole("textbox")[0]));
     first.unmount();
     vi.mocked(api.getChangeControl).mockResolvedValue({ targets: [], change_sets: [change()] });
+    handoff.note = "這個活動還沒上架，平台上還沒有投放組；新廣告請到投放結構加";
     render(page()); await openAdvanced();
     expect((await screen.findByRole("button", { name: "建立變更清單" })).hasAttribute("disabled")).toBe(true);
-    expect(screen.getByText("這個活動還沒有可改的平台對象：先帶入既有活動或完成廣告對應")).toBeTruthy();
+    // F49-I14: the reason is the handoff read's origin-aware note, never 「先帶入既有活動」 on a system-built campaign.
+    expect(await screen.findByText("這個活動還沒上架，平台上還沒有投放組；新廣告請到投放結構加")).toBeTruthy();
+    expect(screen.queryByText(/帶入既有活動/)).toBeNull();
   });
 
   it("切換品牌中止舊讀取，遲到回應不顯示另一品牌清單", async () => {
@@ -110,14 +115,17 @@ describe("ChangeControl 核准與逐項核對", () => {
 
   it("交接與變更都沒有東西時，才顯示「還沒有可核對的廣告對象」", async () => {
     vi.mocked(api.getChangeControl).mockResolvedValue({ targets: [], change_sets: [] });
+    handoff.note = "還沒讀到這個活動的平台結構，按重新讀取";
     render(page()); await openAdvanced();
     expect(await screen.findByText("還沒有可核對的廣告對象")).toBeTruthy();
+    expect(screen.getAllByText("還沒讀到這個活動的平台結構，按重新讀取").length).toBeGreaterThan(0);
+    expect(screen.queryByText(/先從投放中心帶入既有活動/)).toBeNull();
   });
 
   it("部分完成保留逐項結果，降額尚未核對不釋放額度", async () => {
     const set = change({ status: "approved" });
     set.items[0].verification_state = "confirmed";
-    set.items.push({ ...set.items[0], id: "item_2", kind: "budget", target: { ...target, name: "G", native_kind: "adset" }, before: { daily_amount: 1000 }, after: { daily_amount: 800 }, verification_state: "unknown" });
+    set.items.push({ ...set.items[0], id: "item_2", kind: "budget", target: { ...target, name: "G", native_kind: "adset" }, before: { daily_amount: 1000 }, after: { daily_amount: 800 }, verification_state: "unknown", verification_label: "結果未知，待補核對" });
     vi.mocked(api.getChangeControl).mockResolvedValue({ targets: [target], change_sets: [set] });
     render(page()); await openAdvanced();
     expect(await screen.findByText(/1 \/ 2 項設定已核對/)).toBeTruthy();
@@ -135,6 +143,18 @@ describe("ChangeControl 核准與逐項核對", () => {
     expect(screen.getByText("平台文案已變更")).toBeTruthy();
     expect(screen.getByRole("button", { name: "依目前設定另建清單" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "核准這份變更清單" })).toBeNull();
+  });
+
+  it("F49-I14：暫停項目的前後狀態印伺服器給的 status_labels，不印平台代碼", async () => {
+    const set = change({ status: "approved" });
+    set.items[0] = { ...set.items[0], kind: "pause", before: { status: "ACTIVE" }, after: { status: "PAUSED" }, verification_state: "pending", verification_label: "尚未回報", status_labels: { before: "投放中", after: "已暫停", observed: null } };
+    vi.mocked(api.getChangeControl).mockResolvedValue({ targets: [target], change_sets: [set] });
+    render(page()); await openAdvanced();
+    expect(await screen.findByText("尚未回報")).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "查看變更內容與操作對象" }));
+    expect(await screen.findByText("投放中")).toBeTruthy();
+    expect(screen.getByText("已暫停")).toBeTruthy();
+    expect(screen.queryByText(/ACTIVE|PAUSED/)).toBeNull();
   });
 
   it("核准後尚未核對的項目不能直接修改，讀回授權由後端決定", async () => {

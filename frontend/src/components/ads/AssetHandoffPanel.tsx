@@ -7,7 +7,10 @@ import { useOrgClock } from "@/lib/orgClock";
 import { AuthAssetMedia } from "./AuthAssetMedia";
 import { COPY_FIELDS } from "./UserAssetsLibrary";
 
-function HandoffPanel({ brandId, campaignId, placement: p, readOnly, entities = [] }: { brandId: string; campaignId: string; placement: Placement; readOnly: boolean; entities?: NativeEntity[] }) {
+/** `entities`／`destinationsNote` (F49-I14, Contract D): the handoff read's `destinations` and, when there are none, its
+ * `destinations_note` — origin-aware (a system-built draft is not on a platform yet; otherwise the structure was not
+ * read yet), never 「請先同步本活動的原始結構」. */
+function HandoffPanel({ brandId, campaignId, placement: p, readOnly, entities = [], destinationsNote = null }: { brandId: string; campaignId: string; placement: Placement; readOnly: boolean; entities?: NativeEntity[]; destinationsNote?: string | null }) {
   const [handoff, setHandoff] = useState<AssetHandoff | null>(null); const [error, setError] = useState(""); const [busy, setBusy] = useState(false);
   const [sources, setSources] = useState<SourceAccount[]>([]); const [sourceIndex, setSourceIndex] = useState("");
   const [candidates, setCandidates] = useState<BindingCandidate[]>([]); const [cursor, setCursor] = useState<string | null>(null);
@@ -37,7 +40,7 @@ function HandoffPanel({ brandId, campaignId, placement: p, readOnly, entities = 
     {handoff && <div className="mt-3 flex flex-col gap-3"><p className="text-sm">{handoff.notice}</p><AuthAssetMedia brandId={brandId} assetId={p.asset_id} filename={p.filename} mime={p.mime_type} />
       <div className="flex items-center gap-2 text-sm">建議追蹤名稱：{handoff.tracking_name}<CopyIconButton ariaLabel="複製追蹤名稱" getText={() => handoff.tracking_name} /></div>
       {Object.entries(handoff.effective_copy).map(([key, value]) => <div className="flex items-start gap-2 border-t border-border pt-2" key={key}><span className="w-12 shrink-0 text-sm">{COPY_FIELDS.find(f => f.key === key)?.label ?? key}</span><p className="min-w-0 flex-1 whitespace-pre-wrap break-words text-sm">{value || "待補"}</p><CopyIconButton ariaLabel={`複製${key}`} getText={() => value} /></div>)}
-      <p className="text-sm">用途：{handoff.purpose ?? "待補"} · 目的節點：{entities.find(e => e.id === handoff.destination_entity_id)?.name ?? (handoff.destination_entity_id ? "已保存目的節點（請載入本活動目的節點核對）" : "沿活動安排")} · {handoff.start_date ?? "開始日待核對"} — {handoff.end_date ?? "結束日待核對"}</p>
+      <p className="text-sm">用途：{handoff.purpose ?? "待補"} · 目的節點：{entities.find(e => e.id === handoff.destination_entity_id)?.name ?? (handoff.destination_entity_id ? "已保存的目的節點" : "沿活動安排")} · {handoff.start_date ?? "開始日待核對"} — {handoff.end_date ?? "結束日待核對"}</p>
       <details><summary className="cursor-pointer text-sm">原文與補充文案分開查看</summary><p className="whitespace-pre-wrap text-sm">原文：{JSON.stringify(handoff.original_copy, null, 2)}</p><p className="whitespace-pre-wrap text-sm">補充：{JSON.stringify(handoff.suggested_copy, null, 2)}</p></details>
       <p className="text-sm font-medium">廣告存在、素材版本與成效歸屬是三件不同的事。</p>
       {!handoff.bindings.length && <p className="text-sm">尚未記錄上架，也尚未讀回平台廣告。素材版本與成效待核對。</p>}
@@ -45,7 +48,7 @@ function HandoffPanel({ brandId, campaignId, placement: p, readOnly, entities = 
       {!readOnly && p.is_current && <><Button variant="outline" disabled={busy} onClick={() => void action(() => bindingAction(brandId, campaignId, p, "self-report"))}>我已手動上架（僅自行回報）</Button>
         <div className="flex flex-wrap items-center gap-2"><label>平台帳號<select aria-label="核對平台帳號" className="ml-2 rounded border border-border p-2" value={sourceIndex} disabled={busy} onChange={e => { setSourceIndex(e.target.value); setCandidates([]); setCursor(null); setSelected(""); setChecked(false); }}><option value="">選擇綁定帳號</option>{sources.map((s, i) => <option key={`${s.platform}:${s.account_id}`} value={i}>{s.label} · {s.name ?? s.account_id}</option>)}</select></label><Button variant="outline" disabled={busy || sourceIndex === ""} onClick={() => void candidatesPage()}>載入平台候選</Button></div>
         <p className="text-xs text-muted-foreground">候選來自快取；選定後會重新讀取指定廣告、父層與活動，僅查看資料。</p>
-        {sourceIndex !== "" && !candidates.length && <p className="text-sm">尚無已載入候選；請先同步本活動的原始結構，再載入候選。</p>}
+        {sourceIndex !== "" && !candidates.length && <p data-slot="candidates-empty" className="text-sm">尚無已載入候選；{destinationsNote ?? "按「載入平台候選」讀這個帳號已讀到的廣告"}。</p>}
         {candidates.length > 0 && <select aria-label="選擇平台廣告" className="rounded border border-border p-2" value={selected} disabled={busy} onChange={e => { setSelected(e.target.value); setChecked(false); }}><option value="">選擇廣告</option>{candidates.map(c => <option key={c.entity_id} value={c.entity_id}>{c.name ?? c.native_id} · {c.native_id}</option>)}</select>}
         {cursor && <Button variant="outline" disabled={busy} onClick={() => void candidatesPage(true)}>更多候選</Button>}
         <label className="text-sm"><input type="checkbox" checked={checked} disabled={busy} onChange={e => setChecked(e.target.checked)} /> 我已自行比對這一版原檔與文案（不當作平台素材等價證據）</label>

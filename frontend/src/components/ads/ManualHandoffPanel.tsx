@@ -7,6 +7,7 @@ import { useWorkspace } from "@/components/layout/WorkspaceContext";
 import { existingCampaigns, externalView, type NativeEntity, type SourceAccount } from "@/lib/adsExternalApi";
 import { checkHandoff, createNewAdHandoff, getHandoff, HandoffRequestRejected, reconsiderHandoff, refreshHandoffSources, reportHandoff, type HandoffIdentity, type HandoffItem, type HandoffWorkspace, type NewAdHandoffRequest } from "@/lib/adsHandoffApi";
 import { formatSyncTime } from "@/lib/format";
+import { useSyncOutcome } from "@/lib/useSyncOutcome";
 import { currentBudgetMonth } from "./MonthlyBudgetPanel";
 import { useOrgClock } from "@/lib/orgClock";
 import { Disclosure } from "./patterns/Disclosure";
@@ -25,8 +26,10 @@ type Props = {
   platformLabel?: string;
   /** Tells the host whether the settings readback block is shown (the host then drops its own settings view). */
   onSettingsReadback?: (shown: boolean) => void;
+  /** F49-I14 (Contract D): the handoff read's `destinations_note` — why this campaign has no platform object to act on
+   * yet (null when it has destinations), so the host says the same instead of its own origin-blind sentence. */
+  onDestinationsNote?: (note: string | null) => void;
 };
-const states: Record<string, string> = { pending: "待操作", reported: "已回報，待讀回", confirmed: "設定已核對", deviated: "設定有差異", unknown: "尚未能確認", stale: "需重新確認" };
 const materials: Record<string, string> = { unknown: "未知", user_verified: "使用者人工核對", media_verified: "媒體來源已核對" };
 const kinds: Record<string, string> = { campaign: "活動", group: "投放組", adset: "廣告組", ad: "廣告" };
 const fieldLabels: Record<string, string> = { utm: "網址追蹤標記", bidding: "出價設定", tracking: "追蹤設定", attribution: "成效歸因期間", landing_url: "導流網址", audience_source: "受眾來源", audience_window: "受眾期間", optimization_event: "最佳化事件", audience_exclusions: "排除受眾", objective: "投放目標", budget_type: "預算類型", budget_amount: "預算金額", start_date: "開始日期", end_date: "結束日期", copy_text: "文案", copy: "核准文案", material_required: "需要素材核對", manual_settings: "人工設定", title: "標題", body: "內文", description: "說明", targeting: "受眾", bid_strategy: "出價方式", placements: "版位", status: "投放狀態", material: "圖片／影片", parent: "上層對應" };
@@ -39,12 +42,33 @@ const message = (error: unknown) => error instanceof Error ? error.message : "�
 const nativeKey = (node: Pick<NativeEntity, "platform" | "source_account" | "native_kind" | "native_id">) => [node.platform, node.source_account, node.native_kind, node.native_id].join(":");
 const mergeNodes = (nodes: NativeEntity[]) => [...new Map(nodes.map(node => [nativeKey(node), node])).values()];
 
+/** F49-I14 (Contract O): the candidate re-read this panel posted, followed through `useSyncOutcome` — one job read in
+ * the campaign's scope, or (a re-read that requested several accounts) the campaign's worst outcome over them. Prints
+ * the served `text` (found, nothing read, partial／failed with the reason); `onFinished` fires once when the read
+ * finished, so the candidates are read again. */
+function CandidateReadLine({ brandId, campaignId, jobIds, onFinished }: { brandId: string; campaignId: string; jobIds: string[]; onFinished: () => void }) {
+  const outcome = useSyncOutcome(jobIds.length === 1 ? { brandId, jobId: jobIds[0], campaignId } : { brandId, campaignId });
+  const finish = useRef(onFinished);
+  finish.current = onFinished;
+  const reported = useRef(false);
+  useEffect(() => {
+    if (outcome.state === null || outcome.state === "running" || reported.current) return;
+    reported.current = true;
+    finish.current();
+  }, [outcome.state]);
+  const warn = outcome.state === "failed" || outcome.state === "partial";
+  return <>
+    {outcome.text && <p role="status" data-slot="candidate-read" data-state={outcome.state ?? undefined} className={`text-sm ${warn ? "text-warning" : "text-muted-foreground"}`}>{outcome.text}</p>}
+    {outcome.error && <p role="alert" className="text-sm text-destructive">{outcome.error}</p>}
+  </>;
+}
+
 export function ManualHandoffPanel(props: Props) {
   const { scope } = useWorkspace();
   return <Panel key={`${scope}:${props.brandId}:${props.campaignId}`} {...props} scope={scope} />;
 }
 
-function Panel({ brandId, campaignId, scope, mode = "all", refreshKey = 0, onHandoffWork, onBackToPlatform, platformLabel, onSettingsReadback }: Props & { scope: string }) {
+function Panel({ brandId, campaignId, scope, mode = "all", refreshKey = 0, onHandoffWork, onBackToPlatform, platformLabel, onSettingsReadback, onDestinationsNote }: Props & { scope: string }) {
   const [data, setData] = useState<HandoffWorkspace | null>(null);
   const [nodes, setNodes] = useState<NativeEntity[]>([]);
   const [roots, setRoots] = useState<NativeEntity[]>([]);
@@ -55,7 +79,7 @@ function Panel({ brandId, campaignId, scope, mode = "all", refreshKey = 0, onHan
   const [windowRange, setWindowRange] = useState<{ start: string; end: string }>();
   const [error, setError] = useState("");
   const [candidateError, setCandidateError] = useState("");
-  const [syncNotice, setSyncNotice] = useState("");
+  const [candidateRead, setCandidateRead] = useState<{ jobIds: string[]; round: number } | null>(null);
   const [reload, setReload] = useState(0);
   const [busy, setBusy] = useState("");
   const [activeItemId, setActiveItemId] = useState("");
@@ -66,6 +90,10 @@ function Panel({ brandId, campaignId, scope, mode = "all", refreshKey = 0, onHan
   const reportWork = useRef(onHandoffWork);
   reportWork.current = onHandoffWork;
   useEffect(() => { if (hasWork !== null) reportWork.current?.(hasWork); }, [hasWork]);
+  const destinationsNote = data ? data.destinations_note ?? null : undefined;
+  const reportNote = useRef(onDestinationsNote);
+  reportNote.current = onDestinationsNote;
+  useEffect(() => { if (destinationsNote !== undefined) reportNote.current?.(destinationsNote); }, [destinationsNote]);
   useEffect(() => {
     const controller = new AbortController();
     setError("");
@@ -115,8 +143,12 @@ function Panel({ brandId, campaignId, scope, mode = "all", refreshKey = 0, onHan
   }
   async function refreshSources() {
     if (busy) return;
-    const signal = lifetime.current.signal; setBusy("sync"); setCandidateError(""); setSyncNotice("");
-    try { await refreshHandoffSources(brandId, campaignId, signal); if (!signal.aborted) setSyncNotice("來源讀取已排入，稍後按「重新讀取」查看候選。尚未確認的物件仍保留待核對。"); }
+    const signal = lifetime.current.signal; setBusy("sync"); setCandidateError("");
+    try {
+      const result = await refreshHandoffSources(brandId, campaignId, signal);
+      const jobIds = (result.jobs?.length ? result.jobs : [result.job]).map(job => job.id);
+      if (!signal.aborted) setCandidateRead(prev => ({ jobIds, round: (prev?.round ?? 0) + 1 }));
+    }
     catch (err) { if (!signal.aborted) setCandidateError(message(err)); }
     finally { if (!signal.aborted) setBusy(""); }
   }
@@ -155,12 +187,12 @@ function Panel({ brandId, campaignId, scope, mode = "all", refreshKey = 0, onHan
           {entityCursor && <Button variant="outline" disabled={Boolean(busy)} onClick={() => void moreEntities()}>更多已讀回物件</Button>}
           <Button variant="outline" disabled={Boolean(busy)} onClick={() => void refreshSources()}>更新平台候選</Button>
         </div>
-        {syncNotice && <p role="status" className="text-sm text-muted-foreground">{syncNotice}</p>}
+        {candidateRead && <CandidateReadLine key={candidateRead.round} brandId={brandId} campaignId={campaignId} jobIds={candidateRead.jobIds} onFinished={() => setReload(n => n + 1)} />}
         {candidateError && <p role="alert" className="text-sm text-warning">候選清單暫時不完整：{candidateError}。可重讀或展開進階欄位核對識別。</p>}
         {data.items_truncated && <p className="text-sm text-warning">交接項目超過本次顯示範圍，目前清單不代表全部完成。</p>}
         {!workItems.length && <p className="text-sm text-muted-foreground">核准首次投放或新增廣告清單後，這裡會列出逐項交接內容。</p>}
         {workItems.length > 0 && <p className="text-sm font-medium">{pendingItems.length} 項待處理 · {confirmedItems.length} 項設定已核對</p>}
-        {pendingItems.length > 1 && <label className="block text-sm font-medium">選擇這次要核對的項目<select className="mt-2 block w-full" value={activeItem?.id ?? ""} disabled={Boolean(busy)} onChange={event => setActiveItemId(event.target.value)}>{pendingItems.map(item => <option key={item.id} value={item.id}>{item.name} · {states[item.status] ?? "待確認"}</option>)}</select><span className="mt-1 block text-xs font-normal text-muted-foreground">一次處理一項；其他項目的進度會保留。上層物件須先讀回，才能核對下層。</span></label>}
+        {pendingItems.length > 1 && <label className="block text-sm font-medium">選擇這次要核對的項目<select className="mt-2 block w-full" value={activeItem?.id ?? ""} disabled={Boolean(busy)} onChange={event => setActiveItemId(event.target.value)}>{pendingItems.map(item => <option key={item.id} value={item.id}>{item.name}{item.status_label ? ` · ${item.status_label}` : ""}</option>)}</select><span className="mt-1 block text-xs font-normal text-muted-foreground">一次處理一項；其他項目的進度會保留。上層物件須先讀回，才能核對下層。</span></label>}
         {activeItem && renderItem(activeItem)}
         {confirmedItems.length > 0 && <Disclosure label={`查看已核對的 ${confirmedItems.length} 項與證據`}><div className="space-y-3">{confirmedItems.map(renderItem)}</div></Disclosure>}
       </>}
@@ -191,7 +223,7 @@ function HandoffRow({ item, parent, nodes, source, busy, onReport, onCheck, onRe
     : missingParent ? "上層物件還沒核對"
     : !ready ? `還缺${missingIdentity.join("、")}：選一個平台候選，或在「進階：手填平台識別」填上` : undefined;
   return <article className="surface" aria-label={`交接 ${item.name}`}>
-    <div className="surface-header flex flex-wrap items-center justify-between gap-2"><h3>{item.name} <span className="text-xs font-normal text-muted-foreground">{kinds[item.planned_kind] ?? item.planned_kind}</span></h3><span className="rounded-full bg-muted px-3 py-1 text-xs">{states[item.status] ?? item.status}</span></div>
+    <div className="surface-header flex flex-wrap items-center justify-between gap-2"><h3>{item.name} <span className="text-xs font-normal text-muted-foreground">{kinds[item.planned_kind] ?? item.planned_kind}</span></h3>{item.status_label && <span className="rounded-full bg-muted px-3 py-1 text-xs">{item.status_label}</span>}</div>
     <div className="surface-body space-y-4">
       {item.expected_parent_name && <p className="text-sm text-muted-foreground">上層：{item.expected_parent_name}</p>}
       <div className="grid gap-3 sm:grid-cols-3">
@@ -274,11 +306,12 @@ function NewAdForm({ brandId, campaignId, scope, data }: { brandId: string; camp
         <label className="text-sm">已確認素材<select className="mt-1 block w-full" value={placementId} disabled={locked} onChange={e => { setPlacementId(e.target.value); const selectedPlacement = data.ready_placements.find(row => row.id === e.target.value); setDestination(groups.some(row => row.id === selectedPlacement?.destination_entity_id) ? selectedPlacement!.destination_entity_id! : ""); }}><option value="">請選擇</option>{data.ready_placements.map(row => <option key={row.id} value={row.id}>{row.filename} · 版本 {row.revision}</option>)}</select></label>
         <label className="text-sm">加入既有投放組<select className="mt-1 block w-full" value={destination} disabled={locked} onChange={e => setDestination(e.target.value)}><option value="">請選擇</option>{groups.map(row => <option key={row.id} value={row.id}>{row.name || row.native_id} · {row.platform} · {row.source_account}</option>)}</select></label>
       </div>
+      {!groups.length && data.destinations_note && <p data-slot="destinations-note" className="text-sm text-muted-foreground">{data.destinations_note}</p>}
       {data.destinations_truncated && <p className="text-sm text-warning">本次未列出全部投放組，找不到時請回投放中心確認來源，勿任選其他對象。</p>}
       <label className="block text-sm">新增理由<Textarea value={reason} maxLength={2000} disabled={locked} onChange={e => setReason(e.target.value)} /></label>
       <p className="text-xs text-muted-foreground">沿用既有父層預算仍須在核准時核對，不能假定新增廣告不增加花費。</p>
       {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
-      {pending?.changeSetId ? <div className="flex flex-wrap gap-2"><Button asChild><Link to={changeHref(pending.changeSetId)}>前往檢視並核准</Link></Button><Button variant="outline" onClick={() => { sessionStorage.removeItem(storageKey); setPending(null); setTitle(""); setPlacementId(""); setDestination(""); setReason(""); setError(""); }}>建立另一份新增清單</Button></div> : <Button disabled={busy || (!pending && (!data.ready_placements.length || !groups.length))} onClick={() => void save()}>{busy ? "保存中…" : pending ? "重試同一份新增清單" : "保存清單，檢視並核准"}</Button>}
+      {pending?.changeSetId ? <div className="flex flex-wrap gap-2"><Button asChild><Link to={changeHref(pending.changeSetId)}>前往檢視並核准</Link></Button><Button variant="outline" onClick={() => { sessionStorage.removeItem(storageKey); setPending(null); setTitle(""); setPlacementId(""); setDestination(""); setReason(""); setError(""); }}>建立另一份新增清單</Button></div> : <Button disabled={busy || (!pending && (!data.ready_placements.length || !groups.length))} disabledReason={busy || pending ? undefined : !data.ready_placements.length ? "還沒有已確認、原檔可用的素材：先在素材頁確認版本" : !groups.length ? data.destinations_note ?? "這個活動在平台上還沒有可加入的投放組" : undefined} onClick={() => void save()}>{busy ? "保存中…" : pending ? "重試同一份新增清單" : "保存清單，檢視並核准"}</Button>}
     </div>
   </section>;
 }

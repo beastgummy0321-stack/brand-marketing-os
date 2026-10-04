@@ -3,13 +3,13 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter, useLocation } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ManualHandoffPanel } from "./ManualHandoffPanel";
-import { checkHandoff, createNewAdHandoff, getHandoff, HandoffRequestRejected, reconsiderHandoff, reportHandoff, type HandoffItem, type HandoffWorkspace } from "@/lib/adsHandoffApi";
-import { existingCampaigns, externalView, type NativeEntity } from "@/lib/adsExternalApi";
+import { checkHandoff, createNewAdHandoff, getHandoff, HandoffRequestRejected, reconsiderHandoff, refreshHandoffSources, reportHandoff, type HandoffItem, type HandoffWorkspace } from "@/lib/adsHandoffApi";
+import { existingCampaigns, externalView, syncJob, syncOutcome, type NativeEntity, type SyncOutcome } from "@/lib/adsExternalApi";
 import type { ChangeSet } from "@/lib/adsChangeApi";
 
 vi.mock("@/components/layout/WorkspaceContext", () => ({ useWorkspace: () => ({ scope: "user:org", identity: { user: { id: "u", email: "a@example.com" }, org: { id: "o", name: "測試", kind: "personal", role: "owner", timezone: "Asia/Taipei", today: "2026-09-28" }, orgs: [] } }) }));
 vi.mock("@/lib/adsHandoffApi", async () => ({ ...await vi.importActual("@/lib/adsHandoffApi"), getHandoff: vi.fn(), reportHandoff: vi.fn(), checkHandoff: vi.fn(), reconsiderHandoff: vi.fn(), createNewAdHandoff: vi.fn(), refreshHandoffSources: vi.fn() }));
-vi.mock("@/lib/adsExternalApi", () => ({ existingCampaigns: vi.fn(), externalView: vi.fn() }));
+vi.mock("@/lib/adsExternalApi", () => ({ existingCampaigns: vi.fn(), externalView: vi.fn(), syncJob: vi.fn(), syncOutcome: vi.fn() }));
 const node = (id: string, kind = "ad", parent: string | null = "group"): NativeEntity => ({ id, platform: "fixture", source_account: "account", native_kind: kind, native_id: id, parent_native_id: parent, name: `平台 ${id}`, native_label: kind, native_status: "ACTIVE", start_date: null, end_date: null, budget_amount: null, budget_type: "unknown", budget_raw: {}, currency: null, last_success_at: null, sync_error: null, creative: {} });
 const item = (overrides: Partial<HandoffItem> = {}): HandoffItem => ({ id: "handoff", name: "B2", planned_kind: "ad", planned_id: "placement", status: "unknown", change_set_id: "set", parent_item_id: null, expected_parent_name: "既有組", placement_id: "placement", placement_revision: 2, entity_id: null, platform: null, source_account: null, native_kind: null, native_id: null, reported_at: null, observed_at: null, entity_exists: false, setting_matches: null, material_evidence: "unknown", expected_json: { copy: { body: "核准文案" } }, evidence_json: {}, ...overrides });
 const workspace = (items = [item()]): HandoffWorkspace => ({ items, items_truncated: false, ready_placements: [{ id: "placement", filename: "B2.png", revision: 2, purpose: "ad", destination_entity_id: "group" }], destinations: [node("root", "campaign", null), node("group", "adset", "root"), node("old-ad")], destinations_truncated: false, launch_stale: null, notice: "人工交接不代表平台已投遞。", settings_readback: null });
@@ -52,7 +52,7 @@ describe("manual handoff", () => {
   });
   it("does not convert reporting into confirmed settings and blocks children until parent is read back", async () => {
     vi.mocked(getHandoff).mockResolvedValue(workspace([item({ parent_item_id: "missing-parent" })]));
-    vi.mocked(reportHandoff).mockResolvedValue(item({ parent_item_id: "missing-parent", status: "reported", reported_at: "2026-09-19T01:00:00Z" }));
+    vi.mocked(reportHandoff).mockResolvedValue(item({ parent_item_id: "missing-parent", status: "reported", status_label: "已回報，待讀回", reported_at: "2026-09-19T01:00:00Z" }));
     render(view("brand", "campaign", "items"));
     await userEvent.click(await screen.findByRole("button", { name: "我已到平台操作" }));
     expect(await screen.findByText("已回報，待讀回")).toBeTruthy();
@@ -76,7 +76,7 @@ describe("manual handoff", () => {
   it("reconsiders a known disabled ad only through the dedicated check and a stated reason", async () => {
     const bound = item({ entity_id: "B2", native_kind: "ad", native_id: "B2", platform: "fixture", source_account: "account", status: "deviated", entity_exists: true });
     vi.mocked(getHandoff).mockResolvedValue(workspace([bound]));
-    vi.mocked(reconsiderHandoff).mockResolvedValue({ ...bound, status: "stale" });
+    vi.mocked(reconsiderHandoff).mockResolvedValue({ ...bound, status: "stale", status_label: "需重新確認" });
     render(view("brand", "campaign", "items"));
     await userEvent.click(await screen.findByRole("button", { name: "已停用的廣告：重新檢視方案" }));
     expect(screen.getByRole("button", { name: "核對已停用，重審新方案" })).toHaveProperty("disabled", true);
@@ -85,6 +85,48 @@ describe("manual handoff", () => {
     expect(reconsiderHandoff).toHaveBeenCalledWith("brand", "campaign", "handoff", "平台已停用，重做素材版本", expect.any(AbortSignal));
     expect(await screen.findByText("需重新確認")).toBeTruthy();
     expect(createNewAdHandoff).not.toHaveBeenCalled();
+  });
+  it("status words are the served status_label (no local word table)", async () => {
+    vi.mocked(getHandoff).mockResolvedValue(workspace([item({ status: "unknown", status_label: "讀到了但無法核對" }), item({ id: "other", name: "B3", status: "pending", status_label: "尚未回報" })]));
+    render(view("brand", "campaign", "items"));
+    const row = await screen.findByRole("article", { name: "交接 B2" });
+    expect(within(row).getByText("讀到了但無法核對")).toBeTruthy();
+    expect(screen.getByRole("option", { name: "B3 · 尚未回報" })).toBeTruthy();
+  });
+  describe("更新平台候選 follows the read it posted (F49-I14, Contract O)", () => {
+    const job = { id: "aes_1", status: "pending", last_success_at: null };
+    const answer = (state: SyncOutcome["state"], text: string, code: string | null = null) => ({ job, connected: true, outcome: { state, code, text } });
+    const cases: [SyncOutcome["state"], string][] = [
+      ["failed", "這次沒讀到平台資料：平台授權已失效或權限不足，請重新授權"],
+      ["empty", "沒有讀到資料：平台在這段期間沒有回傳任何資料"],
+      ["found", "已讀到平台資料"],
+    ];
+    for (const [state, text] of cases) {
+      it(`a ${state} read prints its sentence and reads the candidates again`, async () => {
+        vi.mocked(refreshHandoffSources).mockResolvedValue({ job, jobs: [job] });
+        vi.mocked(syncJob).mockResolvedValue(answer(state, text, state === "failed" ? "permission_denied" : state === "empty" ? "no_rows" : null));
+        render(view("brand", "campaign", "items"));
+        await screen.findByRole("article", { name: "交接 B2" });
+        expect(externalView).toHaveBeenCalledTimes(1);
+        await userEvent.click(screen.getByRole("button", { name: "更新平台候選" }));
+        const line = await screen.findByText(text);
+        expect(line.getAttribute("data-state")).toBe(state);
+        expect(syncJob).toHaveBeenCalledWith("brand", "aes_1", expect.any(AbortSignal), "campaign");
+        await waitFor(() => expect(externalView).toHaveBeenCalledTimes(2));
+        expect(screen.getByText(text)).toBeTruthy();
+        expect(screen.queryByText(/來源讀取已排入/)).toBeNull();
+      });
+    }
+    it("a re-read that requested several accounts follows the campaign's outcome over them", async () => {
+      vi.mocked(refreshHandoffSources).mockResolvedValue({ job, jobs: [job, { ...job, id: "aes_2" }] });
+      vi.mocked(syncOutcome).mockResolvedValue({ state: "partial", code: "source_error", text: "有部分平台資料沒讀到：平台暫時沒有回應，稍後會再試", job_ids: ["aes_1", "aes_2"], last_success_at: null });
+      render(view("brand", "campaign", "items"));
+      await screen.findByRole("article", { name: "交接 B2" });
+      await userEvent.click(screen.getByRole("button", { name: "更新平台候選" }));
+      expect(await screen.findByText("有部分平台資料沒讀到：平台暫時沒有回應，稍後會再試")).toBeTruthy();
+      expect(syncOutcome).toHaveBeenCalledWith("brand", "campaign", expect.any(AbortSignal));
+      expect(syncJob).not.toHaveBeenCalled();
+    });
   });
   it("tells the host whether the handoff has anything to verify", async () => {
     const onHandoffWork = vi.fn();
@@ -140,6 +182,14 @@ describe("new independent ad", () => {
     await userEvent.click(retry);
     expect(vi.mocked(createNewAdHandoff).mock.calls[1][2]).toEqual(original);
     expect(createNewAdHandoff).toHaveBeenCalledTimes(2);
+  });
+  it("with no ad set to join, says why (destinations_note) on the page and on the greyed 保存 button", async () => {
+    const note = "這個活動還沒上架，平台上還沒有投放組；新廣告請到投放結構加";
+    vi.mocked(getHandoff).mockResolvedValue({ ...workspace(), destinations: [], destination_by_ad: {}, destinations_note: note });
+    render(view("brand", "campaign", "new-ad"));
+    expect(await screen.findByText(note, { selector: "[data-slot=destinations-note]" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "保存清單，檢視並核准" })).toHaveProperty("disabled", true);
+    expect(screen.getAllByText(note).length).toBeGreaterThan(1);
   });
   it("unlocks editing only after a definitive request rejection", async () => {
     vi.mocked(createNewAdHandoff).mockRejectedValueOnce(new HandoffRequestRejected("素材版本已變更"));

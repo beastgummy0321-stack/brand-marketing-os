@@ -106,17 +106,12 @@ function queueItem(overrides: Partial<QueueItem> = {}): QueueItem {
 function queue(items: QueueItem[] = [queueItem()]): QueuePayload {
   return { items, counts: { stop_loss: 0, worse: items.length, better: 0, flat: 0, insufficient: 0, no_target: 0 }, total_ads: items.length, kinds_available: ["worse"], kinds_pending: [] };
 }
+/** F49-I14 (drill-11 C1): a system-built (internal) campaign already launched — no imported-only `external_view`; the
+ * ad's ad set comes from the handoff read's `destination_by_ad`. */
 function campaign(overrides: Partial<CampaignDetail> = {}): CampaignDetail {
   return {
-    id: "cmp_1", origin: "imported", capabilities: { allowed: [], unavailable: {} },
-    external_view: {
-      entities: [
-        { id: "aex_1", platform: "meta", source_account: "acc_1", native_kind: "ad", native_id: "native_1", native_label: "廣告", name: "晨光隨行杯・隨時有你", parent_native_id: "adset_native_1", native_status: "ACTIVE", start_date: null, end_date: null, budget_amount: null, budget_type: "unknown", budget_raw: {}, currency: "TWD", last_success_at: null, sync_error: null, creative: {} },
-        { id: "aes_1", platform: "meta", source_account: "acc_1", native_kind: "adset", native_id: "adset_native_1", native_label: "廣告組", name: "既有投放組", parent_native_id: "campaign_native_1", native_status: "ACTIVE", start_date: null, end_date: null, budget_amount: 500, budget_type: "daily", budget_raw: {}, currency: "TWD", last_success_at: null, sync_error: null, creative: {} },
-      ],
-      observations: [], next_entity_cursor: null, next_observation_cursor: null,
-      window: { start: "2026-09-08", end: "2026-09-21" }, connections: [], sync: {}, coverage: {},
-    },
+    id: "cmp_1", origin: "internal", capabilities: { allowed: [], unavailable: {} },
+    external_view: null,
     name: "測試活動", goal_text: null, objective: "銷售", cap: { value: null, basis: null, own_value: null, break_even: null, price: null, product_id: null, result_kind: "purchase", result_label: "購買", missing: ["product"], revision: 0 },
     start_date: null, end_date: null, status: "live", budget_planned: null, budget_scenario: null, budget_basis_json: {}, budget_total: null,
     context_json: {}, constraints_json: {}, verdict: null, verdict_json: {}, closed_at: null, created_by: null, created_at: "2026-01-01",
@@ -129,6 +124,8 @@ function handoff(overrides: Partial<handoffApi.HandoffWorkspace> = {}): handoffA
   return {
     items: [], items_truncated: false, ready_placements: [], destinations: [], destinations_truncated: false,
     launch_stale: null, notice: "物件存在、設定相符與素材核對分別記錄；人工交接不代表平台已投遞。", settings_readback: null,
+    // The launched campaign's platform ad → its ad set (`app/ads/handoff_data.py::_destination_by_ad`).
+    destination_by_ad: { aex_1: "aes_1" }, destinations_note: null,
     ...overrides,
   };
 }
@@ -242,14 +239,37 @@ describe("MaterialStepPage（F27-I14）建立新廣告提議", () => {
     expect(body.recommendation_id).toBe("rec_1");
   });
 
-  it("找不到這則廣告所屬投放組：警示文字，按鈕停用", async () => {
+  it("F49-I14（C1）：系統建立、已上架的活動，換一張圖選好成品後「建立新廣告提議」可按，目的地來自 destination_by_ad", async () => {
+    const user = userEvent.setup();
     vi.mocked(reviewApi.getReview).mockResolvedValue(review());
-    vi.mocked(adsApi.getCampaign).mockResolvedValue(campaign({ external_view: { entities: [], observations: [], next_entity_cursor: null, next_observation_cursor: null, window: { start: "2026-09-08", end: "2026-09-21" }, connections: [], sync: {}, coverage: {} } }));
     vi.mocked(handoffApi.getHandoff).mockResolvedValue(handoff({
       ready_placements: [{ id: "plc_1", revision: 1, filename: "新圖.png", purpose: "", destination_entity_id: null }],
     }));
     renderAt(materialPath("workbench_image"));
-    expect(await screen.findByText("找不到這則廣告目前所屬的投放組，請重新整理再試；仍可先確認素材安排。")).toBeTruthy();
+    await user.click(await screen.findByLabelText(/新圖\.png/));
+    expect((screen.getByRole("button", { name: /建立新廣告提議/ }) as HTMLButtonElement).disabled).toBe(false);
+    expect(document.querySelector("[data-slot=destination-missing]")).toBeNull();
+  });
+
+  it("找不到這則廣告所屬投放組：印交接讀取的 destinations_note，按鈕停用", async () => {
+    vi.mocked(reviewApi.getReview).mockResolvedValue(review());
+    vi.mocked(handoffApi.getHandoff).mockResolvedValue(handoff({
+      ready_placements: [{ id: "plc_1", revision: 1, filename: "新圖.png", purpose: "", destination_entity_id: null }],
+      destination_by_ad: {}, destinations_note: "還沒讀到這個活動的平台結構，按重新讀取",
+    }));
+    renderAt(materialPath("workbench_image"));
+    expect(await screen.findByText("還沒讀到這個活動的平台結構，按重新讀取")).toBeTruthy();
+    expect((screen.getByRole("button", { name: /建立新廣告提議/ }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("有投放組但這則廣告還沒對上：說還沒讀到它的投放組，按鈕停用", async () => {
+    vi.mocked(reviewApi.getReview).mockResolvedValue(review());
+    vi.mocked(handoffApi.getHandoff).mockResolvedValue(handoff({
+      ready_placements: [{ id: "plc_1", revision: 1, filename: "新圖.png", purpose: "", destination_entity_id: null }],
+      destination_by_ad: { other_ad: "aes_1" },
+    }));
+    renderAt(materialPath("workbench_image"));
+    expect(await screen.findByText(/還沒讀到這則廣告目前所屬的投放組/)).toBeTruthy();
     expect((screen.getByRole("button", { name: /建立新廣告提議/ }) as HTMLButtonElement).disabled).toBe(true);
   });
 });
