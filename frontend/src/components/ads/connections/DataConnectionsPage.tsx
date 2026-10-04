@@ -48,9 +48,9 @@ function RereadOutcome({ brandId, jobId, onFinished, button }: {
       {button(running)}
       {outcome.text && (
         <p role="status" data-slot="reread-outcome" data-state={outcome.state ?? undefined}
-          className={`max-w-[18rem] text-right text-xs ${warn ? "text-warning" : "text-muted-foreground"}`}>{outcome.text}</p>
+          className={`max-w-[24rem] text-right text-xs ${warn ? "text-warning" : "text-muted-foreground"}`}>{outcome.text}</p>
       )}
-      {outcome.error && <p role="alert" className="max-w-[18rem] text-right text-xs text-destructive">{outcome.error}</p>}
+      {outcome.error && <p role="alert" className="max-w-[24rem] text-right text-xs text-destructive">{outcome.error}</p>}
     </>
   );
 }
@@ -93,7 +93,7 @@ function RereadSlot({ brandId, reread, read, onStarted, onFinished }: {
       {read
         ? <RereadOutcome key={`${read.jobId}:${read.round}`} brandId={brandId} jobId={read.jobId} onFinished={onFinished} button={button} />
         : button(false)}
-      {error && <p role="alert" className="max-w-[18rem] text-right text-xs text-destructive">{error}</p>}
+      {error && <p role="alert" className="max-w-[24rem] text-right text-xs text-destructive">{error}</p>}
     </div>
   );
 }
