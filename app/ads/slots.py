@@ -412,8 +412,9 @@ def _planned_slot(
         if progress == "blocked":
             # The file itself failed: no copy unblocks the slot.
             return slot("blocked", pending_thumb, copy_half, blocked=blocked, asset=original)
-        if progress == "retrying":
+        if progress == "retrying" and original is not None:
             # An attempt failed and another is due: the error and when, never a silent 處理中.
+            # (`_original_state` is None for an unreadable original, so it is read here.)
             return slot(
                 "retrying", pending_thumb, copy_half, asset=original,
                 retry_at=original["next_attempt_at"],
@@ -580,13 +581,12 @@ def _assign_refusal(conn, org, brand, campaign_id, ad_id, exc) -> dict:
     from app.ads import asset_suggestions
 
     campaign = ads_repo.get_campaign(conn, org, brand, campaign_id) or {}
+    code: str | None = None
     if campaign.get("status") == "closed":
         code = "campaign_closed"
     elif launch.material_frozen(conn, org, brand, campaign_id, ad_id):
         code = "launch_frozen"
-    else:
-        code = None
-    text = ASSIGN_REFUSALS.get(code) or str(exc)
+    text = ASSIGN_REFUSALS[code] if code is not None else str(exc)
     return {**asset_suggestions.policy.detail("assign", text), "code": code}
 
 
