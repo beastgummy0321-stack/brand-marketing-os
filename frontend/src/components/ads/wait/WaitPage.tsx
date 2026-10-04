@@ -35,6 +35,8 @@ interface Row {
   action?: RowAction;
   /** A fact the system fixes by itself (no exit): the 「自動」 chip. Reason rows without an exit print nothing. */
   auto?: boolean;
+  /** A waiting `reason_code` row (Contract Q), not a fact row. */
+  reason?: boolean;
 }
 
 /** F49 Contract Q (wait reasons): the ads that wait for something — every ad except the ones already judged (a trend
@@ -93,7 +95,7 @@ function buildRows(brandId: string, campaignHref: string, sync: CampaignSyncStat
   for (const code of waitingCodes(items)) {
     const reason = rules?.reasons[code];
     rows.push({
-      key: `reason:${code}`, emoji: "⏳", title: reason?.title ?? "", subtitle: reason?.text ?? "",
+      key: `reason:${code}`, emoji: "⏳", reason: true, title: reason?.title ?? "", subtitle: reason?.text ?? "",
       action: reasonAction(reason?.fix, brandId, campaignHref),
     });
   }
@@ -106,14 +108,15 @@ const BROKEN_READ: ReadonlySet<CampaignSyncState["state"]> = new Set(["failed", 
 type Hero = { tone: "warn" | "ok" | "neutral" | "bad"; mark: string; title: string; note?: string };
 
 /** F47-I06 / F49: the title follows what the data says. A draft has nothing to read; a broken read says so with its
- * reason (never 資料齊了); a listed gap or a waiting reason keeps 資料不足; no gap and some ad judged says the numbers
- * are in, naming the served window. */
+ * reason (never 資料齊了); a fact row (a gap, a missing report) keeps 資料不足; no gap and some ad judged says the
+ * numbers are in, naming the served window — the reason rows then explain only the ads still waiting (or a trend
+ * footnote such as 沒有上一段可以比), not the whole campaign. */
 function waitHero(lifecycle: CampaignLifecycle | null, sync: CampaignSyncState, status: CampaignDataStatus | null, rows: Row[], items: TriageItem[], days: TileDay[]): Hero {
   if (lifecycle?.state === "draft") return { tone: "neutral", mark: "…", title: "這個活動還沒上架，沒有平台資料可讀" };
   if (BROKEN_READ.has(sync.state)) {
     return { tone: "bad", mark: "!", title: status?.label || "這次沒讀到平台資料", note: sync.error ?? undefined };
   }
-  if (rows.length > 0) return { tone: "warn", mark: "…", title: "資料不足，這個活動先不判斷" };
+  if (rows.some((row) => !row.reason)) return { tone: "warn", mark: "…", title: "資料不足，這個活動先不判斷" };
   if (sync.state === "never") return { tone: "neutral", mark: "…", title: "還沒同步過，先不判斷", note: "按「重新檢查」讀一次平台的數字" };
   if (items.some((item) => item.grade !== "insufficient" && item.grade !== "no_target")) {
     const read = days.length > 0 && days.every((d) => d.state !== "missing");

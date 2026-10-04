@@ -326,6 +326,20 @@ describe("WaitPage 讀取結果（F49 Contract O）", () => {
     expect(screen.getByText(/9\/13～9\/19 每天都讀過/)).toBeTruthy();
   });
 
+  it("廣告都判讀了、只差上一段可比時：頭部說資料齊了，沒有上一段可以比只當註腳列", async () => {
+    mockGetTriage.mockResolvedValue(triage({ items: [triageItem({ reason_code: "no_previous_window", grade: "on_target", grade_label: "划算" })] }));
+    renderPage();
+    expect(await screen.findByText("資料齊了，可以回活動看判讀")).toBeTruthy();
+    expect(screen.getByText(RULES_FIXTURE.reasons.no_previous_window.title)).toBeTruthy();
+    expect(screen.queryByText("資料不足，這個活動先不判斷")).toBeNull();
+  });
+
+  it("全部廣告都在等時頭部是資料不足", async () => {
+    mockGetTriage.mockResolvedValue(triage({ items: [triageItem({ reason_code: "needs_resync" })] }));
+    renderPage();
+    expect(await screen.findByText("資料不足，這個活動先不判斷")).toBeTruthy();
+  });
+
   it("重新檢查：送出同步、跟著 useSyncOutcome 讀到結束，印結果句、重新讀這頁", async () => {
     const user = userEvent.setup();
     mockGetTriage.mockResolvedValue(triage());
