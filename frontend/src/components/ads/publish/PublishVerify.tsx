@@ -4,7 +4,7 @@ import { Button } from "@/components/layout/ui/button";
 import { confirmAllLaunchFields, confirmLaunchItemField, fetchLaunchView, readbackLaunch, type LaunchItem, type LaunchView } from "@/lib/adsLaunchApi";
 import { confirmLaunchSetting, type SettingsReadbackKey } from "@/lib/adsLaunchSettingsApi";
 import { ActionBar, Chip, DiffRow, ReadbackRow, ReadbackSummary, ResultHero, TodoRow, UnreadChip, type ChipTone } from "../patterns";
-import { ItemTitle, PublishHead, campaignPath, fieldText, publishPath, readFailedText, timeText, type LaunchPlatform } from "./PublishFlow";
+import { ItemTitle, PublishHead, campaignPath, fieldText, publishPath, readFailedText, readbackReason, timeText, type LaunchPlatform } from "./PublishFlow";
 import { UnreadAllBar } from "./SettingsReadback";
 
 /** F30-I13 step 3 (prototype v10 `pubVerify()`, hash `pub/fall/verify`): one result hero over the items and the launch
@@ -13,14 +13,17 @@ import { UnreadAllBar } from "./SettingsReadback";
  * 重新讀回. The next action depends on the case: 回活動總覽, 回平台改 or 繼續建剩下的. 「我看過了」 only records that
  * the user checked by eye; nothing is written to a platform.
  * Drill-7 #18 (F40 prototype `#/readback`): while any field is still unreadable, one bar over the list marks them all
- * in one request; 回活動總覽 waits until the view reports nothing unreadable. */
+ * in one request; 回活動總覽 waits until the view reports nothing unreadable.
+ * F49 Contract B (decision 5): each item's word is the served `state_label`; the fields no platform read can see were
+ * confirmed once, at approval, and show under 「核准時已確認」 without a button — only a read gap the platform could
+ * have answered (`unreadable`) still asks for the eye, and only those are counted as 讀不到. An `unknown` item prints
+ * its coded reason (`readbackReason`). */
 
 const errorText = (err: unknown, fallback: string) => (err instanceof Error && err.message ? err.message : fallback);
 
-const CHIP: Record<LaunchItem["state"], [ChipTone, string]> = {
-  verified: ["ok", "相符"], mismatch: ["warn", "不符"], built: ["neutral", "待讀回"], unknown: ["neutral", "待確認"],
-  todo: ["neutral", "還沒建"], changed: ["warn", "有變更"],
-};
+/** The chip's colour follows the state; its word is served. */
+const tone = (state: LaunchItem["state"]): ChipTone =>
+  state === "verified" ? "ok" : state === "mismatch" || state === "changed" ? "warn" : "neutral";
 
 const UNREAD_SELECTOR = "[data-slot=item-unread][data-variant=unreadable] button, [data-slot=readback-row][data-variant=unreadable] button";
 
@@ -80,14 +83,19 @@ export function PublishVerify({ brandId, campaignId, name, view, platform, onVie
   const at = readAt ? `讀回於 ${readAt}` : "還沒有讀回時間";
   const reasons = [
     ...fields.filter((f) => f.state === "unreadable").map((f) => f.reason),
-    ...view.items.filter((i) => i.unreadable.some((u) => !u.confirmed)).map((i) => i.reason),
+    ...view.items.filter((i) => i.unreadable.some((u) => !u.confirmed)).map(readbackReason),
   ];
   const settingsNote = fields.length ? `・投放設定 ${nMatch} 項對上了` : "";
+  // Declared fields: confirmed by the approval, named in the note, never counted as 讀不到.
+  const atApproval = view.items.reduce((s, i) => s + (i.confirmed_at_approval?.length ?? 0), 0);
+  const approvalNote = atApproval ? `・${atApproval} 項核准時已確認` : "";
 
   const hero = all
     ? seen > 0
-      ? <ResultHero tone="ok" title="投放設定都核對過了" note={`${n} 項都和核准的一樣${settingsNote}・${seen} 項你在 ${platform.label} 看過・${at}`} />
-      : <ResultHero tone="ok" title={`${n} 項都和核准的一樣`} note={`${fields.length ? `投放設定 ${nMatch} 項對上了・` : ""}${at}`} />
+      ? <ResultHero tone="ok" title="投放設定都核對過了" note={`${n} 項都和核准的一樣${settingsNote}・${seen} 項你在 ${platform.label} 看過${approvalNote}・${at}`} />
+      : <ResultHero tone="ok" title={`${n} 項都和核准的一樣`} note={[
+        fields.length ? `投放設定 ${nMatch} 項對上了` : null, atApproval ? `${atApproval} 項核准時已確認` : null, at,
+      ].filter(Boolean).join("・")} />
     : dev + nDiff > 0
       ? <ResultHero tone="warn" title={`${dev + nDiff} 項和核准的不一樣`} note={`其他 ${ok} 項已核對・${at}`} />
       : unread > 0 && todo === 0 && awaiting === 0
@@ -115,11 +123,11 @@ export function PublishVerify({ brandId, campaignId, name, view, platform, onVie
       )}
       <section aria-label="上架項目核對" className="surface px-[22px] py-5">
         {view.items.map((item, i) => {
-          const [tone, label] = CHIP[item.state];
           const byKey = new Map(item.fields.map((f) => [f.key, f]));
+          const reason = readbackReason(item);
           return (
             <TodoRow key={item.id} no={i + 1} state={item.state === "verified" ? "done" : item.state === "mismatch" ? "mismatch" : "open"}
-              action={<Chip tone={tone}>{label}</Chip>}>
+              action={item.state_label ? <Chip tone={tone(item.state)} data-state={item.state}>{item.state_label}</Chip> : undefined}>
               <ItemTitle item={item} strong={false} />
               {item.mismatches.map((m) => (
                 <DiffRow key={m.key} field={byKey.get(m.key)?.label ?? m.label} before={m.expected} after={m.observed}
@@ -137,9 +145,16 @@ export function PublishVerify({ brandId, campaignId, name, view, platform, onVie
                   </>}
                 </div>
               ))}
-              {item.reason && item.state !== "verified" && (
+              {(item.confirmed_at_approval ?? []).map((c) => (
+                <div key={c.key} data-slot="item-approved" className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                  <span className="text-muted-foreground">{byKey.get(c.key)?.label ?? c.label}</span>
+                  {byKey.has(c.key) && <b className="min-w-0 font-semibold [overflow-wrap:anywhere]">{fieldText(byKey.get(c.key)?.value ?? null)}</b>}
+                  <Chip>核准時已確認</Chip>
+                </div>
+              ))}
+              {reason && (
                 // F47-I06 (R5): a stored reason says when it was read; 重新讀回 below replaces it with the new read.
-                <p data-slot="readback-error" className="mt-1 text-xs text-warning">{readFailedText(item.reason_at, item.reason)}</p>
+                <p data-slot="readback-error" className="mt-1 text-xs text-warning">{readFailedText(item.reason_at, reason)}</p>
               )}
             </TodoRow>
           );

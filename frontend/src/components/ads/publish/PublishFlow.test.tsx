@@ -58,6 +58,8 @@ function view(o: Partial<LaunchView> = {}): LaunchView {
     read_at: null, settings_readback: null, ...o,
   };
 }
+// F49 Contract B: the launch view's `approval_confirms`, real shape (`handoff_check.approval_confirms`).
+const APPROVAL_CONFIRMS = [{ key: "manual_settings.audience_source", label: "受眾來源" }, { key: "material", label: "圖片或影片版本" }];
 const approvedView = (states: Partial<Record<string, Partial<LaunchItem>>> = {}, o: Partial<LaunchView> = {}) =>
   view({ step: "platform", version: 1, approved_at: "2026-09-20T06:05:00Z", items: ITEMS.map((i) => ({ ...i, ...states[i.id] })), ...o });
 
@@ -175,10 +177,28 @@ describe("確認上架清單", () => {
     expect((screen.getByRole("button", { name: "核准上架清單 →" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
+  it("F49 decision 5: the fields no platform read can see are named once, before 核准上架清單", async () => {
+    vi.mocked(fetchLaunchView).mockResolvedValue(view({ approval_confirms: APPROVAL_CONFIRMS }));
+    renderAt("list");
+    const approve = await screen.findByRole("button", { name: "核准上架清單 →" });
+    const line = screen.getByText(/平台讀不到這幾項/);
+    expect(line.textContent).toBe("平台讀不到這幾項，核准就代表上架時照這樣設：受眾來源、圖片或影片版本");
+    // It stands before the approve button in reading order.
+    expect(line.compareDocumentPosition(approve) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("no declared field (or an older backend): no approval line", async () => {
+    vi.mocked(fetchLaunchView).mockResolvedValue(view({ approval_confirms: [] }));
+    renderAt("list");
+    await screen.findByRole("button", { name: "核准上架清單 →" });
+    expect(screen.queryByText(/平台讀不到這幾項/)).toBeNull();
+  });
+
   it("after approval the list is read only and leads on to 到平台完成", async () => {
-    vi.mocked(fetchLaunchView).mockResolvedValue(approvedView());
+    vi.mocked(fetchLaunchView).mockResolvedValue(approvedView({}, { approval_confirms: APPROVAL_CONFIRMS }));
     renderAt("list");
     expect(await screen.findByText("投放設定卡・唯讀")).toBeTruthy();
+    expect(screen.queryByText(/平台讀不到這幾項/)).toBeNull();
     expect(screen.queryByRole("button", { name: "核准上架清單 →" })).toBeNull();
     expect(screen.getByRole("link", { name: "到平台完成 →" }).getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1/publish/platform");
   });
@@ -194,6 +214,8 @@ function monthBlock(o: Partial<LaunchMonthBudget> = {}): LaunchMonthBudget {
   };
 }
 const monthCard = () => screen.getByRole("region", { name: "本月預算放得下" });
+// F49-I12 (drill-11 Q4): the month-budget link carries this list page back, so the home editor offers the way back.
+const BUDGET_BACK = `/brands/brd_1/ads?budget=edit&return=${encodeURIComponent("/brands/brd_1/ads/campaigns/cmp_1/publish/list")}`;
 async function approveButton() {
   return (await screen.findByRole("button", { name: "核准上架清單 →" })) as HTMLButtonElement;
 }
@@ -244,7 +266,7 @@ describe("確認上架清單・本月預算 (F41-I05)", () => {
     expect(await screen.findByText("⚠ 要先設 10 月月預算")).toBeTruthy();
     const card = monthCard();
     expect(within(card).getByText("還沒設月預算")).toBeTruthy();
-    expect(within(card).getByRole("link", { name: "設定 10 月月預算 →" }).getAttribute("href")).toBe("/brands/brd_1/ads?budget=edit");
+    expect(within(card).getByRole("link", { name: "設定 10 月月預算 →" }).getAttribute("href")).toBe(BUDGET_BACK);
     expect((await approveButton()).disabled).toBe(true);
   });
 
@@ -259,7 +281,7 @@ describe("確認上架清單・本月預算 (F41-I05)", () => {
     expect(within(card).queryByText("放得下")).toBeNull();
     expect(within(card).getByText("10 月只剩 932")).toBeTruthy();
     expect(within(card).getByText("不夠 9,068", { exact: false })).toBeTruthy();
-    expect(within(card).getByRole("link", { name: "提高 10 月月預算" }).getAttribute("href")).toBe("/brands/brd_1/ads?budget=edit");
+    expect(within(card).getByRole("link", { name: "提高 10 月月預算" }).getAttribute("href")).toBe(BUDGET_BACK);
     expect(within(card).getByRole("link", { name: "改這期總預算" }).getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1?tab=strategy");
     expect((await approveButton()).disabled).toBe(true);
   });
@@ -400,8 +422,8 @@ describe("讀回核對", () => {
   });
 
   it("an unreadable landing URL is confirmed by eye per field; built items read 待讀回, the rest 還沒建", async () => {
-    const unread = { state: "unknown" as const, unreadable: [{ key: "manual_settings.landing_url", label: "落地頁網址", confirmed: false }] };
-    vi.mocked(fetchLaunchView).mockResolvedValue(approvedView({ h1: { state: "verified" }, h2: unread, h3: { state: "built" } }, read));
+    const unread = { state: "unknown" as const, state_label: "待確認", unreadable: [{ key: "manual_settings.landing_url", label: "落地頁網址", confirmed: false }] };
+    vi.mocked(fetchLaunchView).mockResolvedValue(approvedView({ h1: { state: "verified" }, h2: unread, h3: { state: "built", state_label: "待讀回" } }, read));
     vi.mocked(confirmLaunchItemField).mockResolvedValue(approvedView({ h1: { state: "verified" }, h2: { state: "verified" }, h3: { state: "built" } }, read));
     renderAt("verify");
     expect(await screen.findByText("1／3 已核對")).toBeTruthy();
@@ -435,6 +457,56 @@ describe("讀回核對", () => {
     expect(screen.queryByRole("group", { name: "全部標記" })).toBeNull();
     expect(screen.getByText("你確認一樣")).toBeTruthy();
     expect(screen.getByRole("link", { name: "回活動總覽 →" }).getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1");
+  });
+
+  /** F49 Contract B, real shape of `launch_view._item` after `handoff_check._settings`: the readable fields matched, the
+   * declared ones (material, the group's 受眾來源) are `confirmed_at_approval`, nothing is `unreadable`. */
+  const declaredOnly = {
+    h1: { state: "verified" as const, state_label: "相符" },
+    h2: { state: "verified" as const, state_label: "相符", confirmed_at_approval: [{ key: "manual_settings.audience_source", label: "受眾來源" }] },
+    h3: { state: "verified" as const, state_label: "相符", confirmed_at_approval: [{ key: "material", label: "圖片或影片版本" }] },
+  };
+
+  it("decision 5: readable fields all match — all verified, the declared fields under 核准時已確認 without a button, no 讀不到", async () => {
+    vi.mocked(fetchLaunchView).mockResolvedValue(approvedView(declaredOnly, read));
+    renderAt("verify");
+    expect(await screen.findByText("3 項都和核准的一樣")).toBeTruthy();
+    expect(screen.getByText(/^2 項核准時已確認・讀回於/)).toBeTruthy();
+    expect(screen.getAllByText("相符")).toHaveLength(3);
+    const approved = document.querySelectorAll("[data-slot=item-approved]");
+    expect([...approved].map((row) => row.textContent)).toEqual(["受眾來源核准時已確認","素材已確認版本・圖片 1 張核准時已確認"]);
+    expect(screen.queryByText(/讀不到/)).toBeNull();
+    expect(screen.queryByRole("group", { name: "全部標記" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "我看過了，一樣" })).toBeNull();
+    expect(screen.getByRole("link", { name: "回活動總覽 →" }).getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1");
+  });
+
+  it("a launch-setting read gap still asks for the eye; the declared fields do not join its count", async () => {
+    vi.mocked(fetchLaunchView).mockResolvedValue(approvedView(declaredOnly, { ...read, settings_readback: { read_at: read.read_at, fields: [
+      { key: "pixel_id", label: "像素", expected_label: "晨光官網像素（…4821）", observed_label: null, state: "unreadable", reason: "像素的讀取權限沒開" },
+    ] } }));
+    renderAt("verify");
+    expect(await screen.findByText("1 項還沒核對")).toBeTruthy();
+    expect(screen.getByRole("group", { name: "全部標記" }).textContent).toContain("1 項讀不到（像素的讀取權限沒開）");
+    const settings = screen.getByRole("region", { name: "投放設定讀回" });
+    expect(within(settings).getByRole("button", { name: "我看過了，一樣" })).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: "我看過了，一樣" })).toHaveLength(1);
+    expect(screen.getAllByText("核准時已確認")).toHaveLength(2);
+  });
+
+  it("an unknown item prints its coded reason; the check's general remark is no reason", async () => {
+    vi.mocked(fetchLaunchView).mockResolvedValue(approvedView({
+      h1: { state: "verified", state_label: "相符" },
+      h2: { state: "unknown", state_label: "待確認", reason: "這次讀回沒讀到廣告組的受眾設定，請稍後再讀回一次。", reason_code: "audience_unread" },
+      h3: { state: "unknown", state_label: "待確認", reason: "只記本次物件與設定核對；不代表已投遞、素材因果或成效改善。", reason_code: null,
+        unreadable: [{ key: "copy.headline", label: "標題", confirmed: false }] },
+    }, read));
+    renderAt("verify");
+    expect(await screen.findByText("這次讀回沒讀到廣告組的受眾設定，請稍後再讀回一次。")).toBeTruthy();
+    expect(screen.queryByText(/只記本次物件/)).toBeNull();
+    expect(screen.getAllByText("待確認")).toHaveLength(2);
+    // The bar names no reason the payload did not give.
+    expect(screen.getByRole("group", { name: "全部標記" }).textContent).not.toContain("只記本次物件");
   });
 
   it("重新讀回 reads the batch again in place", async () => {

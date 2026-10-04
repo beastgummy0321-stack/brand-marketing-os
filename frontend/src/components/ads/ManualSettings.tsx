@@ -34,7 +34,8 @@ function clearManualDraft(key: string) {
 export function ManualSettings({ draftScope, brandId, campaign, onSaved, onDirtyChange, embedded = false, groupId }: {
   draftScope: string;
   brandId: string;
-  campaign: Pick<CampaignDetail, "id" | "status" | "manual_handoff">;
+  /** F49 Contract L: edits lock on the served lifecycle (`closed`), never the stored status. */
+  campaign: Pick<CampaignDetail, "id" | "lifecycle" | "manual_handoff">;
   onSaved: (c: CampaignDetail) => void;
   onDirtyChange?: (dirty: boolean) => void;
   /** F29 Unresolved 5: inside the launch settings' 「進階設定」 fold (publish list stage) — the per-ad-set free-text
@@ -88,7 +89,7 @@ export function ManualSettings({ draftScope, brandId, campaign, onSaved, onDirty
           open={Boolean(openGroups[group.id])}
           onOpenChange={(next) => setOpenGroups((current) => ({ ...current, [group.id]: next }))}>
           <GroupSettings brandId={brandId} campaignId={campaign.id} fields={handoff.fields} group={group}
-            locked={campaign.status === "closed"} onSaved={onSaved}
+            locked={campaign.lifecycle?.state === "closed"} onSaved={onSaved}
             draftKey={`brand-os:ads:manual-draft:v1:${draftScope}:${brandId}:${campaign.id}:${group.id}`}
             focusRequest={focusRequests[group.id] ?? null}
             onDirtyChange={(next) => setGroupDirty(group.id, next)} />
