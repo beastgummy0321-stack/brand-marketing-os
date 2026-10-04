@@ -1,6 +1,6 @@
 /** frontend/src/lib/adsCampaignTypes.ts — F40-I12: the campaign create／context shapes shared by
  * `adsApi.ts` (the campaign payloads), `adsWizardApi.ts` (the structured create) and the two wizard
- * pages. Type-only; split out of `adsApi.ts` for its 800-line cap. Mirrors `app/ads/brief.py`
+ * pages. Type-only; split out of `adsApi.ts` for its 800-line cap. Shapes served by `app/ads/brief.py`
  * (`_check_extras`, `_copy_from_previous`, `set_landing_url`) and `app/ads/routes.py`
  * (`CreateCampaignRequest`). */
 

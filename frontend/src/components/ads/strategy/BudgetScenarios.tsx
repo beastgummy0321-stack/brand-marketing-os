@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Button } from "@/components/layout/ui/button";
-import { selectScenario, setBudgetCap, type BudgetScenarioRow, type CampaignDetail } from "@/lib/adsApi";
+import { selectScenario, setBudgetCap, type BudgetScenarioRow, type CampaignDetail, type ResplitRow, type SelectScenarioResult } from "@/lib/adsApi";
 import { Chip, ConfirmSheet, Disclosure, ScenarioBars, WarnButton, formatAmount, type ScenarioRow } from "../patterns";
 
 /** F28-I09: the strategy tab's 「這一期的總預算」 card (prototype v9 `budgetBlock()`): the API's budget scenarios as bars
@@ -9,7 +9,11 @@ import { Chip, ConfirmSheet, Disclosure, ScenarioBars, WarnButton, formatAmount,
  *
  * Nothing is preselected: the highlighted row is the user's unsaved pick, else the saved row, else none (§1.7 item 3).
  * A row over the budget cap is never picked directly — it opens the confirm sheet, and only its second yes saves it
- * (`confirm_over_cap: true`). The in-cap pick is saved by the tab's bottom bar (「儲存預算 X」). */
+ * (`confirm_over_cap: true`). The in-cap pick is saved by the tab's bottom bar (「儲存預算 X」).
+ *
+ * F48 Contract M: under the title, the saved total's `budget_preview` — 「每天 X・這期實際 Y」 and the server's note
+ * when the whole daily does not spend the chosen total exactly; after a save on an adopted plan, the API's `resplit`
+ * (「已照比例重分到 N 個投放組：…」). Every number is served; the card computes no money. */
 
 export interface OverCapPending {
   key: string;
@@ -44,7 +48,21 @@ function scenarioRow(c: CampaignDetail, key: string | null): BudgetScenarioRow |
   return c.budget_basis_json.scenarios?.scenarios.find((r) => r.key === key) ?? null;
 }
 
-export function BudgetScenarios({ brandId, campaign: c, picked, onPick, pending, onPending, onCampaignChange }: {
+/** 「已照比例重分到 N 個投放組：〈role〉 before → after、…」: each re-split ad set under its role's served label (the
+ * strategy's allocation row), else its group name. */
+function ResplitNote({ c, rows }: { c: CampaignDetail; rows: ResplitRow[] }) {
+  const roleLabel = (row: ResplitRow) =>
+    c.budget_basis_json.strategy?.allocation.find((a) => a.role === row.role)?.label
+    ?? c.groups.find((g) => g.id === row.group_id)?.name ?? row.role;
+  return (
+    <p role="status" data-slot="budget-resplit" className="mt-2 text-sm [overflow-wrap:anywhere]">
+      已照比例重分到 {rows.length} 個投放組：
+      {rows.map((row) => `${roleLabel(row)} ${fmt(row.before)} → ${fmt(row.after)}`).join("、")}
+    </p>
+  );
+}
+
+export function BudgetScenarios({ brandId, campaign: c, picked, onPick, pending, onPending, onCampaignChange, onBudgetSaved, resplit = null }: {
   brandId: string;
   campaign: CampaignDetail;
   picked: string | null;
@@ -52,10 +70,15 @@ export function BudgetScenarios({ brandId, campaign: c, picked, onPick, pending,
   pending: OverCapPending | null;
   onPending: (pending: OverCapPending | null) => void;
   onCampaignChange: (campaign: CampaignDetail) => void;
+  /** A total was saved (`selectScenario`): the returned campaign and its re-split list. */
+  onBudgetSaved: (result: SelectScenarioResult) => void;
+  /** The ad sets the last save re-split (an adopted, unbound plan); null when nothing was re-split. */
+  resplit?: ResplitRow[] | null;
 }) {
   const scenarios = c.budget_basis_json.scenarios;
   const budgetCap = scenarios?.budget_cap ?? null;
   const saved = savedRowKey(c);
+  const preview = c.budget_preview ?? null;
   const [capEditing, setCapEditing] = useState(false);
   const [capValue, setCapValue] = useState("");
   const [capSaving, setCapSaving] = useState(false);
@@ -96,7 +119,7 @@ export function BudgetScenarios({ brandId, campaign: c, picked, onPick, pending,
     setConfirming(true);
     setError(null);
     try {
-      onCampaignChange(await selectScenario(brandId, c.id, { scenario_key: pending.key, custom_total: pending.customTotal }, { confirmOverCap: true }));
+      onBudgetSaved(await selectScenario(brandId, c.id, { scenario_key: pending.key, custom_total: pending.customTotal }, { confirmOverCap: true }));
       onPending(null);
       onPick(null);
       if (pending.customTotal !== null) setCustomValue("");
@@ -118,7 +141,7 @@ export function BudgetScenarios({ brandId, campaign: c, picked, onPick, pending,
     }
     setCustomSaving(true);
     try {
-      onCampaignChange(await selectScenario(brandId, c.id, { scenario_key: "custom", custom_total: total }));
+      onBudgetSaved(await selectScenario(brandId, c.id, { scenario_key: "custom", custom_total: total }));
       onPick(null);
       onPending(null);
       setCustomValue("");
@@ -189,6 +212,13 @@ export function BudgetScenarios({ brandId, campaign: c, picked, onPick, pending,
         {capError && <p role="alert" className="w-full text-right text-xs text-danger">{capError}</p>}
       </div>
 
+      {preview && preview.daily !== null && preview.total !== null && (
+        <p data-slot="budget-preview" className="-mt-1.5 mb-3 text-[13px]">
+          <span className="numeric">每天 {fmt(preview.daily)}・這期實際 {fmt(preview.total)}</span>
+          {preview.note && <span className="ml-2 text-muted-foreground">{preview.note}</span>}
+        </p>
+      )}
+
       <ScenarioBars rows={rows} budgetCap={budgetCap} selected={picked ?? saved} onSelect={choose} resultCap={c.cap.value} />
 
       {pending && (
@@ -208,6 +238,7 @@ export function BudgetScenarios({ brandId, campaign: c, picked, onPick, pending,
         />
       )}
       {error && <p role="alert" className="mt-2 text-sm text-danger">{error}</p>}
+      {resplit && resplit.length > 0 && <ResplitNote c={c} rows={resplit} />}
 
       <div className="mt-3 flex flex-col gap-2">
         <Disclosure label="為什麼是這幾個數字">

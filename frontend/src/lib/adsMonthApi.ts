@@ -1,5 +1,5 @@
 /** frontend/src/lib/adsMonthApi.ts — F27-I07 Contract G: the monthly review summary and
- * suggestion dismissal. Mirrors `app/ads/month_summary.py`/`app/ads/month_summary_routes.py`
+ * suggestion dismissal. Shapes served by `app/ads/month_summary.py`/`app/ads/month_summary_routes.py`
  * exactly — the GET response is flat (no outer wrapper key), same shape as
  * `adsChangeApi.ts::getChangeControl`. Same fetch helper/error style as the other `ads*Api.ts`
  * files (each keeps its own small copy, existing convention — see `adsChangeApi.ts`). */

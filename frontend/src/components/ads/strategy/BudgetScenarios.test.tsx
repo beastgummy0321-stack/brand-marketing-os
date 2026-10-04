@@ -5,7 +5,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { selectScenario, setBudgetCap, type BudgetScenarioRow, type CampaignDetail } from "@/lib/adsApi";
+import { selectScenario, setBudgetCap, type BudgetScenarioRow, type CampaignDetail, type ResplitRow } from "@/lib/adsApi";
 import { BudgetScenarios, type OverCapPending } from "./BudgetScenarios";
 
 vi.mock("@/lib/adsApi", async () => ({
@@ -37,11 +37,14 @@ function Harness({ initial, onChange }: { initial: CampaignDetail; onChange: (c:
   const [c, setC] = useState(initial);
   const [picked, setPicked] = useState<string | null>(null);
   const [pending, setPending] = useState<OverCapPending | null>(null);
+  const [resplit, setResplit] = useState<ResplitRow[] | null>(null);
   return (
     <>
       <BudgetScenarios
         brandId="brd_1" campaign={c} picked={picked} onPick={setPicked} pending={pending} onPending={setPending}
         onCampaignChange={(next) => { onChange(next); setC(next); }}
+        onBudgetSaved={(result) => { onChange(result.campaign); setC(result.campaign); setResplit(result.resplit); }}
+        resplit={resplit}
       />
       <output data-testid="picked">{picked ?? ""}</output>
     </>
@@ -146,7 +149,7 @@ describe("BudgetScenarios", () => {
 
   it("自己填總額 within the cap saves as custom; above it opens the sheet and confirms with custom_total", async () => {
     const user = userEvent.setup();
-    vi.mocked(selectScenario).mockResolvedValue(campaign(30000, { budget_planned: 25000, budget_scenario: "custom" }));
+    vi.mocked(selectScenario).mockResolvedValue({ campaign: campaign(30000, { budget_planned: 25000, budget_scenario: "custom" }), resplit: null });
     renderCard(campaign(30000));
     await user.click(await screen.findByRole("button", { name: "自己填總額" }));
     const input = screen.getByLabelText("自己填這一期的總預算");
@@ -171,6 +174,70 @@ describe("BudgetScenarios", () => {
     await user.click(await screen.findByRole("button", { name: "超出預算上限也要用" }));
     expect((await screen.findByRole("alert")).textContent).toContain("超出你設的預算上限");
     expect(screen.getByRole("alertdialog")).toBeTruthy();
+  });
+
+  it("F48 Contract M: the saved total's budget_preview prints under the title — 每天 X・這期實際 Y and the server's note", async () => {
+    // 10,000 over 31 days: the whole daily is 322 and the period really spends 9,982 (`budget.preview`).
+    renderCard(campaign(30000, {
+      budget_planned: 10000, budget_scenario: "custom",
+      budget_preview: { daily: 322, total: 9982, chosen: 10000, note: "每天要是整數，這期實際 9,982" },
+    }));
+    const line = await screen.findByText(/每天 322・這期實際 9,982/);
+    expect(line.closest("[data-slot=budget-preview]")?.textContent).toBe("每天 322・這期實際 9,982每天要是整數，這期實際 9,982");
+    const heading = screen.getByRole("heading", { name: "這一期的總預算" });
+    expect(heading.compareDocumentPosition(line) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("a total that divides evenly has no note; no total chosen prints no preview line", async () => {
+    const { unmount } = render(<Harness initial={campaign(30000, {
+      budget_planned: 31000, budget_scenario: "custom", budget_preview: { daily: 1000, total: 31000, chosen: 31000, note: null },
+    })} onChange={vi.fn()} />);
+    expect((await screen.findByText(/每天 1,000・這期實際 31,000/)).closest("[data-slot=budget-preview]")?.textContent).toBe("每天 1,000・這期實際 31,000");
+    unmount();
+    renderCard(campaign(30000));
+    await screen.findByRole("radio", { name: /最低/ });
+    expect(document.querySelector("[data-slot=budget-preview]")).toBeNull();
+  });
+
+  it("F48 decision 8: a new total on an adopted plan prints the API's resplit list, under each role's served label", async () => {
+    const user = userEvent.setup();
+    const ready = campaign(30000, {
+      status: "ready", budget_planned: 27900, budget_scenario: "minimum",
+      groups: [{ id: "grp_new", name: "新客｜通勤族" }, { id: "grp_exp", name: "探索｜備考生" }] as unknown as CampaignDetail["groups"],
+    });
+    (ready.budget_basis_json as { strategy?: unknown }).strategy = {
+      allocation: [
+        { role: "new", label: "新客", pct: 70, rationale: null, amount: 19530 },
+        { role: "explore", label: "探索", pct: 30, rationale: null, amount: 8370 },
+      ],
+      why: [], unknowns: [], alternatives: [],
+    };
+    vi.mocked(selectScenario).mockResolvedValue({
+      campaign: { ...ready, budget_planned: 24986, budget_scenario: "custom" },
+      resplit: [
+        { group_id: "grp_new", role: "new", before: 630, after: 564 },
+        { group_id: "grp_exp", role: "explore", before: 270, after: 242 },
+      ],
+    });
+    renderCard(ready);
+    await user.click(await screen.findByRole("button", { name: "自己填總額" }));
+    await user.type(screen.getByLabelText("自己填這一期的總預算"), "25000");
+    await user.click(screen.getByRole("button", { name: "套用" }));
+    await screen.findByText(/已照比例重分到/);
+    const note = document.querySelector("[data-slot=budget-resplit]") as HTMLElement;
+    expect(note.getAttribute("role")).toBe("status");
+    expect(note.textContent).toBe("已照比例重分到 2 個投放組：新客 630 → 564、探索 270 → 242");
+  });
+
+  it("a campaign with an ad set on the platform: the 409 campaign_bound sentence is shown as the server wrote it", async () => {
+    const user = userEvent.setup();
+    vi.mocked(selectScenario).mockRejectedValue(new Error("投放組已上架，改預算要走變更清單。"));
+    renderCard(campaign(30000, { status: "ready", budget_planned: 27900, budget_scenario: "minimum" }));
+    await user.click(await screen.findByRole("button", { name: "自己填總額" }));
+    await user.type(screen.getByLabelText("自己填這一期的總預算"), "25000");
+    await user.click(screen.getByRole("button", { name: "套用" }));
+    expect((await screen.findByRole("alert")).textContent).toBe("投放組已上架，改預算要走變更清單。");
+    expect(document.querySelector("[data-slot=budget-resplit]")).toBeNull();
   });
 
   it("為什麼是這幾個數字 lists each row's own caption", async () => {

@@ -1,9 +1,9 @@
 /** frontend/src/lib/adsStatusApi.ts — F27-I09 Contract I: the brand-wide sync/queue status
- * summary. Mirrors `app/ads/status_summary.py::get_status_summary` exactly — a read shape, not
+ * summary. Shapes served by `app/ads/status_summary.py::get_status_summary` — a read shape, not
  * re-worded. Same `BASE`/`parseJsonOrThrow` helpers `adsApi.ts` already exports, same import
  * style `adsTriageApi.ts` already uses for them.
  *
- * F27-I10 Contract K: `getRecovery` mirrors `app/ads/recovery.py::get_recovery` the same way. */
+ * F27-I10 Contract K: `getRecovery` reads the shape served by `app/ads/recovery.py::get_recovery` the same way. */
 import { apiFetch } from "./http";
 import { BASE, parseJsonOrThrow } from "./adsApi";
 

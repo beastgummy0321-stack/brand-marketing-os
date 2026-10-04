@@ -140,7 +140,7 @@ describe("StrategyTab (F28-I09)", () => {
   it("an in-cap pick is saved by the bar as the user's choice, then adopting is the next action", async () => {
     const user = userEvent.setup();
     const saved = campaign({ budget_planned: 27900, budget_scenario: "minimum" });
-    vi.mocked(selectScenario).mockResolvedValue(saved);
+    vi.mocked(selectScenario).mockResolvedValue({ campaign: saved, resplit: null });
     const { onCampaignChange } = renderTab(campaign());
     await user.click(await screen.findByRole("radio", { name: /最低/ }));
     expect(screen.getByRole("radio", { name: /最低/ }).getAttribute("aria-checked")).toBe("true");
@@ -153,7 +153,7 @@ describe("StrategyTab (F28-I09)", () => {
   it("an over-cap row opens the confirm sheet, the bar's save stays disabled, and confirming sends confirm_over_cap", async () => {
     const user = userEvent.setup();
     const saved = campaign({ budget_planned: 69750, budget_scenario: "recommended" });
-    vi.mocked(selectScenario).mockResolvedValue(saved);
+    vi.mocked(selectScenario).mockResolvedValue({ campaign: saved, resplit: null });
     renderTab(campaign({ budget_planned: 30000, budget_scenario: "cap" }));
     await user.click(await screen.findByRole("radio", { name: /穩定成長/ }));
     const sheet = await screen.findByRole("alertdialog");
@@ -290,6 +290,52 @@ describe("StrategyTab (F28-I09)", () => {
       expect(within(byRole("explore")).getByText("試「三盒 NT$999 另送一盒」，看優惠拉不拉得動新客。")).toBeTruthy();
       // The bar is the thin one: no legend line repeating the rows.
       expect(document.querySelector("[data-slot=allocation-bar]")?.textContent).toBe("");
+    });
+
+    it("F48 Contract M: each row prints the payload's own amount — never total × pct priced in the browser", async () => {
+      const c = withReasons();
+      // The API's split of 30,001 (`budget.split`): 18,001／9,000／3,000 — not round(30,001 × pct).
+      c.budget_planned = 30001;
+      c.budget_basis_json.strategy!.allocation = c.budget_basis_json.strategy!.allocation.map((item) => ({
+        ...item, amount: { new: 18001, retarget: 9000, explore: 3000 }[item.role],
+      }));
+      renderTab(c);
+      const byRole = (role: string) => document.querySelector(`[data-slot=allocation-row][data-role=${role}]`) as HTMLElement;
+      expect((await screen.findByText("以 30,001 計"))).toBeTruthy();
+      expect(byRole("new").textContent).toContain("60%・18,001 元");
+      expect(byRole("retarget").textContent).toContain("30%・9,000 元");
+      expect(byRole("explore").textContent).toContain("10%・3,000 元");
+    });
+
+    it("an unsaved pick is not priced in the browser: the rows print the percent only until it is saved", async () => {
+      const user = userEvent.setup();
+      renderTab(withReasons());
+      await user.click(await screen.findByRole("radio", { name: /最低/ }));
+      expect(screen.getByText("以 27,900 計")).toBeTruthy();
+      const row = document.querySelector("[data-slot=allocation-row][data-role=new]") as HTMLElement;
+      expect(row.textContent).toContain("60%");
+      expect(row.textContent).not.toContain("元");
+    });
+
+    it("F48 Contract S: the program's facts print as one list above the model's prose, each under its lead word", async () => {
+      const user = userEvent.setup();
+      const c = withReasons();
+      c.budget_basis_json.strategy!.facts = [
+        { kind: "groups", text: "這期打 2 群：學生備考、通勤上班族" },
+        { kind: "offers", text: "可用的優惠：〈折扣特價〉優惠價 NT$999（原價 NT$1,500）" },
+        { kind: "numbers", text: "上限每筆 450；上一期最好的是「考前一週」每筆 392（賣出 6 筆）；已結案 2 期" },
+        { kind: "capacity", text: "這期每天 1,500，撐得起 3 則（另加 1 則探索）；最多 4 則（上限每筆 450）" },
+        { kind: "learnings", text: "讀了上幾期的排名：留下 2 則、換掉 1 則；過去的學習 3 條" },
+      ];
+      renderTab(c);
+      await user.click(await screen.findByRole("button", { name: "為什麼這樣建議" }));
+      const list = document.querySelector("[data-slot=strategy-facts]") as HTMLElement;
+      const rows = Array.from(list.querySelectorAll("li"));
+      expect(rows.map((li) => li.getAttribute("data-kind"))).toEqual(["groups", "offers", "numbers", "capacity", "learnings"]);
+      expect(rows.map((li) => li.querySelector("span")?.textContent)).toEqual(["顧客群", "優惠", "數字", "預算", "學習"]);
+      expect(rows[2].textContent).toContain("上一期最好的是「考前一週」每筆 392（賣出 6 筆）");
+      const prose = screen.getByText("新客比例高：通勤情境近 30 天在新客的每筆成本最低");
+      expect(list.compareDocumentPosition(prose) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     });
 
     it("before a budget is chosen the rows print only the percent, even though generating filled `amount`", async () => {

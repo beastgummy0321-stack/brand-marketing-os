@@ -387,15 +387,23 @@ describe("v9 pieces（F28-I07）", () => {
     expect(container.querySelectorAll('[data-part="close"]')).toHaveLength(2);
     render(<ProgressSegments label="3／11 已核對" segments={[{ key: "1", state: "ok" }, { key: "2", state: "changed" }, { key: "3", state: "todo" }]} />);
     expect(screen.getByRole("img", { name: "3／11 已核對" }).querySelectorAll("[data-state]")).toHaveLength(3);
-    render(<AllocationBar parts={[{ key: "new", label: "新客", pct: 70 }, { key: "re", label: "再行銷", pct: 20 }, { key: "x", label: "探索", pct: 10 }]} total={null} />);
+    render(<AllocationBar parts={[{ key: "new", label: "新客", pct: 70 }, { key: "re", label: "再行銷", pct: 20 }, { key: "x", label: "探索", pct: 10 }]} />);
     expect(screen.getByText("新客 70%", { selector: "i" })).toBeTruthy();
     expect(screen.queryByText(/・/)).toBeNull();
+  });
+
+  it("AllocationBar legend prints each part's served amount as sent (F48 Contract M: never total × pct)", async () => {
+    const { AllocationBar } = await import("./ScenarioBars");
+    // 10,001 split by the API: the amounts are not round(10,001 × pct) and must print unchanged.
+    render(<AllocationBar parts={[{ key: "new", label: "新客", pct: 70, amount: 7001 }, { key: "x", label: "探索", pct: 30, amount: 3000 }]} />);
+    expect(screen.getByText(/新客 70%・7,001/)).toBeTruthy();
+    expect(screen.getByText(/探索 30%・3,000/)).toBeTruthy();
   });
 
   it("AllocationBar legend={false}：細條、段內無字、無圖例；allocationFills 與段色一致、0% 不上色", async () => {
     const { AllocationBar, allocationFills } = await import("./ScenarioBars");
     const parts = [{ key: "new", label: "新客", pct: 70 }, { key: "re", label: "再行銷", pct: 0 }, { key: "x", label: "探索", pct: 30 }];
-    const { container } = render(<AllocationBar parts={parts} total={10000} legend={false} />);
+    const { container } = render(<AllocationBar parts={parts} legend={false} />);
     const bar = container.querySelector("[data-slot=allocation-bar]") as HTMLElement;
     expect(bar.textContent).toBe("");
     const fills = allocationFills(parts);

@@ -1,6 +1,6 @@
 /** frontend/src/lib/adsStrategyTypes.ts — F41-I04: the strategy shapes inside `ads_campaign.budget_basis_json`
  * (`strategy` and `basis`). Type-only; split out of `adsApi.ts` for its 800-line cap, which re-exports them so
- * importers keep using `@/lib/adsApi`. Mirrors `app/ads/strategy.py` (`generate_strategy`'s `basis`) and
+ * importers keep using `@/lib/adsApi`. Shapes served by `app/ads/strategy.py` (`generate_strategy`'s `basis`) and
  * `app/ads/coordinate_learning.py` (`learning_rows`). */
 
 import type { CoordinateLearnings } from "./adsLearningsApi";
@@ -16,13 +16,23 @@ export interface StrategyAllocationItem {
   amount: number | null;
 }
 
+/** F48 Contract S: one program-built fact line under the strategy (`strategy._facts`), recomputed on every campaign
+ * read — the screen prints `text` as is, after a lead word for its `kind`. */
+export interface StrategyFact {
+  kind: "groups" | "offers" | "numbers" | "capacity" | "learnings";
+  text: string;
+}
+
 export interface StrategyPayload {
   allocation: StrategyAllocationItem[];
   why: string[];
   unknowns: string[];
-  alternatives: unknown[];
+  alternatives: string[];
   /** F04-I13：這一輪想學到什麼，最多 3 條；舊資料沒有這個鍵時當空陣列讀，可選。 */
   learning_goals?: string[];
+  /** F48 Contract S: the facts the program built (groups／offers／numbers／capacity／learnings); a strategy from
+   * before F48 read through a backend that predates it has none. */
+  facts?: StrategyFact[] | null;
 }
 
 export interface StrategyBasisFact {
@@ -58,6 +68,40 @@ export interface StrategyCoordinateLearning {
   campaign_name: string;
   /** `none` coordinates are omitted by the backend. */
   coordinates: { dimension: string; dimension_label: string; label: string }[];
+}
+
+/** F48 Contract M: `budget_preview` — the whole daily the structure will get for the chosen total (`daily_of`) and
+ * the period total that daily really spends (`total_of`); `note` (「每天要是整數，這期實際 X」) only when they differ. */
+export interface BudgetPreview {
+  daily: number | null;
+  total: number | null;
+  chosen: number;
+  note: string | null;
+}
+
+/** F48 decision 8: one ad set re-split by a new total chosen after adoption (`plan.resplit_groups`). */
+export interface ResplitRow {
+  group_id: string;
+  role: StrategyRole;
+  before: number;
+  after: number;
+}
+
+/** F48-I06: one row of this period's coordinate menu (`plan.served`) — the keys the plan and hand edits may use. */
+export interface PlanMenuRow {
+  dimension: string;
+  key: string;
+  label: string;
+}
+
+/** F48 Contract C: what this period's daily budget carries (`plan.served`); `carried` = ads carried from the
+ * previous period. */
+export interface PlanCapacity {
+  daily: number;
+  cap: number;
+  can_support: number;
+  ceiling: number;
+  carried?: number;
 }
 
 /** 查看策略依據：這個策略用到哪些品牌事實／商品價格／學習／llm_task，畫面照這個列。 */

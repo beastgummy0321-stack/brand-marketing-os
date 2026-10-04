@@ -1,5 +1,5 @@
 /** frontend/src/lib/adsSettleApi.ts — F29-I03 Contract E: the period settle (one period = one
- * calendar month in the org timezone). Mirrors `app/ads/settle.py`/`app/ads/settle_routes.py`
+ * calendar month in the org timezone). Shapes served by `app/ads/settle.py`/`app/ads/settle_routes.py`
  * exactly — the GET/POST response is flat (no outer wrapper key). Rows are the month review's own
  * `grade_period` rows (`PeriodGradeRow`) plus the settle's fate; unknown numbers are `null`,
  * never 0. Errors carry the backend `code` (`settle_not_ended`, `settle_angle_missing`,

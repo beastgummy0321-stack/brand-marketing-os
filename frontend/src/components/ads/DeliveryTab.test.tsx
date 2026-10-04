@@ -10,8 +10,8 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 
 import type { AdRow, CampaignDetail, DeliveryGroupRow } from "@/lib/adsApi";
-import { adoptStrategy, dispatchPack, getCampaign, patchGroup } from "@/lib/adsApi";
-import { fetchCoordinates } from "@/lib/coordinatesApi";
+import { AdsApiError, adoptStrategy, dispatchPack, getCampaign, patchAd, patchGroup } from "@/lib/adsApi";
+import { fetchCoordinates, type Coordinate } from "@/lib/coordinatesApi";
 import { fetchChannels } from "@/lib/adsLaunchApi";
 import { DeliveryTab } from "./DeliveryTab";
 
@@ -23,7 +23,8 @@ vi.mock("@/components/layout/WorkspaceContext", () => ({
   useWorkspace: () => ({ scope: "user_1:org_1" }),
 }));
 
-vi.mock("@/lib/adsApi", () => ({
+vi.mock("@/lib/adsApi", async () => ({
+  AdsApiError: (await vi.importActual<typeof import("@/lib/adsApi")>("@/lib/adsApi")).AdsApiError,
   adoptStrategy: vi.fn(),
   dispatchPack: vi.fn(),
   getCampaign: vi.fn(),
@@ -33,11 +34,6 @@ vi.mock("@/lib/adsApi", () => ({
   patchAd: vi.fn(),
   createAd: vi.fn(),
   createGroup: vi.fn(),
-  currentBudgetTotal: vi.fn((c: CampaignDetail) => {
-    const dailySum = c.groups.reduce((sum, row) => sum + row.daily_budget, 0);
-    const days = c.start_date && c.end_date ? 15 : 0;
-    return { dailySum, days, total: days ? dailySum * days : null };
-  }),
 }));
 
 vi.mock("@/lib/coordinatesApi", () => ({
@@ -523,5 +519,124 @@ describe("DeliveryTab failed reads (F29-I10 Contract K)", () => {
     await user.click(screen.getByRole("button", { name: "重試" }));
     expect(vi.mocked(fetchCoordinates)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(fetchChannels)).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("DeliveryTab: one budget, the period's menu and carried ads (F48-I10)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sessionStorage.clear();
+  });
+
+  function vocab(dimension: Coordinate["dimension"], key: string, label: string): Coordinate {
+    return { id: `${dimension}-${key}`, dimension, key, label, category: null, canonical_key: null, attributes: {} as Coordinate["attributes"], disabled_at: null, rejected: false };
+  }
+
+  it("調整結構（進階） prints the campaign's one budget_total — no 差額, no 採用時的計畫, no raw scenario key", async () => {
+    const user = userEvent.setup();
+    // The server's total; budget_planned differs on purpose and is never subtracted or shown here.
+    renderTab(campaign({ budget_total: 15000, budget_planned: 15004, budget_scenario: "recommended" }));
+    await user.click(screen.getByRole("button", { name: "調整結構（進階）" }));
+    const card = screen.getByRole("heading", { name: "預算（這個 Campaign）" }).closest(".surface") as HTMLElement;
+    expect(card.textContent).toContain("15,000");
+    expect(card.textContent).not.toMatch(/差額|採用時的計畫|recommended|15,004/);
+    expect(screen.queryByText("差額")).toBeNull();
+    expect(screen.queryByText("每日合計")).toBeNull();
+  });
+
+  it("no group budget or dates yet: the total says it is not set (never a 0)", async () => {
+    const user = userEvent.setup();
+    renderTab(campaign({ budget_total: null }));
+    await user.click(screen.getByRole("button", { name: "調整結構（進階）" }));
+    const card = screen.getByRole("heading", { name: "預算（這個 Campaign）" }).closest(".surface") as HTMLElement;
+    expect(card.textContent).toContain("尚未設定");
+  });
+
+  it("after a group save the tab re-reads the campaign once and passes on the server's numbers", async () => {
+    const user = userEvent.setup();
+    const saved = group({ daily_budget: 1200 });
+    const fresh = campaign({ budget_total: 18000, groups: [{ ...saved, ads: [ad(), ad({ id: "ad_2", name: "廣告二" })] }] });
+    vi.mocked(patchGroup).mockResolvedValueOnce(saved);
+    vi.mocked(getCampaign).mockResolvedValueOnce(fresh);
+    const { onCampaignChange } = renderTab(campaign({ budget_total: 15000 }));
+    await user.click(screen.getByRole("button", { name: "進階：編輯這一組（投放組）" }));
+    await user.click(screen.getByRole("button", { name: /^投放組/ }));
+    const daily = screen.getByDisplayValue("1000");
+    await user.clear(daily);
+    await user.type(daily, "1200");
+    await user.click(screen.getByRole("button", { name: "儲存變更" }));
+    await vi.waitFor(() => expect(onCampaignChange).toHaveBeenLastCalledWith(fresh));
+    expect(getCampaign).toHaveBeenCalledTimes(1);
+    expect(getCampaign).toHaveBeenCalledWith("brd_1", "cmp_1");
+  });
+
+  it("capacity prints as one line under the tree, as served", () => {
+    renderTab(campaign({ capacity: { daily: 1500, cap: 450, can_support: 3, ceiling: 4, carried: 1 } }));
+    const line = document.querySelector("[data-slot=plan-capacity]") as HTMLElement;
+    expect(line.textContent).toBe("每天 1,500，撐得起 3 則，另加一則探索（這期最多 4 則，其中 1 則沿用上一期）");
+    const tree = screen.getByRole("heading", { name: "活動 → 廣告組 → 廣告" });
+    expect(tree.compareDocumentPosition(line) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("no capacity (no cap or no budget yet): no line", () => {
+    renderTab(campaign({ capacity: null }));
+    expect(document.querySelector("[data-slot=plan-capacity]")).toBeNull();
+  });
+
+  it("a carried ad shows the served 「沿用上一期」 chip in its group's list and its carry_note in the editor", async () => {
+    const user = userEvent.setup();
+    const carried = ad({ id: "ad_c", name: "考前一週・書包一盒", carried_label: "沿用上一期", carry_note: "上一期的素材找不到，這則要重新放素材" });
+    renderTab(campaign({ groups: [group({ ads: [carried, ad({ id: "ad_2", name: "廣告二" })] })] }));
+    await user.click(screen.getByRole("button", { name: "進階：編輯這一組（投放組）" }));
+    const node = screen.getByRole("button", { name: /^考前一週・書包一盒/ });
+    expect(within(node).getByText("沿用上一期")).toBeTruthy();
+    expect(within(screen.getByRole("button", { name: /^廣告二/ })).queryByText("沿用上一期")).toBeNull();
+    await user.click(node);
+    expect(document.querySelector("[data-slot=carry-note]")?.textContent).toBe("上一期的素材找不到，這則要重新放素材");
+  });
+
+  it("the ad editor offers only this period's menu for proof／offer／format; a held excluded key stays, marked 這期不能用", async () => {
+    const user = userEvent.setup();
+    vi.mocked(fetchCoordinates).mockResolvedValueOnce([
+      vocab("proof", "none", "不放證據"), vocab("proof", "lab_test", "檢驗報告"), vocab("proof", "review", "顧客好評"),
+      vocab("offer", "none", "無優惠"), vocab("offer", "discount", "折扣特價"), vocab("offer", "limited_time", "限時"),
+      vocab("audience", "cold", "陌生"), vocab("audience", "warm", "看過的人"),
+    ]);
+    const menu = [
+      { dimension: "proof", key: "none", label: "不放證據" }, { dimension: "proof", key: "lab_test", label: "檢驗報告" },
+      { dimension: "offer", key: "none", label: "無優惠" }, { dimension: "offer", key: "discount", label: "折扣特價" },
+      { dimension: "audience", key: "cold", label: "陌生" }, { dimension: "audience", key: "warm", label: "看過的人" },
+    ];
+    renderTab(campaign({ menu, groups: [group({ ads: [ad({ offer_key: "limited_time" })] })] }));
+    await user.click(screen.getByRole("button", { name: "進階：編輯這一組（投放組）" }));
+    await user.click(await screen.findByRole("button", { name: /^廣告一/ }));
+    const options = (label: string) => Array.from((screen.getByRole("combobox", { name: label }) as HTMLSelectElement).options).map((o) => o.textContent);
+    await vi.waitFor(() => expect(options("證據")).toEqual(["未設定", "不放證據", "檢驗報告"]));
+    expect(options("優惠")).toEqual(["限時（這期不能用）", "未設定", "無優惠", "折扣特價"]);
+    // A dimension the menu does not narrow lists the vocabulary as before.
+    expect(options("受眾")).toEqual(["未設定", "陌生", "看過的人"]);
+  });
+
+  it("a refused ad save: name_forbidden beside the name, coordinate_unavailable beside the coordinates, in the server's words", async () => {
+    const user = userEvent.setup();
+    vi.mocked(patchAd).mockRejectedValueOnce(new AdsApiError("廣告名稱寫了「治療」，這是你標了不能講的話", "name_forbidden"));
+    renderTab(campaign());
+    await user.click(screen.getByRole("button", { name: "進階：編輯這一組（投放組）" }));
+    await user.click(screen.getByRole("button", { name: /^廣告一/ }));
+    const name = screen.getByDisplayValue("廣告一");
+    await user.clear(name);
+    await user.type(name, "治療失眠");
+    await user.click(screen.getByRole("button", { name: "儲存變更" }));
+    const alert = await screen.findByText("廣告名稱寫了「治療」，這是你標了不能講的話");
+    expect(alert.getAttribute("role")).toBe("alert");
+    expect(alert.parentElement?.contains(name)).toBe(true);
+    expect(name.getAttribute("aria-invalid")).toBe("true");
+
+    vi.mocked(patchAd).mockRejectedValueOnce(new AdsApiError("這期不能用這個優惠：這個賣法沒有登記這種優惠", "coordinate_unavailable"));
+    await user.type(name, "好");
+    await user.click(screen.getByRole("button", { name: "儲存變更" }));
+    const coords = await screen.findByText("這期不能用這個優惠：這個賣法沒有登記這種優惠");
+    expect(coords.previousElementSibling?.querySelector("select")).toBeTruthy();
+    expect(screen.queryByText("廣告名稱寫了「治療」，這是你標了不能講的話")).toBeNull();
   });
 });

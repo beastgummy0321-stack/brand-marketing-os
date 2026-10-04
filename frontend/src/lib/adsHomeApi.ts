@@ -1,5 +1,5 @@
 /** frontend/src/lib/adsHomeApi.ts — F28-I06 "Home overview": the month-level numbers of the
- * ads-centre home (board D). Mirrors `app/ads/home_overview.py` exactly; the GET response is flat.
+ * ads-centre home (board D). Shapes served by `app/ads/home_overview.py`; the GET response is flat.
  *
  * Rules the screen can rely on (never re-derive them here):
  * - `spent` is the one spend figure for the whole screen; `quality.buckets` add up to it exactly
