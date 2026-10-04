@@ -1,5 +1,5 @@
 /** frontend/src/lib/adsTriageApi.ts — F19-I01: typed entry for the v7 ads-centre home's brand
- * decision queue, per-ad program triage, and campaign target sub-resource. Mirrors
+ * decision queue, per-ad program triage, and campaign target sub-resource. Shapes served by
  * `app/ads/triage.py`/`app/ads/triage_routes.py` and the `target` routes in `app/ads/routes.py`
  * exactly — types are read shapes, not re-worded (labels come from the backend `label` field).
  * Same fetch helper and error style as `frontend/src/lib/adsChangeApi.ts`. */

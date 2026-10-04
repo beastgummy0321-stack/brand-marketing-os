@@ -1,5 +1,5 @@
 /** frontend/src/lib/adsConnectionsApi.ts — F30-I14 (Feature F30 Contract H): the connections
- * page's one read. Mirrors `app/ads/connections.py::get_connections` exactly; the read never
+ * page's one read. Shapes served by `app/ads/connections.py::get_connections`; the read never
  * requests a sync.
  *
  * Rules the screen can rely on (never re-derive them here):

@@ -87,23 +87,12 @@ const NOT_A_RULER: { file: string; text: string; why: string }[] = [
   { file: "components/ads/patterns/SlotGrid.tsx", text: "\"缺 1 則\"", why: "a slot placeholder is one missing ad by construction, not a figure" },
   { file: "components/ads/ExperimentPlan.tsx", text: "0.1 代表 10%", why: "explains the input's number format (a fraction), not a fact" },
   { file: "components/ads/StrategyTab.tsx", text: "剛好 100%", why: "percent shares sum to 100 by definition, not a fact" },
-  // F48-I10 money scan. Debt outside this issue's touch (reported to the feature lead): browser arithmetic over a
-  // backend number, and comments that say a frontend function re-derives a backend rule.
-  { file: "components/ads/patterns/PaceChart.tsx", text: "const pace = Math.round((budget * dayOfMonth) / daysInMonth);", why: "debt: today's pace on the home month chart is priced in the browser; home_overview's pace block should serve it" },
-  { file: "components/ads/PerformanceTab.tsx", text: "跟 `app/ads/learning.py::_sentence` 同一套公式", why: "debt: the closeout learning sentence is rebuilt in the browser; the close response should serve it" },
-  { file: "components/ads/review/reviewFlow.ts", text: "mirrors `app/ads/triage.py::_ad_spend` exactly", why: "debt: an ad's window spend is summed in the browser; the review read should serve it" },
-  { file: "components/ads/review/reviewFlow.ts", text: "mirrors `app/ads/triage.py::_ad_window`", why: "debt: the ad's result view is picked in the browser by triage's rule; the review read should serve it" },
-  // Read-shape notes: a type file saying which route serves its shape re-derives no rule (rewording them is a
-  // one-word change in files outside this issue's touch).
-  { file: "lib/adsConnectionsApi.ts", text: "Mirrors `app/ads/connections.py::get_connections` exactly", why: "a response type's shape, not a rule" },
-  { file: "lib/adsTriageApi.ts", text: "decision queue, per-ad program triage, and campaign target sub-resource. Mirrors", why: "a response type's shape, not a rule" },
-  { file: "lib/adsHomeApi.ts", text: "Mirrors `app/ads/home_overview.py` exactly", why: "a response type's shape, not a rule" },
-  { file: "lib/adsMonthApi.ts", text: "Mirrors `app/ads/month_summary.py`", why: "a response type's shape, not a rule" },
-  { file: "lib/adsSettleApi.ts", text: "Mirrors `app/ads/settle.py`", why: "a response type's shape, not a rule" },
-  { file: "lib/adsStatusApi.ts", text: "Mirrors `app/ads/status_summary.py::get_status_summary`", why: "a response type's shape, not a rule" },
-  { file: "lib/adsStatusApi.ts", text: "mirrors `app/ads/recovery.py::get_recovery`", why: "a response type's shape, not a rule" },
-  { file: "lib/adsWizardApi.ts", text: "Mirrors `app/ads/wizard_options.py`", why: "a response type's shape, not a rule" },
-  { file: "lib/adsWorkspaceApi.ts", text: "Mirrors `app/ads/workspace_reads.py` exactly", why: "a response type's shape, not a rule" },
+  // F48-I10 money scan: browser arithmetic over a backend number, and frontend functions that re-derive a backend
+  // rule. Each is served by the backend in a later feature; the excuse goes when it is.
+  { file: "components/ads/patterns/PaceChart.tsx", text: "const pace = Math.round((budget * dayOfMonth) / daysInMonth);", why: "debt: feature C/D (W11/W16) — today's pace on the home month chart is priced in the browser" },
+  { file: "components/ads/PerformanceTab.tsx", text: "跟 `app/ads/learning.py::_sentence` 同一套公式", why: "debt: feature C/D (W11/W16) — the closeout learning sentence is rebuilt in the browser" },
+  { file: "components/ads/review/reviewFlow.ts", text: "mirrors `app/ads/triage.py::_ad_spend` exactly", why: "debt: feature C/D (W11/W16) — an ad's window spend is summed in the browser" },
+  { file: "components/ads/review/reviewFlow.ts", text: "mirrors `app/ads/triage.py::_ad_window`", why: "debt: feature C/D (W11/W16) — the ad's result view is picked in the browser by triage's rule" },
 ];
 
 /** Test data that lives beside the sources: the served rules as a test fixture (the app never imports it). */

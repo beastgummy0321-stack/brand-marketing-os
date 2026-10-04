@@ -1,5 +1,5 @@
 /** frontend/src/lib/adsWorkspaceApi.ts — F30-I06 (Contract E): the campaign workspace reads.
- * Mirrors `app/ads/workspace_reads.py` exactly; no shared type grows (`CampaignDetail`,
+ * Shapes served by `app/ads/workspace_reads.py`; no shared type grows (`CampaignDetail`,
  * `TriageItem`, `ChangeSet` stay as they are).
  *
  * Rules the screen can rely on (never re-derive them here):

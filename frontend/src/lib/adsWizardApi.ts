@@ -1,5 +1,5 @@
 /** frontend/src/lib/adsWizardApi.ts — F30-I04: the new-campaign wizard's reads and its
- * structured create (Feature F30 Contracts B, C, D). Mirrors `app/ads/wizard_options.py`,
+ * structured create (Feature F30 Contracts B, C, D). Shapes served by `app/ads/wizard_options.py`,
  * `app/ads/objectives.py` and the structured branch of `POST …/campaigns` exactly.
  *
  * Rules the screen can rely on (never re-derive them here):

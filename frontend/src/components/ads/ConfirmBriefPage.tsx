@@ -1,6 +1,6 @@
 import { useState, type KeyboardEvent, type ReactNode } from "react";
 import { Link2 } from "lucide-react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, Navigate, useNavigate } from "react-router-dom";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { Button } from "@/components/layout/ui/button";
 import { Input } from "@/components/layout/ui/input";
@@ -94,6 +94,12 @@ export function ConfirmBriefPage({ brandId, campaignId }: { brandId: string; cam
       </>,
       <ActionBar back={{ label: "上一步", to: backHref }}><Button disabled>產生策略 →</Button></ActionBar>,
     );
+  }
+
+  // F48-I07: once the plan is adopted the brief's fields are locked (409 `plan_already_adopted`); a stale URL or Back
+  // lands on the campaign's strategy tab instead of an editable brief.
+  if (campaign.status !== "draft") {
+    return <Navigate to={`/brands/${brandId}/ads/campaigns/${campaignId}?tab=strategy`} replace />;
   }
 
   const context = campaign.context_json ?? {};

@@ -4,7 +4,7 @@
  * `putTarget {basis:"own"}`, the campaign re-read afterwards. */
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { CampaignDetail } from "@/lib/adsApi";
@@ -84,6 +84,28 @@ beforeEach(() => {
   vi.mocked(getWizardOptions).mockResolvedValue(options);
   vi.mocked(fetchChannels).mockResolvedValue([{ key: "meta", label: "Meta", connected: true, state_text: "" }, { key: "google_ads", label: "Google Ads", connected: false, state_text: "" }]);
 });
+
+describe("ConfirmBriefPage after adoption (F48-I07 lead note)", () => {
+  it("a campaign that is no longer a draft goes to its strategy tab — the locked brief is never shown or patched", async () => {
+    vi.mocked(getCampaign).mockResolvedValue(campaign({ status: "ready" }));
+    render(
+      <MemoryRouter initialEntries={["/brands/brd_1/ads/new/cmp_1"]}>
+        <Routes>
+          <Route path="/brands/:b/ads/new/:c" element={<ConfirmBriefPage brandId="brd_1" campaignId="cmp_1" />} />
+          <Route path="/brands/:b/ads/campaigns/:c" element={<SearchProbe />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    expect((await screen.findByTestId("landed")).textContent).toBe("/brands/brd_1/ads/campaigns/cmp_1?tab=strategy");
+    expect(screen.queryByText("系統這樣理解")).toBeNull();
+    expect(patchCampaign).not.toHaveBeenCalled();
+  });
+});
+
+function SearchProbe() {
+  const location = useLocation();
+  return <p data-testid="landed">{location.pathname + location.search}</p>;
+}
 
 describe("ConfirmBriefPage (F30-I05)", () => {
   it("shows the six understood fields and the optional cap chip with their values; 主打／素材 are not shown before the strategy", async () => {
