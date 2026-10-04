@@ -19,7 +19,6 @@
 
 import os
 import re
-from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID
 
@@ -37,7 +36,7 @@ from app.core import cleanup, input_rules
 from app.core import settings as core_settings
 from app.core import vocab as md
 from app.core.db import connection as core_db_connection
-from app.core.db import new_id
+from app.core.db import new_id, now_iso
 from app.identity import repository as identity_repo
 from app.llm import gateway, providers
 from app.shared import web
@@ -269,7 +268,7 @@ def library_bundle(request: Request, brand_id: str):
         "customer_voices": [_customer_voice_shape(v)
                              for v in repo.list_customer_voices(web.conn, brand_id)],
     }
-    return {"data": data, "generated_at": datetime.now(UTC).isoformat()}
+    return {"data": data, "generated_at": now_iso()}
 
 
 @router.post("/api/library/brands/{brand_id}/delete")

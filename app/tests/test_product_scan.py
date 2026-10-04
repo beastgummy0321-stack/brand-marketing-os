@@ -281,7 +281,8 @@ class ProductRescanTest(_BaseProductScanTest):
             product_id, state = self._post()
         self.assertEqual(state["status"], "failed")
         self.assertEqual(state["error"], background_module.JOB_FAILED_MESSAGE)
-        notices = [r["message"] for r in core_interrupts.list_open(web.conn, brand_id=self.brand["id"])
+        notices = [r["message"] for r in core_interrupts.list_open(
+                       web.conn, org_id=DEV_ORG_ID, brand_id=self.brand["id"])
                    if r["category"] == "product_research_done"]
         self.assertTrue(any("調研失敗" in m for m in notices), notices)
         self.assertEqual(bi_repo.list_product_facts(web.conn, self.brand["id"], product_id), [])

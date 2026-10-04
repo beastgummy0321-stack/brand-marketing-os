@@ -484,7 +484,7 @@ class TotalsWindowTest(_WithReader):
         _obs(self.conn, self.org, brand, campaign, ad, date(2026, 9, 24), spend=777, count=7)
         # Every day of the window was read; the days without a row spent nothing.
         _synced(self.conn, self.org, brand, campaign, date(2026, 8, 1), date(2026, 9, 24))
-        with mock.patch.object(coresettings, "datetime", _Clock):
+        with mock.patch.object(db, "now_utc", return_value=_Clock.now_utc):
             ws = self.workspace(brand, campaign)
         self.assertEqual(ws["totals"], {
             "start": "2026-09-10", "end": "2026-09-23", "currency": "TWD", "spend": 150,
@@ -503,7 +503,7 @@ class TotalsWindowTest(_WithReader):
                          (date(2026, 8, 1), date(2026, 9, 21))):   # 9/22–9/23 never read
             with self.subTest(coverage=coverage):
                 _synced(self.conn, self.org, brand, campaign, *coverage)
-                with mock.patch.object(coresettings, "datetime", _Clock):
+                with mock.patch.object(db, "now_utc", return_value=_Clock.now_utc):
                     totals = self.workspace(brand, campaign)["totals"]
                 self.assertEqual((totals["start"], totals["end"]), ("2026-09-10", "2026-09-23"))
                 self.assertEqual(
@@ -511,7 +511,7 @@ class TotalsWindowTest(_WithReader):
                     (None, None, None),
                 )
         _synced(self.conn, self.org, brand, campaign, date(2026, 9, 10), date(2026, 9, 23))
-        with mock.patch.object(coresettings, "datetime", _Clock):
+        with mock.patch.object(db, "now_utc", return_value=_Clock.now_utc):
             totals = self.workspace(brand, campaign)["totals"]
         self.assertEqual((totals["spend"], totals["results"], totals["cost_per_result"]),
                          (180, 2, 90))
@@ -521,7 +521,7 @@ class TotalsWindowTest(_WithReader):
         campaign = _imported(self.conn, self.org, brand, "沒讀過", "c_nocov", cap=100)
         ad = _ad(self.conn, self.org, brand, campaign, "a_nocov", ("campaign", "c_nocov"))
         _obs(self.conn, self.org, brand, campaign, ad, date(2026, 9, 14), spend=100, count=1)
-        with mock.patch.object(coresettings, "datetime", _Clock):
+        with mock.patch.object(db, "now_utc", return_value=_Clock.now_utc):
             totals = self.workspace(brand, campaign)["totals"]
         self.assertIsNone(totals["spend"])
         self.assertIsNone(totals["cost_per_result"])
@@ -530,7 +530,7 @@ class TotalsWindowTest(_WithReader):
         brand = _brand(self.conn, self.org, "工作區：未知花費")
         campaign = _imported(self.conn, self.org, brand, "未知", "c_unk", cap=100)
         _synced(self.conn, self.org, brand, campaign, date(2026, 8, 1), date(2026, 9, 23))
-        with mock.patch.object(coresettings, "datetime", _Clock):
+        with mock.patch.object(db, "now_utc", return_value=_Clock.now_utc):
             empty = self.workspace(brand, campaign)["totals"]
         self.assertIsNone(empty["spend"])
         self.assertIsNone(empty["results"])
@@ -545,7 +545,7 @@ class TotalsWindowTest(_WithReader):
             result_attribution="7d_click+1d_view",
         )
         self.conn.commit()
-        with mock.patch.object(coresettings, "datetime", _Clock):
+        with mock.patch.object(db, "now_utc", return_value=_Clock.now_utc):
             totals = self.workspace(brand, campaign)["totals"]
         self.assertIsNone(totals["spend"])
         self.assertEqual(totals["currency"], "TWD")

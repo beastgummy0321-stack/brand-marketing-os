@@ -10,12 +10,12 @@
 對外進入點：本檔的 `router`。誰依賴它：只有 `app/brand_web/__init__.py` 的 register()。
 """
 
-from datetime import UTC, datetime
 
 from fastapi import APIRouter, Request
 
 import app.shared.web as main_mod
 from app.core import input_rules, rule_cards
+from app.core.db import now_iso
 from app.shared.web import JSONResponse
 
 router = APIRouter()
@@ -74,7 +74,7 @@ def api_rule_cards_get(brand_id: str, request: Request):
     cards = [_rule_card_json(c) for c in rule_cards.list_cards(main_mod.conn, brand_id)]
     return {
         "data": {"brand_id": brand_id, "cards": cards},
-        "generated_at": datetime.now(UTC).isoformat(),
+        "generated_at": now_iso(),
     }
 
 
@@ -99,7 +99,7 @@ async def api_rule_cards_save(request: Request, brand_id: str, card_key: str):
         rule_cards.set_value(main_mod.conn, brand_id, card_key, field_key, value,
                              str(actor.user_id), org_id=actor.org_id)
     card = rule_cards.get_card(main_mod.conn, brand_id, card_key)
-    return {"data": _rule_card_json(card), "generated_at": datetime.now(UTC).isoformat()}
+    return {"data": _rule_card_json(card), "generated_at": now_iso()}
 
 
 @router.post("/api/settings/rule-cards/brands/{brand_id}/{card_key}/reset")
@@ -111,4 +111,4 @@ def api_rule_cards_reset(request: Request, brand_id: str, card_key: str):
     rule_cards.reset_card(main_mod.conn, brand_id, card_key, str(actor.user_id),
                           org_id=actor.org_id)
     card = rule_cards.get_card(main_mod.conn, brand_id, card_key)
-    return {"data": _rule_card_json(card), "generated_at": datetime.now(UTC).isoformat()}
+    return {"data": _rule_card_json(card), "generated_at": now_iso()}

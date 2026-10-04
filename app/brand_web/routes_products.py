@@ -27,8 +27,6 @@
 `app/main.py`。
 """
 
-from datetime import UTC, datetime
-
 from fastapi import APIRouter, Request
 from fastapi.responses import Response
 
@@ -43,9 +41,10 @@ from app.brand_web import routes as legacy_routes
 from app.brand_web import routes_product_helpers as product_helpers
 from app.brand_web.routes_library import confirmer_label
 from app.core import cleanup, input_rules
+from app.core import settings as coresettings
 from app.core import vocab as md
 from app.core.db import connection as core_db_connection
-from app.core.db import new_id
+from app.core.db import new_id, now_iso
 from app.llm import gateway
 from app.shared import web
 from app.shared.web import (
@@ -64,7 +63,7 @@ def _error(status_code: int, message: str) -> JSONResponse:
 
 
 def _envelope(data) -> dict:
-    return {"data": data, "generated_at": datetime.now(UTC).isoformat()}
+    return {"data": data, "generated_at": now_iso()}
 
 
 async def _json_body(request: Request) -> dict:
@@ -213,18 +212,18 @@ def _research_state(conn, brand_id: str, product_id: str) -> dict:
     if outcome == "active":
         running_row = row is not None and row["status"] == "running"
         return {"status": "running", "stage": "讀取網址中",
-                "started_at": row["started_at"] if running_row else datetime.now(UTC).isoformat(),
+                "started_at": row["started_at"] if running_row else now_iso(),
                 "usual_range_text": _RESEARCH_USUAL_RANGE, "error": None, "added_count": None,
                 "price_created": False}
     if outcome == "failed":
         own_error = row is not None and row["status"] not in ("running", "succeeded") and row["error"]
         return {"status": "failed", "stage": "整理事實中",
-                "started_at": row["started_at"] if row is not None else datetime.now(UTC).isoformat(),
+                "started_at": row["started_at"] if row is not None else now_iso(),
                 "usual_range_text": _RESEARCH_USUAL_RANGE,
                 "error": row["error"] if own_error else JOB_FAILED_MESSAGE,
                 "added_count": None, "price_created": False}
     if row is None:
-        return {"status": "done", "stage": "", "started_at": datetime.now(UTC).isoformat(),
+        return {"status": "done", "stage": "", "started_at": now_iso(),
                 "usual_range_text": "", "error": None, "added_count": None, "price_created": False}
     if row["status"] == "running":
         return {"status": "running", "stage": "讀取網址中", "started_at": row["started_at"],
@@ -606,7 +605,8 @@ async def handoff_submit(request: Request, brand_id: str, product_id: str):
         # green 「貼回完成，新增了 0 條」; nothing is written and the panel keeps the pasted text.
         return _error(400, HANDOFF_NOTHING_READ_MESSAGE)
 
-    src_label = f"外部深研交接包・{datetime.now(UTC).date().isoformat()}"
+    today = coresettings.today_for_org(web.conn, org_id=actor.org_id)
+    src_label = f"外部深研交接包・{today.isoformat()}"
     src_id = legacy_routes._create_source_ref(brand_id, str(actor.user_id), src_label)
     added, _skipped, _price_created = product_helpers._apply_product_scan_result(
         brand_id, product_id, str(actor.user_id), src_id, result)

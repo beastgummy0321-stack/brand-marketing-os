@@ -253,7 +253,7 @@ class ResearchBackgroundTest(_BaseProductsApiTest):
         self.assertEqual(len(facts), 2)
         for f in facts:
             self.assertEqual(f["status"], "pending")
-        open_items = core_interrupts.list_open(web.conn, brand_id=self.bid)
+        open_items = core_interrupts.list_open(web.conn, org_id=DEV_ORG_ID, brand_id=self.bid)
         matches = [r for r in open_items if r["category"] == "product_research_done"]
         self.assertEqual(len(matches), 1)
         self.assertLessEqual(len(matches[0]["message"]), core_interrupts.MAX_MESSAGE_LEN)

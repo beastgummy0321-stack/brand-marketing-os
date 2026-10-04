@@ -11,10 +11,12 @@
 """
 
 import unittest
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
+from unittest import mock
 
 from app.core import db
 from app.core import interrupts as core_interrupts
+from app.core import settings as coresettings
 
 
 class InterruptQueueTest(unittest.TestCase):
@@ -27,6 +29,10 @@ class InterruptQueueTest(unittest.TestCase):
         # （list_open() 沒有篩選 dedupe_key，共用品牌 id 會讓斷言看到別的測試留下的殘留）。
         self.brand_id = f"brn_FAKE_{db.new_id('t')}"
         self._default_dedupe_key = f"dedupe-{db.new_id('t')}"
+
+    def _open(self, **kwargs):
+        return core_interrupts.list_open(self.conn, org_id=db.DEV_ORG_ID, brand_id=self.brand_id,
+                                         **kwargs)
 
     def _enqueue(self, dedupe_key=None, message="測試訊息，一句話。", **extra):
         return core_interrupts.enqueue(
@@ -102,7 +108,7 @@ class InterruptQueueTest(unittest.TestCase):
         self.conn.commit()
         second = self._enqueue(dedupe_key="b", message="第二筆。")
         self.conn.commit()
-        open_items = core_interrupts.list_open(self.conn, brand_id=self.brand_id)
+        open_items = self._open()
         self.assertEqual([i["id"] for i in open_items], [first, second])
 
     def test_resolve_moves_item_to_done_and_writes_audit(self):
@@ -110,7 +116,7 @@ class InterruptQueueTest(unittest.TestCase):
         self.conn.commit()
         core_interrupts.resolve(self.conn, interrupt_id, actor="測試員", org_id=db.DEV_ORG_ID)
 
-        self.assertEqual(core_interrupts.list_open(self.conn, brand_id=self.brand_id), [])
+        self.assertEqual(self._open(), [])
         done = core_interrupts.list_done(self.conn, brand_id=self.brand_id)
         self.assertEqual([d["id"] for d in done], [interrupt_id])
         self.assertEqual(done[0]["status"], "resolved")
@@ -129,16 +135,19 @@ class InterruptQueueTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             core_interrupts.resolve(self.conn, interrupt_id, actor="", org_id=db.DEV_ORG_ID)
 
+    def _org_today(self) -> date:
+        return coresettings.today_for_org(self.conn, org_id=db.DEV_ORG_ID)
+
     def test_visible_from_hides_item_until_due(self):
-        future = (date.today() + timedelta(days=5)).isoformat()
+        future = (self._org_today() + timedelta(days=5)).isoformat()
         interrupt_id = self._enqueue(visible_from=future)
         self.conn.commit()
-        self.assertEqual(core_interrupts.list_open(self.conn, brand_id=self.brand_id), [])
+        self.assertEqual(self._open(), [])
 
         due_today = self._enqueue(dedupe_key="dedupe-2",
-                                  visible_from=date.today().isoformat())
+                                  visible_from=self._org_today().isoformat())
         self.conn.commit()
-        open_ids = [i["id"] for i in core_interrupts.list_open(self.conn, brand_id=self.brand_id)]
+        open_ids = [i["id"] for i in self._open()]
         self.assertNotIn(interrupt_id, open_ids)
         self.assertIn(due_today, open_ids)
 
@@ -146,10 +155,10 @@ class InterruptQueueTest(unittest.TestCase):
         """資訊性項目逾期自動降級封存，不再佔待辦清單（驗收條件）。"""
         interrupt_id = self._enqueue()
         self.conn.commit()
-        stale_today = (date.today()
+        stale_today = (self._org_today()
                        + timedelta(days=core_interrupts.STALE_AFTER_DAYS + 1)).isoformat()
 
-        open_items = core_interrupts.list_open(self.conn, brand_id=self.brand_id, today=stale_today)
+        open_items = self._open(today=stale_today)
         self.assertEqual(open_items, [])
 
         done = core_interrupts.list_done(self.conn, brand_id=self.brand_id)
@@ -170,10 +179,10 @@ message="結算上一期，待寫進筆記本",
         )
         other_id = self._enqueue()
         self.conn.commit()
-        stale_today = (date.today()
+        stale_today = (self._org_today()
                        + timedelta(days=core_interrupts.STALE_AFTER_DAYS + 30)).isoformat()
         open_ids = [i["id"] for i in core_interrupts.list_open(
-            self.conn, brand_id=self.brand_id, today=stale_today)]
+            self.conn, org_id=db.DEV_ORG_ID, brand_id=self.brand_id, today=stale_today)]
         self.assertEqual(open_ids, [settle_id])
         done = core_interrupts.list_done(self.conn, brand_id=self.brand_id)
         self.assertEqual([d["id"] for d in done], [other_id])
@@ -232,8 +241,49 @@ message="結算上一期，待寫進筆記本",
              "a_category_removed_from_categories", "informational", "測試訊息。", db.now_utc()),
         )
         self.conn.commit()
-        open_items = core_interrupts.list_open(self.conn, brand_id=self.brand_id)
+        open_items = self._open()
         self.assertEqual([i["id"] for i in open_items], [interrupt_id])
+
+
+    def test_list_open_for_one_org_never_archives_another_orgs_rows(self):
+        """F50 Contract K: the informational archive runs only for the org being listed -- one
+        org's "today" is not a global UPDATE over every tenant's rows."""
+        other_org = f"org_itr_{db.new_id('t')}"
+        self.conn.execute("INSERT INTO organisation (id, name, kind) VALUES (%s, %s, 'personal')",
+                          (other_org, other_org))
+        other_brand = f"brn_FAKE_{db.new_id('t')}"
+        other_id = core_interrupts.enqueue(
+            self.conn, org_id=other_org, brand_id=other_brand,
+            category="customer_voice_extraction_done", dedupe_key=f"other-{db.new_id('t')}",
+            message="別的組織的提醒。",
+        )
+        mine = self._enqueue()
+        self.conn.commit()
+        try:
+            stale_today = (self._org_today()
+                           + timedelta(days=core_interrupts.STALE_AFTER_DAYS + 1)).isoformat()
+            core_interrupts.list_open(self.conn, org_id=db.DEV_ORG_ID, today=stale_today)
+            status = {r["id"]: r["status"] for r in self.conn.execute(
+                "SELECT id, status FROM interrupt WHERE id IN (%s, %s)", (other_id, mine))}
+            self.assertEqual(status, {other_id: "open", mine: "archived"})
+            self.assertNotIn(other_id, [
+                r["id"] for r in core_interrupts.list_open(self.conn, org_id=db.DEV_ORG_ID)])
+        finally:
+            self.conn.execute("DELETE FROM interrupt WHERE org_id = %s", (other_org,))
+            self.conn.execute("DELETE FROM organisation WHERE id = %s", (other_org,))
+            self.conn.commit()
+
+    def test_today_is_the_org_calendar_day(self):
+        """F50 Contract K: a row visible from the org's tomorrow-in-UTC is already due at
+        07:30 Taipei (23:30 UTC the day before) -- `today` is the org's, not the machine's."""
+        taipei_first = date(2026, 11, 1)
+        row_id = self._enqueue(visible_from=taipei_first.isoformat())
+        self.conn.commit()
+        with mock.patch.object(db, "now_utc",
+                               return_value=datetime(2026, 10, 31, 23, 30, tzinfo=UTC)):
+            open_ids = [r["id"] for r in core_interrupts.list_open(
+                self.conn, org_id=db.DEV_ORG_ID, brand_id=self.brand_id, archive_stale=False)]
+        self.assertIn(row_id, open_ids)
 
 
 if __name__ == "__main__":

@@ -846,6 +846,11 @@ class AiSpendCapGateTest(unittest.TestCase):
         )
         self.conn.commit()
 
+    def _this_month(self) -> str:
+        """An instant inside the org's current month (a day after its 1st, 00:00 org time)."""
+        start = coresettings.org_month_start(self.conn, org_id=ORG_A_04_1A)
+        return (start + timedelta(days=1)).isoformat()
+
     def _run(self, brand: dict, provider) -> dict:
         return gateway.run_task(
             self.conn, provider, brand_id=brand["id"], task_type="analyzeBrandContext",
@@ -858,8 +863,7 @@ class AiSpendCapGateTest(unittest.TestCase):
     def test_over_cap_refuses_before_any_charge(self):
         coresettings.set_setting(
             self.conn, coresettings.AI_MONTHLY_COST_LIMIT_SETTING, "10", org_id=ORG_A_04_1A)
-        now = db.now_utc()
-        self._seed_spend(ORG_A_04_1A, self.brand["id"], 10.0, now.strftime("%Y-%m-02T00:00:00"))
+        self._seed_spend(ORG_A_04_1A, self.brand["id"], 10.0, self._this_month())
         fake = FakeProvider()
 
         with self.assertRaises(SpendCapExceededError) as ctx:
@@ -877,15 +881,11 @@ class AiSpendCapGateTest(unittest.TestCase):
     def test_month_rollover_only_counts_this_months_spend(self):
         coresettings.set_setting(
             self.conn, coresettings.AI_MONTHLY_COST_LIMIT_SETTING, "10", org_id=ORG_A_04_1A)
-        now = db.now_utc()
-        # 顯式算上個月的邊界（跨年也對）：這個月 1 號往前一天，一定是上個月的某一天；
-        # 固定塞成 15 號──每個月都有 15 號，不必擔心 2 月 30 號這種不存在的日期。
-        last_month_boundary = now.replace(day=1) - timedelta(days=1)
+        # 上個月的一筆：這個組織當月 1 號 00:00 往前半個月，跨年也對。
+        month_start = coresettings.org_month_start(self.conn, org_id=ORG_A_04_1A)
         self._seed_spend(
-            ORG_A_04_1A, self.brand["id"], 999.0,
-            last_month_boundary.strftime("%Y-%m-15T00:00:00"))
-        self._seed_spend(
-            ORG_A_04_1A, self.brand["id"], 3.0, now.strftime("%Y-%m-02T00:00:00"))
+            ORG_A_04_1A, self.brand["id"], 999.0, (month_start - timedelta(days=15)).isoformat())
+        self._seed_spend(ORG_A_04_1A, self.brand["id"], 3.0, self._this_month())
         fake = FakeProvider()
 
         row = self._run(self.brand, fake)
@@ -893,13 +893,31 @@ class AiSpendCapGateTest(unittest.TestCase):
         self.assertEqual(row["status"], "succeeded", "上個月花的 999 不該算進這個月的上限")
         self.assertEqual(len(fake.calls), 1)
 
+    def test_month_is_the_orgs_month_at_seven_on_the_first(self):
+        """F50 Contract K: at 07:00 Taipei on 1 Nov (23:00 UTC on 31 Oct) the month is November
+        -- spend from 31 Oct Taipei time does not count, spend after 00:00 on 1 Nov does."""
+        coresettings.set_setting(
+            self.conn, coresettings.AI_MONTHLY_COST_LIMIT_SETTING, "10", org_id=ORG_A_04_1A)
+        self._seed_spend(ORG_A_04_1A, self.brand["id"], 999.0,
+                         "2026-10-31T10:00:00+00:00")  # 18:00 on 31 Oct in Taipei
+        self._seed_spend(ORG_A_04_1A, self.brand["id"], 3.0,
+                         "2026-10-31T17:00:00+00:00")  # 01:00 on 1 Nov in Taipei
+        fake = FakeProvider()
+        with mock.patch.object(db, "now_utc",
+                               return_value=datetime(2026, 10, 31, 23, 0, tzinfo=UTC)):
+            month_start = coresettings.org_month_start(self.conn, org_id=ORG_A_04_1A)
+            spent = coresettings.org_ai_spent_this_month(
+                self.conn, org_id=ORG_A_04_1A, since=month_start)
+            row = self._run(self.brand, fake)
+        self.assertEqual(spent, 3.0)
+        self.assertEqual(row["status"], "succeeded", "last month's 999 must not count")
+
     # -- 驗收 6：各組織互不影響 ----------------------------------------------------------
 
     def test_org_over_cap_does_not_block_another_org(self):
         coresettings.set_setting(
             self.conn, coresettings.AI_MONTHLY_COST_LIMIT_SETTING, "10", org_id=ORG_A_04_1A)
-        now = db.now_utc()
-        self._seed_spend(ORG_A_04_1A, self.brand["id"], 999.0, now.strftime("%Y-%m-02T00:00:00"))
+        self._seed_spend(ORG_A_04_1A, self.brand["id"], 999.0, self._this_month())
         fake = FakeProvider()
 
         with self.assertRaises(SpendCapExceededError):
@@ -916,8 +934,7 @@ class AiSpendCapGateTest(unittest.TestCase):
             self.conn, coresettings.AI_KEY_SOURCE_SETTING, "own", org_id=ORG_A_04_1A)
         coresettings.set_setting(
             self.conn, coresettings.AI_MONTHLY_COST_LIMIT_SETTING, "1", org_id=ORG_A_04_1A)
-        now = db.now_utc()
-        self._seed_spend(ORG_A_04_1A, self.brand["id"], 999.0, now.strftime("%Y-%m-02T00:00:00"))
+        self._seed_spend(ORG_A_04_1A, self.brand["id"], 999.0, self._this_month())
         fake = FakeProvider()
 
         row = self._run(self.brand, fake)

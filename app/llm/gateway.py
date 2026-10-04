@@ -233,7 +233,7 @@ def check_spend_cap(conn: db.Conn, *, org_id: str) -> None:
     if not ai_creds.cap_applies:
         return
     limit = settings.get_ai_monthly_cost_limit(conn, org_id=org_id)
-    since = db.now_utc().strftime("%Y-%m-01T00:00:00")
+    since = settings.org_month_start(conn, org_id=org_id)
     spent = settings.org_ai_spent_this_month(conn, org_id=org_id, since=since)
     if spent >= limit:
         raise SpendCapExceededError(

@@ -16,6 +16,7 @@
 from datetime import date, datetime, timedelta
 
 from app.core import cleanup
+from app.core import settings as coresettings
 from app.core.audit import write_audit
 from app.core.db import new_id, now_utc
 
@@ -130,7 +131,7 @@ _NEVER_STALE_KINDS = ("day3_look_dont_touch", "day7_report")
 _NEVER_STALE_CATEGORIES = ("ads_triage_settle",)
 
 
-def _archive_stale_informational(conn, today: str | None = None) -> int:
+def _archive_stale_informational(conn, *, org_id: str, today: date) -> int:
     """資訊性項目逾期自動降級封存：**到期**超過 STALE_AFTER_DAYS 天沒人處理，自動轉
     archived，不再佔待辦清單（不擋路，見 0025 懶人優先總則）。
 
@@ -139,18 +140,20 @@ def _archive_stale_informational(conn, today: str | None = None) -> int:
     （例如票 #38 的 final_settlement 排在檔期結束＋14 天），起算點若用 created_at，
     這類提醒還沒被使用者看過就已經因為「早就存在資料庫裡」而被判定逾期、悄悄消失，
     等於從沒機會被看到（曾是真實的潛在 bug，不是本函式故意的行為）。
+
+    F50 Contract K: runs for one org only (`today` is that org's calendar date); one org's
+    "today" never archives another org's rows.
     """
-    today_date = date.fromisoformat(today) if today else date.today()
-    cutoff = today_date - timedelta(days=STALE_AFTER_DAYS)
+    cutoff = today - timedelta(days=STALE_AFTER_DAYS)
     placeholders = ",".join("%s" for _ in _NEVER_STALE_KINDS)
     category_placeholders = ",".join("%s" for _ in _NEVER_STALE_CATEGORIES)
     cursor = conn.execute(
         "UPDATE interrupt SET status = 'archived', resolved_at = %s"
-        " WHERE status = 'open' AND severity = 'informational'"
+        " WHERE org_id = %s AND status = 'open' AND severity = 'informational'"
         " AND COALESCE(visible_from, created_at) < %s"
         f" AND (kind IS NULL OR kind NOT IN ({placeholders}))"
         f" AND category NOT IN ({category_placeholders})",
-        (now_utc(), cutoff, *_NEVER_STALE_KINDS, *_NEVER_STALE_CATEGORIES),
+        (now_utc(), org_id, cutoff, *_NEVER_STALE_KINDS, *_NEVER_STALE_CATEGORIES),
     )
     conn.commit()
     return cursor.rowcount
@@ -165,30 +168,31 @@ def _sort_key(row: dict):
     )
 
 
-def list_open(conn, brand_id: str | None = None, category: str | None = None,
-              today: str | None = None, archive_stale: bool = True,
-              org_id: str | None = None) -> list:
+def list_open(conn, *, org_id: str, brand_id: str | None = None, category: str | None = None,
+              today: str | None = None, archive_stale: bool = True) -> list:
     """待辦清單：已到 visible_from 的 open 項目，嚴重度為主、同級按行動價值排序。
 
-    brand_id 省略＝跨品牌查（首頁待辦、全站收件匣用）——這時租戶界線改由 org_id 守
-    （票 03-1：不然沒帶 brand_id 的呼叫會查到別的組織的資料）。有 brand_id 時本來就
-    已經被上游 require_brand() 驗過該品牌屬於哪個組織，org_id 這裡不必重複。
+    org_id 必填（F50 Contract K）：「今天」是這個組織行事曆上的今天（`today_for_org`，
+    不是機器的日期——台北 00:00–08:00 之間機器還停在昨天），逾期資訊性項目的自動封存也
+    只封存這個組織的列，不再是一條跨組織的全域 UPDATE。租戶界線一律由 org_id 守；
+    brand_id 是額外縮小到單一品牌（上游 require_brand() 已驗過品牌屬於這個組織）。
+
+    today：測試／`BRAND_OS_TODAY` 覆寫用的 ISO 日期；省略＝`today_for_org`。
 
     archive_stale＝False：跳過逾期資訊性項目自動封存（唯讀呼叫端專用，例如
     app/dashboard——「查詢函式」若順手寫資料庫就不是真的唯讀，見票 02 第 2 輪）。
     預設 True：保留既有呼叫端（app/shared/web.py、app/ads/onboarding.py 等）原行為。
     """
+    today_date = (date.fromisoformat(today) if today
+                  else coresettings.today_for_org(conn, org_id=org_id))
     if archive_stale:
-        _archive_stale_informational(conn, today)
-    today = today or date.today().isoformat()
-    sql = "SELECT * FROM interrupt WHERE status = 'open' AND (visible_from IS NULL OR visible_from <= %s)"
-    params: list = [today]
+        _archive_stale_informational(conn, org_id=org_id, today=today_date)
+    sql = ("SELECT * FROM interrupt WHERE org_id = %s AND status = 'open'"
+           " AND (visible_from IS NULL OR visible_from <= %s)")
+    params: list = [org_id, today_date.isoformat()]
     if brand_id:
         sql += " AND brand_id = %s"
         params.append(brand_id)
-    elif org_id:
-        sql += " AND org_id = %s"
-        params.append(org_id)
     if category:
         sql += " AND category = %s"
         params.append(category)

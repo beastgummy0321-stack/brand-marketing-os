@@ -2,12 +2,12 @@
 does not touch app/main.py. F42-I14 removed the truth-card and photo-product-card routes that
 used to live here."""
 
-from datetime import UTC, datetime
 
 from fastapi import APIRouter, Request
 from fastapi.responses import Response
 
 from app.brand_intelligence import personas
+from app.core.db import now_iso
 from app.intake import persona_generation
 from app.shared import web
 from app.shared.web import JSONResponse, require_actor, require_brand
@@ -17,7 +17,7 @@ CONFIRMED_BY = "使用者"
 
 
 def _envelope(data) -> dict:
-    return {"data": data, "generated_at": datetime.now(UTC).isoformat()}
+    return {"data": data, "generated_at": now_iso()}
 
 
 def _error(status_code: int, message: str) -> JSONResponse:

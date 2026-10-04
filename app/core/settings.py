@@ -3,6 +3,28 @@
 只做兩件事：讀一個鍵、寫一個鍵；外加三個語意函式（金鑰、模型、精靈花費上限），
 把「DB 設定 > 環境變數 > 程式預設」這條優先順序寫在一個地方，呼叫端不各自實作。
 
+F50 Contract K (one clock): this module is also the one place that answers "which day is it for
+the user" (`today_for_org`, `org_month_start`, `org_day_start`, `day_window`) and "which day is
+complete" (`last_complete_day`, `today_in`). Which clock answers which question:
+
+| Question                                                         | Clock                            |
+|------------------------------------------------------------------|----------------------------------|
+| When did it happen (`*_at`, `generated_at`, audit, elapsed, retry)| `db.now_utc()` / `db.now_iso()`  |
+| Which day／month is it for the user (defaults, 本月, deferral      | `today_for_org` /                |
+|   dates, inbox `visible_from`, informational archive, orders      |   `org_month_start` /            |
+|   windows, SKU cost `valid_from`, report date, AI monthly limit)  |   `org_day_start`                |
+| Which platform day is complete (judging, coverage, workspace      | ads: `coverage.last_complete_day`|
+|   totals, home month cutoff, closeout, A/B, review evidence,      |   (the ad-account zone); else    |
+|   tracked zeros, connections proof)                               |   `last_complete_day` here       |
+| Today for one ad account (Meta daily pull)                        | `today_in(account zone)`         |
+| When may a queued job run (procrastinate `retry_at`／`schedule_at`)| the queue's own clock, SQL       |
+|   -- the one exception: the drill moves `db.now_utc` forward      |   `now()` (`recovery._queue_now`)|
+
+Nothing outside `app/core/db.py` asks the machine (`date.today()`, `datetime.now()`,
+`datetime.utcnow()`, `datetime.today()`, `time.time()`); month starts are `org_month_start`, never
+`strftime("%Y-%m-01…")`; yesterday is `last_complete_day`, never `today_for_org(...) - timedelta`.
+`app/tests/test_clock_rule.py` goes red when one of those returns.
+
 介面契約原文件已被 5eca0db 清除；權威現在是這三個函式本身的簽章與行為。
 """
 
@@ -10,7 +32,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import UTC, date, datetime, time, timedelta, tzinfo
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import psycopg
@@ -219,7 +241,7 @@ def get_ai_monthly_cost_limit(conn: db.Conn | None = None, *, org_id: str) -> fl
         return DEFAULT_AI_MONTHLY_COST_LIMIT
 
 
-def org_ai_spent_this_month(conn: db.Conn, *, org_id: str, since: str) -> float:
+def org_ai_spent_this_month(conn: db.Conn, *, org_id: str, since: datetime | str) -> float:
     """這個組織這個月已經花了多少 AI 費用（US$，累加全組織所有品牌成功呼叫的
     llm_task.cost；票 04-1a，D4-2／D4-3）。
 
@@ -227,9 +249,9 @@ def org_ai_spent_this_month(conn: db.Conn, *, org_id: str, since: str) -> float:
     all-time，保護的是客戶自己設的品牌預算；這裡是整個組織、當月，保護的是操作者的
     帳單（操作者付的是 'platform' 層每個組織每個月的總帳，不分品牌）。
 
-    since 由呼叫端算好傳入（當月 1 號的時間戳記字串），這裡不呼叫 db.now_utc() 或
-    date.today()——比照 app/dashboard/repository.py `today` 參數的既有慣例：呼叫端在
-    正式路徑用真實時鐘算，測試可以帶假的 since 精準驗證月份邊界，不必等到月初才測得到。
+    since 由呼叫端算好傳入（F50 Contract K：`org_month_start()`，組織時區當月 1 號 00:00
+    的 UTC 時刻），這裡不自己問時鐘——比照 app/dashboard/repository.py `today` 參數的既有
+    慣例：測試可以帶假的 since 精準驗證月份邊界，不必等到月初才測得到。
     """
     row = conn.execute(
         "SELECT SUM(cost) AS n FROM llm_task WHERE org_id = %s AND status = 'succeeded'"
@@ -299,8 +321,51 @@ def today_for_org(conn: db.Conn | db.ConnProxy | None, *, org_id: str) -> date:
     範圍只有排程面問「今天幾號」的地方（票 04-1b）：稽核時間戳、`started_at` 這類
     事件發生時刻一律維持 UTC，不走這裡。容錯規則見 `org_timezone()`（票 M1 從這裡
     抽出的姊妹函式）——這裡只是把它給的時區換成日期。
+
+    F50 Contract K: the instant comes from `db.now_utc()` (through the module attribute), so the
+    drill clock, which patches `db.now_utc`, moves this answer too.
     """
-    return datetime.now(org_timezone(conn, org_id=org_id)).date()
+    return today_in(org_timezone(conn, org_id=org_id))
+
+
+# ---- F50 Contract K: one clock (audit W11); the module docstring holds the clock table. ------
+
+
+def today_in(zone: tzinfo) -> date:
+    """The calendar date it is right now in `zone` (an ad account's or the org's)."""
+    return db.now_utc().astimezone(zone).date()
+
+
+def last_complete_day(conn: db.Conn | db.ConnProxy | None, *, org_id: str,
+                      zone: tzinfo | None = None) -> date:
+    """The newest day that has fully ended: yesterday in `zone`, or in the org's calendar when no
+    zone is given. The bare name `today_for_org` is the module attribute looked up at call time,
+    so tests and the drill tool that patch `settings.today_for_org` move this too."""
+    if zone is None:
+        current = today_for_org(conn, org_id=org_id)
+    else:
+        current = today_in(zone)
+    return current - timedelta(days=1)
+
+
+def org_day_start(conn: db.Conn | db.ConnProxy | None, *, org_id: str, day: date) -> datetime:
+    """The UTC instant of 00:00 on `day` in the org's zone (e.g. a deferral date's start)."""
+    zone = org_timezone(conn, org_id=org_id)
+    return datetime.combine(day, time.min, tzinfo=zone).astimezone(UTC)
+
+
+def org_month_start(conn: db.Conn | db.ConnProxy | None, *, org_id: str) -> datetime:
+    """The UTC instant of 00:00 on the first day of the org's current month (本月, the AI monthly
+    limit). At 07:00 Taipei on the 1st this is this month's first, not last month's."""
+    today = today_for_org(conn, org_id=org_id)
+    return org_day_start(conn, org_id=org_id, day=today.replace(day=1))
+
+
+def day_window(end: date, days: int) -> tuple[date, date]:
+    """`(start, end)` spanning exactly `days` dates, both ends included (「最近 30 天」)."""
+    if days < 1:
+        raise ValueError(f"day_window needs at least one day, got {days}")
+    return end - timedelta(days=days - 1), end
 
 
 def get_intake_budget_limit(conn: db.Conn | None = None, *, org_id: str) -> float:

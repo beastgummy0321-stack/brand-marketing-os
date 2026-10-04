@@ -62,15 +62,17 @@ def _revenue_and_mom(conn, brand_id: str, today: str) -> tuple:
     return current, _mom_pct(current, previous)
 
 
-def brand_month_money(conn, *, org_id: str, brand_id: str, today: str | None = None) -> dict:
+def brand_month_money(conn, *, org_id: str, brand_id: str, today: str) -> dict:
     """票 06：品牌頁的本月花費／營收／毛利／ROAS 併桌——花費來自 app.meta；營收來自
     app.orders 的 `channel_revenue`（票 12：全通路彙總，不只官網），毛利仍只算官網——
     毛利來自 order_item × sku_cost，只有官網訂單有明細行。
 
     月份窗口跟 app/meta/routes.py `brand_spend` 用同一種算法（本月曆月），兩支端點的
     花費數字才不會對不上；營收／毛利沿用本檔既有的 `_month_to_date_range`（字串，含頭含尾）。
+
+    today 必填（F50 Contract K）：組織行事曆上的今天，由路由用 `today_for_org` 算好傳入
+    （`BRAND_OS_TODAY` 測試接縫照舊覆寫）——本檔不問機器的日期。
     """
-    today = today or date.today().isoformat()
     since, until = _month_to_date_range(today)
     month_start = date.fromisoformat(today).replace(day=1)
     month_end = (month_start + timedelta(days=32)).replace(day=1)  # 半開區間，比照 brand_spend
@@ -141,8 +143,8 @@ def _guide_cards(conn, brand_id: str) -> list:
 
 
 def _brand_card(conn, brand: dict, today: str) -> dict:
-    open_interrupts = core_interrupts.list_open(conn, brand_id=brand["id"], today=today,
-                                                archive_stale=False)
+    open_interrupts = core_interrupts.list_open(conn, org_id=brand["org_id"], brand_id=brand["id"],
+                                                today=today, archive_stale=False)
     revenue, revenue_mom_pct = _revenue_and_mom(conn, brand["id"], today)
     cards = _guide_cards(conn, brand["id"])
     return {
@@ -157,7 +159,7 @@ def _brand_card(conn, brand: dict, today: str) -> dict:
     }
 
 
-def overview(conn, *, org_id: str, today: str | None = None) -> list:
-    today = today or date.today().isoformat()
+def overview(conn, *, org_id: str, today: str) -> list:
+    """today 必填（F50 Contract K）：組織行事曆上的今天（路由用 `today_for_org` 算好）。"""
     brands = bi_repo.list_brands(conn, org_id, status="active")
     return [_brand_card(conn, brand, today) for brand in brands]

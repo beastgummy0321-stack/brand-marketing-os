@@ -22,13 +22,12 @@ Entry point: this file's `router`, included at the end of `app/intake/routes_api
 """
 
 from collections.abc import Callable
-from datetime import UTC, datetime
 from typing import cast
 
 from fastapi import APIRouter, Request
 from starlette.concurrency import run_in_threadpool
 
-from app.core.db import Conn
+from app.core.db import Conn, now_iso
 from app.intake import custom, product_prefill
 from app.intake import product_onboarding as po
 from app.shared import web
@@ -41,7 +40,7 @@ _STEP = _BRAND + "/products/{product_id}/onboarding"
 
 
 def _envelope(data) -> dict:
-    return {"data": data, "generated_at": datetime.now(UTC).isoformat()}
+    return {"data": data, "generated_at": now_iso()}
 
 
 def _error(status_code: int, message: str) -> JSONResponse:

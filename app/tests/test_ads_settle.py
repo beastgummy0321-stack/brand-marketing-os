@@ -495,13 +495,9 @@ class SettleTimezoneTest(SettleFixture):
     def at(self, local):
         zone = coresettings.org_timezone(self.conn, org_id=self.org)
         instant = local.replace(tzinfo=zone).astimezone(UTC)
-
-        class _Frozen(datetime):
-            @classmethod
-            def now(cls, tz=None):
-                return instant.astimezone(tz) if tz else instant.replace(tzinfo=None)
-
-        return patch.object(coresettings, "datetime", _Frozen)
+        # F50 Contract K: `today_for_org` reads its instant from `db.now_utc()` (the drill
+        # clock's seam too), so freezing that one function freezes the org's calendar.
+        return patch.object(db, "now_utc", return_value=instant)
 
     def test_month_edge_follows_the_org_timezone(self):
         self.today_patch.stop()
@@ -552,7 +548,7 @@ class SettleQueueTest(SettleFixture):
         triage.refresh_queue(self.conn, self.org, self.brand)
         settle.write(self.conn, self.org, self.brand, MONTH,
                      self.picks(*LEARNABLE), "user_1")
-        open_rows = interrupts.list_open(self.conn, brand_id=self.brand,
+        open_rows = interrupts.list_open(self.conn, org_id=self.org, brand_id=self.brand,
                                          category="ads_triage_settle", archive_stale=False)
         self.assertEqual(open_rows, [])
         queue = triage.refresh_queue(self.conn, self.org, self.brand)

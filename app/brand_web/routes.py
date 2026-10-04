@@ -22,7 +22,6 @@ POST 端點與它們 303 redirect 落地用的 GET 頁。
 `/api` 版本。
 """
 
-from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import APIRouter, Request
@@ -32,6 +31,7 @@ import app.storage as storage
 from app.brand_intelligence import report as brand_report_mod
 from app.brand_intelligence import repository as repo
 from app.brand_web import report_service
+from app.core import settings as coresettings
 from app.core import vocab as md
 from app.shared import web
 from app.shared.web import NotFoundKind, clean, require_actor, require_brand
@@ -56,9 +56,13 @@ def _create_source_ref(brand_id: str, actor: str, text: str) -> str | None:
     text = clean(text)
     if not text:
         return None
+    # F50 Contract K: the capture date is the org's calendar day, not the machine's.
+    brand = repo.get_brand(web.conn, brand_id)
+    if brand is None:
+        raise ValueError(f"找不到品牌：{brand_id}")
     row = repo.create_source_reference(
         web.conn, brand_id, actor=actor, title=text, source_type="other",
-        captured_date=datetime.now(UTC).date(),
+        captured_date=coresettings.today_for_org(web.conn, org_id=brand["org_id"]),
     )
     return row["id"]
 

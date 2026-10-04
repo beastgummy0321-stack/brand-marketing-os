@@ -19,11 +19,10 @@ caller that gets a fresh `background.app()` (each test module) must call this ag
 import json
 import random
 import re
-from datetime import UTC, datetime
 
 from app.background import app as background_app
 from app.brand_intelligence import repository as bi_repo
-from app.core.db import APP_DIR, connection
+from app.core.db import APP_DIR, connection, now_utc
 from app.llm import context_compiler, gateway, methodology, providers
 from app.workbench import claims, prompts, repository, validate, visual
 from app.workbench import identity as identity_mod
@@ -502,7 +501,7 @@ def _run_image_prompt(conn, org_id: str, brand_id: str, brief_id: str, brief: di
 
     ctx = _image_task_context(conn, org_id, brand_id, brand, brief)
     identity = identity_mod.ensure_identity(conn, org_id, brand_id, PROVIDER)
-    today = datetime.now(UTC)
+    today = now_utc()
     learn = looks_mod.visual_learnings(conn, brand_id, ctx["learnings_audience_key"], today=today)
     history = repository.look_history(conn, org_id, brand_id, ctx["round_audience_key"])
     alloc = looks_mod.allocate(

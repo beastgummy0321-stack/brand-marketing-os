@@ -120,7 +120,7 @@ def relative_time(value) -> str:
     dt = value if isinstance(value, datetime) else datetime.fromisoformat(value)
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=UTC)
-    days = (datetime.now(UTC) - dt).days
+    days = (coredb.now_utc() - dt).days
     if days <= 0:
         return "今天"
     if days == 1:
@@ -145,7 +145,7 @@ def fact_staleness(fact: dict) -> str | None:
         confirmed_at = datetime.fromisoformat(confirmed_at)
     if confirmed_at.tzinfo is None:
         confirmed_at = confirmed_at.replace(tzinfo=UTC)
-    days = (datetime.now(UTC) - confirmed_at).days
+    days = (coredb.now_utc() - confirmed_at).days
     if days <= FACT_STALE_DAYS:
         return None
     return f"上次確認 {days // 30} 個月前"

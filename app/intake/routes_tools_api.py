@@ -12,14 +12,13 @@ GET /api/meta/accounts、POST /api/meta/brands/{b}/accounts/{a}），前端直�
 對外進入點：本檔的 `router`，由 `app/intake/routes_api.py` 檔尾比照 `t2_router` 併入。
 """
 
-from datetime import UTC, datetime
 from typing import cast
 
 from fastapi import APIRouter, Request
 from fastapi.responses import Response
 
 from app.brand_intelligence import repository as bi_repo
-from app.core.db import Conn
+from app.core.db import Conn, now_iso
 from app.core.vocab import CONVERSION_GOAL_LABELS
 from app.intake import state
 from app.meta import repository as meta_repo
@@ -30,7 +29,7 @@ router = APIRouter()
 
 
 def _envelope(data) -> dict:
-    return {"data": data, "generated_at": datetime.now(UTC).isoformat()}
+    return {"data": data, "generated_at": now_iso()}
 
 
 def _error(status_code: int, message: str) -> JSONResponse:

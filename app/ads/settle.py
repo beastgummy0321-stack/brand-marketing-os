@@ -431,7 +431,7 @@ def _scope(row, group_id) -> str:
 
 def _resolve_queue_rows(conn, org_id, brand_id, end, actor) -> None:
     key = triage._dedupe_key(QUEUE_KIND, brand_id, end)
-    for row in interrupts.list_open(conn, brand_id=brand_id, category=QUEUE_CATEGORY,
+    for row in interrupts.list_open(conn, org_id=org_id, brand_id=brand_id, category=QUEUE_CATEGORY,
                                     archive_stale=False):
         if row["dedupe_key"] == key:
             interrupts.resolve(conn, row["id"], actor=actor, org_id=org_id)

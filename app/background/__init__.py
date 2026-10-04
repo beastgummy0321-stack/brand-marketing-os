@@ -15,7 +15,7 @@
    `recover_interrupted_jobs(*, retry_tasks=None, fail_tasks=None, limit=100) -> dict`，
    僅供持有 schema worker 鎖的組裝根在啟動時回收中斷的孤兒工作（規則見
    `app/background/recovery.py` 檔頭：唯讀工作照舊重送、其餘重送一次、第二次中斷標失敗）。
-   F29-I05 另提供唯讀的 `queue_snapshot(*, since=None) -> dict`（整條佇列的排隊順序與今天
+   F29-I05 另提供唯讀的 `queue_snapshot(*, since) -> dict`（整條佇列的排隊順序與今天
    做完／失敗數，呼叫端目前只有 `app/dashboard/routes_jobs_api.py`）。F31-I02（Contract J）
    另提供唯讀的 `job_outcome(lock) -> "active"|"failed"|"succeeded"|None`（這個 lock 最新
    一個 job 的結局），供 `app/intake`／`app/brand_web` 的狀態端點判斷。其餘一律私有。
@@ -358,7 +358,7 @@ def _seconds(later: datetime, earlier: datetime | None) -> int | None:
     return None if earlier is None else max(0, int((later - earlier).total_seconds()))
 
 
-def queue_snapshot(*, since: datetime | None = None) -> dict:
+def queue_snapshot(*, since: datetime) -> dict:
     """Read-only picture of the whole queue (every tenant — one shared worker).
 
     Returns `{jobs, total, done_today, failed_today, worker_alive}`:
@@ -370,12 +370,12 @@ def queue_snapshot(*, since: datetime | None = None) -> dict:
       it was queued / became due (queued); None for a job scheduled in the future.
       `args` are the job's own kwargs: callers must pick what they show, never pass them on.
     - `done_today`/`failed_today`: `{org_id: count}` of `succeeded`/`failed` events since
-      `since` (default: 00:00 UTC today); jobs without `org_id` in args are keyed `None`.
+      `since` (required, F50 Contract K: the caller's org-day start, e.g.
+      `routes_jobs_api._since`; never the machine's UTC midnight); jobs without `org_id` in args
+      are keyed `None`.
     - `worker_alive`: Contract C (module docstring) — some worker heartbeat within
       `WORKER_HEARTBEAT_STALE_SECONDS`.
     Memory queue mode (e2e): an empty snapshot with `worker_alive` True."""
-    if since is None:
-        since = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
     if config.settings().brand_os_job_queue == "memory":
         return {"jobs": [], "total": 0, "done_today": {}, "failed_today": {},
                 "worker_alive": True}

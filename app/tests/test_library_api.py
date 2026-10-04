@@ -286,7 +286,7 @@ class CustomerVoiceBackgroundTest(unittest.TestCase):
         self.assertEqual(stored[0]["raw_text"], "喝了三天真的有感")
 
         # 收件匣通知（五鐵則③）
-        open_items = core_interrupts.list_open(web.conn, brand_id=self.bid)
+        open_items = core_interrupts.list_open(web.conn, org_id=coredb.DEV_ORG_ID, brand_id=self.bid)
         matches = [r for r in open_items if r["category"] == "customer_voice_extraction_done"]
         self.assertEqual(len(matches), 1)
         self.assertLessEqual(len(matches[0]["message"]), core_interrupts.MAX_MESSAGE_LEN)
@@ -306,7 +306,7 @@ class CustomerVoiceBackgroundTest(unittest.TestCase):
         self.assertEqual(status["status"], "failed")
         self.assertTrue(status["message"])
         self.assertEqual(repo.list_customer_voices(web.conn, self.bid), [])
-        open_items = core_interrupts.list_open(web.conn, brand_id=self.bid)
+        open_items = core_interrupts.list_open(web.conn, org_id=coredb.DEV_ORG_ID, brand_id=self.bid)
         self.assertEqual(
             len([r for r in open_items if r["category"] == "customer_voice_extraction_done"]), 1)
 
