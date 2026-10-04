@@ -53,7 +53,7 @@ function renderBlock(c: CampaignDetail) {
 describe("CapBlock", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(getTriage).mockResolvedValue({ window_days: 14, items: [], closed: { paused: 0, archived: 0, other: 0, total: 0, items: [], truncated: false } });
+    vi.mocked(getTriage).mockResolvedValue({ window_days: 14, items: [], closed: { groups: [], total: 0, items: [], truncated: false } });
     vi.mocked(getTarget).mockResolvedValue(target(BE, 1060));
   });
 
@@ -187,7 +187,7 @@ describe("CapBlock", () => {
 
   it("the mid ruler places the campaign's graded ads from triage", async () => {
     vi.mocked(getTriage).mockResolvedValue({
-      window_days: 14, closed: { paused: 0, archived: 0, other: 0, total: 0, items: [], truncated: false },
+      window_days: 14, closed: { groups: [], total: 0, items: [], truncated: false },
       items: [item("a1", "on_target", 3600, 20), item("a2", "over", 6200, 10), item("a3", "wasted", 1600, 0)],
     });
     renderBlock(campaign(OWN));

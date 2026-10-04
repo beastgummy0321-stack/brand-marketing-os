@@ -101,7 +101,7 @@ function dailyAds(cap: Cap = OWN_450): TriageItem[] {
   ];
 }
 
-const EMPTY_CLOSED = { groups: [], total: 0, items: [], truncated: false } as unknown as TriageClosedBlock;
+const EMPTY_CLOSED: TriageClosedBlock = { groups: [], total: 0, items: [], truncated: false };
 
 function triage(items: TriageItem[], extra: Partial<CampaignTriage> = {}): CampaignTriage {
   return {
@@ -439,8 +439,8 @@ describe("CampaignDetailPage (F28-I10, v10 tabPerf F29-I13)", () => {
     vi.mocked(getTriage).mockResolvedValue(triage([], {
       closed: {
         groups: [{ state: "off", label: "已暫停", count: 11 }, { state: "off", label: "已封存", count: 4 }], total: 15, truncated: false,
-        items: [{ entity_id: "c1", name: "舊版主視覺 0715", delivery: { state: "off", label: "已暫停" }, delivery_label: "已暫停", thumbnail_url: null, spend: 321, cost_per_result: 45.5, result_label: "購買" }],
-      } as unknown as TriageClosedBlock,
+        items: [{ entity_id: "c1", name: "舊版主視覺 0715", native_status: "PAUSED", delivery: { state: "off", label: "已暫停" }, delivery_label: "已暫停", thumbnail_url: null, spend: 321, cost_per_result: 45.5, result_label: "購買" }],
+      },
     }));
     renderPage();
     expect(await screen.findByText("已暫停 11・已封存 4・不算在上面的在投數量裡")).toBeTruthy();

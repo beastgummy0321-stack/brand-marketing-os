@@ -176,19 +176,16 @@ export interface TriageClosedItem {
   thumbnail_url: string | null; spend: number | null; cost_per_result: number | null;
   result_label: string;
 }
-/** F26-I01: `classify()`'s own `closed` block (feature Decisions "I01") -- every ad of this
- * campaign whose `native_status` reads closed, kept and reported, never judged (`items` never
- * appears in `CampaignTriage.items` above). `paused`/`archived` are the two statuses the frontend
- * groups the strip by; every other closed status (`DELETED`/`ADSET_PAUSED`/`CAMPAIGN_PAUSED`)
- * falls into `other`, so `paused + archived + other === total` always. `items` is capped at 50,
- * in the same (name, id) order the campaign's own ad query returns; `truncated` says whether
- * there's more than that cap. Real responses always carry this (`triage.py::classify`), same
- * reason it's required here unlike `data` above. */
+/** F26-I01: `classify()`'s own `closed` block (feature Decisions "I01") -- every ad of this campaign that is not
+ * judged (F49 Contract L: its delivery is `not_running` or `off`), kept and reported (`items` never appears in
+ * `CampaignTriage.items` above). `items` is capped at 50, in the same (name, id) order the campaign's own ad query
+ * returns; `truncated` says whether there's more than that cap. Real responses always carry this
+ * (`triage.py::classify`), same reason it's required here unlike `data` above. */
 export interface TriageClosedBlock {
   // F49 Contract L: the not-judged ads grouped by their served delivery label, first seen first; counts add up to
-  // `total`. `paused`／`archived`／`other` are the older three-way counts by the same labels.
-  groups?: (DeliveryView & { count: number })[];
-  paused: number; archived: number; other: number; total: number;
+  // `total`. Screens print these groups; there is no local status grouping.
+  groups: (DeliveryView & { count: number })[];
+  total: number;
   items: TriageClosedItem[]; truncated: boolean;
 }
 export interface CampaignTriage {
@@ -427,7 +424,9 @@ export interface CloseoutQueueRow {
 }
 /** F49 Contract Q: the queue's decision count (`queue_done.stamp`) — `kinds` are the decision kinds in board order,
  * `open` the open decision rows: 「共 M 件」, the top bar's `open_items` and the inbox's ads rows are this number. */
-export interface QueueDecisions { kinds: QueueKind[]; open: number }
+// `settle` is a decision kind (the brand's period-settle row) but not a `QueueKind` (`splitQueue` takes it out of
+// `items`), so the served list is widened by it here.
+export interface QueueDecisions { kinds: (QueueKind | "settle")[]; open: number }
 export interface QueuePayload {
   /** Ad-level rows only (every one carries its `triage` item). */
   items: QueueItem[]; counts: Record<TriageClass, number>; total_ads: number;

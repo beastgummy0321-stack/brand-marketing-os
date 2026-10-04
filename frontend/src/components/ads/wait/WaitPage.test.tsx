@@ -84,7 +84,7 @@ const judged = (overrides: Partial<TriageItem> = {}) =>
 
 // F26-I01: `closed` is always sent by the real backend -- an empty block here.
 const EMPTY_CLOSED: TriageClosedBlock = {
-  paused: 0, archived: 0, other: 0, total: 0, items: [], truncated: false,
+  groups: [], total: 0, items: [], truncated: false,
 };
 
 const WINDOW = ["2026-09-13", "2026-09-14", "2026-09-15", "2026-09-16", "2026-09-17", "2026-09-18", "2026-09-19"];
