@@ -27,6 +27,10 @@ F49-I01 (Contract L, one lifecycle): a platform status word (ACTIVE, PAUSED, …
 outside `app/ads/adapters/` (allowlist: the change-set pause payload, W19); a `native_status`
 comparison outside `lifecycle.py`／`adapters/`; and campaign-selection SQL on `ads_campaign`
 (`status != 'closed'`, `status IN (…)`) outside `lifecycle.py` each fail, naming file and line.
+
+F49-I02 (Contract O, one sync outcome): an SQL write of `ads_external_sync_job` (its
+`status`／`error`) outside `external_sync.py`, and a read of a sync task's `errors`／`error_code`
+outside `external_sync.py`, each fail, naming file and line.
 """
 
 import ast
@@ -621,6 +625,104 @@ class OneLifecycleTest(unittest.TestCase):
         self.assertEqual(sorted(set(_native_words(tree))), [3, 13, 18])
         self.assertEqual(sorted(set(_native_comparisons(tree))), [3, 5, 7, 13])
         self.assertEqual(sorted(_campaign_selections(tree)), [14, 15])
+
+
+# -- F49 Contract O: one sync outcome --------------------------------------------------------------
+
+# The one owner of a sync job's writes and of its tasks' error fields: everything else reads
+# `external_sync.outcome`／`campaign_outcome`.
+SYNC_FILE = "external_sync.py"
+_SYNC_JOB_WRITE = re.compile(r"\b(INSERT\s+INTO|UPDATE)\s+ads_external_sync_job\b", re.I)
+TASK_ERROR_KEYS = {"errors", "error_code"}
+# (file relative to app/ads, function, key) -> why that read is not a sync task's error field.
+# Never widen this to hide a task read: call `external_sync.outcome` instead.
+NOT_A_TASK_ERROR = {
+    ("repository.py", "campaign_sync_state", "error_code"):
+        "a campaign section's own sync state (`record_sync`), not a job task",
+}
+
+
+def _sync_job_writes(tree):
+    """Yield the line of every SQL string that inserts into or updates `ads_external_sync_job`."""
+    for line, value in _code_strings(tree):
+        if _SYNC_JOB_WRITE.search(value):
+            yield line
+
+
+def _task_error_reads(tree):
+    """Yield `(function_name, lineno, key)` for every `x["errors"]`／`x["error_code"]` load and
+    `x.get("errors"／"error_code")` (a write building a dict is not a read)."""
+    parents = _parents(tree)
+    for node in ast.walk(tree):
+        key = None
+        if isinstance(node, ast.Subscript) and isinstance(node.ctx, ast.Load) \
+                and isinstance(node.slice, ast.Constant):
+            key = node.slice.value
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
+                and node.func.attr == "get" and node.args \
+                and isinstance(node.args[0], ast.Constant):
+            key = node.args[0].value
+        if key in TASK_ERROR_KEYS:
+            yield _enclosing(parents, node), node.lineno, key
+
+
+class OneSyncOutcomeTest(unittest.TestCase):
+    """F49 Contract O: a sync job's status／error are written only in `external_sync.py`, and a
+    task's `errors`／`error_code` are read only there; every reader goes through `outcome`. The
+    monthly coverage proof (`coverage`／`last_covered`, read by `month_budget`／`connections`) is
+    not an error field and stays readable."""
+
+    def test_sync_job_is_written_only_by_external_sync(self):
+        offenders = []
+        for path in _ads_files():
+            relative = path.relative_to(ADS_DIR).as_posix()
+            if relative == SYNC_FILE:
+                continue
+            text = path.read_text(encoding="utf-8")
+            for line in _sync_job_writes(ast.parse(text, filename=str(path))):
+                offenders.append(f"app/ads/{relative}:{line}")
+        self.assertEqual(
+            offenders, [],
+            "a sync job written outside external_sync.py -- call "
+            "external_sync.record_request_failure／request_sync (F49 O)",
+        )
+
+    def test_task_errors_are_read_only_by_external_sync(self):
+        offenders, seen = [], set()
+        for path in _ads_files():
+            relative = path.relative_to(ADS_DIR).as_posix()
+            if relative == SYNC_FILE:
+                continue
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for function, line, key in _task_error_reads(tree):
+                if (relative, function, key) in NOT_A_TASK_ERROR:
+                    seen.add((relative, function, key))
+                    continue
+                offenders.append(f"app/ads/{relative}:{line} in {function}(): {key}")
+        self.assertEqual(
+            offenders, [],
+            "a sync task's errors／error_code read outside external_sync.py -- read "
+            "external_sync.outcome (F49 O)",
+        )
+        # An allow entry whose read is gone must go too (the list only ever shrinks).
+        self.assertEqual(set(NOT_A_TASK_ERROR), seen)
+
+    def test_the_sync_scans_see_each_planted_shape(self):
+        tree = ast.parse(
+            '"""UPDATE ads_external_sync_job in prose is fine."""\n'
+            "def fallback(conn, task, state):\n"
+            "    conn.execute(\"INSERT INTO ads_external_sync_job(id,error) VALUES (%s,%s)\")\n"
+            "    conn.execute('UPDATE ads_external_sync_job SET error=%s')\n"
+            "    conn.execute('SELECT status FROM ads_external_sync_job')\n"
+            "    text = task.get('errors') or task['error_code']\n"
+            "    built = {'errors': [], 'error_code': None}\n"
+            "    return text, built, state['error']\n"
+        )
+        self.assertEqual(sorted(_sync_job_writes(tree)), [3, 4])
+        self.assertEqual(
+            sorted((f, line, k) for f, line, k in _task_error_reads(tree)),
+            [("fallback", 6, "error_code"), ("fallback", 6, "errors")],
+        )
 
 
 class RulesEndpointTest(unittest.TestCase):

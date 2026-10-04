@@ -15,6 +15,221 @@ from app.core.db import connection, jsonb, new_id, now_utc, set_tenant_scope
 
 TASK = "background.ads_external_sync"
 SECTIONS = ("structure", "creatives", "observations")
+# F49 Contract O: the key of the account task `record_request_failure` stores when a read could
+# not even be requested (unbound account, unsupported platform). It is never pending, so no worker
+# picks it, and the next `request_sync` drops it (it is not a requested key).
+REQUEST_TASK = "request"
+
+# -- F49 Contract O: one sync outcome --------------------------------------------------------------
+# A read's outcome is computed here from its tasks and nowhere else: every screen reads `outcome`
+# (through the routes and `useSyncOutcome`), never a job's `status`／`error` or a task's
+# `errors`／`error_code`.
+SYNC_STATES = ("running", "failed", "partial", "empty", "found")
+SYNC_TEXT = {
+    "running": "正在讀取平台資料",
+    "failed": "這次沒讀到平台資料",
+    "partial": "有部分平台資料沒讀到",
+    "empty": "沒有讀到資料",
+    "found": "已讀到平台資料",
+}
+# The first failed task's code by this priority names the reason; codes not listed follow.
+CODE_PRIORITY = (
+    "disconnected", "permission_denied", "unsupported", "source_error", "page_limit",
+    "invalid_source_page", "invalid_monthly_scope", "partial_source_page", "derive_failed",
+)
+# One sentence per `SourceReadError` code the adapters and this module raise, plus `no_rows`
+# (read cleanly, the platform returned nothing) and `not_read` (no read on record yet).
+SYNC_REASONS = {
+    "disconnected": "廣告帳戶已解除連結或不屬於這個品牌，請到設定重新連接",
+    "permission_denied": "平台授權已失效或權限不足，請重新授權",
+    "unsupported": "這個平台還不支援這項讀取",
+    "source_error": "平台暫時沒有回應，稍後會再試",
+    "page_limit": "資料量超過一次可讀的上限，這次沒有讀完",
+    "invalid_source_page": "平台回傳的資料無法核對，這次沒有存下",
+    "invalid_monthly_scope": "帳戶整月花費的範圍、幣別或時區無法核對",
+    "partial_source_page": "部分成效或素材對不到已讀到的廣告，這幾筆沒有存下",
+    "derive_failed": "已讀到的成效沒問題，但推算「0 筆」的規則出錯，可重新讀取",
+    "parent_mismatch": "平台物件或它的上層結構無法核對",
+    "no_rows": "平台在這段期間沒有回傳任何資料",
+    "not_read": "這個帳戶還沒讀取過",
+}
+_FINISHED = {"succeeded", "failed"}
+
+
+def _code_rank(code):
+    return CODE_PRIORITY.index(code) if code in CODE_PRIORITY else len(CODE_PRIORITY)
+
+
+def _result(state, code):
+    reason = SYNC_REASONS.get(code) if code else None
+    return {
+        "state": state,
+        "code": code,
+        "text": f"{SYNC_TEXT[state]}：{reason}" if reason else SYNC_TEXT[state],
+    }
+
+
+def outcome(tasks, *, campaign_id=None):
+    """F49 Contract O: `{state, code, text}` of a job's `tasks` (key -> task), pure.
+
+    Scope = the account tasks (no `campaign_id`) plus `campaign_id`'s tasks (every campaign task
+    when `None`). State, first match: `running` (a scoped task is pending), `failed` (every
+    finished scoped task failed), `partial` (some failed), `empty` (none failed and the scoped
+    `observations` tasks -- or the `list` task when no campaign task is in scope -- saved 0
+    rows; no task at all is `not_read`), else `found`. A task finished before rows were counted
+    (no `rows`) is never read as empty."""
+    scoped = {
+        key: task for key, task in (tasks or {}).items()
+        if not task.get("campaign_id") or campaign_id is None
+        or task.get("campaign_id") == campaign_id
+    }
+    if not scoped:
+        return _result("empty", "not_read")
+    if any(task.get("status") == "pending" for task in scoped.values()):
+        return _result("running", None)
+    finished = [task for task in scoped.values() if task.get("status") in _FINISHED]
+    failed = [task for task in finished if task.get("status") == "failed"]
+    if failed:
+        code = min(
+            (task.get("error_code") or "source_error" for task in failed), key=_code_rank,
+        )
+        return _result("failed" if len(failed) == len(finished) else "partial", code)
+    if any(task.get("campaign_id") for task in scoped.values()):
+        counted = [t for t in scoped.values() if t.get("section") == "observations"]
+    else:
+        counted = [scoped["list"]] if "list" in scoped else []
+    if counted and all(isinstance(t.get("rows"), int) for t in counted) \
+            and sum(t["rows"] for t in counted) == 0:
+        return _result("empty", "no_rows")
+    return _result("found", None)
+
+
+def failed_outcome(exc):
+    """The outcome of a read that could not even start (`account_reader` raised)."""
+    return _result("failed", getattr(exc, "code", None) or "source_error")
+
+
+_STATE_RANK = {"found": 0, "empty": 1, "partial": 2, "failed": 3, "running": 4}
+_JOB_STATUS = {
+    "running": "pending", "failed": "failed", "partial": "partial",
+    "empty": "succeeded", "found": "succeeded",
+}
+
+
+def _store_outcome(conn, job_id, tasks):
+    """Write the job-wide outcome: `status ∈ {pending, succeeded, partial, failed}` and `error` =
+    the outcome text when partial／failed, else NULL. The only writer of a job's status／error
+    after a task finished."""
+    result = outcome(tasks)
+    status = _JOB_STATUS[result["state"]]
+    conn.execute(
+        "UPDATE ads_external_sync_job SET status=%s,error=%s,last_success_at=CASE WHEN "
+        "%s='succeeded' THEN now() ELSE last_success_at END WHERE id=%s",
+        (status, result["text"] if status in {"partial", "failed"} else None, status, job_id),
+    )
+    return status
+
+
+def record_request_failure(conn, org_id, brand_id, platform, source_account, code):
+    """F49 Contract O: a read that could not be requested (the runtime's backoff row). Stores a
+    failed `request` account task so `outcome` names `code`, and stamps the attempt so the
+    runtime's due rule backs off. Earlier tasks (and their coverage proof) are kept."""
+    conn.execute(
+        "INSERT INTO ads_external_sync_job(id,org_id,brand_id,platform,source_account) "
+        "VALUES (%s,%s,%s,%s,%s) ON CONFLICT(org_id,brand_id,platform,source_account) DO NOTHING",
+        (new_id("aes"), org_id, brand_id, platform, source_account),
+    )
+    row = conn.execute(
+        "SELECT id,tasks FROM ads_external_sync_job WHERE org_id=%s AND brand_id=%s "
+        "AND platform=%s AND source_account=%s FOR UPDATE",
+        (org_id, brand_id, platform, source_account),
+    ).fetchone()
+    assert row is not None
+    code = code or "source_error"
+    tasks = {
+        **dict(row["tasks"] or {}),
+        REQUEST_TASK: {
+            "section": REQUEST_TASK, "status": "failed", "error_code": code,
+            "errors": [SYNC_REASONS.get(code, SYNC_REASONS["source_error"])], "rows": 0,
+            "attempted_at": now_utc(),
+        },
+    }
+    conn.execute(
+        "UPDATE ads_external_sync_job SET tasks=%s,last_attempt_at=now(),updated_at=now() "
+        "WHERE id=%s",
+        (jsonb(tasks), row["id"]),
+    )
+    _store_outcome(conn, row["id"], tasks)
+    conn.commit()
+
+
+def bound_accounts(conn, org_id, brand_id):
+    """`(platform, account_id)` of every account bound to the brand, across the channels."""
+    return [
+        (channel["key"], account["account_id"])
+        for channel in channels.CHANNELS
+        if (reader := channels.external_reader(channel["key"]))
+        for account in reader.accounts(conn, org_id, brand_id)
+    ]
+
+
+def _campaign_accounts(conn, org_id, brand_id, campaign_id):
+    """The accounts covering a campaign: its roots' accounts; no root -> every bound account
+    (a campaign not on a platform yet is looked for in the account listing)."""
+    roots = conn.execute(
+        "SELECT DISTINCT platform,source_account FROM ads_external_entity WHERE org_id=%s "
+        "AND brand_id=%s AND campaign_id=%s AND parent_native_id IS NULL "
+        "ORDER BY platform,source_account",
+        (org_id, brand_id, campaign_id),
+    ).fetchall()
+    if roots:
+        return [(r["platform"], r["source_account"]) for r in roots], True
+    return bound_accounts(conn, org_id, brand_id), False
+
+
+def account_job(conn, org_id, brand_id, platform, source_account):
+    row = conn.execute(
+        "SELECT * FROM ads_external_sync_job WHERE org_id=%s AND brand_id=%s AND platform=%s "
+        "AND source_account=%s",
+        (org_id, brand_id, platform, source_account),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def request_campaign_sync(conn, org_id, brand_id, campaign_id, *, start=None, end=None):
+    """Every job a campaign's 重新讀取 requests: each root account with the asked window; a
+    campaign without a root refreshes every bound account (drill 5). Raises `ValueError` when
+    there is nothing to read."""
+    accounts, rooted = _campaign_accounts(conn, org_id, brand_id, campaign_id)
+    if not accounts:
+        raise ValueError("此工作區沒有可同步的原生來源。")
+    window = {"start": start, "end": end} if rooted else {}
+    return [
+        request_sync(conn, org_id, brand_id, platform, account, **window)
+        for platform, account in accounts
+    ]
+
+
+def campaign_outcome(conn, org_id, brand_id, campaign_id):
+    """`{state, code, text, job_ids, last_success_at}` -- the worst outcome over the jobs
+    covering the campaign (running wins while any runs, then failed > partial > empty > found).
+    `last_success_at` is the oldest of their clean reads (null while any never read cleanly):
+    everything shown was read at least then."""
+    accounts, _ = _campaign_accounts(conn, org_id, brand_id, campaign_id)
+    results, jobs = [], []
+    for platform, account in accounts:
+        job = account_job(conn, org_id, brand_id, platform, account)
+        if job is not None:
+            jobs.append(job)
+        results.append(outcome(job["tasks"] if job else {}, campaign_id=campaign_id))
+    worst = max(results, key=lambda r: _STATE_RANK[r["state"]]) if results else outcome({})
+    successes = [job["last_success_at"] for job in jobs]
+    return {
+        **worst,
+        "job_ids": [job["id"] for job in jobs],
+        "last_success_at": min(successes)
+        if successes and len(jobs) == len(accounts) and None not in successes else None,
+    }
 # Advisory locks are database-wide, but the rows this lock serialises live in the connection's
 # schema. The key carries `current_schema()` so a read in one schema never skips because a
 # different schema (another test module/run on the same server) holds the same account.
@@ -142,6 +357,8 @@ def request_sync(conn, org_id, brand_id, platform, source_account, *, start=None
             "errors": [],
             "error_code": None,
             "attempts": 0,
+            # Contract O: saved rows of this generation (a resumed read keeps counting).
+            "rows": resumed.get("rows") if resume else 0,
         }
         covered = _last_covered(old) if task["section"] == "monthly" else None
         if covered:
@@ -157,6 +374,13 @@ def request_sync(conn, org_id, brand_id, platform, source_account, *, start=None
     return job
 
 
+def _count_rows(task, saved):
+    """Add a page's saved rows; a task from before rows were counted stays uncounted (never
+    read as empty)."""
+    if isinstance(task.get("rows"), int):
+        task["rows"] += saved
+
+
 def _update_task(conn, job, key, task):
     conn.execute(
         "UPDATE ads_external_sync_job SET tasks=tasks || jsonb_build_object(%s::text,%s::jsonb), "
@@ -165,17 +389,7 @@ def _update_task(conn, job, key, task):
         (key, jsonb(task), job["org_id"], job["brand_id"], job["id"]),
     )
     current = repo.get_job(conn, job["org_id"], job["brand_id"], job["id"])
-    values = list(current["tasks"].values())
-    status = (
-        "pending"
-        if any(t["status"] == "pending" for t in values)
-        else ("partial" if any(t["status"] == "failed" for t in values) else "succeeded")
-    )
-    conn.execute(
-        "UPDATE ads_external_sync_job SET status=%s,last_success_at=CASE WHEN %s='succeeded' "
-        "THEN now() ELSE last_success_at END WHERE id=%s",
-        (status, status, job["id"]),
-    )
+    _store_outcome(conn, job["id"], current["tasks"])
     conn.commit()
     return repo.get_job(conn, job["org_id"], job["brand_id"], job["id"])
 
@@ -215,6 +429,7 @@ def _save_monthly(conn, job, task, page, account):
         raise SourceReadError("來源沒有可核對的帳戶整月涵蓋證據。", "invalid_monthly_scope")
     if page.errors or len(page.items) > 100:
         raise SourceReadError("月份來源分頁有缺漏，請完整重讀。", "invalid_source_page")
+    saved = 0
     seen = {tuple(pair) for pair in task.get("seen_native_ids", [])}
     assigned = {
         (kind, native): entity for kind, native, entity in task.get("assigned_native_ids", [])
@@ -265,6 +480,8 @@ def _save_monthly(conn, job, task, page, account):
             {k: v for k, v in item.items() if k not in {"native_kind", "native_id"}}
             | {"entity_id": root["id"], "attribution_key": MONTHLY_BUDGET_ATTRIBUTION_KEY},
         )
+        saved += 1
+    _count_rows(task, saved)
     # Recheck all observed identities: another brand may have claimed a root between pages.
     for kind, native_id in sorted(seen):
         roots = _monthly_roots(conn, job, kind, native_id)
@@ -309,9 +526,11 @@ def _save_page(conn, job, task, page, reader=None):
     if len(page.items) > 100:
         raise ValueError("來源分頁超過100個節點。")
     errors = list(page.errors)
+    saved = 0  # Contract O: rows this page saved, added to the task's `rows` below.
     for item in page.items:
         if task["section"] == "list":
             repo.cache_listing(conn, org, brand, job["platform"], job["source_account"], item)
+            saved += 1
         elif task["section"] == "observations":
             entity = conn.execute(
                 "SELECT id FROM ads_external_entity WHERE org_id=%s AND "
@@ -349,6 +568,7 @@ def _save_page(conn, job, task, page, reader=None):
                 # not per reader.
                 heal_superseded_attribution=True,
             )
+            saved += 1
         else:
             if (
                 item["platform"] != job["platform"]
@@ -378,15 +598,17 @@ def _save_page(conn, job, task, page, reader=None):
                 from app.ads import asset_binding_repository
 
                 asset_binding_repository.lock_native(conn, {"org_id": org, **item})
-            saved = repo.upsert_entity(conn, org, brand, task["campaign_id"], item)
+            entity = repo.upsert_entity(conn, org, brand, task["campaign_id"], item)
+            saved += 1
             if "creative" in item:
                 from app.ads import asset_binding_repository
 
                 asset_binding_repository.stale_for_entity(
-                    conn, org, brand, task["campaign_id"], saved["id"], item["creative"]
+                    conn, org, brand, task["campaign_id"], entity["id"], item["creative"]
                 )
             if task["section"] == "structure" and not item.get("parent_native_id"):
                 _fill_result_kind_if_null(conn, reader, org, brand, task["campaign_id"], item)
+    _count_rows(task, saved)
     return errors
 
 
@@ -417,6 +639,7 @@ def run_sync(org_id, brand_id, job_id):
                 (job_id,),
             )
             conn.commit()
+            rows_before = task.get("rows")  # a rolled-back page saved nothing
             try:
                 reader, account = account_reader(
                     conn, org_id, brand_id, job["platform"], job["source_account"]
@@ -565,6 +788,7 @@ def run_sync(org_id, brand_id, job_id):
                     "errors": [reason],
                     "error_code": code,
                     "attempts": attempts,
+                    "rows": rows_before,
                 }
                 if task["section"] == "monthly":
                     updated["restart_required"] = code not in {

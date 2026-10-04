@@ -19,6 +19,8 @@
  *    read — screens print the served `delivery_label`; no `.status ===` against `live|ended|closed` and no local list
  *    or map of two or more of those codes — screens read the served `lifecycle {state, label, can_close}`. Today's
  *    hits are listed in `LIFECYCLE_PENDING`, each naming the issue that removes it.
+ * 7. F49-I02 (Contract O, one sync outcome): no `.job.status`／`.job.error` read and no `syncJob(` call outside
+ *    `lib/useSyncOutcome.ts` — screens print the served `outcome`. Today's hits are listed in `SYNC_PENDING`.
  *
  * Comments are not code: every scan reads the source with comments blanked out (line numbers kept); the numeric
  * literals are read in code only (a class name such as `gap-1.5` is a string). A hit that is not a served fact is
@@ -516,5 +518,67 @@ describe("one lifecycle (F49 Contract L, decision 11)", () => {
     expect(lifecycleCodes('const one = ["live"]; const k = { live: 1 };')).toEqual([]);
     expect(lifecycleCodes('// c.status === "live"')).toEqual([]);
     expect(lifecycleCodes('if (job.status === "running") x();')).toEqual([]);
+  });
+});
+
+/** F49-I02 (Contract O, one sync outcome): a platform read's outcome is served (`outcome {state, code, text}`) and read
+ * through `lib/useSyncOutcome.ts` only — no screen reads a sync job's `.job.status`／`.job.error` or polls `syncJob(`
+ * itself (the function's own declaration in `lib/adsExternalApi.ts` is not a call). Today's callers are listed in
+ * `SYNC_PENDING`, each naming the issue that moves the screen onto the hook and deletes the entry; an entry whose file no
+ * longer hits fails the stale-entry test. */
+const SYNC_JOB_READ = [
+  /\.job\??\.(?:status|error)\b/,
+  /(?<!function\s+)\bsyncJob\(/,
+];
+const syncJobReads = (text: string) => hits(text, SYNC_JOB_READ);
+const SYNC_PENDING: { file: string; issue: string; text?: string; why?: string }[] = [
+  { file: "components/ads/wait/WaitPage.tsx", issue: "F49-I10" },
+  { file: "components/ads/CampaignWorkspace.tsx", issue: "F49-I09" },
+  { file: "components/ads/connections/DataConnectionsPage.tsx", issue: "F49-I14" },
+  { file: "components/ads/ExistingCampaignDialog.tsx", issue: "F49-I14" },
+  { file: "components/ads/ExternalCampaignPanel.tsx", issue: "F49-I14" },
+  { file: "components/ads/settle/SettleAngles.tsx", issue: "W14", text: "found?.job.status",
+    why: "an AI (LLM) job's queue status, not a platform read; background job outcomes are W14 (feature C)" },
+];
+
+describe("one sync outcome (F49 Contract O)", () => {
+  it("no ads source reads a sync job's status／error or polls syncJob( outside useSyncOutcome", () => {
+    const files = FILES();
+    expect(files.length).toBeGreaterThan(20);
+    const offenders = files.flatMap((full) => {
+      const text = readFileSync(full, "utf-8");
+      const lines = text.split("\n");
+      const entries = SYNC_PENDING.filter((x) => x.file === rel(full));
+      const excused = (line: number) => entries.some((x) => x.text === undefined || lines[line - 1].includes(x.text));
+      return syncJobReads(text).filter((line) => !excused(line)).map((line) => `${rel(full)}:${line}`);
+    });
+    expect(offenders).toEqual([]);
+  });
+
+  it("every pending entry still hits (an issue that moved its screen onto the hook deletes its entry)", () => {
+    const present = new Set(FILES().map(rel));
+    const stale = SYNC_PENDING.filter((x) => {
+      if (!present.has(x.file)) return true;
+      const text = readFileSync(join(SRC_DIR, x.file), "utf-8");
+      const lines = text.split("\n");
+      return !syncJobReads(text).some((line) => x.text === undefined || lines[line - 1].includes(x.text));
+    });
+    expect(stale).toEqual([]);
+  });
+
+  it("the hook itself is the reader and is not scanned as a screen", () => {
+    expect(FILES().map(rel)).not.toContain("lib/useSyncOutcome.ts");
+    expect(syncJobReads(readFileSync(join(LIB_DIR, "useSyncOutcome.ts"), "utf-8")).length).toBeGreaterThan(0);
+  });
+
+  it("the sync scan sees each read shape and leaves the declaration, outcomes and comments alone", () => {
+    expect(syncJobReads('if (["pending", "running"].includes(result.job.status)) x();')).toEqual([1]);
+    expect(syncJobReads("if (result.job.error) setError(result.job.error);")).toEqual([1]);
+    expect(syncJobReads("const s = page?.job?.status;")).toEqual([1]);
+    expect(syncJobReads("const r = await syncJob(brandId, id, signal);")).toEqual([1]);
+    expect(syncJobReads("export async function syncJob(brand: string, id: string) {}")).toEqual([]);
+    expect(syncJobReads("<p>{outcome.text}</p>")).toEqual([]);
+    expect(syncJobReads('if (read.state === "running") x();')).toEqual([]);
+    expect(syncJobReads("// was: result.job.error")).toEqual([]);
   });
 });

@@ -273,6 +273,17 @@ class RuntimeTest(unittest.TestCase):
         ).fetchone()["tasks"]
         self.assertEqual(reopened, tasks)
 
+    def test_backoff_is_written_only_through_record_request_failure(self):
+        with (
+            patch.object(external_sync, "account_reader",
+                         side_effect=SourceReadError("private detail", "unsupported")),
+            patch.object(external_sync, "record_request_failure") as record,
+        ):
+            runtime._sync_sources(self.conn, self.org, self.brand, self.campaign, db.now_utc())
+        record.assert_called_once_with(
+            self.conn, self.org, self.brand, "fixture", "account", "unsupported",
+        )
+
     def test_reader_failure_before_job_insert_persists_backoff_and_unknown_health(self):
         now = db.now_utc()
         with patch.object(
@@ -286,11 +297,19 @@ class RuntimeTest(unittest.TestCase):
                 "SELECT * FROM ads_external_sync_job WHERE brand_id=%s",
                 (self.brand,),
             ).fetchone()
-            self.assertEqual(job["status"], "partial")
-            self.assertEqual(job["last_attempt_at"], now)
-            self.assertEqual(job["tasks"], {})
+            # F49 Contract O: the backoff row is written through
+            # `external_sync.record_request_failure` -- a failed `request` account task the one
+            # outcome reads (nothing else was read: `failed`, naming the code).
+            self.assertEqual(job["status"], "failed")
+            self.assertIsNotNone(job["last_attempt_at"])
+            self.assertEqual(set(job["tasks"]), {external_sync.REQUEST_TASK})
             self.assertIsNone(job["last_success_at"])
             self.assertNotIn("private detail", job["error"])
+            read = external_sync.outcome(job["tasks"], campaign_id=self.campaign)
+            self.assertEqual((read["state"], read["code"]), ("failed", "disconnected"))
+            self.assertEqual(job["error"], read["text"])
+            source = runtime._sources(self.conn, self.org, self.brand, self.campaign)[0]
+            self.assertEqual(source["error"], read["text"])
             runtime._sync_sources(
                 self.conn,
                 self.org,

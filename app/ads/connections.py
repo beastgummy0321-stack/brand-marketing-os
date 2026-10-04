@@ -30,7 +30,8 @@ did not cover, from its first monthly day on. Days before any read are `none`; a
 read at all misses every day (its note says 「還沒讀取過」, not a list of dates).
 
 Account state, first match: `auth_expired` / `failed` (the latest account-wide read -- the `list`
-task or the newest `monthly` task -- failed, or one of its open campaigns' own sync state is
+task, the newest `monthly` task or a read that could not be requested, judged by
+`external_sync.outcome` (F49 Contract O) -- failed, or one of its open campaigns' own sync state is
 failed / auth_expired; auth through the adapters' auth-error classifier) / `never` (no coverage
 at all) / `missing_days` / `ok`. `missing_days` are the complete days (up to yesterday) of this
 month or of the last `LOOKBACK_DAYS` days, whichever starts earlier -- so a gap just before the
@@ -46,7 +47,15 @@ import calendar
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from app.ads import adapters, channels, lifecycle, repository, triage, wizard_options
+from app.ads import (
+    adapters,
+    channels,
+    external_sync,
+    lifecycle,
+    repository,
+    triage,
+    wizard_options,
+)
 from app.core import settings as coresettings
 from app.orders import repository as orders_repo
 
@@ -175,16 +184,19 @@ def _account(conn, org_id, brand_id, channel, account, span, accounts_cache):
     monthly = _monthly_ranges(tasks, zone)
     moments = [job["last_success_at"]] if job else []
     failures = []  # (error_code, error text)
-    auth = False
     newest_month = max((key for key in tasks if key.startswith("monthly:")), default=None)
-    for key in ("list", newest_month):
-        task = tasks.get(key) if key else None
-        if not task:
-            continue
-        if task.get("status") == "failed":
-            failures.append((task.get("error_code"), (task.get("errors") or [None])[0]))
-            auth = auth or adapters.is_auth_error(platform, task.get("error_code"))
-        elif task.get("status") == "succeeded":
+    # F49 Contract O: the account-wide read (the list, the newest month, a request that could not
+    # start) fails through the one sync outcome -- never a task's own error fields.
+    account_tasks = {
+        key: tasks[key] for key in ("list", newest_month, external_sync.REQUEST_TASK)
+        if key and key in tasks
+    }
+    read = external_sync.outcome(account_tasks) if account_tasks else None
+    if read and read["state"] in {"failed", "partial"}:
+        failures.append((read["code"], read["text"]))
+    auth = bool(read) and adapters.is_auth_error(platform, read["code"])
+    for task in account_tasks.values():
+        if task.get("status") == "succeeded":
             moments.append(task.get("completed_at"))
 
     ranges = list(monthly)
