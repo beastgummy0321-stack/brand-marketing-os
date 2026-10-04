@@ -18,7 +18,8 @@ import { ActionBar, CampaignChip, Chip, FlowHeader, LearnCard, ReadFailed, Resul
 import { reviewRoundPath } from "../review/reviewFlow";
 import { AbLearnedCard, useAbContext } from "./AbEvidence";
 import { cleanupSteps } from "./CleanupProposal";
-import { CLEANUP_HERO_TITLE, CleanupVerifyRows, cleanupOverallState } from "./CleanupVerifyRows";
+import { CleanupVerifyRows, readbackMessage } from "./CleanupVerifyRows";
+import { NextOrHome } from "./confirmParts";
 import {
   abSteps,
   campaignChangesPath,
@@ -32,24 +33,19 @@ import {
   itemAngle,
   nextOpenQueueItem,
   proposePausePath,
-  queueItemEntityId,
   stepFromChangeSet,
 } from "./changeFlow";
 
 const STEP_PURPOSE = "系統讀回平台確認";
 type Kind = "pause" | "copy" | "budget" | "new_ad";
 
-const STATUS_LABEL: Record<string, string> = { ACTIVE: "啟用", PAUSED: "暫停", ARCHIVED: "已封存", DELETED: "已刪除" };
-function statusLabel(value: string | null | undefined): string {
-  if (!value) return "尚待確認";
-  return STATUS_LABEL[value] ?? "尚待確認";
+/** F49 Contract L: a platform status is printed by its served word (`item.status_labels`, the platform adapter's own
+ * table) — never mapped here. A side the read did not return reads 尚待確認. */
+function statusWord(item: ChangeItem, side: "after" | "observed"): string {
+  return item.status_labels?.[side] ?? "尚待確認";
 }
-/** `evidence_json.message` only exists on some read-backs (`app/ads/change_control_verify.py`);
- * anything else in that bag is not ours to interpret (feature Decisions). */
-function messageOf(item: ChangeItem): string | undefined {
-  const value = item.evidence_json.message;
-  return typeof value === "string" ? value : undefined;
-}
+/** `evidence_json.message` only exists on some read-backs (`app/ads/change_control_verify.py`). */
+const messageOf = readbackMessage;
 /** 「讀回於」＝`evidence_json.observed_at`，瀏覽器本地時間；沒有就是「尚未讀到」
  * （feature Decisions「Verify」）。 */
 function observedAtText(item: ChangeItem): string {
@@ -81,7 +77,7 @@ function confirmedRailNote(item: ChangeItem, kind: Kind): string {
   if (kind === "copy") return "標題、內文";
   if (kind === "budget") return `每日 ${formatTargetAmount(item.after.daily_amount ?? null)}`;
   if (kind === "new_ad") return "已對應平台上的廣告物件";
-  return `狀態：${statusLabel(item.after.status)}`;
+  return `狀態：${statusWord(item, "after")}`;
 }
 
 /** `M/D`，瀏覽器本地時區——跟 `observedAtText` 同一份「讀不到就說讀不到」慣例，`date` 是
@@ -183,8 +179,8 @@ function DeviatedCompare({ item, kind }: { item: ChangeItem; kind: Kind }) {
     );
   }
   const label = kind === "pause" ? "狀態" : "每日預算";
-  const approvedValue = kind === "pause" ? statusLabel(item.after.status) : formatTargetAmount(item.after.daily_amount ?? null);
-  const observedValue = kind === "pause" ? statusLabel(observed.status) : formatTargetAmount(observed.daily_amount ?? null);
+  const approvedValue = kind === "pause" ? statusWord(item, "after") : formatTargetAmount(item.after.daily_amount ?? null);
+  const observedValue = kind === "pause" ? statusWord(item, "observed") : formatTargetAmount(observed.daily_amount ?? null);
   return (
     <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
       <div className="rounded-xl border border-border bg-card p-4">
@@ -204,7 +200,8 @@ function DeviatedCompare({ item, kind }: { item: ChangeItem; kind: Kind }) {
  * 對非 copy kind 一律寫回 confirmed）；`deviated`／`stale` 的畫法照原型 copy kind 的展示邏輯
  * 類推到其他 kind（差異逐行標記只對文字內容有意義）。`pending`（`reported_at` 已寫入）與
  * `reported`／`unknown` 兩種原型沒畫過的狀態，照 feature Decisions 給的文案與動作組裝
- * （neutral hero／`平台上還是原本的設定`），不是重新設計。 */
+ * （neutral hero／`平台上還是原本的設定`），不是重新設計。F49 Contract B: `reported` and `unknown` print their served
+ * `verification_label`; every state's bar carries a forward exit (下一件, else ← 回投放中心). */
 export function VerifyPage({ brandId, campaignId, setId }: {
   brandId: string; campaignId: string; setId: string;
 }) {
@@ -369,24 +366,24 @@ export function VerifyPage({ brandId, campaignId, setId }: {
     </>
   ) : undefined;
 
-  // 「下一件」（F25-I03）：跟 ConfirmPage 的關閉態共用同一顆判斷，不各自算各自的
-  // （feature Decisions「下一件」——`changeFlow.ts::nextOpenQueueItem`，涵蓋全部四種 kind）。
-  const currentEntityId = triageItem ? queueItemEntityId(triageItem) : undefined;
-  const nextAction = nextOpenQueueItem(queue, currentEntityId);
-  const nextOrHome = nextAction
-    ? <Button asChild><Link to={nextAction.href}>下一件 →</Link></Button>
-    : <Button asChild><Link to={homeHref}>回投放中心 →</Link></Button>;
+  // 「下一件」（F25-I03, F49 Contract Q）：跟 ConfirmPage／HandoffPage 共用同一顆判斷（`nextOpenQueueItem`）。Every
+  // state below carries it as its forward exit (else 「← 回投放中心」): primary where the state has nothing else to
+  // press, quiet beside a state's own primary action.
+  const nextAction = nextOpenQueueItem(brandId, queue, triageItem);
+  const nextOrHome = <NextOrHome next={nextAction} homeHref={homeHref} />;
+  const nextOrHomeQuiet = <NextOrHome next={nextAction} homeHref={homeHref} quiet />;
 
   // F27-I15 Contract F Screens「Flow pages, new-ad and multi-item」: 「verify... one row per item
   // with its own state and a summary hero by the worst state」——整支跟單項 kind 的
   // confirmed/deviated/stale/pending-old/checking 分支是不同的畫法（沒有單一 `before/after` 可比
-  // 較），提早分支，不硬套下面的單項邏輯。
+  // 較），提早分支，不硬套下面的單項邏輯。F49 Contract B: the summary is the set's served worst state and its word
+  // (`change_control_data.worst_state`, the same aggregate the queue row's proposal carries).
   if (cleanupSet) {
-    const overall = cleanupOverallState(changeSet.items);
+    const overall = changeSet.verification_state;
     const hero = (
       <ResultHero
         tone={overall === "confirmed" ? "ok" : overall === "deviated" || overall === "stale" ? "bad" : "warn"}
-        title={CLEANUP_HERO_TITLE[overall]}
+        title={overall === "confirmed" ? "這批要清理的廣告都已經關閉" : changeSet.verification_label ?? "核對中"}
       />
     );
     return (
@@ -417,12 +414,15 @@ export function VerifyPage({ brandId, campaignId, setId }: {
     </Button>
   );
 
-  const state: "confirmed" | "deviated" | "stale" | "pending-old" | "checking" =
+  // F49 Contract B: `unknown` (read, but not provable) is its own state — its stored reason, 重新核對 and the exits —
+  // never the same screen as `reported` (reported, not read yet).
+  const state: "confirmed" | "deviated" | "stale" | "pending-old" | "unknown" | "reported" =
     item.verification_state === "confirmed" ? "confirmed"
     : item.verification_state === "deviated" ? "deviated"
     : item.verification_state === "stale" ? "stale"
     : item.verification_state === "pending" ? "pending-old"
-    : "checking";
+    : item.verification_state === "unknown" ? "unknown"
+    : "reported";
 
   let hero: ReactNode;
   let rail: ReactNode = null;
@@ -449,11 +449,7 @@ export function VerifyPage({ brandId, campaignId, setId }: {
     bar = (
       <ActionBar>
         {again}
-        {nextAction ? (
-          <Button asChild><Link to={nextAction.href}>下一件 →</Link></Button>
-        ) : (
-          <Button asChild><Link to={homeHref}>回投放中心 →</Link></Button>
-        )}
+        {nextOrHome}
       </ActionBar>
     );
   } else if (state === "deviated") {
@@ -471,7 +467,7 @@ export function VerifyPage({ brandId, campaignId, setId }: {
       ? `${reviewRoundPath(brandId, campaignId, changeSet.review_id, "copy")}?prefill=observed&set=${encodeURIComponent(changeSet.id)}`
       : null;
     bar = (
-      <ActionBar>
+      <ActionBar back={nextOrHomeQuiet}>
         {again}
         {adoptHref && <Button variant="ghost" asChild><Link to={adoptHref}>改用平台現在的內容</Link></Button>}
         <Button asChild>
@@ -487,23 +483,28 @@ export function VerifyPage({ brandId, campaignId, setId }: {
       : kind === "pause" ? proposePausePath(brandId, campaignId, item.target_id, "verify", changeSet.id)
       : campaignChangesPath(brandId, campaignId);
     bar = (
-      <ActionBar back={<Button variant="ghost" asChild><Link to={homeHref}>← 投放中心</Link></Button>}>
+      <ActionBar back={nextOrHomeQuiet}>
         <Button asChild><Link to={restartHref}>重新檢討 →</Link></Button>
       </ActionBar>
     );
   } else if (state === "pending-old") {
     hero = <ResultHero tone="warn" title="平台上還是原本的設定" note={messageOf(item) ?? "這項操作尚未完成。"} />;
     bar = (
-      <ActionBar>
+      <ActionBar back={nextOrHomeQuiet}>
         {again}
         <Button asChild>
           <Link to={changeStepPath(brandId, campaignId, changeSet.id, "handoff")}>回平台完成 →</Link>
         </Button>
       </ActionBar>
     );
+  } else if (state === "unknown") {
+    // Read, but not provable: the served word, and the stored reason the read gave beside it.
+    hero = <ResultHero tone="warn" title={item.verification_label ?? "核對中"} note={messageOf(item)} />;
+    bar = <ActionBar>{again}{nextOrHome}</ActionBar>;
   } else {
-    hero = <ResultHero tone="neutral" title="還沒讀到平台上的新設定" note={messageOf(item) ?? "稍後重新核對即可。"} />;
-    bar = <ActionBar>{again}</ActionBar>;
+    // Reported, not read yet: the served word; a re-check reads the platform now.
+    hero = <ResultHero tone="neutral" title={item.verification_label ?? "核對中"} note={messageOf(item) ?? "系統還沒讀回平台；稍後重新核對即可。"} />;
+    bar = <ActionBar>{again}{nextOrHome}</ActionBar>;
   }
 
   return (

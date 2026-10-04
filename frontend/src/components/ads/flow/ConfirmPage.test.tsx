@@ -258,7 +258,7 @@ describe("ConfirmPage（F22-I02）三種 kind", () => {
     expect(screen.queryByRole("link", { name: "← 投放中心" })).toBeNull();
   });
 
-  it("已拒絕的改文案清單：即使承接自檢討，返回鍵仍是「投放中心」（F23-I04）", async () => {
+  it("已拒絕的改文案清單：即使承接自檢討，出口仍是投放中心（F23-I04；F49：沒有下一件時是主按鈕「← 回投放中心」）", async () => {
     vi.mocked(changeApi.getChangeControl).mockResolvedValue({
       targets: [], change_sets: [changeSet({
         id: "acs_copy", review_id: "arv_1", recommendation_id: "rec_1", status: "rejected", reason: "資料還不夠",
@@ -267,8 +267,10 @@ describe("ConfirmPage（F22-I02）三種 kind", () => {
     });
     renderAt(confirmPath("acs_copy"));
     await screen.findByText("確認變更");
-    const back = screen.getByRole("link", { name: "← 投放中心" }) as HTMLAnchorElement;
-    expect(back.getAttribute("href")).toBe("/brands/brd_1/ads");
+    const home = screen.getByRole("link", { name: "← 回投放中心" }) as HTMLAnchorElement;
+    expect(home.getAttribute("href")).toBe("/brands/brd_1/ads");
+    // One way to one place: no second 「← 投放中心」 back link, no 「先不要」 exit on a closed set.
+    expect(screen.queryByRole("link", { name: "← 投放中心" })).toBeNull();
     expect(screen.queryByRole("link", { name: /先不要，回投放中心/ })).toBeNull();
   });
 
@@ -656,7 +658,7 @@ describe("ConfirmPage（F40-I08）本月預算放得下：三個狀態", () => {
     expect(await screen.findByText("預留＝最大 還有 5 天沒跑完，每天 1,500；第二 還有 4 天沒跑完，每天 800；第三 還有 3 天沒跑完，每天 300等 4 項 先留著；跑完就還回來。")).toBeTruthy();
   });
 
-  it("(ii) 還沒設月預算：標題、「設定 N 月月預算 →」連去投放中心的月預算表單，核准灰掉、旁邊寫原因", async () => {
+  it("(ii) 還沒設月預算：標題、「設定 N 月月預算 →」連去投放中心的月預算表單（帶 return＝這一頁），核准灰掉、旁邊寫原因", async () => {
     vi.mocked(triageApi.getQueue).mockResolvedValue(queue([scaleQueueItem()]));
     vi.mocked(changeApi.getMonthlyBudget).mockResolvedValue(monthlyBudget({
       amount: null, known_spend: null, ongoing_estimate: null, available: null, can_increase: false, ongoing_owners: [],
@@ -669,7 +671,10 @@ describe("ConfirmPage（F40-I08）本月預算放得下：三個狀態", () => {
     expect(text).toContain("，算不出放不放得下");
     expect(text).toContain("尚未設定 2026-09 的月總額。");
     expect(text).not.toContain("還能花");
-    expect(screen.getByRole("link", { name: "設定 9 月月預算 →" }).getAttribute("href")).toBe("/brands/brd_1/ads?budget=edit");
+    // F49 Contract Q (drill-11 Q4): the link carries this page's own path, so the home budget editor offers
+    // 「← 回到剛才的核准」 after saving.
+    expect(screen.getByRole("link", { name: "設定 9 月月預算 →" }).getAttribute("href"))
+      .toBe(`/brands/brd_1/ads?budget=edit&return=${encodeURIComponent(proposeBudgetPath)}`);
     expect(screen.getByText("⚠ 要先設 9 月月預算")).toBeTruthy();
     expect((screen.getByRole("button", { name: "核准加碼，接著到平台操作 →" }) as HTMLButtonElement).disabled).toBe(true);
     expect(changeApi.createChangeSet).not.toHaveBeenCalled();
@@ -1147,7 +1152,7 @@ describe("ConfirmPage（F29-I10）讀取失敗與出口", () => {
     renderAt(confirmPath());
     expect(await screen.findByText(/已暫緩・再看看/)).toBeTruthy();
     expect(screen.queryByRole("link", { name: /先不要，回投放中心/ })).toBeNull();
-    expect(screen.getByRole("link", { name: "← 投放中心" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "← 回投放中心" })).toBeTruthy();
   });
 
   it("加預算的月預算讀取失敗：說失敗、核准內容照舊，重試重讀月預算", async () => {
@@ -1311,5 +1316,52 @@ describe("ConfirmPage（F45-I06）暫停提議頁讀廣告本身", () => {
     renderAt(proposeBudgetPath);
     expect(await screen.findByText("提議：加預算")).toBeTruthy();
     expect(triageApi.getPauseView).not.toHaveBeenCalled();
+  });
+});
+
+// F49 Contract Q (drill-11 R4 H4): 下一件 on a closed set is the open decision row with the lowest served position —
+// never a notice row (資料不足 on the campaign row) — and an ended campaign's closeout row opens its closeout.
+describe("ConfirmPage（F49-I11）下一件跟著 served position", () => {
+  const deferredSet = () => changeSet({ status: "deferred", reason: "再看看", revisit_at: "2099-01-01T00:00:00Z" });
+  const notice = () => queueItem({
+    id: "int_gap", kind_key: "insufficient_data", decision: false, position: null,
+    action_url: "/brands/brd_1/ads/campaigns/cmp_2/wait", triage: triage({ entity_id: "aex_gap", campaign_id: "cmp_2" }),
+  });
+
+  it("skips the notice row and the handled row, follows position over list order", async () => {
+    vi.mocked(changeApi.getChangeControl).mockResolvedValue({ targets: [], change_sets: [deferredSet()] });
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([
+      notice(),
+      queueItem({ id: "int_3", triage: triage({ entity_id: "aex_3", campaign_id: "cmp_3" }), decision: true, position: 3 }),
+      queueItem({ id: "int_done", triage: triage({ entity_id: "aex_d", campaign_id: "cmp_d" }), decision: true, position: null, done: true }),
+      queueItem({ id: "int_2", triage: triage({ entity_id: "aex_2", campaign_id: "cmp_2" }), decision: true, position: 2 }),
+    ]));
+    renderAt(confirmPath());
+    const next = await screen.findByRole("link", { name: "下一件 →" });
+    expect(next.getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_2/propose/pause/aex_2");
+  });
+
+  it("only a notice row left: no 下一件, the forward exit is 「← 回投放中心」", async () => {
+    vi.mocked(changeApi.getChangeControl).mockResolvedValue({ targets: [], change_sets: [deferredSet()] });
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([notice()]));
+    renderAt(confirmPath());
+    expect((await screen.findByRole("link", { name: "← 回投放中心" })).getAttribute("href")).toBe("/brands/brd_1/ads");
+    expect(screen.queryByRole("link", { name: /下一件|去處理/ })).toBeNull();
+  });
+
+  it("a closeout row next: 「結案這一期 →」 opens the campaign's closeout", async () => {
+    vi.mocked(changeApi.getChangeControl).mockResolvedValue({ targets: [], change_sets: [deferredSet()] });
+    vi.mocked(triageApi.getQueue).mockResolvedValue({
+      ...queue([notice()]),
+      closeouts: [{
+        id: "int_close", dedupe_key: "ads-triage:closeout:cmp_9", category: "ads_triage_closeout", severity: "rule_warning",
+        message: "「秋季檔期」已結束，待結案", action_url: "/brands/brd_1/ads/campaigns/cmp_9?tab=perf&close=1", visible_from: null,
+        status: "open", created_at: "2026-10-10T00:00:00Z", campaign_id: "cmp_9", decision: true, position: 1, done: false,
+        closeout: { campaign_id: "cmp_9", campaign_name: "秋季檔期", end_date: "2026-10-09", running: { count: 0, read_at: null } },
+      }],
+    });
+    renderAt(confirmPath());
+    const close = await screen.findByRole("link", { name: "結案這一期 →" });
+    expect(close.getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_9?tab=perf&close=1");
   });
 });

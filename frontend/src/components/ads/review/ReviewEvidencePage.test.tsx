@@ -185,19 +185,20 @@ describe("ReviewEvidencePage（F23-I02）各狀態的卡片與 bar", () => {
     expect(screen.queryByLabelText("處理階梯（接上後開放）")).toBeNull();
   });
 
-  it("F47-I06：麵包屑用這一列自己的種類；沒有對應的列就寫「檢討」，不是固定的「變貴」", async () => {
+  it("F47-I06／F49 Contract Q：麵包屑印這一列自己 served 的句子（不是本地的種類對照表）；沒有對應的列就寫「檢討」", async () => {
     vi.mocked(reviewApi.getReview).mockResolvedValue(review());
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([queueItem({ message: "廣告「健身情境單圖」變差，待決定" })]));
     const first = renderAt(roundPath());
-    expect(await screen.findByText(/^變貴・/)).toBeTruthy();
+    expect(await screen.findByText("廣告「健身情境單圖」變差，待決定")).toBeTruthy();
     first.unmount();
-    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([queueItem({ kind_key: "stop_loss" })]));
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([queueItem({ kind_key: "cleanup", message: "「秋季檔期」花錢沒效，待決定" })]));
     const second = renderAt(roundPath());
-    expect(await screen.findByText(/^停損・/)).toBeTruthy();
+    expect(await screen.findByText("「秋季檔期」花錢沒效，待決定")).toBeTruthy();
     second.unmount();
     vi.mocked(triageApi.getQueue).mockResolvedValue(queue([]));
     renderAt(roundPath());
     expect(await screen.findByText(/^檢討・/)).toBeTruthy();
-    expect(screen.queryByText(/^變貴・/)).toBeNull();
+    expect(screen.queryByText(/待決定/)).toBeNull();
   });
 
   it("ready：非銷售活動（target.result_kind 不是 purchase）顯示「這條素材的紀錄」，不顯示商城訂單", async () => {

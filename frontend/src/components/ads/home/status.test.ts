@@ -163,22 +163,56 @@ describe("nextOpenQueueItem", () => {
   it("skips done rows", () => {
     const deferred = queueItem({ id: "a", triage: triageItem({ entity_id: "ad_a" }), proposal: deferredReview, done: true });
     const open = queueItem({ id: "b", triage: triageItem({ entity_id: "ad_b" }) });
-    expect(nextOpenQueueItem(queue([deferred, open]), "ad_x")?.href).toBe("/brands/brd_1/ads/campaigns/cmp_1/review/ad_b");
-    expect(nextOpenQueueItem(queue([deferred]), "ad_x")).toBeNull();
+    expect(nextOpenQueueItem("brd_1", queue([deferred, open]), null)?.href).toBe("/brands/brd_1/ads/campaigns/cmp_1/review/ad_b");
+    expect(nextOpenQueueItem("brd_1", queue([deferred]), null)).toBeNull();
   });
 
-  it("a 資料不足 row goes to its own page, never to a pause proposal for the campaign's first ad (drill-10 Q1)", () => {
-    const cleanup = queueItem({
-      id: "c", kind_key: "cleanup", proposal: set("acs_1", "draft"), action_url: "/brands/brd_1/ads/campaigns/cmp_1/propose/cleanup/cmp_1",
-      cleanup: { campaign_id: "cmp_1", campaign_name: "活動", can_support: 1, active_ads: 3, ads: [], keep: [], short: 0, daily_saving: null, scale_owner_id: null },
-    });
-    const insufficient = queueItem({
-      id: "i", kind_key: "insufficient_data", action_url: "/brands/brd_1/ads/campaigns/cmp_2/wait",
+  // F49 Contract Q: 下一件 is the open decision row with the lowest served position other than this page's own row.
+  it("follows the served position, skips notice rows and the current row (drill-11 R4 H4)", () => {
+    const current = queueItem({ id: "w1", triage: triageItem({ entity_id: "ad_1" }), decision: true, position: 1 });
+    const later = queueItem({ id: "w3", triage: triageItem({ entity_id: "ad_3" }), decision: true, position: 3 });
+    const sooner = queueItem({ id: "w2", triage: triageItem({ entity_id: "ad_2" }), decision: true, position: 2 });
+    const gap = queueItem({
+      id: "g", kind_key: "insufficient_data", decision: false, position: null, action_url: "/brands/brd_1/ads/campaigns/cmp_2/wait",
       insufficient: { campaign_id: "cmp_2", campaign_name: "活動二", missing_days: ["2026-10-03"], sync_state: "ok", coverage: null },
     });
-    expect(nextOpenQueueItem(queue([cleanup, insufficient]), "cmp_1")).toEqual({
-      label: "去處理", href: "/brands/brd_1/ads/campaigns/cmp_2/wait", done: false,
+    const q = served([gap, later, current, sooner]);
+    expect(nextOpenQueueItem("brd_1", q, current)?.href).toBe("/brands/brd_1/ads/campaigns/cmp_1/review/ad_2");
+    // Only notices and handled rows left → nothing next (the page shows ← 回投放中心), never the 資料不足 row.
+    const handled = queueItem({ id: "h", decision: true, position: null, done: true });
+    expect(nextOpenQueueItem("brd_1", served([gap, current, handled]), current)).toBeNull();
+  });
+
+  it("a cleanup row on the same campaign is not mistaken for the current one; a draft-less one opens its proposal", () => {
+    const refresh = queueItem({
+      id: "r", kind_key: "refresh_creative", decision: true, position: 1,
+      refresh: { campaign_id: "cmp_1", campaign_name: "活動", readable_count: 1, classified_count: 3, thumbnails: [] },
     });
+    const cleanup = queueItem({
+      id: "c", kind_key: "cleanup", decision: true, position: 2, proposal: null,
+      cleanup: { campaign_id: "cmp_1", campaign_name: "活動", can_support: 1, active_ads: 3, ads: [], keep: [], short: 0, daily_saving: null, scale_owner_id: null },
+    });
+    expect(nextOpenQueueItem("brd_1", served([refresh, cleanup]), refresh)).toEqual({
+      label: "看提議", href: "/brands/brd_1/ads/campaigns/cmp_1/propose/cleanup/cmp_1", done: false,
+    });
+    expect(nextOpenQueueItem("brd_1", served([refresh, cleanup]), cleanup)?.href).toBe("/brands/brd_1/ads/campaigns/cmp_1?tab=assets&material_new=1");
+    expect(nextOpenQueueItem("brd_1", served([refresh, { ...cleanup, proposal: set("acs_1", "draft") }]), refresh)?.href)
+      .toBe("/brands/brd_1/ads/campaigns/cmp_1/changes/acs_1/confirm");
+  });
+
+  it("a closeout row next links to the campaign's closeout (「結案這一期」); the settle row to its settle page", () => {
+    const current = queueItem({ id: "w1", decision: true, position: 1 });
+    const later = queueItem({ id: "w9", triage: triageItem({ entity_id: "ad_9" }), decision: true, position: 4 });
+    const q = served([current, later], { closeouts: [closeoutRow({ position: 3 })], settle: settleRow({ decision: true, position: 2, done: false }) });
+    expect(nextOpenQueueItem("brd_1", q, current)).toEqual({ label: "開始結算", href: "/brands/brd_1/ads/settle/2026-08/result", done: false });
+    const noSettle = { ...q, settle: null };
+    expect(nextOpenQueueItem("brd_1", noSettle, current)).toEqual({
+      label: "結案這一期", href: "/brands/brd_1/ads/campaigns/cmp_9?tab=perf&close=1", done: false, closeout: true,
+    });
+    // A closeout is never the current row of a flow page: the same campaign's cleanup row does not hide it.
+    const sameCampaign = closeoutRow({ campaign_id: "cmp_1", position: 2, action_url: "/brands/brd_1/ads/campaigns/cmp_1?tab=perf&close=1" });
+    expect(nextOpenQueueItem("brd_1", served([current], { closeouts: [sameCampaign] }), current)?.href)
+      .toBe("/brands/brd_1/ads/campaigns/cmp_1?tab=perf&close=1");
   });
 });
 

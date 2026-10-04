@@ -286,6 +286,27 @@ describe("HandoffPage（F27-I15）new_ad kind：嵌入既有的 ManualHandoffPan
   });
 });
 
+// F49 Contract Q exits: beside 「← 還沒做完，先離開」, the next open decision by served position (never a notice row).
+describe("HandoffPage（F49-I11）下一件", () => {
+  it("another open decision: 「下一件 →」 by served position beside the way home; a notice row is never next", async () => {
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([
+      queueItem({ decision: true, position: 1 }),
+      queueItem({ id: "gap", kind_key: "insufficient_data", decision: false, position: null, action_url: "/brands/brd_1/ads/campaigns/cmp_8/wait", triage: triage({ entity_id: "aex_8" }) }),
+      queueItem({ id: "w3", kind_key: "worse", decision: true, position: 3, triage: triage({ entity_id: "aex_3", campaign_id: "cmp_3" }) }),
+    ]));
+    renderAt(handoffPath());
+    expect((await screen.findByRole("link", { name: "下一件 →" })).getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_3/review/aex_3");
+    expect(screen.getByRole("link", { name: "← 還沒做完，先離開" }).getAttribute("href")).toBe("/brands/brd_1/ads");
+  });
+
+  it("nothing else open: only the way home", async () => {
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([queueItem({ decision: true, position: 1 })]));
+    renderAt(handoffPath());
+    expect(await screen.findByRole("link", { name: "← 還沒做完，先離開" })).toBeTruthy();
+    expect(screen.queryByRole("link", { name: /下一件/ })).toBeNull();
+  });
+});
+
 // F47-I07: 「第 N 件／共 M 件」 counts the open home decisions (the top bar's owner), never every queue row.
 describe("HandoffPage 「第幾件」", () => {
   it("counts only open home decisions: a handled row and a 資料不足 row are not counted", async () => {
