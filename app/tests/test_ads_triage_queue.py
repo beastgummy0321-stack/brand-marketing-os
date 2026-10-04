@@ -1768,6 +1768,22 @@ class InboxFollowsTheQueueTest(_RealCampaignQueue):
                             identity_id=self.campaign)
         self.assertEqual([r["id"] for r in self._open("cleanup")], [self.row["id"]])
 
+    def test_a_launch_set_answers_no_queue_row(self):
+        """The launch handoff (whose re-approval carries `confirmed` forward,
+        `handoff_data.carry_launch`) answers no decision row: resolving for it leaves the
+        campaign's waiting cleanup row open."""
+        set_id = db.new_id("acs")
+        self.conn.execute(
+            "INSERT INTO ads_change_set(id,org_id,brand_id,campaign_id,operation_id,request_hash,"
+            "content_hash,title,month,plan_json,created_by,status) "
+            "VALUES(%s,%s,%s,%s,%s,'h','h','上架','2026-01',%s,'test','approved')",
+            (set_id, self.org, self.brand, self.campaign, db.new_id("op"),
+             db.jsonb({"launch_snapshot": {}, "items": [{"id": "x", "kind": "launch"}]})),
+        )
+        self.conn.commit()
+        triage.resolve_change_set(self.conn, self.org, self.brand, set_id)
+        self.assertEqual([r["id"] for r in self._open("cleanup")], [self.row["id"]])
+
     def test_one_count_everywhere(self):
         from app.ads import digest, status_summary
 
