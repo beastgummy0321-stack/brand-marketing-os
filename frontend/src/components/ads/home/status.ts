@@ -1,27 +1,7 @@
-import type { CampaignStatus } from "@/lib/adsApi";
 import type { HomeOverview } from "@/lib/adsHomeApi";
 import type {
-  QueueItem, QueueKind, QueuePauseProposal, QueuePayload, QueueProposal, QueueReviewProposal, SettleQueueRow,
+  CloseoutQueueRow, QueueItem, QueuePauseProposal, QueuePayload, QueueProposal, QueueReviewProposal, SettleQueueRow,
 } from "@/lib/adsTriageApi";
-
-/** F19-I02：從 `AdsHomePage.tsx` 抽出，讓 `home/CampaignCards.tsx` 跟 `AdsHomePage.tsx` 都能讀，
- * 不必互相 import 造成循環依賴。`AdsHomePage.tsx` 原樣 re-export，`AllCampaignsPage.tsx`
- * （do_not_touch 外但這次沒有理由改）沿用同一個 import 路徑不受影響。 */
-export const STATUS_LABEL: Record<CampaignStatus, string> = {
-  draft: "草稿",
-  ready: "待發布",
-  live: "投放中",
-  ended: "已結束",
-  closed: "已結案",
-};
-
-export const STATUS_TONE: Record<CampaignStatus, "secondary" | "default" | "outline"> = {
-  draft: "secondary",
-  ready: "outline",
-  live: "default",
-  ended: "outline",
-  closed: "secondary",
-};
 
 /** F22-I05/F23-I01: what a `stop_loss` or `worse` row／ad leads to, driven entirely by
  * `item.proposal` (feature Decisions "Queue row state"; routes and labels from the issue's rule
@@ -77,6 +57,7 @@ function reviewChangeSetAction(
     campaign_id: campaignId,
     status: proposal.change_set_status ?? "draft",
     verification_state: proposal.verification_state ?? "pending",
+    verification_label: proposal.verification_label,
     reason: proposal.reason,
     revisit_at: proposal.revisit_at,
     multi: proposal.multi,
@@ -168,20 +149,17 @@ export function proposalAction(
         href: stepHref("confirm"),
         done: true,
       };
-    case "approved":
-      switch (proposal.verification_state) {
-        case "pending":
-          return { label: "到平台完成", href: stepHref("handoff"), done: false };
-        case "reported":
-        case "unknown":
-          return { label: "核對中", href: stepHref("verify"), done: false };
-        case "deviated":
-          return { label: "與核准不符", href: stepHref("verify"), done: false };
-        case "stale":
-          return { label: "需重新檢討", href: stepHref("verify"), done: false };
-        case "confirmed":
-          return { label: "已核對", href: stepHref("verify"), done: true };
-      }
+    case "approved": {
+      // F49 Contract B: the state's word is served (`verification_label`); this only picks the step. A set nothing has
+      // been reported on yet waits on the platform side, every other state is read on the verify step. Without the
+      // served word (older hand-written fixtures only) the step's own name stands in.
+      const pending = proposal.verification_state === "pending";
+      return {
+        label: proposal.verification_label ?? (pending ? "到平台完成" : "核對中"),
+        href: stepHref(pending ? "handoff" : "verify"),
+        done: proposal.verification_state === "confirmed",
+      };
+    }
   }
 }
 
@@ -206,50 +184,69 @@ export function isQueueItemDone(item: QueueItem): boolean {
   return item.done;
 }
 
-/** The ad-level kinds the home 「需要你決定」 board shows, in board order (the brand's settle row joins them in
- * `decisionBoard`). Same set as the backend's `queue_done.DECISION_KINDS`, which the top bar's `open_items` counts. */
-const DECISION_ORDER: QueueKind[] = ["cleanup", "worse", "refresh_creative"];
-
-/** The home board's ad-level rows, open and handled, in board order — split by the row's own `done`. */
-export function decisionRows(queue: QueuePayload): { open: QueueItem[]; done: QueueItem[] } {
-  const rows = queue.items
-    .filter((item) => DECISION_ORDER.includes(item.kind_key))
-    .map((item, i) => ({ item, i }))
-    .sort((a, b) => DECISION_ORDER.indexOf(a.item.kind_key) - DECISION_ORDER.indexOf(b.item.kind_key) || a.i - b.i)
-    .map(({ item }) => item);
-  return { open: rows.filter((item) => !isQueueItemDone(item)), done: rows.filter((item) => isQueueItemDone(item)) };
+/** F49 Contract Q: whether a row is a decision the user is asked to make is the row's served `decision` (`false` on a
+ * notice: `scale_budget` on the money card, `insufficient_data` on the campaign row). A row without the flag (older
+ * hand-written fixtures only; every real row carries it) counts. */
+function isDecision(row: { decision?: boolean }): boolean {
+  return row.decision !== false;
 }
 
-/** One entry of the home board: an ad-level queue row, or the brand's period-settle row. */
-export type HomeDecision = { kind: "item"; item: QueueItem } | { kind: "settle"; row: SettleQueueRow };
+/** One entry of the home board: an ad-level queue row, the brand's period-settle row, or an ended campaign's
+ * closeout row. */
+export type HomeDecision =
+  | { kind: "item"; item: QueueItem }
+  | { kind: "settle"; row: SettleQueueRow }
+  | { kind: "closeout"; row: CloseoutQueueRow };
 
-/** Board order (prototype): cleanup, worse, settle, refresh_creative. `open.length` is the home's count and the top
- * bar's `open_items`; the flow pages' 「第 N 件／共 M 件」 is a position in `open` (`decisionPosition`). */
+const positionOf = (d: HomeDecision): number | null | undefined => (d.kind === "item" ? d.item.position : d.row.position);
+
+/** F49 Contract Q: the home 「需要你決定」 board — every decision row of the queue (ad rows, the settle row, the
+ * closeout rows), open ones in their served `position` (board order is the backend's `DECISION_KINDS`), then the
+ * handled ones as served. Done-ness is each row's own served `done`. The count is `decisionCount`. */
 export function decisionBoard(brandId: string, queue: QueuePayload): { open: HomeDecision[]; done: HomeDecision[] } {
-  const items = decisionRows(queue);
-  const place = (list: QueueItem[], settle: SettleQueueRow | null): HomeDecision[] => {
-    const entries: HomeDecision[] = list.map((item) => ({ kind: "item", item }));
-    if (!settle) return entries;
-    const at = entries.findIndex((e) => e.kind === "item" && e.item.kind_key === "refresh_creative");
-    entries.splice(at < 0 ? entries.length : at, 0, { kind: "settle", row: settle });
-    return entries;
-  };
   const settle = queue.settle ?? null;
-  const settleDone = settle ? settleAction(brandId, settle).done : false;
-  return {
-    open: place(items.open, settle && !settleDone ? settle : null),
-    done: place(items.done, settle && settleDone ? settle : null),
-  };
+  const entries: HomeDecision[] = [
+    ...queue.items.filter(isDecision).map((item): HomeDecision => ({ kind: "item", item })),
+    ...(settle && isDecision(settle) ? [{ kind: "settle", row: settle } as HomeDecision] : []),
+    ...(queue.closeouts ?? []).filter(isDecision).map((row): HomeDecision => ({ kind: "closeout", row })),
+  ];
+  const isDone = (d: HomeDecision) =>
+    d.kind === "item" ? isQueueItemDone(d.item) : d.kind === "settle" ? (d.row.done ?? settleAction(brandId, d.row).done) : d.row.done;
+  const open = entries
+    .filter((d) => !isDone(d))
+    .map((d, i) => ({ d, i }))
+    .sort((a, b) => (positionOf(a.d) ?? Infinity) - (positionOf(b.d) ?? Infinity) || a.i - b.i)
+    .map(({ d }) => d);
+  return { open, done: entries.filter(isDone) };
 }
 
-/** F47-I07: 「第 N 件／共 M 件」 on a flow page — the row's place among the open home decisions, counted by the same
- * owner as the home and the top bar. `null` when the row is not one of them (handled, or a kind the board does not
- * show): no position is invented for it. */
+/** 「共 M 件」: the served `decisions.open` (the top bar's `open_items` and the inbox's ads rows are the same number);
+ * the board's own open rows only when a payload predates it (older hand-written fixtures). */
+export function decisionCount(queue: QueuePayload, board: { open: HomeDecision[] }): number {
+  return queue.decisions?.open ?? board.open.length;
+}
+
+/** F49 Contract Q: 「第 N 件／共 M 件」 — the served `position` of an open decision row among `decisions.open`. `null`
+ * when the row is not an open decision (handled, or a notice): no position is invented for it. */
+function boardPosition(
+  brandId: string, queue: QueuePayload, which: (d: HomeDecision) => boolean,
+): { pos: number; total: number } | null {
+  const board = decisionBoard(brandId, queue);
+  const at = board.open.findIndex(which);
+  if (at < 0) return null;
+  return { pos: positionOf(board.open[at]) ?? at + 1, total: decisionCount(queue, board) };
+}
+
+/** A flow page's 「第 N 件／共 M 件」 for an ad-level row. */
 export function decisionPosition(queue: QueuePayload | null, item: QueueItem | null): { pos: number; total: number } | null {
   if (!queue || !item || item.brand_id === null) return null;
-  const open = decisionBoard(item.brand_id, queue).open;
-  const at = open.findIndex((d) => d.kind === "item" && d.item.id === item.id);
-  return at < 0 ? null : { pos: at + 1, total: open.length };
+  return boardPosition(item.brand_id, queue, (d) => d.kind === "item" && d.item.id === item.id);
+}
+
+/** The settle page's 「第 N 件（共 M 件）」 for the brand's open settle row. */
+export function settlePosition(brandId: string, queue: QueuePayload | null): { pos: number; total: number } | null {
+  if (!queue?.settle) return null;
+  return boardPosition(brandId, queue, (d) => d.kind === "settle");
 }
 
 /** F29-I11 (Contract E): the brand-level period-settle row's own action. Its link is the row's own

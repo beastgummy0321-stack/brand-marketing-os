@@ -9,7 +9,7 @@ import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { getHomeOverview, type HomeOverview } from "@/lib/adsHomeApi";
-import { refreshQueue, type QueueItem, type QueueKind, type QueuePayload, type QueueProposal, type SettleQueueRow, type TriageItem } from "@/lib/adsTriageApi";
+import { refreshQueue, type CloseoutQueueRow, type QueueItem, type QueueKind, type QueuePayload, type QueueProposal, type SettleQueueRow, type TriageItem } from "@/lib/adsTriageApi";
 import { getMonthlyBudget, saveMonthlyBudget, type MonthlyBudget } from "@/lib/adsChangeApi";
 import { getRecovery, type AdsRecovery } from "@/lib/adsStatusApi";
 import { AdsHomePage } from "./AdsHomePage";
@@ -108,6 +108,22 @@ function queue(items: QueueItem[]): QueuePayload {
   return { items, counts: { stop_loss: 0, worse: 0, better: 0, flat: 0, insufficient: 0, no_target: 0 }, total_ads: 0, kinds_available: [], kinds_pending: [] };
 }
 
+/** A queue as F49 Contract Q serves it: rows stamped with `decision`／`position`, `decisions.open` the count. */
+function served(items: QueueItem[], open: number, extra: Partial<QueuePayload> = {}): QueuePayload {
+  return { ...queue(items), settle: null, closeouts: [], decisions: { kinds: ["cleanup", "worse", "closeout", "refresh_creative"], open }, ...extra };
+}
+
+/** An ended campaign's closeout row (Contract Q), as `splitQueue` hands it over. */
+function closeout(overrides: Partial<CloseoutQueueRow> = {}): CloseoutQueueRow {
+  return {
+    id: "itr_close", dedupe_key: "k_close", category: "ads_triage_closeout", severity: "rule_warning", message: "「秋季檔期・第三期」已結束，待結案",
+    action_url: "/brands/brd_1/ads/campaigns/cmp_fall?tab=perf&close=1", visible_from: null, status: "open", created_at: "2026-10-10T00:00:00Z",
+    campaign_id: "cmp_fall", decision: true, position: 1, done: false,
+    closeout: { campaign_id: "cmp_fall", campaign_name: "秋季檔期・第三期", end_date: "2026-10-09", running: { count: 2, read_at: "2026-10-10T02:00:00Z" } },
+    ...overrides,
+  };
+}
+
 const notRecovering: AdsRecovery = { recovering: false, gap: null, steps: [] };
 const budget: MonthlyBudget = {
   month: "2026-09", currency: "TWD", amount: 60000, revision: 1, known_spend: 22000, ongoing_estimate: 14400, reserved_increases: 0,
@@ -149,22 +165,46 @@ describe("AdsHomePage (F28-I08 board D)", () => {
     expect(vi.mocked(refreshQueue)).toHaveBeenCalledTimes(1);
   });
 
-  it("decisions: open cleanup, worse and refresh rows only, in that order; stop_loss and scale rows are not cards", async () => {
-    vi.mocked(refreshQueue).mockResolvedValue(queue([
-      item("w1", "worse"),
-      item("s1", "stop_loss", {}, { class: "stop_loss" }),
-      item("r1", "refresh_creative", { action_url: "/brands/brd_1/ads/campaigns/cmp_daily?tab=assets", refresh: { campaign_id: "cmp_daily", campaign_name: "日常商品推廣・轉換", readable_count: 2, classified_count: 5, thumbnails: [null] } }),
-      cleanupItem("c1"),
-    ]));
+  // F49 Contract Q: which rows are decisions (`decision`), their order (`position`) and the count (`decisions.open`)
+  // are served; the order here (worse, refresh, cleanup) is not the old local list (cleanup, worse, refresh).
+  it("decisions: the served decision rows in their served position; notice rows (stop_loss, scale) are not cards", async () => {
+    vi.mocked(refreshQueue).mockResolvedValue(served([
+      item("w1", "worse", { decision: true, position: 1 }),
+      item("s1", "stop_loss", { decision: false, position: null }, { class: "stop_loss" }),
+      item("r1", "refresh_creative", { decision: true, position: 2, action_url: "/brands/brd_1/ads/campaigns/cmp_daily?tab=assets", refresh: { campaign_id: "cmp_daily", campaign_name: "日常商品推廣・轉換", readable_count: 2, classified_count: 5, thumbnails: [null] } }),
+      { ...cleanupItem("c1"), decision: true, position: 3 },
+    ], 3));
     renderPage();
     const section = await screen.findByRole("region", { name: /需要你決定/ });
     const cards = await within(section).findAllByRole("article");
-    expect(cards.map((c) => c.getAttribute("aria-label"))).toEqual(["關 1 則、留 0 則", "再行銷・兩入組 NT$1,580 免運 - 複本 2", "能判讀的素材只剩 2 則"]);
+    expect(cards.map((c) => c.getAttribute("aria-label"))).toEqual(["再行銷・兩入組 NT$1,580 免運 - 複本 2", "能判讀的素材只剩 2 則", "關 1 則、留 0 則"]);
     expect(within(section).getByText("3 件")).toBeTruthy();
-    expect(within(cards[0]).getByRole("link", { name: "決定要不要關 →" }).getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_daily/propose/cleanup/cmp_daily");
-    expect(within(cards[1]).getByRole("link", { name: "查原因 →" }).getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_daily/review/ad_w1");
-    expect(within(cards[2]).getByRole("link", { name: "準備新素材 →" }).getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_daily?tab=assets");
+    expect(within(cards[2]).getByRole("link", { name: "決定要不要關 →" }).getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_daily/propose/cleanup/cmp_daily");
+    expect(within(cards[0]).getByRole("link", { name: "查原因 →" }).getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_daily/review/ad_w1");
+    expect(within(cards[1]).getByRole("link", { name: "準備新素材 →" }).getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_daily?tab=assets");
     expect(await screen.findByRole("button", { name: "3 件要你決定 ↓" })).toBeTruthy();
+  });
+
+  it("the count is the served decisions.open: 今天 and the chip say it even when it differs from the rows in this read", async () => {
+    vi.mocked(refreshQueue).mockResolvedValue(served([item("w1", "worse", { decision: true, position: 1 })], 2));
+    renderPage();
+    const section = await screen.findByRole("region", { name: /需要你決定/ });
+    expect(await within(section).findAllByRole("article")).toHaveLength(1);
+    expect(within(section).getByText("2 件")).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "2 件要你決定 ↓" })).toBeTruthy();
+  });
+
+  it("an ended campaign's closeout row is a decision card: the served sentence, its end and running ads, 結案這一期 to its own link", async () => {
+    vi.mocked(refreshQueue).mockResolvedValue(served([item("w1", "worse", { decision: true, position: 2 })], 2, {
+      closeouts: [closeout({ position: 1 })],
+    }));
+    renderPage();
+    const section = await screen.findByRole("region", { name: /需要你決定/ });
+    const cards = await within(section).findAllByRole("article");
+    expect(cards.map((c) => c.getAttribute("aria-label"))).toEqual(["「秋季檔期・第三期」已結束，待結案", "再行銷・兩入組 NT$1,580 免運 - 複本 2"]);
+    expect(within(cards[0]).getByText("10/09 結束・平台上還開著 2 則")).toBeTruthy();
+    expect(within(cards[0]).getByRole("link", { name: "結案這一期 →" }).getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_fall?tab=perf&close=1");
+    expect(within(section).getByText("2 件")).toBeTruthy();
   });
 
   it("more than three open decisions: three cards, the rest behind one closed fold that uses the cleanup cut mark", async () => {
@@ -194,15 +234,15 @@ describe("AdsHomePage (F28-I08 board D)", () => {
   });
 
   // F29-I11: the period settle is one of today's decisions (QueuePayload.settle, Contract E).
-  it("settle row present: counted, placed after cleanup and worse, before refresh; the card spans the row and opens the settle page", async () => {
-    vi.mocked(refreshQueue).mockResolvedValue({ ...queue([
-      item("r1", "refresh_creative", { action_url: "/brands/brd_1/ads/campaigns/cmp_daily?tab=assets", refresh: { campaign_id: "cmp_daily", campaign_name: "日常商品推廣・轉換", readable_count: 2, classified_count: 5, thumbnails: [null] } }),
-      item("w1", "worse"),
-    ]), settle: settleRow() });
+  it("settle row present: counted and placed by its served position; the card spans the row and opens the settle page", async () => {
+    vi.mocked(refreshQueue).mockResolvedValue(served([
+      item("r1", "refresh_creative", { decision: true, position: 1, action_url: "/brands/brd_1/ads/campaigns/cmp_daily?tab=assets", refresh: { campaign_id: "cmp_daily", campaign_name: "日常商品推廣・轉換", readable_count: 2, classified_count: 5, thumbnails: [null] } }),
+      item("w1", "worse", { decision: true, position: 3 }),
+    ], 3, { settle: { ...settleRow(), decision: true, position: 2, done: false } }));
     renderPage();
     const section = await screen.findByRole("region", { name: /需要你決定/ });
     const cards = await within(section).findAllByRole("article");
-    expect(cards.map((c) => c.getAttribute("aria-label"))).toEqual(["再行銷・兩入組 NT$1,580 免運 - 複本 2", "結算上一期", "能判讀的素材只剩 2 則"]);
+    expect(cards.map((c) => c.getAttribute("aria-label"))).toEqual(["能判讀的素材只剩 2 則", "結算上一期", "再行銷・兩入組 NT$1,580 免運 - 複本 2"]);
     expect(cards[1].className).toContain("col-span-full");
     expect(within(cards[1]).getByRole("link", { name: "開始結算 →" }).getAttribute("href")).toBe("/brands/brd_1/ads/settle/2026-08/result");
     expect(within(section).getByText("3 件")).toBeTruthy();
@@ -329,6 +369,44 @@ describe("AdsHomePage (F28-I08 board D)", () => {
     expect(saveMonthlyBudget).toHaveBeenCalledWith("brd_1", expect.objectContaining({ amount: 45000 }), expect.any(AbortSignal));
   });
 
+  // F49 Contract Q (drill-11 Q4): an approval's month-budget gate links here with `return=<its path>`.
+  it("?budget=edit&return=<approval>: after saving, 「← 回到剛才的核准」 leads back; it stays after the area closes", async () => {
+    vi.mocked(saveMonthlyBudget).mockResolvedValue({ ...budget, amount: 70000, revision: 2 });
+    const back = "/brands/brd_1/ads/campaigns/cmp_daily/changes/acs_1/confirm";
+    renderAt(`/brands/brd_1/ads?budget=edit&return=${encodeURIComponent(back)}`);
+    const amount = await screen.findByRole("spinbutton", { name: "每月品牌總額" });
+    expect(screen.queryByRole("link", { name: "← 回到剛才的核准" })).toBeNull();
+    await userEvent.clear(amount);
+    await userEvent.type(amount, "70000");
+    await userEvent.click(screen.getByRole("button", { name: "確認月總額" }));
+    expect((await screen.findByRole("link", { name: "← 回到剛才的核准" })).getAttribute("href")).toBe(back);
+    await userEvent.click(screen.getByRole("button", { name: "← 收起" }));
+    expect(screen.getByRole("status", { name: "search" }).textContent).toBe("");
+    expect(screen.getByRole("link", { name: "← 回到剛才的核准" }).getAttribute("href")).toBe(back);
+  });
+
+  it("closing the area without saving also offers the way back", async () => {
+    const back = "/brands/brd_1/ads/campaigns/cmp_daily/propose/budget/adset_A";
+    renderAt(`/brands/brd_1/ads?budget=edit&return=${encodeURIComponent(back)}`);
+    await screen.findByRole("spinbutton", { name: "每月品牌總額" });
+    await userEvent.click(screen.getByRole("button", { name: "← 收起" }));
+    expect(screen.getByRole("link", { name: "← 回到剛才的核准" }).getAttribute("href")).toBe(back);
+  });
+
+  it("a return outside this brand's ads centre (or without budget=edit) is ignored", async () => {
+    for (const bad of ["https://evil.example/x", "//evil.example/brands/brd_1/ads/x", "/brands/brd_2/ads/campaigns/c", "/settings"]) {
+      const { unmount } = renderAt(`/brands/brd_1/ads?budget=edit&return=${encodeURIComponent(bad)}`);
+      await screen.findByRole("spinbutton", { name: "每月品牌總額" });
+      await userEvent.click(screen.getByRole("button", { name: "← 收起" }));
+      expect(screen.queryByRole("link", { name: "← 回到剛才的核准" })).toBeNull();
+      unmount();
+    }
+    renderAt(`/brands/brd_1/ads?return=${encodeURIComponent("/brands/brd_1/ads/campaigns/c")}`);
+    await userEvent.click(await screen.findByRole("button", { name: "調整" }));
+    await userEvent.click(screen.getByRole("button", { name: "← 收起" }));
+    expect(screen.queryByRole("link", { name: "← 回到剛才的核准" })).toBeNull();
+  });
+
   it("without the param the home opens with the editor closed", async () => {
     renderAt("/brands/brd_1/ads");
     expect(await screen.findByRole("button", { name: "調整" })).toBeTruthy();
@@ -353,6 +431,19 @@ describe("AdsHomePage (F28-I08 board D)", () => {
     expect(screen.queryByRole("region", { name: /需要你決定/ })).toBeNull();
     expect(screen.queryByText(/算不出來|還沒有購買|NT\$0|0 筆/)).toBeNull();
     expect(screen.getByRole("heading", { level: 1, name: "9 月的廣告" })).toBeTruthy();
+  });
+
+  it("no campaign in progress and nothing spent, but campaigns closed this month (drill-11 N3): never 「還沒有活動」 or a first-run card", async () => {
+    vi.mocked(getHomeOverview).mockResolvedValue(home({
+      spent: null, campaigns: [], quality: null, closed_this_month: 3,
+      money: { purchases: null, cost_per_purchase: null, cap: null, earn: null, earn_missing: ["no_purchase_campaign"], excluded: [], previous_same_period: null },
+    }));
+    renderPage();
+    const rows = await screen.findByTestId("campaign-grid");
+    expect(rows.textContent).toContain("這個月沒有進行中的活動・已結案 3 個");
+    expect(within(rows).getByRole("link", { name: "已結案 3 個" }).getAttribute("href")).toBe("/brands/brd_1/ads/campaigns");
+    expect(screen.queryByText("還沒有活動")).toBeNull();
+    expect(screen.queryByRole("region", { name: "還沒有進行中的活動" })).toBeNull();
   });
 
   it("no open campaign but spend this month (a campaign closed mid-month): the board still shows that spend", async () => {

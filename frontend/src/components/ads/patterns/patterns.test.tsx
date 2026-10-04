@@ -743,20 +743,24 @@ describe("blocked slot（F44-I05，原型 f44-blocked-slot）", () => {
   });
 });
 
-describe("campaign words（F47-I08，drill-10 §4.3）", () => {
-  it("一個活動一個字：草稿（含待發布）／投放中（含匯入）／已結束／已結案；工作區自己的答案優先", async () => {
+describe("campaign words（F47-I08，drill-10 §4.3；F49 Contract L）", () => {
+  it("一個活動一個字＝後端給的 lifecycle.label（不看 status、不自己換字）；沒有 lifecycle 印「—」", async () => {
     const { campaignWord } = await import("./campaignWords");
-    expect(campaignWord({ status: "draft" })).toBe("草稿");
-    expect(campaignWord({ status: "ready" })).toBe("草稿");
-    expect(campaignWord({ status: "live" })).toBe("投放中");
-    expect(campaignWord({ status: "draft", origin: "imported" })).toBe("投放中");
-    expect(campaignWord({ status: "ended" })).toBe("已結束");
-    expect(campaignWord({ status: "closed", origin: "imported" })).toBe("已結案");
-    expect(campaignWord({ status: "ready" }, { onPlatform: true })).toBe("投放中");
-    expect(campaignWord({ status: "live" }, { onPlatform: false })).toBe("草稿");
+    const lc = (state: "draft" | "live" | "ended" | "closed", label: string) => ({ lifecycle: { state, label, can_close: false } });
+    expect(campaignWord(lc("draft", "草稿"))).toBe("草稿");
+    expect(campaignWord(lc("live", "投放中"))).toBe("投放中");
+    expect(campaignWord(lc("ended", "已結束・待結案"))).toBe("已結束・待結案");
+    expect(campaignWord(lc("ended", "已結束"))).toBe("已結束");
+    expect(campaignWord(lc("closed", "已結案"))).toBe("已結案");
+    // The old second argument still compiles and no longer overrides the served word.
+    expect(campaignWord(lc("live", "投放中"), { onPlatform: false })).toBe("投放中");
+    expect(campaignWord({})).toBe("—");
+    expect(campaignWord({ lifecycle: null })).toBe("—");
+    // Without a served lifecycle, a caller's own 「not on a platform」 answer still reads 草稿.
+    expect(campaignWord({}, { onPlatform: false })).toBe("草稿");
   });
 
-  it("已結案不說在投：平台上還開著 N 則才寫出來", async () => {
+  it("已結案不說在投：平台上還在投的 N 則（served running count）才寫出來", async () => {
     const { closedWord } = await import("./campaignWords");
     expect(closedWord(6)).toBe("已結案・平台上還開著 6 則");
     expect(closedWord(0)).toBe("已結案");

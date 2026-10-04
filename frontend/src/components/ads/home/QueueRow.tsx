@@ -1,9 +1,9 @@
 import { Link } from "react-router-dom";
 import { Button } from "@/components/layout/ui/button";
-import type { QueueItem } from "@/lib/adsTriageApi";
-import { cleanupAction, proposalAction } from "./status";
+import type { CloseoutQueueRow, QueueItem, QueueKind } from "@/lib/adsTriageApi";
+import { cleanupAction, proposalAction, settleAction, type HomeDecision } from "./status";
 import { Chip, KindMark } from "../patterns";
-import { shortName } from "./NextDates";
+import { monthDay, shortName } from "./NextDates";
 
 /** One home decision's action (feature F28 "Decisions on home": `cleanup`, `worse`, `refresh_creative`).
  * `cleanup`／`worse` follow their proposal through `home/status.ts` (same helpers the detail page and the flows use)
@@ -47,16 +47,18 @@ export function DoneChip({ action }: { action: HomeAction }) {
   );
 }
 
-const MARK = {
-  cleanup: { kind: "cut", label: "清理" },
-  worse: { kind: "worse", label: "變貴" },
-  refresh_creative: { kind: "fresh", label: "補素材" },
-} as const;
+/** The fold's kind mark of an ad-level decision (v9 `qRow()`: 「✂ 清理」, 變貴, 補素材); other kinds carry none. */
+function markOf(kind: QueueKind): { kind: "cut" | "worse" | "fresh"; label: string } | null {
+  if (kind === "cleanup") return { kind: "cut", label: "清理" };
+  if (kind === "worse") return { kind: "worse", label: "變貴" };
+  if (kind === "refresh_creative") return { kind: "fresh", label: "補素材" };
+  return null;
+}
 
 /** A decision folded under the three cards (prototype v9 `qRow()` vocabulary: kind mark, campaign, title, action).
  * The cleanup mark is `KindMark cut` 「✂ 清理」. */
 export function QueueRow({ brandId, item, recovering }: { brandId: string; item: QueueItem; recovering: boolean }) {
-  const mark = MARK[item.kind_key as keyof typeof MARK];
+  const mark = markOf(item.kind_key);
   const action = homeAction(brandId, item);
   const campaignName = item.cleanup?.campaign_name ?? item.refresh?.campaign_name ?? item.triage.campaign_name;
   return (
@@ -73,4 +75,42 @@ export function QueueRow({ brandId, item, recovering }: { brandId: string; item:
       ) : null}
     </div>
   );
+}
+
+/** F49 Contract Q: an ended campaign's closeout decision — its one step is the row's own `action_url` (the campaign's
+ * 成效 tab with the close dialog open), never rebuilt here. A closeout row is never done: it leaves when the campaign
+ * closes. */
+export function closeoutAction(row: CloseoutQueueRow): HomeAction {
+  return { label: "結案這一期", href: row.action_url, done: row.done };
+}
+
+/** What the closeout card says under its title: the end date and the ads its platform read still finds running. */
+export function closeoutNote(row: CloseoutQueueRow): string {
+  const { end_date: end, running } = row.closeout;
+  const parts = [end ? `${monthDay(end)} 結束` : null, running.count > 0 ? `平台上還開著 ${running.count} 則` : null];
+  return parts.filter(Boolean).join("・");
+}
+
+/** A closeout decision folded under the three cards (same row vocabulary as `QueueRow`). */
+export function CloseoutRow({ row, recovering }: { row: CloseoutQueueRow; recovering: boolean }) {
+  const action = closeoutAction(row);
+  return (
+    <div className="flex flex-wrap items-center gap-3 border-t border-border py-2.5 first:border-t-0">
+      <Chip tone="warn">結案</Chip>
+      <span className="min-w-0 flex-1 text-sm font-medium [overflow-wrap:anywhere]">{row.message}</span>
+      <span className="text-xs text-muted-foreground">{shortName(row.closeout.campaign_name)}</span>
+      {recovering ? (
+        <Chip>補完資料後更新</Chip>
+      ) : action.href ? (
+        <Button asChild size="sm" variant="outline"><Link to={action.href}>{action.label} →</Link></Button>
+      ) : null}
+    </div>
+  );
+}
+
+/** Where one board entry's step leads (the settle page's 「下一件」 reads it). */
+export function decisionHref(brandId: string, d: HomeDecision): string | null {
+  if (d.kind === "item") return homeAction(brandId, d.item).href;
+  if (d.kind === "settle") return settleAction(brandId, d.row).href;
+  return closeoutAction(d.row).href;
 }

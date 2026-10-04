@@ -7,7 +7,7 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 
 import type { HomeCampaign, HomeOverview } from "@/lib/adsHomeApi";
-import type { QueueItem, SettleQueueRow, TriageItem } from "@/lib/adsTriageApi";
+import type { CloseoutQueueRow, QueueItem, SettleQueueRow, TriageItem } from "@/lib/adsTriageApi";
 import { CampaignRows } from "./CampaignRows";
 import { MonthMoney } from "./MonthMoney";
 import { NextDates } from "./NextDates";
@@ -250,6 +250,64 @@ describe("CampaignRows", () => {
     expect(name.parentElement?.className).toContain("flex-wrap");
   });
 
+  // F49 Contract L: the word is the served lifecycle; 「在投」 is the served running count and only while live.
+  it("an ended campaign reads 已結束・待結案 with its closeout step and no 在投; ads still running are said apart", () => {
+    wrap(<CampaignRows brandId="b" state={ready(home({ campaigns: [
+      campaign({ campaign_id: "cmp_end", name: "秋季檔期・第三期", status: "ended", lifecycle: { state: "ended", label: "已結束・待結案", can_close: true },
+        running: { count: 2, unknown: 0, read_at: "2026-10-10T02:00:00Z", stale: false } }),
+      campaign({ campaign_id: "cmp_imp", name: "夏季清倉・舊帳戶", origin: "imported", status: "ended", lifecycle: { state: "ended", label: "已結束", can_close: false },
+        running: { count: 0, unknown: 0, read_at: null, stale: false } }),
+    ] }))} onRetry={vi.fn()} />);
+    const grid = screen.getByTestId("campaign-grid");
+    expect(within(grid).getByText("已結束・待結案").getAttribute("data-state")).toBe("ended");
+    expect(within(grid).getByText("已結束")).toBeTruthy();
+    expect(grid.textContent).not.toMatch(/在投/);
+    expect(within(grid).getByText("平台上還開著 2 則")).toBeTruthy();
+    expect(within(grid).getByRole("link", { name: "結案這一期 →" }).getAttribute("href")).toBe("/brands/b/ads/campaigns/cmp_end?tab=perf&close=1");
+    // An imported campaign has no closeout here: it opens as before.
+    expect(within(grid).getByRole("link", { name: "打開 →" }).getAttribute("href")).toBe("/brands/b/ads/campaigns/cmp_imp");
+  });
+
+  it("a live row prints 投放中 and the served running count; a count read before the last report says when it was read", () => {
+    const readAt = "2026-10-03T06:20:00Z";
+    const d = new Date(readAt);
+    const at = `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+    wrap(<CampaignRows brandId="b" state={ready(home({ campaigns: [
+      campaign({ lifecycle: { state: "live", label: "投放中", can_close: true }, active_ads: 0, daily_budget: null,
+        running: { count: 0, unknown: 1, read_at: readAt, stale: true } }),
+      campaign({ campaign_id: "cmp_2", name: "第二個活動", lifecycle: { state: "live", label: "投放中", can_close: true }, active_ads: 3,
+        running: { count: 3, unknown: 0, read_at: readAt, stale: false } }),
+    ] }))} onRetry={vi.fn()} />);
+    expect(screen.getByText(`在投 0 則・另有 1 則狀態不明・上次讀取 ${at}・每日 未知`)).toBeTruthy();
+    expect(screen.getByText("在投 3 則・每日 1,200")).toBeTruthy();
+    expect(screen.getAllByText("投放中")).toHaveLength(2);
+  });
+
+  it("a stale count never read yet says so instead of a time", () => {
+    wrap(<CampaignRows brandId="b" state={ready(home({ campaigns: [
+      campaign({ lifecycle: { state: "live", label: "投放中", can_close: true }, active_ads: 0, running: { count: 0, unknown: 0, read_at: null, stale: true } }),
+    ] }))} onRetry={vi.fn()} />);
+    expect(screen.getByText("在投 0 則・還沒讀到平台上的廣告・每日 1,200")).toBeTruthy();
+  });
+
+  it("a draft row's chip is the served label", () => {
+    wrap(<CampaignRows brandId="b" state={ready(home({ campaigns: [
+      campaign({ campaign_id: "cmp_fall", name: "秋季新色預購", status: "ready", lifecycle: { state: "draft", label: "草稿", can_close: false }, month_spend: null, purchases: null, cost_per_purchase: null, cap: null,
+        active_ads: 0, draft: { start_date: "2026-10-01", cap_missing: false, ads_total: 8, ads_ready: 8, approved: true } }),
+    ] }))} onRetry={vi.fn()} />);
+    expect(screen.getByText("草稿").getAttribute("data-state")).toBe("draft");
+  });
+
+  it("no campaign in progress: names the ones closed this month and links to all campaigns; none closed says 還沒有活動", () => {
+    const { unmount } = wrap(<CampaignRows brandId="b" state={ready(home({ campaigns: [], closed_this_month: 3 }))} onRetry={vi.fn()} />);
+    expect(screen.getByTestId("campaign-grid").textContent).toContain("這個月沒有進行中的活動・已結案 3 個");
+    expect(screen.getByRole("link", { name: "已結案 3 個" }).getAttribute("href")).toBe("/brands/b/ads/campaigns");
+    expect(screen.queryByText("還沒有活動")).toBeNull();
+    unmount();
+    wrap(<CampaignRows brandId="b" state={ready(home({ campaigns: [], closed_this_month: 0 }))} onRetry={vi.fn()} />);
+    expect(screen.getByText("還沒有活動")).toBeTruthy();
+  });
+
   it("the campaigns block failing alone shows its own retry", () => {
     wrap(<CampaignRows brandId="b" state={ready(home({ campaigns: null }))} onRetry={vi.fn()} />);
     expect(screen.getByText("活動暫時讀取不到")).toBeTruthy();
@@ -417,6 +475,33 @@ describe("TodayDecisions", () => {
     wrap(<TodayDecisions brandId="b" state={payload([stale])} syncing={false} recovering={false} sync={null} onRetry={vi.fn()} />);
     expect(screen.getByText("1 件")).toBeTruthy();
     expect(screen.queryByRole("button", { name: /今天處理過/ })).toBeNull();
+  });
+
+  it("a closeout beyond the first three folds into its own row with 結案這一期; the fold count and chip use the served count", () => {
+    const close: CloseoutQueueRow = {
+      id: "itr_c", dedupe_key: "c", category: "ads_triage_closeout", severity: "rule_warning", message: "「秋季檔期・第三期」已結束，待結案",
+      action_url: "/brands/b/ads/campaigns/cmp_fall?tab=perf&close=1", visible_from: null, status: "open", created_at: "2026-10-10T00:00:00Z",
+      campaign_id: "cmp_fall", decision: true, position: 4, done: false,
+      closeout: { campaign_id: "cmp_fall", campaign_name: "秋季檔期・第三期", end_date: null, running: { count: 0, read_at: null } },
+    };
+    const rows = [1, 2, 3].map((n) => row(`w${n}`, "worse", { decision: true, position: n }, { entity_id: `ad_${n}`, name: `廣告 ${n}` }));
+    wrap(<TodayDecisions brandId="b" state={{ status: "ready", queue: { ...payload(rows).queue, closeouts: [close], decisions: { kinds: [], open: 4 } } }} syncing={false} recovering={false} sync={null} onRetry={vi.fn()} />);
+    expect(screen.getAllByRole("article")).toHaveLength(3);
+    expect(screen.getByText("4 件")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "還有 1 件要決定" }));
+    expect(screen.getByText("「秋季檔期・第三期」已結束，待結案")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "結案這一期 →" }).getAttribute("href")).toBe("/brands/b/ads/campaigns/cmp_fall?tab=perf&close=1");
+  });
+
+  it("an approved decision's button prints the served verification word", () => {
+    const approved = row("c1", "cleanup", {
+      action_url: "/x",
+      proposal: { kind: "cleanup", change_set_id: "acs_1", campaign_id: "cmp_daily", status: "approved", verification_state: "reported", verification_label: "已回報，待讀回", reason: null, revisit_at: null, multi: true },
+      cleanup: { campaign_id: "cmp_daily", campaign_name: "日常商品推廣・轉換", can_support: 6, active_ads: 8, short: 0, daily_saving: null, scale_owner_id: null, keep: [],
+        ads: [{ entity_id: "a8", name: "提問式貼文", thumbnail_url: null, spend_7d: null, grade: "wasted", cost_per_result: null, spend: 2470, result_count: 0, daily_spend: null, rejected_before: null }] },
+    });
+    wrap(<TodayDecisions brandId="b" state={payload([approved])} syncing={false} recovering={false} sync={null} onRetry={vi.fn()} />);
+    expect(screen.getByRole("link", { name: "已回報，待讀回 →" }).getAttribute("href")).toBe("/brands/b/ads/campaigns/cmp_daily/changes/acs_1/verify");
   });
 
   it("read failure: hero with the last successful sync time and a retry", () => {

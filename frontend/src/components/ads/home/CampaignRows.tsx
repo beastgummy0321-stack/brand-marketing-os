@@ -3,16 +3,18 @@ import { Button } from "@/components/layout/ui/button";
 import { Skeleton } from "@/components/layout/Skeleton";
 import type { HomeCampaign, HomeCap, HomeHandoff, HomeOverview } from "@/lib/adsHomeApi";
 import type { CampaignDataState } from "@/lib/adsTriageApi";
-import { CAMPAIGN_WORD, Chip, MoneyMeter, MoneyTag, formatAmount } from "../patterns";
+import { Chip, MoneyMeter, MoneyTag, formatAmount } from "../patterns";
 import { cn } from "@/lib/utils";
 import { wholeYuan } from "./MonthMoney";
 import { monthDay } from "./NextDates";
 
-/** v10 home campaign rows (prototype v10 `homeCamps()`, `.ct`): every campaign that is not closed — live and
+/** v10 home campaign rows (prototype v10 `homeCamps()`, `.ct`): every campaign that is not closed — live, ended and
  * imported first by this month's spend, then drafts by start date (order from `GET …/home`). The campaign name opens
- * its workspace; the row's action is the one next step (打開／重新連線／繼續準備). An approved change still waiting on
- * the platform side shows as a chip to the 變更與核對 tab (`handoff`); why a campaign's numbers are missing or partial
- * is the row's own `data_status.label`, never re-derived here. */
+ * its workspace; beside it the served `lifecycle.label` (F49 Contract L). The row's action is the one next step
+ * (打開／重新連線／結案這一期／繼續準備). 「在投」 is the served `running` count and is said only while the campaign is
+ * live; an ended one shows its closeout step instead. An approved change still waiting on the platform side shows as
+ * a chip to the 變更與核對 tab (`handoff`); why a campaign's numbers are missing or partial is the row's own
+ * `data_status.label`, never re-derived here. */
 
 const GRID = "grid grid-cols-[minmax(0,2.2fr)_minmax(0,1.2fr)_minmax(0,1.6fr)_minmax(0,.8fr)_120px] items-center gap-4 px-6";
 /** Data states whose fix is on the connections page (the row's action becomes 重新連線). */
@@ -56,6 +58,39 @@ function HandoffChip({ brandId, campaignId, handoff }: { brandId: string; campai
   );
 }
 
+/** 「10/3 14:20」 in the browser's time zone (a structure read's time). */
+function readTime(iso: string): string {
+  const d = new Date(iso);
+  return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+/** The campaign's served lifecycle word as a chip (nothing while a read predates it). */
+function LifecycleChip({ c }: { c: HomeCampaign }) {
+  if (!c.lifecycle) return null;
+  return <Chip tone={c.lifecycle.state === "ended" ? "warn" : "neutral"} data-state={c.lifecycle.state}>{c.lifecycle.label}</Chip>;
+}
+
+/** 「在投 N 則」 from the served `running` (drill-11 E5: a count read before the user's last report says when it was
+ * read; ads whose platform status is unknown are said apart, never folded into 0). */
+function runningText(c: HomeCampaign): string {
+  const running = c.running ?? { count: c.active_ads, unknown: 0, read_at: null, stale: false };
+  const parts = [`在投 ${running.count} 則`];
+  if (running.unknown > 0) parts.push(`另有 ${running.unknown} 則狀態不明`);
+  if (running.stale) parts.push(running.read_at ? `上次讀取 ${readTime(running.read_at)}` : "還沒讀到平台上的廣告");
+  return parts.join("・");
+}
+
+/** The month's empty rows: no campaign in progress; the ones closed this month are named, never 「還沒有活動」. */
+function EmptyRows({ brandId, closed }: { brandId: string; closed: number }) {
+  if (closed <= 0) return <p className="border-t border-border px-6 py-3.5 text-sm text-muted-foreground">還沒有活動</p>;
+  return (
+    <p className="border-t border-border px-6 py-3.5 text-sm text-muted-foreground">
+      這個月沒有進行中的活動・
+      <Link to={`/brands/${brandId}/ads/campaigns`} className="font-medium text-primary hover:underline">已結案 {closed} 個</Link>
+    </p>
+  );
+}
+
 export function CampaignRows({ brandId, state, onRetry }: {
   brandId: string;
   state: { status: "loading" } | { status: "error" } | { status: "ready"; home: HomeOverview };
@@ -79,8 +114,8 @@ export function CampaignRows({ brandId, state, onRetry }: {
           <Button variant="outline" size="sm" onClick={onRetry}>重新讀取</Button>
         </div>
       )}
-      {campaigns && campaigns.length === 0 && (
-        <p className="border-t border-border px-6 py-3.5 text-sm text-muted-foreground">還沒有活動</p>
+      {state.status === "ready" && campaigns && campaigns.length === 0 && (
+        <EmptyRows brandId={brandId} closed={state.home.closed_this_month ?? 0} />
       )}
       {state.status === "ready" && campaigns?.map((c) => (
         c.draft ? <DraftRow key={c.campaign_id} brandId={brandId} c={c} /> : <LiveRow key={c.campaign_id} brandId={brandId} c={c} spent={state.home.spent} />
@@ -102,17 +137,25 @@ function LiveRow({ brandId, c, spent }: { brandId: string; c: HomeCampaign; spen
   const reconnect = RECONNECT.has(status.state);
   const tl = capLabel(c.cap);
   const cap = c.cap && c.cap.basis ? { value: c.cap.value, basis: c.cap.basis } : null;
+  // An ended campaign's next step is its closeout (the same link as its queue row), not another look at the numbers.
+  const closeout = c.lifecycle?.state === "ended" && c.lifecycle.can_close;
+  const running = c.running?.count ?? c.active_ads;
   return (
     <div className={cn(GRID, "border-t border-border py-3.5")}>
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
           <NameLink brandId={brandId} c={c} />
+          <LifecycleChip c={c} />
           <HandoffChip brandId={brandId} campaignId={c.campaign_id} handoff={c.handoff} />
           {NOTED.has(status.state) && <Chip tone="warn" data-state={status.state}>{dataChipText(status)}</Chip>}
         </div>
-        <div className="numeric text-sm text-muted-foreground">
-          在投 {c.active_ads} 則・每日 {c.daily_budget === null ? "未知" : formatAmount(c.daily_budget)}
-        </div>
+        {c.lifecycle && c.lifecycle.state !== "live" ? (
+          running > 0 && <div className="numeric text-sm text-muted-foreground">平台上還開著 {running} 則</div>
+        ) : (
+          <div className="numeric text-sm text-muted-foreground">
+            {runningText(c)}・每日 {c.daily_budget === null ? "未知" : formatAmount(c.daily_budget)}
+          </div>
+        )}
       </div>
       <div>
         <MoneyMeter value={c.month_spend} max={spent} tone="primary" />
@@ -136,7 +179,9 @@ function LiveRow({ brandId, c, spent }: { brandId: string; c: HomeCampaign; spen
       <div className="numeric font-semibold">{c.purchases === null ? "—" : formatAmount(c.purchases)}</div>
       <div className="text-right">
         <Button asChild variant="link" className="h-auto p-0">
-          {reconnect
+          {closeout
+            ? <Link to={`/brands/${brandId}/ads/campaigns/${c.campaign_id}?tab=perf&close=1`}>結案這一期 →</Link>
+            : reconnect
             ? <Link to={`/brands/${brandId}/ads/connections`}>重新連線 →</Link>
             : <Link to={`/brands/${brandId}/ads/campaigns/${c.campaign_id}`}>打開 →</Link>}
         </Button>
@@ -157,7 +202,7 @@ function DraftRow({ brandId, c }: { brandId: string; c: HomeCampaign }) {
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
           <NameLink brandId={brandId} c={c} />
-          <Chip>{CAMPAIGN_WORD.draft}</Chip>
+          <LifecycleChip c={c} />
           <HandoffChip brandId={brandId} campaignId={c.campaign_id} handoff={c.handoff} />
         </div>
         <div className="text-sm text-muted-foreground">{start}{todo.length ? `・還要${todo.join("、")}` : "・可以上架了"}</div>

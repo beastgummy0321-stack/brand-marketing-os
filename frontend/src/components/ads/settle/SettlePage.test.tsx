@@ -343,3 +343,45 @@ describe("SettlePage step 3 寫進筆記本", () => {
     await waitFor(() => expect(screen.getByRole("heading", { name: "這期成績" })).toBeTruthy());
   });
 });
+
+// F49 Contract Q: the settle row's place among today's decisions is served (`position`／`decisions.open`), never recounted
+// from a local kind list; 「下一件」 is the next open decision on the home board in the served order.
+describe("SettlePage 今天要決定的第幾件（F49 Contract Q）", () => {
+  const settleRow = (position: number) => ({
+    id: "itr_s", dedupe_key: "settle", category: "ads_triage_settle", severity: "rule_warning" as const, message: "",
+    action_url: "/brands/brd_1/ads/settle/2026-08?step=result", visible_from: null, status: "open", created_at: "2026-09-02T00:00:00Z",
+    settle: { month: "2026-08", start: "2026-08-01", end: "2026-08-31", campaign_count: 2, imported_count: 1, learnable_count: 7, buckets: [] },
+    decision: true, position, done: false,
+  });
+  const closeout = {
+    id: "itr_c", dedupe_key: "c", category: "ads_triage_closeout", severity: "rule_warning" as const, message: "「秋季檔期」已結束，待結案",
+    action_url: "/brands/brd_1/ads/campaigns/cmp_fall?tab=perf&close=1", visible_from: null, status: "open", created_at: "2026-09-02T00:00:00Z",
+    campaign_id: "cmp_fall", decision: true, position: 1, done: false,
+    closeout: { campaign_id: "cmp_fall", campaign_name: "秋季檔期", end_date: "2026-08-31", running: { count: 0, read_at: null } },
+  };
+
+  it("prints the settle row's served position over decisions.open", async () => {
+    getQueue.mockResolvedValue({ items: [], counts: {} as never, total_ads: 8, kinds_available: [], kinds_pending: [],
+      settle: settleRow(2), closeouts: [closeout], decisions: { kinds: [], open: 4 } });
+    getSettle.mockResolvedValue(view());
+    renderAt("result");
+    expect(await screen.findByText("今天要決定的第 2 件（共 4 件）")).toBeTruthy();
+  });
+
+  it("no settle row in the queue: no position is invented", async () => {
+    getSettle.mockResolvedValue(view());
+    renderAt("result");
+    await screen.findByRole("heading", { name: "這期成績" });
+    expect(screen.queryByText(/今天要決定的第/)).toBeNull();
+  });
+
+  it("written: 下一件 is the next open decision in served order (a closeout row included)", async () => {
+    getQueue.mockResolvedValue({ items: [], counts: {} as never, total_ads: 8, kinds_available: [], kinds_pending: [],
+      settle: { ...settleRow(2), status: "resolved", done: true }, closeouts: [closeout], decisions: { kinds: [], open: 1 } });
+    const written = view({ status: "written", notebook: { count: 21 }, written: { at: "2026-09-02T02:20:00Z", by: "usr_1", count: 7, effective: 2, ineffective: 5 } });
+    written.rows.forEach((r) => { if (r.fate !== "skip") { r.written_angle = r.angles.candidates[0]; r.angles = { status: "not_needed", candidates: [] }; } });
+    getSettle.mockResolvedValue(written);
+    renderAt("note");
+    expect((await screen.findByRole("link", { name: "下一件 →" })).getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_fall?tab=perf&close=1");
+  });
+});

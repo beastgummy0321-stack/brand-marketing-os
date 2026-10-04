@@ -9,19 +9,39 @@ import { Button } from "@/components/layout/ui/button";
 import { Input } from "@/components/layout/ui/input";
 import { Badge } from "@/components/layout/ui/badge";
 import { KpiStrip, campaignWord } from "./patterns";
-import { STATUS_TONE } from "./AdsHomePage";
 import { formatCurrency } from "@/lib/format";
-import { listCampaigns, type CampaignCard, type CampaignStatus } from "@/lib/adsApi";
+import { listCampaigns, type CampaignCard, type LifecycleState } from "@/lib/adsApi";
 
 type LoadState =
   | { status: "loading" }
   | { status: "error"; message: string }
   | { status: "ready"; campaigns: CampaignCard[] };
 
-type FilterKey = "all" | "live" | "upcoming" | "ended" | "imported";
+/** F49 Contract L: the list filters by the served `lifecycle.state` — 已結束 (waiting for its closeout) and 已結案 are
+ * two filters. Imported campaigns have their own pill; the state pills count system-built ones. */
+type FilterKey = "all" | "imported" | LifecycleState;
 
-const UPCOMING_STATUSES: CampaignStatus[] = ["draft", "ready"];
-const ENDED_STATUSES: CampaignStatus[] = ["ended", "closed"];
+const FILTERS: { key: FilterKey; label: string }[] = [
+  { key: "all", label: "全部" },
+  { key: "imported", label: "既有平台活動" },
+  { key: "live", label: "進行中" },
+  { key: "draft", label: "即將上線" },
+  { key: "ended", label: "已結束" },
+  { key: "closed", label: "已結案" },
+];
+
+/** Whether a campaign belongs under a filter pill. */
+function inFilter(c: CampaignCard, key: FilterKey): boolean {
+  if (key === "all") return true;
+  if (key === "imported") return c.origin === "imported";
+  return c.origin !== "imported" && c.lifecycle?.state === key;
+}
+
+/** The status badge's look: live stands out, a campaign waiting for its closeout is outlined, the rest are quiet. */
+function badgeVariant(c: CampaignCard): "default" | "outline" | "secondary" {
+  const state = c.lifecycle?.state;
+  return state === "live" ? "default" : state === "ended" ? "outline" : "secondary";
+}
 
 const JUDGMENT_ICON: Record<CampaignCard["judgment"]["tone"], typeof TrendingUp> = {
   good: TrendingUp,
@@ -65,25 +85,12 @@ export function AllCampaignsPage({ brandId }: { brandId: string }) {
   const campaigns = state.status === "ready" ? state.campaigns : [];
 
   const counts = useMemo(
-    () => ({
-      all: campaigns.length,
-      imported: campaigns.filter(c => c.origin === "imported").length,
-      live: campaigns.filter((c) => c.origin !== "imported" && c.status === "live").length,
-      upcoming: campaigns.filter((c) => c.origin !== "imported" && UPCOMING_STATUSES.includes(c.status)).length,
-      ended: campaigns.filter((c) => c.origin !== "imported" && ENDED_STATUSES.includes(c.status)).length,
-    }),
+    () => Object.fromEntries(FILTERS.map(({ key }) => [key, campaigns.filter((c) => inFilter(c, key)).length])) as Record<FilterKey, number>,
     [campaigns],
   );
 
   const visible = useMemo(() => {
-    const byFilter = campaigns.filter((c) => {
-      if (filter === "imported") return c.origin === "imported";
-      if (filter !== "all" && c.origin === "imported") return false;
-      if (filter === "live") return c.status === "live";
-      if (filter === "upcoming") return UPCOMING_STATUSES.includes(c.status);
-      if (filter === "ended") return ENDED_STATUSES.includes(c.status);
-      return true;
-    });
+    const byFilter = campaigns.filter((c) => inFilter(c, filter));
     const q = search.trim().toLowerCase();
     if (!q) return byFilter;
     return byFilter.filter((c) => c.name.toLowerCase().includes(q));
@@ -122,29 +129,21 @@ export function AllCampaignsPage({ brandId }: { brandId: string }) {
             {
               icon: Clock,
               label: "即將上線的 Campaign",
-              value: String(counts.upcoming),
+              value: String(counts.draft),
               caption: "已排程，準備就緒",
             },
             {
               icon: TrendingUp,
               label: "已結束的 Campaign",
               value: String(counts.ended),
-              caption: "可以回頭看結案判斷",
+              caption: "結案後這期成績寫進筆記本",
             },
           ]}
         />
 
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap items-center gap-2">
-            {(
-              [
-                ["all", "全部", counts.all],
-                ["imported", "既有平台活動", counts.imported],
-                ["live", "進行中", counts.live],
-                ["upcoming", "即將上線", counts.upcoming],
-                ["ended", "已結束", counts.ended],
-              ] as [FilterKey, string, number][]
-            ).map(([key, label, count]) => (
+            {FILTERS.map(({ key, label }) => (
               <Button
                 key={key}
                 type="button"
@@ -152,7 +151,7 @@ export function AllCampaignsPage({ brandId }: { brandId: string }) {
                 variant={filter === key ? "default" : "outline"}
                 onClick={() => setFilter(key)}
               >
-                {label} {count}
+                {label} {counts[key]}
               </Button>
             ))}
           </div>
@@ -201,7 +200,7 @@ export function AllCampaignsPage({ brandId }: { brandId: string }) {
                     <tr key={c.id} className="border-t border-border align-top">
                       <td className="px-3 py-2 font-medium">{c.name}{c.origin === "imported" && <span className="mt-1 block text-xs text-muted-foreground">既有平台活動</span>}</td>
                       <td className="px-3 py-2">
-                        <Badge variant={STATUS_TONE[c.status]}>{campaignWord(c)}</Badge>
+                        <Badge variant={badgeVariant(c)}>{campaignWord(c)}</Badge>
                       </td>
                       <td className="px-3 py-2">{c.objective}</td>
                       <td className="px-3 py-2">

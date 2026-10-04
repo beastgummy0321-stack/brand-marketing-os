@@ -291,7 +291,7 @@ describe("HandoffPage 「第幾件」", () => {
   it("counts only open home decisions: a handled row and a 資料不足 row are not counted", async () => {
     vi.mocked(triageApi.getQueue).mockResolvedValue(queue([
       queueItem({ id: "w_done", kind_key: "worse", done: true, triage: triage({ entity_id: "aex_9" }) }),
-      queueItem({ id: "gap", kind_key: "insufficient_data", triage: triage({ entity_id: "aex_8" }), insufficient: { campaign_id: "cmp_2", campaign_name: "x", missing_days: [], sync_state: "failed", coverage: null } }),
+      queueItem({ id: "gap", kind_key: "insufficient_data", decision: false, triage: triage({ entity_id: "aex_8" }), insufficient: { campaign_id: "cmp_2", campaign_name: "x", missing_days: [], sync_state: "failed", coverage: null } }),
       queueItem({ kind_key: "worse" }),
     ]));
     renderAt(handoffPath());

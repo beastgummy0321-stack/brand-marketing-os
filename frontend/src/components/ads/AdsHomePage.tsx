@@ -17,10 +17,19 @@ import { QualityBand } from "./home/QualityBand";
 import { TodayDecisions, homeBoard, type QueueState } from "./home/TodayDecisions";
 import { proposalAction } from "./home/status";
 
-export { STATUS_LABEL, STATUS_TONE } from "./home/status";
-
 type RecoveryState = { status: "loading" } | { status: "error" } | { status: "ready"; recovery: AdsRecovery };
 type HomeState = { status: "loading" } | { status: "error" } | { status: "ready"; home: HomeOverview };
+
+/** The query key an approval's month-budget link names itself by (F49-I11 builds `?budget=edit&return=<path>`). */
+const BUDGET_RETURN_PARAM = "return";
+
+/** `return` is taken only as a path inside this brand's ads centre (`/brands/{brandId}/ads/…`); anything else — another
+ * brand, an absolute URL, `//host` — is dropped. */
+export function budgetReturn(brandId: string, value: string | null): string | null {
+  if (!value) return null;
+  const prefix = `/brands/${brandId}/ads/`;
+  return value.startsWith(prefix) && !value.includes("//") ? value : null;
+}
 
 /** 瀏覽器本地時區的 HH:MM——`gap.start`／`gap.end` 一律是帶時區的 ISO instant。 */
 function formatHM(iso: string): string {
@@ -78,7 +87,7 @@ function AdsHome({ brandId }: { brandId: string }) {
   const note: TodayNote = syncing ? { kind: "syncing" }
     : queueState.status === "loading" ? { kind: "loading" }
     : queueState.status === "error" ? { kind: "error" }
-    : decisions && decisions.open.length ? { kind: "open", count: decisions.open.length } : { kind: "none" };
+    : decisions && decisions.open.length ? { kind: "open", count: decisions.count } : { kind: "none" };
 
   // 「看加預算建議」: the first open `scale_budget` row's own step (budget owner id, `home/status.ts` "budget" branch).
   const scaleHref = (() => {
@@ -101,16 +110,20 @@ function AdsHome({ brandId }: { brandId: string }) {
   // so back／reload do not reopen it.
   const [searchParams, setSearchParams] = useSearchParams();
   const [openBudget] = useState(() => searchParams.get(BUDGET_EDIT_PARAM) === "edit");
+  // F49 Contract Q (drill-11 Q4): an approval's month-budget gate links here with `return=<its path>`; only a path inside
+  // this brand's ads centre is taken (never another site or brand). Read once: closing the area drops the params.
+  const [returnTo] = useState(() => budgetReturn(brandId, openBudget ? searchParams.get(BUDGET_RETURN_PARAM) : null));
   const closeBudget = useCallback(() => {
     retryHome();
-    setSearchParams((params) => { params.delete(BUDGET_EDIT_PARAM); return params; }, { replace: true });
+    setSearchParams((params) => { params.delete(BUDGET_EDIT_PARAM); params.delete(BUDGET_RETURN_PARAM); return params; }, { replace: true });
   }, [retryHome, setSearchParams]);
   const monthNo = monthNumber(home?.month);
   const recovering = recoveryState.status === "ready" && recoveryState.recovery.recovering;
 
   // Zero campaigns and nothing spent this month: the prototype draws no first-run board, so the page shows one honest
   // empty card whose clear action is ＋ 建立活動 — no money card, band or decisions that could only print zeros.
-  const empty = home !== null && home.campaigns !== null && home.campaigns.length === 0 && !home.spent;
+  // A brand whose campaigns all closed this month is not a first run (drill-11 N3): the rows say so instead.
+  const empty = home !== null && home.campaigns !== null && home.campaigns.length === 0 && !home.spent && !home.closed_this_month;
 
   return (
     <div className="flex max-w-[1260px] flex-col gap-5">
@@ -131,7 +144,7 @@ function AdsHome({ brandId }: { brandId: string }) {
       {recoveryState.status === "ready" && <RecoveryBanner recovery={recoveryState.recovery} />}
       {empty ? <EmptyBoard brandId={brandId} /> : <>
         <NextDates home={home} note={note} onJump={jump} />
-        <MonthMoney brandId={brandId} state={homeState} onRetry={retryHome} scaleHref={scaleHref} onBudgetClosed={closeBudget} openBudget={openBudget} />
+        <MonthMoney brandId={brandId} state={homeState} onRetry={retryHome} scaleHref={scaleHref} onBudgetClosed={closeBudget} openBudget={openBudget} returnTo={returnTo} />
         <QualityBand state={homeState} onRetry={retryHome} />
         <TodayDecisions
           brandId={brandId}
