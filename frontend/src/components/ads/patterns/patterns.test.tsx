@@ -765,13 +765,6 @@ describe("campaign words（F47-I08，drill-10 §4.3；F49 Contract L）", () => 
     expect(closedWord(6)).toBe("已結案・平台上還開著 6 則");
     expect(closedWord(0)).toBe("已結案");
   });
-
-  it("平台狀態說中文，不認得的或沒有的寫「平台狀態不明」，絕不印英文代碼", async () => {
-    const { nativeStatusWord } = await import("./campaignWords");
-    expect(["ACTIVE", "PAUSED", "DELETED", "ARCHIVED"].map(nativeStatusWord)).toEqual(["開啟中", "已暫停", "已刪除", "已封存"]);
-    expect(nativeStatusWord("paused")).toBe("已暫停");
-    for (const odd of ["WITH_ISSUES", "CAMPAIGN_PAUSED", "", null, undefined]) expect(nativeStatusWord(odd)).toBe("平台狀態不明");
-  });
 });
 
 describe("served rules（F48-I08 Contract R-API）", () => {

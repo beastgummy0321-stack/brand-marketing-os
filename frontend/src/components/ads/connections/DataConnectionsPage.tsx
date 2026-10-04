@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { PageHeader } from "@/components/layout/PageHeader";
@@ -7,7 +7,8 @@ import { Button } from "@/components/layout/ui/button";
 import { getOrgId } from "@/lib/auth";
 import { formatSyncTime } from "@/lib/format";
 import { getConnections, type AdsConnections, type ConnectionReread, type ConnectionSource } from "@/lib/adsConnectionsApi";
-import { refreshExisting, syncJob } from "@/lib/adsExternalApi";
+import { refreshExisting } from "@/lib/adsExternalApi";
+import { useSyncOutcome } from "@/lib/useSyncOutcome";
 import { ActionBar, Chip, DAY_SWATCH, DayGrid, Legend, ReadFailed, SourceList, SourceRow, type ChipTone } from "../patterns";
 
 /** v10 `connections()` (Feature F30 Contract H, issue F30-I15): one read of `GET …/connections` feeds the
@@ -16,17 +17,51 @@ import { ActionBar, Chip, DAY_SWATCH, DayGrid, Legend, ReadFailed, SourceList, S
  * maps a state to its chip words and picks a row glyph.
  *
  * F47-I08 (Contract H, drill-10 R6): an account row the server marks `reread` (failed / missing days / never read)
- * gets 「重新讀取」 in its action slot: it posts the existing `…/existing-campaigns/refresh` with that body, waits on
- * the returned sync job, then reads this page again; a refused refresh shows the server's sentence on the row. */
+ * gets 「重新讀取」 in its action slot: it posts the existing `…/existing-campaigns/refresh` with that body; a refused
+ * refresh shows the server's sentence on the row.
+ *
+ * F49-I14 (Contract O): the re-read's job is followed through `useSyncOutcome` and its served `text` stays on the row
+ * — found, nothing read, or partial／failed with the reason — after the page reads itself again (quietly, so the
+ * sentence is not lost under a skeleton, and kept even when the row no longer asks for a re-read). */
 
-const POLL_MS = 3000;
-const RUNNING = new Set(["pending", "running"]);
+/** One re-read the user started on a row: the job it posted; `round` mounts a fresh reader per press. */
+type RowRead = { jobId: string; round: number };
 
-type RereadState = { status: "idle" } | { status: "running" } | { status: "error"; message: string };
+/** The re-read job's served outcome on its row, with the button (disabled while the read runs). Calls `onFinished`
+ * once, when the read finished, so the page reads its sources and calendar again. */
+function RereadOutcome({ brandId, jobId, onFinished, button }: {
+  brandId: string; jobId: string; onFinished: () => void; button: (running: boolean) => ReactNode;
+}) {
+  const outcome = useSyncOutcome({ brandId, jobId });
+  const running = outcome.state === "running" || (outcome.state === null && !outcome.error);
+  const reported = useRef(false);
+  const finish = useRef(onFinished);
+  finish.current = onFinished;
+  useEffect(() => {
+    if (outcome.state === null || outcome.state === "running" || reported.current) return;
+    reported.current = true;
+    finish.current();
+  }, [outcome.state]);
+  const warn = outcome.state === "failed" || outcome.state === "partial";
+  return (
+    <>
+      {button(running)}
+      {outcome.text && (
+        <p role="status" data-slot="reread-outcome" data-state={outcome.state ?? undefined}
+          className={`max-w-[24rem] text-right text-xs ${warn ? "text-warning" : "text-muted-foreground"}`}>{outcome.text}</p>
+      )}
+      {outcome.error && <p role="alert" className="max-w-[24rem] text-right text-xs text-destructive">{outcome.error}</p>}
+    </>
+  );
+}
 
-/** 「重新讀取」 for one account: post the refresh, poll its job until it is no longer pending／running, then `onDone`. */
-function RereadButton({ brandId, reread, onDone }: { brandId: string; reread: ConnectionReread; onDone: () => void }) {
-  const [state, setState] = useState<RereadState>({ status: "idle" });
+/** 「重新讀取」 for one account: post the refresh with the server's range, then follow the returned job. */
+function RereadSlot({ brandId, reread, read, onStarted, onFinished }: {
+  brandId: string; reread: ConnectionReread | null; read: RowRead | undefined;
+  onStarted: (jobId: string) => void; onFinished: () => void;
+}) {
+  const [posting, setPosting] = useState(false);
+  const [error, setError] = useState("");
   const alive = useRef(new AbortController());
   useEffect(() => {
     alive.current = new AbortController();
@@ -34,31 +69,31 @@ function RereadButton({ brandId, reread, onDone }: { brandId: string; reread: Co
   }, []);
 
   async function run() {
+    if (!reread) return;
     const signal = alive.current.signal;
-    setState({ status: "running" });
+    setPosting(true);
+    setError("");
     try {
-      let { job } = await refreshExisting(brandId, reread.platform, reread.source_account, { start: reread.start, end: reread.end });
-      while (RUNNING.has(job.status)) {
-        await new Promise((resolve) => setTimeout(resolve, POLL_MS));
-        if (signal.aborted) return;
-        job = (await syncJob(brandId, job.id, signal)).job;
-      }
-      if (signal.aborted) return;
-      setState({ status: "idle" });
-      onDone();
+      const { job } = await refreshExisting(brandId, reread.platform, reread.source_account, { start: reread.start, end: reread.end });
+      if (!signal.aborted) onStarted(job.id);
     } catch (err: unknown) {
-      if (signal.aborted) return;
-      setState({ status: "error", message: err instanceof Error ? err.message : "重新讀取沒有成功，請稍後再試。" });
+      if (!signal.aborted) setError(err instanceof Error ? err.message : "重新讀取沒有成功，請稍後再試。");
+    } finally {
+      if (!signal.aborted) setPosting(false);
     }
   }
 
-  const running = state.status === "running";
+  const button = (running: boolean) => reread ? (
+    <Button variant="outline" size="sm" disabled={posting || running} onClick={() => void run()}>
+      {posting || running ? "讀取中…" : "重新讀取"}
+    </Button>
+  ) : null;
   return (
     <div className="flex flex-col items-end gap-1">
-      <Button variant="outline" size="sm" disabled={running} onClick={() => void run()}>
-        {running ? "讀取中…" : "重新讀取"}
-      </Button>
-      {state.status === "error" && <p role="alert" className="max-w-[18rem] text-right text-xs text-destructive">{state.message}</p>}
+      {read
+        ? <RereadOutcome key={`${read.jobId}:${read.round}`} brandId={brandId} jobId={read.jobId} onFinished={onFinished} button={button} />
+        : button(false)}
+      {error && <p role="alert" className="max-w-[24rem] text-right text-xs text-destructive">{error}</p>}
     </div>
   );
 }
@@ -122,7 +157,10 @@ const LEGEND = [
   { label: "今天", swatch: DAY_SWATCH.today },
 ];
 
-function Sources({ brandId, sources, onReread }: { brandId: string; sources: ConnectionSource[]; onReread: () => void }) {
+function Sources({ brandId, sources, reads, onStarted, onReread }: {
+  brandId: string; sources: ConnectionSource[]; reads: Record<string, RowRead>;
+  onStarted: (key: string, jobId: string) => void; onReread: () => void;
+}) {
   return (
     <section aria-label="資料來源" className="surface px-[22px] py-5">
       <SourceList>
@@ -135,7 +173,11 @@ function Sources({ brandId, sources, onReread }: { brandId: string; sources: Con
               <Link to={source.action.href}>{source.action.label} →</Link>
             </Button>
           ) : null;
-          const reread = source.reread ? <RereadButton brandId={brandId} reread={source.reread} onDone={onReread} /> : null;
+          const read = reads[source.key];
+          const reread = source.reread || read ? (
+            <RereadSlot brandId={brandId} reread={source.reread} read={read}
+              onStarted={(jobId) => onStarted(source.key, jobId)} onFinished={onReread} />
+          ) : null;
           const action = link && reread
             ? <div className="flex items-start gap-2">{reread}{link}</div>
             : reread ?? link ?? undefined;
@@ -186,9 +228,12 @@ function LoadingBody() {
 function DataConnections({ brandId }: { brandId: string }) {
   const [state, setState] = useState<LoadState>({ status: "loading" });
   const [reloadKey, setReloadKey] = useState(0);
+  const [reads, setReads] = useState<Record<string, RowRead>>({});
   useEffect(() => {
     const controller = new AbortController();
-    setState({ status: "loading" });
+    // A read after a re-read keeps the page on screen (the row's outcome sentence stays); only a first read or a
+    // retry after a failed read shows the skeleton.
+    setState((prev) => (prev.status === "ready" ? prev : { status: "loading" }));
     getConnections(brandId, controller.signal)
       .then((data) => setState({ status: "ready", data }))
       .catch((err: unknown) => {
@@ -215,7 +260,9 @@ function DataConnections({ brandId }: { brandId: string }) {
         )}
         {state.status === "ready" && (
           <>
-            <Sources brandId={brandId} sources={state.data.sources} onReread={() => setReloadKey((key) => key + 1)} />
+            <Sources brandId={brandId} sources={state.data.sources} reads={reads}
+              onStarted={(key, jobId) => setReads((prev) => ({ ...prev, [key]: { jobId, round: (prev[key]?.round ?? 0) + 1 } }))}
+              onReread={() => setReloadKey((key) => key + 1)} />
             <Calendar calendar={state.data.calendar} />
           </>
         )}

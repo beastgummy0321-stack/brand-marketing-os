@@ -29,6 +29,10 @@
  * 10. F49-I07 (Contract T): in the slot pieces no chip word (處理中／等你／卡住／失敗) in a string or JSX text, no word
  *    table keyed by two or more slot states and no `missing_material` read — slots serve `state_label`／`state_text`,
  *    the structure `slot_state`／`slot_label`. Today's hits are listed in `SLOT_PENDING`.
+ * 11. F49-I14 (Contract D, no origin forks): the imported-only payload `campaign.external_view` is read (`.external_view`)
+ *    only by the imported-only screens in `EXTERNAL_VIEW_READERS`, and `externalView(` is called only by the files in
+ *    `EXTERNAL_VIEW_CALLERS` — a screen open to system-built campaigns reads the handoff read's `destinations`／
+ *    `destination_by_ad`／`destinations_note`. Both lists are permanent (which screens are imported-only), not debt.
  *
  * Comments are not code: every scan reads the source with comments blanked out (line numbers kept); the numeric
  * literals are read in code only (a class name such as `gap-1.5` is a string). A hit that is not a served fact is
@@ -564,6 +568,64 @@ describe("one sync outcome (F49 Contract O)", () => {
     expect(syncJobReads("<p>{outcome.text}</p>")).toEqual([]);
     expect(syncJobReads('if (read.state === "running") x();')).toEqual([]);
     expect(syncJobReads("// was: result.job.error")).toEqual([]);
+  });
+});
+
+/** F49-I14 (Contract D, W17 no origin forks): `campaign.external_view` is the imported-only payload — read only by the
+ * screens that render for imported campaigns alone; `externalView(` (`GET …/external`) is called only by the imported
+ * panel, the manual handoff's candidate list (an origin-neutral endpoint) and the API module itself. A screen open to
+ * system-built campaigns finds an ad's ad set through the handoff read's `destination_by_ad`, its options through
+ * `destinations` and says why there are none with `destinations_note` (drill-11 C1: 「換一張圖」 dead end). These lists
+ * are permanent: each names a file whose screen is imported-only, not debt. */
+const EXTERNAL_VIEW_READERS = [
+  "components/ads/PerformanceTab.tsx",
+  "components/ads/detail/PeriodStatusRow.tsx",
+  "components/ads/OverviewTab.tsx",
+  "components/ads/workspace/WorkspaceHead.tsx",
+  "components/ads/AssetsTab.tsx",
+  "components/ads/DeliveryTab.tsx",
+  "components/ads/CampaignWorkspace.tsx",
+];
+const EXTERNAL_VIEW_CALLERS = [
+  "components/ads/ExternalCampaignPanel.tsx",
+  "components/ads/ManualHandoffPanel.tsx",
+  "lib/adsExternalApi.ts",
+];
+type OriginRule = "reads" | "calls";
+const ORIGIN_SCANS: Record<OriginRule, (text: string) => number[]> = {
+  reads: (text) => hits(text, [/\.external_view\b/]),
+  calls: (text) => hits(text, [/\bexternalView\(/]),
+};
+const ORIGIN_ALLOWED: Record<OriginRule, string[]> = { reads: EXTERNAL_VIEW_READERS, calls: EXTERNAL_VIEW_CALLERS };
+
+describe("no origin forks (F49 Contract D)", () => {
+  for (const rule of ["reads", "calls"] as const) {
+    it(`only imported-only files ${rule === "reads" ? "read `.external_view`" : "call `externalView(`"}`, () => {
+      const files = FILES();
+      expect(files.length).toBeGreaterThan(20);
+      const offenders = files.flatMap((full) => {
+        if (ORIGIN_ALLOWED[rule].includes(rel(full))) return [];
+        return ORIGIN_SCANS[rule](readFileSync(full, "utf-8")).map((line) => `${rel(full)}:${line}`);
+      });
+      expect(offenders).toEqual([]);
+    });
+  }
+
+  it("every listed imported-only file exists (a moved or deleted screen leaves the list)", () => {
+    const present = new Set(FILES().map(rel));
+    expect([...EXTERNAL_VIEW_READERS, ...EXTERNAL_VIEW_CALLERS].filter((file) => !present.has(file))).toEqual([]);
+  });
+
+  it("the origin scans see reads and calls and leave types, keys and comments alone", () => {
+    expect(ORIGIN_SCANS.reads("const e = campaign?.external_view?.entities ?? [];")).toEqual([1]);
+    expect(ORIGIN_SCANS.reads("const v = c.external_view;")).toEqual([1]);
+    expect(ORIGIN_SCANS.reads("interface X { external_view?: ExternalView | null }")).toEqual([]);
+    expect(ORIGIN_SCANS.reads("const next = { ...c, external_view: null };")).toEqual([]);
+    expect(ORIGIN_SCANS.reads("// read c.external_view here")).toEqual([]);
+    expect(ORIGIN_SCANS.calls("const v = await externalView(brand, id, {}, signal);")).toEqual([1]);
+    expect(ORIGIN_SCANS.calls("import { externalView } from \"@/lib/adsExternalApi\";")).toEqual([]);
+    expect(ORIGIN_SCANS.calls("const v = await completeExternalView(brand, id);")).toEqual([]);
+    expect(ORIGIN_SCANS.calls("/** externalView(brand, id) */")).toEqual([]);
   });
 });
 

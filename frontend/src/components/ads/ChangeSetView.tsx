@@ -9,16 +9,14 @@ import type { ChangeItem, ChangeSet, SettingValues } from "@/lib/adsChangeApi";
 import { Disclosure } from "./patterns/Disclosure";
 import { kindLabel, targetLabel } from "./ChangeComposer";
 
-const verificationLabels: Record<ChangeItem["verification_state"], string> = {
-  pending: "尚未回報", reported: "已自行回報，待核對", confirmed: "設定已讀回",
-  deviated: "與核准內容不同", unknown: "結果未知，待補核對", stale: "相關設定已變，需要重審",
-};
 const setLabels: Record<ChangeSet["status"], string> = { draft: "待核准", approved: "已核准，逐項處理", rejected: "已拒絕", deferred: "已暫緩", superseded: "已有修訂清單，保留歷史" };
-function Values({ value }: { value: SettingValues }) {
+/** F49-I14 (Contract L): a status value prints the served word for that side (`status_labels.before／after／observed`),
+ * never the platform's own code. */
+function Values({ value, statusLabel }: { value: SettingValues; statusLabel?: string | null }) {
   const labels: Record<keyof SettingValues, string> = { title: "標題", body: "內文", titles: "標題（多則）", bodies: "內文（多則）", daily_amount: "每日預算", status: "投放狀態" };
   const fields = Object.entries(value).filter(([key]) => key in labels);
   if (!fields.length) return <p className="text-sm text-muted-foreground">尚未取得可核對設定</p>;
-  return <dl className="space-y-2 text-sm">{fields.map(([key, val]) => <div key={key}><dt className="text-xs text-muted-foreground">{labels[key as keyof SettingValues]}</dt><dd className="whitespace-pre-wrap break-words">{key === "status" ? ({ ACTIVE: "啟用", PAUSED: "暫停", ARCHIVED: "已封存", DELETED: "已刪除" }[String(val)] ?? "尚待確認") : String(val ?? "未知")}</dd></div>)}</dl>;
+  return <dl className="space-y-2 text-sm">{fields.map(([key, val]) => <div key={key}><dt className="text-xs text-muted-foreground">{labels[key as keyof SettingValues]}</dt><dd className="whitespace-pre-wrap break-words">{key === "status" ? statusLabel ?? "尚待確認" : String(val ?? "未知")}</dd></div>)}</dl>;
 }
 export function ChangeSetView({ set, busy, onApprove, onDecision, onItem, onReconsider }: {
   set: ChangeSet; busy: boolean; onApprove: () => void;
@@ -43,13 +41,13 @@ export function ChangeSetView({ set, busy, onApprove, onDecision, onItem, onReco
         return <article key={item.id} className={`rounded-lg border p-4 space-y-3 ${needsReview ? "border-destructive/30 bg-destructive/5" : "border-border"}`}>
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="flex items-start gap-2">{item.verification_state === "confirmed" ? <CheckCircle2 className="mt-0.5 size-5 text-success" /> : needsReview ? <AlertTriangle className="mt-0.5 size-5 text-destructive" /> : <Clock className="mt-0.5 size-5 text-warning" />}<div><h3 className="font-medium text-sm">{index + 1}. {targetLabel(item.target)}</h3><p className="text-xs text-muted-foreground">{item.kind === "new_ad" ? "新增另一則廣告，保留原廣告" : item.kind === "launch" ? "首次投放人工交接" : kindLabel[item.kind]}</p></div></div>
-            {approved && <Badge variant="outline" className={needsReview ? "text-destructive" : item.verification_state === "confirmed" ? "text-success" : "text-warning"}>{verificationLabels[item.verification_state]}</Badge>}
+            {approved && item.verification_label && <Badge variant="outline" className={needsReview ? "text-destructive" : item.verification_state === "confirmed" ? "text-success" : "text-warning"}>{item.verification_label}</Badge>}
           </div>
           <p className="text-sm text-muted-foreground">{item.reason}</p>
           {item.kind === "budget" && item.before.daily_amount !== undefined && item.after.daily_amount !== undefined && item.after.daily_amount < item.before.daily_amount && item.verification_state !== "confirmed" && <p className="text-sm text-warning">降額尚未核對，不會先釋放額度。目前 {item.before.daily_amount.toLocaleString()} → 目標 {item.after.daily_amount.toLocaleString()}。</p>}
           <Disclosure label={needsReview ? "查看差異與重審原因" : "查看變更內容與操作對象"} defaultOpen={!approved && index === 0 || needsReview}>
             <div className="space-y-3">
-              <div className="grid gap-3 xl:grid-cols-2"><div className="rounded-md bg-muted p-3"><h4 className="mb-2 text-sm font-medium">{needsReview ? "原核准內容" : "變更前"}</h4>{item.kind === "new_ad" ? <p className="text-sm">原廣告與投放組預算保持不變。</p> : <Values value={needsReview ? item.after : item.before} />}</div><div className="rounded-md bg-accent/60 p-3"><h4 className="mb-2 text-sm font-medium">{needsReview ? "平台目前" : "希望調整為"}</h4>{item.kind === "new_ad" ? <div className="space-y-2 text-sm"><p>{item.handoff_snapshot?.filename} · 素材版本 {item.handoff_snapshot?.revision}</p><p>沿用現有父層預算，不另產生可花額度。</p><Values value={{ title: item.handoff_snapshot?.copy.headline, body: item.handoff_snapshot?.copy.body }} /></div> : <Values value={needsReview ? (current && typeof current === "object" ? current as SettingValues : {}) : item.after} />}</div></div>
+              <div className="grid gap-3 xl:grid-cols-2"><div className="rounded-md bg-muted p-3"><h4 className="mb-2 text-sm font-medium">{needsReview ? "原核准內容" : "變更前"}</h4>{item.kind === "new_ad" ? <p className="text-sm">原廣告與投放組預算保持不變。</p> : <Values value={needsReview ? item.after : item.before} statusLabel={needsReview ? item.status_labels?.after : item.status_labels?.before} />}</div><div className="rounded-md bg-accent/60 p-3"><h4 className="mb-2 text-sm font-medium">{needsReview ? "平台目前" : "希望調整為"}</h4>{item.kind === "new_ad" ? <div className="space-y-2 text-sm"><p>{item.handoff_snapshot?.filename} · 素材版本 {item.handoff_snapshot?.revision}</p><p>沿用現有父層預算，不另產生可花額度。</p><Values value={{ title: item.handoff_snapshot?.copy.headline, body: item.handoff_snapshot?.copy.body }} /></div> : <Values value={needsReview ? (current && typeof current === "object" ? current as SettingValues : {}) : item.after} statusLabel={needsReview ? item.status_labels?.observed : item.status_labels?.after} />}</div></div>
               {item.kind === "copy" && <p className="flex items-start gap-2 text-sm text-muted-foreground"><Info className="size-4 shrink-0" />只修改原廣告文案，圖片保持不變。文案相符也不代表圖片等價已證實。</p>}
               <p className="text-xs text-muted-foreground">{item.target.platform ?? "平台待指定"} · 帳戶 {item.target.source_account ?? "待對應"} · 平台識別 {item.target.native_id ?? "尚未建立對應"}</p>
               {item.stale_reason && <p className="text-sm text-destructive">{item.stale_reason}</p>}
