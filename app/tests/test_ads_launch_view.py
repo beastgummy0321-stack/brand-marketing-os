@@ -574,11 +574,10 @@ class LaunchViewTest(unittest.TestCase):
         items = self.items(view)
         self.assertEqual(items["秋季預購"]["state"], "verified")
         group, ad = items["新客"], items["禮盒主圖"]
-        self.assertEqual(group["state"], "unknown")
-        self.assertEqual(
-            group["unreadable"],
-            [{"key": "manual_settings.landing_url", "label": "落地頁網址", "confirmed": False}],
-        )
+        # F49 Contract B: no field is left to the eye -- the landing URL is compared on the ads
+        # (this plan has none), the material was confirmed at approval.
+        self.assertEqual(group["state"], "verified")
+        self.assertEqual(group["unreadable"], [])
         # F49 decision 5: the material is declared unreadable -- confirmed at approval, so the ad
         # whose readable fields all match is verified without a click.
         self.assertEqual(ad["state"], "verified")
@@ -596,14 +595,9 @@ class LaunchViewTest(unittest.TestCase):
         # Only a field the read could not see can be confirmed.
         refused = self.post(f"/items/{group['id']}/confirm", key="budget_amount")
         self.assertEqual(refused.status_code, 409, refused.text)
-        confirmed = self.post(f"/items/{group['id']}/confirm", key="manual_settings.landing_url")
-        self.assertEqual(confirmed.status_code, 200, confirmed.text)
-        group = self.items(confirmed.json())["新客"]
-        self.assertEqual(group["state"], "verified")
-        self.assertEqual(group["unreadable"][0]["confirmed"], True)
-        again = self.post(f"/items/{group['id']}/confirm", key="manual_settings.landing_url")
-        self.assertEqual(again.status_code, 409, again.text)
-        self.assertEqual({i["state"] for i in confirmed.json()["items"]}, {"verified"})
+        refused = self.post(f"/items/{group['id']}/confirm", key="manual_settings.landing_url")
+        self.assertEqual(refused.status_code, 409, refused.text)
+        self.assertEqual({i["state"] for i in view["items"]}, {"verified"})
         launch = change_control_launch.launch_set(self.conn, self.org, self.brand, self.campaign)
         action = self.conn.execute(
             "SELECT verification_state FROM ads_action WHERE change_set_id=%s", (launch["id"],)
@@ -660,7 +654,7 @@ class LaunchViewTest(unittest.TestCase):
             before["evidence_json"].get("material_evidence"),
         )
 
-    def test_a_mismatch_keeps_observed_values_and_a_confirmation_outlives_a_fresh_read(self):
+    def test_a_mismatch_keeps_observed_values_until_a_fresh_read_matches(self):
         self.approve()
         self.report_all()
         self.structure[0]["budget_amount"] = 400
@@ -671,17 +665,11 @@ class LaunchViewTest(unittest.TestCase):
             group["mismatches"],
             [{"key": "budget_amount", "label": "每日預算", "expected": 300, "observed": 400}],
         )
-        # The unreadable landing URL may be confirmed while the budget still differs.
-        view = self.post(f"/items/{group['id']}/confirm", key="manual_settings.landing_url").json()
-        group = self.items(view)["新客"]
-        self.assertEqual(group["state"], "mismatch")
-        self.assertTrue(group["unreadable"][0]["confirmed"])
-        # The user fixes the budget on the platform and reads again: the confirmation stays.
+        # The user fixes the budget on the platform and reads again.
         self.structure[0]["budget_amount"] = 300
         group = self.items(self.readback())["新客"]
         self.assertEqual(group["state"], "verified")
         self.assertEqual(group["mismatches"], [])
-        self.assertTrue(group["unreadable"][0]["confirmed"])
 
     def test_missing_or_ambiguous_names_leave_the_item_built_with_a_reason(self):
         self.approve()
@@ -729,7 +717,7 @@ class LaunchViewTest(unittest.TestCase):
         # A successful read drops the old reason and its time.
         self.assertIsNone(items["秋季預購"]["reason_at"])
         self.assertIsNone(items["秋季預購"]["reason_code"])
-        self.assertEqual(items["新客"]["state"], "unknown")
+        self.assertEqual(items["新客"]["state"], "verified")
 
     def test_unreport_clears_a_report_until_the_item_is_verified(self):
         self.approve()

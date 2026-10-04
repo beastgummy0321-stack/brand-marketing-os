@@ -1,5 +1,7 @@
 """Fresh read-only native verification with scoped ownership and late-response protection."""
 
+from urllib.parse import parse_qsl, urlsplit
+
 from app.ads import (
     adapters,
     asset_binding,
@@ -36,6 +38,11 @@ READBACK_REASONS = {
     "item_taken": "此平台物件已對應另一個交接項目。",
     "source_changed": "核對期間來源已更新，保留較新的資料，請再核對。",
     "plan_changed": "核准後計畫或素材已變更，請重新檢視交接。",
+    # What a read compared and found different, or could not read (never a 「請到平台看」).
+    "landing_url_mismatch": "廣告連到的網址跟核准的落地頁不一樣。",
+    "landing_url_unread": "這次讀回沒讀到廣告連到的網址，請稍後再讀回一次。",
+    "audience_mismatch": "廣告組的受眾裡沒有核准的平台受眾 ID。",
+    "audience_unread": "這次讀回沒讀到廣告組的受眾設定，請稍後再讀回一次。",
     "chain_mismatch": "平台回讀的上下層跟選的物件對不起來，請重新選擇後再讀回。",
     "material_unverified": "素材對應沒能核對（素材版本或對應已改變），請重新讀回。",
     # The batch readback's name match (`launch_view._match`).
@@ -155,6 +162,9 @@ _SETTING_LABELS = {f["key"]: f["label"] for f in manual_settings.FIELDS}
 # approving the launch was its confirmation, never a per-field eye check after launch.
 MATERIAL_KEY, MATERIAL_LABEL = "material", "圖片或影片版本"
 _PROVEN_MATERIAL = frozenset({"media_verified"})
+# F49 Contract B: a group's manual setting the readback compares on each of the group's ads (the
+# ad's creative carries the link), not on the ad set.
+_COMPARED_ON_ADS = frozenset({"landing_url"})
 
 
 def approval_confirms(snapshot) -> list[dict]:
@@ -178,6 +188,28 @@ def _plain(value):
     return value if value is None or isinstance(value, (str, int, float, bool)) else str(value)
 
 
+_CLICK_IDS = frozenset({"fbclid", "gclid"})
+
+
+def same_landing(planned, link) -> bool:
+    """F49 Contract B: one landing page -- same host (lowercased, `www.` ignored, port kept) and
+    path (trailing slash ignored), the query compared without `utm_*`／`fbclid`／`gclid` and in
+    any order; the scheme and fragment are ignored."""
+
+    def normal(value):
+        text = str(value).strip()
+        parts = urlsplit(text if "//" in text else "//" + text)
+        host = (parts.hostname or "").removeprefix("www.")
+        query = sorted(
+            (key, val)
+            for key, val in parse_qsl(parts.query, keep_blank_values=True)
+            if not key.lower().startswith("utm_") and key.lower() not in _CLICK_IDS
+        )
+        return host, parts.port, parts.path.rstrip("/"), query
+
+    return normal(planned) == normal(link)
+
+
 def _settings(item, node, material, observed=None, pixels=None):
     expected = item["expected_json"]
     known, missing, differences = {}, [], []
@@ -187,6 +219,9 @@ def _settings(item, node, material, observed=None, pixels=None):
     # unreadable (decision 5) is never `unreadable` -- it goes to `confirmed_at_approval`, and the
     # item's state is computed over the readable fields only.
     unreadable, mismatches, at_approval = [], [], []
+    # F49 Contract B: a compared field the read did not carry this time (`unproven`, the item
+    # stays `unknown` with the reason, no eye check) and the first reason code met.
+    unproven, codes = [], []
 
     def unread(key, label, text):
         missing.append(text)
@@ -194,6 +229,11 @@ def _settings(item, node, material, observed=None, pixels=None):
 
     def approved(key, label):
         at_approval.append({"key": key, "label": label})
+
+    def not_read(key, label, code):
+        missing.append(label)
+        unproven.append({"key": key, "label": label, "reason_code": code})
+        codes.append(code)
 
     def differ(key, label, text, want, got):
         differences.append(text)
@@ -237,6 +277,19 @@ def _settings(item, node, material, observed=None, pixels=None):
             known[MATERIAL_KEY] = material
         else:
             approved(MATERIAL_KEY, MATERIAL_LABEL)
+        # F49 Contract B: the group's planned landing URL against every link the creative sends
+        # people to (the platform's creative shape is the adapter's).
+        planned_url = expected.get("landing_url")
+        if planned_url:
+            key, label = "landing_url", _SETTING_LABELS["landing_url"]
+            links = adapters.creative_links(node)
+            if not links:
+                not_read(key, label, "landing_url_unread")
+            elif other := next((u for u in links if not same_landing(planned_url, u)), None):
+                differ(key, label, label, planned_url, other)
+                codes.append("landing_url_mismatch")
+            else:
+                known[key] = planned_url
     else:
         for key, value in expected.items():
             if key == "launch_settings":
@@ -245,11 +298,24 @@ def _settings(item, node, material, observed=None, pixels=None):
             if key == "manual_settings":
                 # No existing reader contract proves these semantic/manual fields: a declared one
                 # was confirmed at approval, any other is confirmed by eye.
-                for k in value:
-                    if k in manual_settings.DECLARED_UNREADABLE:
-                        approved("manual_settings." + k, _SETTING_LABELS.get(k, k))
+                for k, planned in value.items():
+                    setting = "manual_settings." + k
+                    if k in _COMPARED_ON_ADS:
+                        continue
+                    if k == "audience_id":
+                        ids = adapters.audience_ids(node)
+                        name = _SETTING_LABELS[k]
+                        if ids is None:
+                            not_read(setting, name, "audience_unread")
+                        elif str(planned) not in ids:
+                            differ(setting, name, name, planned, "、".join(ids) or None)
+                            codes.append("audience_mismatch")
+                        else:
+                            known[k] = planned
+                    elif k in manual_settings.DECLARED_UNREADABLE:
+                        approved(setting, _SETTING_LABELS.get(k, k))
                     else:
-                        unread("manual_settings." + k, _SETTING_LABELS.get(k, k), "人工設定：" + k)
+                        unread(setting, _SETTING_LABELS.get(k, k), "人工設定：" + k)
             elif value is None or node.get(key) is None:
                 unread(key, label, key)
             elif str(node[key]) != str(value):
@@ -274,6 +340,8 @@ def _settings(item, node, material, observed=None, pixels=None):
                 known[key] = value
     state = "deviated" if differences else "unknown" if missing else "confirmed"
     extra = {"launch_settings": compared} if compared else {}
+    if codes:
+        extra |= {"reason_code": codes[0]}
     return state, extra | {
         "setting_matches": False if differences else None if missing else True,
         "matched_fields": list(known),
@@ -281,11 +349,14 @@ def _settings(item, node, material, observed=None, pixels=None):
         "deviated_fields": differences,
         "unreadable": unreadable,
         "confirmed_at_approval": at_approval,
+        "unproven": unproven,
         "mismatches": mismatches,
         "material_evidence": material,
         "entity_exists": True,
         "delivery_confirmed": False,
-        "message": "只記本次物件與設定核對；不代表已投遞、素材因果或成效改善。",
+        "message": reason_text(codes[0])
+        if codes and state != "confirmed"
+        else "只記本次物件與設定核對；不代表已投遞、素材因果或成效改善。",
     }
 
 
@@ -298,6 +369,7 @@ def _resolve(status, evidence):
         status == "unknown"
         and evidence.get("entity_exists") is True
         and not evidence.get("deviated_fields")
+        and not evidence.get("unproven")
         and unreadable
         and all(u["key"] in confirmed for u in unreadable)
     ):

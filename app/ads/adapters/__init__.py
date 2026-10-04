@@ -115,6 +115,36 @@ def delivery(platform: str | None, native_status: str | None) -> dict:
     return {"state": state, "label": label}
 
 
+def _read_module(platform: str | None):
+    """The platform's read adapter module (`creative_links`／`audience_ids`), or None for a
+    platform without one. Same lazy-import dispatch seam as `platform_url` above."""
+    if platform == "meta":
+        from app.ads.adapters import meta_read
+
+        return meta_read
+    if platform == "simulated":
+        from app.ads.adapters import simulated_read
+
+        return simulated_read
+    return None
+
+
+def creative_links(entity: dict) -> list[str] | None:
+    """F49 Contract B: every destination URL one read ad's creative sends people to, in the
+    platform's own creative shape; `[]` when the creative was read and names none, None when no
+    creative was read (or the platform has no reader). Readback (`handoff_check`) compares them
+    with the plan's landing URL and names no platform field itself."""
+    module = _read_module(entity.get("platform"))
+    return module.creative_links(entity) if module is not None else None
+
+
+def audience_ids(entity: dict) -> list[str] | None:
+    """F49 Contract B: the platform audience ids one read ad set targets; `[]` when its targeting
+    was read and holds none, None when no targeting was read (or the platform has no reader)."""
+    module = _read_module(entity.get("platform"))
+    return module.audience_ids(entity) if module is not None else None
+
+
 def gone(platform: str | None, native_status: str | None) -> bool:
     """Whether this stored native status says the object no longer exists on the platform (a
     subset of `off`). Unknown platform or status -> `False`."""

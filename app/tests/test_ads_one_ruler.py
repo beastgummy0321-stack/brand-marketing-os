@@ -833,10 +833,7 @@ class OneCoverageReaderTest(unittest.TestCase):
 
 # (file relative to app/ads, why) -- a `except (ValueError, AttributeError)` still to narrow, naming
 # the issue that removes the entry. Never widen: an AttributeError is a code bug, not a refusal.
-VALUE_OR_ATTRIBUTE_PENDING = {
-    "asset_binding.py": "unassigned -- outside F49-I06's touch (reported to the lead): "
-    "`verify`'s provider read still reads a code bug as a failed read",
-}
+VALUE_OR_ATTRIBUTE_PENDING: dict = {}
 _STATE_SQL = re.compile(
     r"verification_state\s*(?:=|<>|!=)\s*'(\w+)'|THEN\s+'(\w+)'"
     r"|verification_state\s+(?:NOT\s+)?IN\s*\(([^)]*)\)",

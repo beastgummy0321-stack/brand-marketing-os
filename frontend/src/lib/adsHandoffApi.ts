@@ -17,6 +17,9 @@ export interface HandoffEvidence {
   reason_code?: string;
   /** F49 Contract B (decision 5): the declared-unreadable fields the approval confirmed. */
   confirmed_at_approval?: { key: string; label: string }[];
+  /** F49 Contract B: compared fields this read did not carry (landing URL, audience) -- `unknown` with the reason,
+   * re-read rather than confirmed by eye. */
+  unproven?: { key: string; label: string; reason_code: string }[];
 }
 export interface HandoffItem {
   id: string; name: string; planned_kind: string; planned_id: string;

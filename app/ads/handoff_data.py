@@ -5,8 +5,10 @@ from app.ads import launch_settings, lifecycle, manual_settings
 from app.ads import user_assets_repository as assets
 from app.core import db
 
-# The manual settings frozen per ad set for readback (`install_launch`): the required ones.
+# The manual settings frozen per ad set for readback (`install_launch`): the required ones, plus
+# the platform audience ID when the group has one (F49 Contract B: the readback compares it).
 LAUNCH_MANUAL_KEYS = tuple(f["key"] for f in manual_settings.FIELDS if f["required"])
+LAUNCH_MANUAL_KEYS_IF_SET = ("audience_id",)
 # F49 Contract D: why a campaign's handoff has no platform destination to offer a new ad.
 DESTINATIONS_NOTE_DRAFT = "這個活動還沒上架，平台上還沒有投放組；新廣告請到投放結構加"
 DESTINATIONS_NOTE_UNREAD = "還沒讀到這個活動的平台結構，按重新讀取"
@@ -69,14 +71,14 @@ def install_launch(conn, org, brand, campaign, set_id, action_id, frozen):
     )
     manual = {g["id"]: g["values"] for g in frozen.get("manual_settings", [])}
     for group in frozen["groups"]:
+        values = manual.get(group["id"], {})
         expected = {
             "budget_type": "daily",
             "budget_amount": group.get("daily_budget"),
             "start_date": group.get("start_date") or frozen.get("start_date"),
             "end_date": group.get("end_date") or frozen.get("end_date"),
-            "manual_settings": {
-                key: manual.get(group["id"], {}).get(key) for key in LAUNCH_MANUAL_KEYS
-            },
+            "manual_settings": {key: values.get(key) for key in LAUNCH_MANUAL_KEYS}
+            | {key: values[key] for key in LAUNCH_MANUAL_KEYS_IF_SET if values.get(key)},
         }
         # F29 Contract I: each ad set is read back against the frozen launch settings (a launch
         # approved before they existed froze none and compares none).
@@ -98,7 +100,12 @@ def install_launch(conn, org, brand, campaign, set_id, action_id, frozen):
         for ad in group.get("ads", []):
             material = ad.get("material_assignment") or {}
             copy = material.get("copy_fields") or {}
-            expected = {"copy_text": ad.get("copy_text"), "material_required": True}
+            # F49 Contract B: the group's landing URL is compared on each of its ads' links.
+            expected = {
+                "copy_text": ad.get("copy_text"),
+                "material_required": True,
+                "landing_url": values.get("landing_url"),
+            }
             if frozen.get("launch_settings") is not None:
                 expected["launch_settings"] = launch_settings.ad_subset(frozen["launch_settings"])
             if material:

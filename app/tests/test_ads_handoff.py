@@ -258,8 +258,10 @@ class HandoffTest(unittest.TestCase):
         self.assertEqual(root["status"], "confirmed")
         group = self.check(nodes["group"], "adset", "group")
         self.assertTrue(group["entity_exists"], group["evidence_json"])
-        self.assertEqual(group["status"], "unknown")
-        self.assertTrue(group["evidence_json"]["unknown_fields"])
+        # F49 Contract B: the landing URL is compared on the group's ads, never asked of the
+        # user on the ad set -- and this plan has none to compare.
+        self.assertEqual(group["status"], "confirmed", group["evidence_json"])
+        self.assertEqual(group["evidence_json"]["unreadable"], [])
         ad = self.check(nodes["ad"], "ad", "B2", user_verified=True)
         self.assertTrue(ad["entity_exists"], ad["evidence_json"])
         self.assertEqual(ad["status"], "confirmed", ad["evidence_json"])
@@ -288,9 +290,9 @@ class HandoffTest(unittest.TestCase):
         return TestClient(app), f"/api/ads/brands/{self.brand}/campaigns/{self.campaign}"
 
     def _read_back_with_unreadable_fields(self):
-        """A read-back launch whose ad set cannot see 2 launch settings and whose items cannot see
-        2 fields: the group's landing URL and the ad's description. The ad's material is declared
-        unreadable (F49 decision 5): confirmed at approval, never asked again."""
+        """A read-back launch whose ad set cannot see 2 launch settings and whose ad cannot see its
+        description. The ad's material is declared unreadable (F49 decision 5): confirmed at
+        approval; the landing URL is compared on the ads (Contract B), never asked by eye."""
         _, nodes = self.launch()
         frozen = nodes["group"]["expected_json"]["launch_settings"]
         audience = frozen["audience"]
@@ -314,7 +316,7 @@ class HandoffTest(unittest.TestCase):
         self.check(nodes["campaign"], "campaign", "root")
         group = self.check(nodes["group"], "adset", "group")
         ad = self.check(nodes["ad"], "ad", "B2")
-        self.assertEqual(group["status"], "unknown", group["evidence_json"])
+        self.assertEqual(group["status"], "confirmed", group["evidence_json"])
         self.assertEqual(ad["status"], "unknown", ad["evidence_json"])
         return group, ad
 
@@ -341,10 +343,7 @@ class HandoffTest(unittest.TestCase):
         )
         self.assertEqual(
             unreadable(before),
-            {
-                ("計畫投放組", "manual_settings.landing_url"): False,
-                ("原廣告", "copy.description"): False,
-            },
+            {("原廣告", "copy.description"): False},
         )
         ad_view = next(i for i in before["items"] if i["name"] == "原廣告")
         self.assertEqual(
@@ -354,7 +353,7 @@ class HandoffTest(unittest.TestCase):
         first = client.post(base + "/handoff/launch/confirm-all")
         self.assertEqual(first.status_code, 200, first.text)
         result = first.json()
-        self.assertEqual(result["confirmed_items"], 2)
+        self.assertEqual(result["confirmed_items"], 1)
         self.assertEqual(result["confirmed_settings"], 2)
         view = result["view"]
         self.assertEqual(set(view), set(before), "the same payload GET …/launch returns")
@@ -369,8 +368,6 @@ class HandoffTest(unittest.TestCase):
         self.assertEqual(set(item["evidence_json"]["confirmed"]), {"copy.description"})
         # The material is not eye-confirmed after launch: its evidence stays what the read proved.
         self.assertEqual(item["evidence_json"]["material_evidence"], "unknown")
-        item = handoff_data.get(self.conn, self.org, self.brand, self.campaign, group["id"])
-        self.assertEqual(set(item["evidence_json"]["confirmed"]), {"manual_settings.landing_url"})
         launch = change_control_launch.launch_set(self.conn, self.org, self.brand, self.campaign)
         self.assertEqual(set(launch["plan_json"]["settings_confirmed"]), {"pixel_id", "placement"})
 
@@ -1369,29 +1366,109 @@ class HandoffTest(unittest.TestCase):
             },
         )
 
-    def test_a_declared_manual_field_is_confirmed_at_approval_not_asked_again(self):
-        """Decision 5: a launch whose readable fields all match and whose manual field no reader
-        can see is declared ends confirmed without a click, the label under
-        `confirmed_at_approval` (the landing URL stands in for a declared key here)."""
+    # -- F49 Contract B (rescope): the landing URL and the audience ID are compared ---------------
+
+    PLANNED_URL = "https://shop.example.com/gift?ref=a"
+
+    def _compared_launch(self, *, landing=None, audience=None):
+        """A launch whose group saved a landing URL and／or an audience ID, read through the Meta
+        adapter's own link and audience readers; the campaign is read back."""
+        from app.ads import manual_settings
+
+        values = {k: v for k, v in (("landing_url", landing), ("audience_id", audience)) if v}
+        manual_settings.save(
+            self.conn, self.org, self.brand, self.campaign, self.group, values, actor="test"
+        )
+        self.conn.commit()
+        patch.object(adapters, "_read_module", side_effect=lambda platform: meta_read).start()
         _, nodes = self.launch()
         self.check(nodes["campaign"], "campaign", "root")
-        with patch.object(
-            handoff_check.manual_settings, "DECLARED_UNREADABLE", frozenset({"landing_url"})
-        ):
-            group = self.check(nodes["group"], "adset", "group")
+        return nodes
+
+    def _read_ad(self, nodes, spec):
+        if spec is not None:
+            self.native_ad["creative"]["fields"]["object_story_spec"] = spec
+        self.check(nodes["group"], "adset", "group")
+        return self.check(nodes["ad"], "ad", "B2")
+
+    def test_the_same_landing_page_matches_without_tracking_scheme_www_or_trailing_slash(self):
+        nodes = self._compared_launch(landing=self.PLANNED_URL)
+        link = "http://www.SHOP.example.com/gift/?utm_source=fb&ref=a&fbclid=x&gclid=y"
+        ad = self._read_ad(nodes, {"link_data": {"link": link}})
+        self.assertEqual(ad["status"], "confirmed", ad["evidence_json"])
+        self.assertIn("landing_url", ad["evidence_json"]["matched_fields"])
+        self.assertEqual(ad["evidence_json"]["unreadable"], [])
+
+    def test_a_utm_only_difference_is_the_same_page(self):
+        nodes = self._compared_launch(landing=self.PLANNED_URL + "&utm_campaign=autumn")
+        ad = self._read_ad(
+            nodes,
+            {"link_data": {"link": "https://shop.example.com/gift?utm_campaign=spring&ref=a"}},
+        )
+        self.assertEqual(ad["status"], "confirmed", ad["evidence_json"])
+
+    def test_another_landing_page_is_a_deviation_with_its_reason(self):
+        nodes = self._compared_launch(landing=self.PLANNED_URL)
+        other = "https://shop.example.com/sale?ref=a"
+        ad = self._read_ad(nodes, {"link_data": {"link": other}})
+        self.assertEqual(ad["status"], "deviated", ad["evidence_json"])
+        evidence = ad["evidence_json"]
+        self.assertEqual(evidence["reason_code"], "landing_url_mismatch")
+        reasons = handoff_check.READBACK_REASONS
+        self.assertEqual(evidence["message"], reasons["landing_url_mismatch"])
+        self.assertEqual(
+            evidence["mismatches"],
+            [{"key": "landing_url", "label": "落地頁網址", "expected": self.PLANNED_URL,
+              "observed": other}],
+        )
+        action = self.conn.execute(
+            "SELECT verification_state FROM ads_action WHERE id=%s", (ad["action_id"],)
+        ).fetchone()
+        self.assertEqual(action["verification_state"], "deviated")
+
+    def test_a_video_ads_link_is_read_from_its_call_to_action(self):
+        nodes = self._compared_launch(landing=self.PLANNED_URL)
+        video = {"video_data": {"video_id": "v1", "call_to_action": {
+            "type": "SHOP_NOW", "value": {"link": "https://shop.example.com/gift/?ref=a"}}}}
+        ad = self._read_ad(nodes, video)
+        self.assertEqual(ad["status"], "confirmed", ad["evidence_json"])
+        video["video_data"]["call_to_action"]["value"]["link"] = "https://elsewhere.example.com/"
+        ad = self.check(nodes["ad"], "ad", "B2")
+        self.assertEqual(ad["status"], "deviated", ad["evidence_json"])
+        self.assertEqual(ad["evidence_json"]["reason_code"], "landing_url_mismatch")
+
+    def test_no_link_read_leaves_the_ad_unknown_with_a_reason_and_no_eye_check(self):
+        nodes = self._compared_launch(landing=self.PLANNED_URL)
+        ad = self._read_ad(nodes, None)  # the creative carries no story spec
+        self.assertEqual(ad["status"], "unknown", ad["evidence_json"])
+        evidence = ad["evidence_json"]
+        self.assertEqual(evidence["reason_code"], "landing_url_unread")
+        self.assertEqual(evidence["message"], handoff_check.READBACK_REASONS["landing_url_unread"])
+        self.assertEqual(evidence["unreadable"], [])
+        self.assertEqual(
+            evidence["unproven"],
+            [{"key": "landing_url", "label": "落地頁網址", "reason_code": "landing_url_unread"}],
+        )
+        # Nothing to confirm by eye: confirm-all leaves it to the next read.
+        handoff_check.confirm_all(self.conn, self.org, self.brand, self.campaign, "human")
+        again = handoff_data.get(self.conn, self.org, self.brand, self.campaign, ad["id"])
+        self.assertEqual(again["status"], "unknown")
+
+    def test_the_audience_id_is_compared_with_the_ad_sets_audiences(self):
+        nodes = self._compared_launch(audience="123")
+        self.assertEqual(nodes["group"]["expected_json"]["manual_settings"]["audience_id"], "123")
+        self.native_group["targeting"] = {"custom_audiences": [{"id": "9"}, {"id": "123"}]}
+        group = self.check(nodes["group"], "adset", "group")
         self.assertEqual(group["status"], "confirmed", group["evidence_json"])
+        self.native_group["targeting"] = {"custom_audiences": [{"id": "9"}]}
+        group = self.check(nodes["group"], "adset", "group")
+        self.assertEqual(group["status"], "deviated", group["evidence_json"])
+        self.assertEqual(group["evidence_json"]["reason_code"], "audience_mismatch")
+        del self.native_group["targeting"]
+        group = self.check(nodes["group"], "adset", "group")
+        self.assertEqual(group["status"], "unknown", group["evidence_json"])
+        self.assertEqual(group["evidence_json"]["reason_code"], "audience_unread")
         self.assertEqual(group["evidence_json"]["unreadable"], [])
-        self.assertEqual(
-            group["evidence_json"]["confirmed_at_approval"],
-            [{"key": "manual_settings.landing_url", "label": "落地頁網址"}],
-        )
-        # Not declared (today): the landing URL is still the user's eye check.
-        undeclared = self.check(nodes["group"], "adset", "group")
-        self.assertEqual(undeclared["status"], "unknown")
-        self.assertEqual(
-            [u["key"] for u in undeclared["evidence_json"]["unreadable"]],
-            ["manual_settings.landing_url"],
-        )
 
     def test_identical_upserts_leave_updated_at_alone(self):
         external_repository.upsert_entity(self.conn, self.org, self.brand, self.campaign, self.root)
@@ -1460,3 +1537,54 @@ class HandoffTest(unittest.TestCase):
         self.assertEqual(
             deferred, [{"ad_id": self.ad, "name": "原廣告", "group_name": "計畫投放組"}]
         )
+
+
+class LinkAndAudienceReaderTest(unittest.TestCase):
+    """F49 Contract B: the platform's creative and targeting shapes live in its adapter; the
+    readback's landing-page rule is platform-neutral."""
+
+    def test_meta_reads_link_video_and_dynamic_destinations(self):
+        def ad(fields):
+            return {"platform": "meta", "creative": {"kind": "image", "fields": fields}}
+
+        self.assertEqual(
+            adapters.creative_links(ad({"object_story_spec": {"link_data": {"link": "https://a/"}}})),
+            ["https://a/"],
+        )
+        video = {"video_data": {"call_to_action": {"value": {"link": "https://v/"}}}}
+        self.assertEqual(adapters.creative_links(ad({"object_story_spec": video})), ["https://v/"])
+        feed = {"link_urls": [{"website_url": "https://d1/"}, {"display_url": "x"}]}
+        self.assertEqual(adapters.creative_links(ad({"asset_feed_spec": feed})), ["https://d1/"])
+        self.assertEqual(adapters.creative_links(ad({"title": "t"})), [])
+        self.assertIsNone(adapters.creative_links({"platform": "meta", "creative": {}}))
+        self.assertIsNone(adapters.creative_links({"platform": "unknown-platform"}))
+
+    def test_meta_reads_the_ad_sets_custom_audiences(self):
+        targeting = {"custom_audiences": [{"id": 123, "name": "買過"}, {"id": "9"}]}
+        self.assertEqual(
+            adapters.audience_ids({"platform": "meta", "targeting": targeting}), ["123", "9"]
+        )
+        self.assertEqual(adapters.audience_ids({"platform": "meta", "targeting": {}}), [])
+        self.assertIsNone(adapters.audience_ids({"platform": "meta"}))
+
+    def test_simulated_reads_its_own_fields(self):
+        self.assertIsNone(adapters.creative_links({"platform": "simulated", "creative": {}}))
+        self.assertEqual(
+            adapters.creative_links(
+                {"platform": "simulated", "creative": {"fields": {"links": ["https://s/"]}}}
+            ),
+            ["https://s/"],
+        )
+        self.assertEqual(
+            adapters.audience_ids({"platform": "simulated", "audience_ids": ["1"]}), ["1"]
+        )
+
+    def test_the_landing_page_rule(self):
+        same = handoff_check.same_landing
+        planned = "https://shop.example.com/gift?ref=a&b=2"
+        self.assertTrue(same(planned, "http://WWW.shop.example.com/gift/?b=2&ref=a&utm_x=1"))
+        self.assertTrue(same(planned, "shop.example.com/gift?ref=a&b=2&fbclid=1#top"))
+        self.assertFalse(same(planned, "https://shop.example.com/gift?ref=b&b=2"))
+        self.assertFalse(same(planned, "https://shop.example.com/Gift?ref=a&b=2"))
+        self.assertFalse(same(planned, "https://other.example.com/gift?ref=a&b=2"))
+        self.assertFalse(same(planned, "https://shop.example.com:8443/gift?ref=a&b=2"))

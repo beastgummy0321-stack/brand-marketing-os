@@ -22,6 +22,20 @@ ACCOUNT_NAME = "模擬通路"
 PAGE_SIZE = 100  # `external_sync._save_page` refuses a page of more than 100 nodes
 
 
+def creative_links(entity: dict) -> list[str] | None:
+    """F49 Contract B (`adapters.creative_links`): a simulated ad's creative names its links in
+    its own `fields.links`; the simulated chain registers no creative, so this reads None."""
+    links = ((entity.get("creative") or {}).get("fields") or {}).get("links")
+    return [str(link) for link in links if link] if isinstance(links, list) else None
+
+
+def audience_ids(entity: dict) -> list[str] | None:
+    """F49 Contract B (`adapters.audience_ids`): a simulated ad set's own `audience_ids`; None
+    when it carries none (the simulated chain registers no targeting)."""
+    ids = entity.get("audience_ids")
+    return [str(value) for value in ids] if isinstance(ids, list) else None
+
+
 def _day(value) -> date:
     return value if isinstance(value, date) else date.fromisoformat(str(value))
 
