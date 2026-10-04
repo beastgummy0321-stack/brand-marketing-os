@@ -17,7 +17,15 @@ campaigns have no coordinates, so no pairs.
 
 from datetime import timedelta
 
-from app.ads import change_control, experiments, live_creative, outcome, repository, triage
+from app.ads import (
+    change_control,
+    coverage,
+    experiments,
+    live_creative,
+    outcome,
+    repository,
+    triage,
+)
 from app.core import settings
 
 # The ruler's thresholds through `experiments.DEFAULT_RULES` (F48 Contract R: `triage` constants).
@@ -95,6 +103,11 @@ def _decisions(conn, org, brand, campaign_id):
     return decisions
 
 
+def _first_row_day(rows, default):
+    """The earliest day of `rows` (the span the day states are loaded over), else `default`."""
+    return min((r["day"] for r in rows), default=default)
+
+
 def _first_delivery(rows, ad_id, last_day):
     days = [
         r["day"] for r in rows
@@ -140,12 +153,13 @@ def _window_days(start, end):
     return [start + timedelta(days=i) for i in range((end - start).days + 1)]
 
 
-def _covered_zero_rows(rows, ad_ids, start, end, coverage):
-    """Lead ruling (F29-I04): the known-days convention of triage (`triage._coverage` /
-    `_window_covered`). For a real ad (none of its rows is simulated), a day inside the campaign's
-    recorded sync coverage with no row is a tracked zero-delivery day (spend 0, results 0); a day
-    outside coverage stays missing. Simulated ads are never padded. An untracked (NULL) purchase
-    count on an existing row is untouched -- never 0."""
+def _covered_zero_rows(rows, ad_ids, start, end, read):
+    """Lead ruling (F29-I04): the known-days convention of triage (`read` = `coverage.load`, F49
+    Contract V). For a real ad (none of its rows is simulated), a day inside one of the
+    campaign's recorded clean read ranges with no row of this ad is a tracked zero-delivery day
+    (spend 0, results 0); any other day stays missing -- another ad's row proves its own day was
+    read, not that this ad's rows of it arrived (`Days.cleanly_read`). Simulated ads are never
+    padded. An untracked (NULL) purchase count on an existing row is untouched -- never 0."""
     padded = []
     for ad_id in ad_ids:
         own = [r for r in rows if r["entity_id"] == ad_id]
@@ -159,7 +173,7 @@ def _covered_zero_rows(rows, ad_ids, start, end, coverage):
             {"entity_id": ad_id, "day": day, "spend": 0, "purchases": 0, "revenue": None,
              "source": source}
             for day in _window_days(start, end)
-            if day not in present and triage._window_covered(coverage, day, day)
+            if day not in present and read.cleanly_read(day, day)
         )
     return padded
 
@@ -173,7 +187,7 @@ def _gaps(rows, ad_ids, start, end):
     ]
 
 
-def _judge_pair(group, a, b, dimension, labels, entities, rows, last_day, decision, coverage):
+def _judge_pair(group, a, b, dimension, labels, entities, rows, last_day, decision, read):
     dimension_label = experiments.DIMENSIONS[dimension]
     values = [labels.get((dimension, ad[f"{dimension}_key"]), ad[f"{dimension}_key"])
               for ad in (a, b)]
@@ -195,7 +209,7 @@ def _judge_pair(group, a, b, dimension, labels, entities, rows, last_day, decisi
         }
     start = max(first_a, first_b)
     days = (last_day - start).days + 1
-    rows = rows + _covered_zero_rows(rows, (a["id"], b["id"]), start, last_day, coverage)
+    rows = rows + _covered_zero_rows(rows, (a["id"], b["id"]), start, last_day, read)
     core = experiments.evaluate(rows, [a["id"], b["id"]], start, last_day, RULES, "cpa")
     sides = [
         _side(ad, v, entities.get(ad["id"]), total)
@@ -247,14 +261,14 @@ def read(conn, org, brand, campaign_id) -> dict:
     yesterday = settings.today_for_org(conn, org_id=org) - timedelta(days=1)
     rows = _outcome_rows(conn, org, brand, campaign_id, [ad["id"] for ad in ads], yesterday)
     decisions = _decisions(conn, org, brand, campaign_id)
-    coverage = triage._coverage(detail)
+    read = coverage.load(conn, org, brand, detail, _first_row_day(rows, yesterday), yesterday)
     pairs = []
     for group, a, b, dimension in found:
         end = group.get("end_date") or detail.get("end_date")
         last_day = min(yesterday, end) if end else yesterday
         pairs.append(_judge_pair(
             group, a, b, dimension, labels, entities, rows, last_day,
-            decisions.get(pair_id(a["id"], b["id"])), coverage,
+            decisions.get(pair_id(a["id"], b["id"])), read,
         ))
     return {"pairs": pairs, "unavailable": None}
 

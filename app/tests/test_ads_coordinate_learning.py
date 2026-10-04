@@ -285,6 +285,12 @@ class CloseWritesRankedRowsTest(CoordinateLearningTestBase):
 
     def test_partial_data_writes_no_ranked_row(self):
         campaign, _ads = self._drill_ten()
+        # F49 Contract V: `record_sync` keeps a union, so clear the full-period range first.
+        self.conn.execute(
+            "UPDATE ads_campaign SET context_json = context_json "
+            "#- '{external_sync,observations,ranges}' WHERE id = %s",
+            (campaign["id"],),
+        )
         outcome_seed.set_coverage(
             self.conn, self.org_id, self.brand_id, campaign["id"],
             self.start + timedelta(days=2), self.today,

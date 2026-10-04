@@ -241,13 +241,12 @@ def snapshot(
     prior_end = start - timedelta(days=1)
     prior_start = start - timedelta(days=(end - start).days + 1)
     # F36-I06 (drill-6 #13, ruling C): an unsynced day is missing evidence, not "no row". The
-    # rows read below cannot tell the two apart, so the window (current AND its equal-length
-    # prior period) must sit inside the campaign's recorded observations sync coverage -- the
-    # same rule `triage._window_covered` grades with, refused here like the date guards above.
-    # Lazy import: `triage` imports this module for `aggregate`.
-    from app.ads import triage
+    # rows read below cannot tell the two apart, so every campaign day of the window (current AND
+    # its equal-length prior period) must be read -- the same day states triage grades with
+    # (`coverage.gap`, F49 Contract V), refused here like the date guards above.
+    from app.ads import coverage
 
-    gap = triage.coverage_gap(campaign, prior_start, end)
+    gap = coverage.gap(conn, org, brand, campaign, prior_start, end)
     if gap["never_synced"]:
         # F37 Contract Q (ruling 4): never read is not "nothing missing" (F36 as-built gap).
         raise ValueError("這個活動還沒讀過平台資料；先重新讀取平台。")

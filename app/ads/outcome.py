@@ -15,9 +15,10 @@ non-`NULL` rows and reports `None`/`NULL` when nothing in the set is tracked -- 
 coerced into zero. `spend`/`impressions`/`clicks` of a platform row may also be unknown; `_bucket`
 sums the known ones (a row with no known spend adds nothing, it is not invented).
 
-Coverage (Contract P/Q): `coverage` names the campaign-window days the platform read has not
-covered (`triage.coverage_gap`) over `start_date … min(end_date, org yesterday)` -- today is
-never a complete day -- and says `never_synced` instead of a wall of dates when nothing was read.
+Coverage (Contract P/Q, F49 Contract V): `coverage` names the campaign-window days nobody read
+(`coverage.gap`: no row and no clean read range) over `start_date … min(end_date, org yesterday)`
+-- today is never a complete day -- and says `never_synced` instead of a wall of dates when
+nothing was read.
 """
 
 from datetime import date, timedelta
@@ -106,22 +107,22 @@ def _daily_series(rows: list) -> list:
     return [{"day": day, **_bucket(day_rows)} for day, day_rows in sorted(by_day.items())]
 
 
-def _coverage(campaign: dict, today: date) -> dict:
+def _coverage(conn: _AnyConn, org_id: str, brand_id: str, campaign: dict, today: date) -> dict:
     """Contract P's `coverage`: the campaign window `start_date … min(end_date, org yesterday)`
-    checked against the recorded platform-read coverage by `triage.coverage_gap` (the rule
-    triage/closeout/review share). No window (no start date, or it starts today or later) ⇒
-    `expected` 0 and nothing missing; `never_synced` still says whether anything was ever read."""
-    from app.ads import triage  # 延遲 import 避免循環
+    checked day by day by `coverage.gap` (F49 Contract V, the rule triage/closeout/review share).
+    No window (no start date, or it starts today or later) ⇒ `expected` 0 and nothing missing;
+    `never_synced` still says whether anything was ever read."""
+    from app.ads import coverage  # 延遲 import 避免循環
 
     start = campaign.get("start_date")
     yesterday = today - timedelta(days=1)
     end = campaign.get("end_date")
     end = min(end, yesterday) if end is not None else yesterday
     if start is None or end < start:
-        never_synced = triage.coverage_gap(campaign, end, end)["never_synced"]
+        never_synced = coverage.gap(conn, org_id, brand_id, campaign, end, end)["never_synced"]
         return {"start": None, "end": None, "expected": 0, "missing": 0, "missing_days": [],
                 "never_synced": never_synced}
-    gap = triage.coverage_gap(campaign, start, end)
+    gap = coverage.gap(conn, org_id, brand_id, campaign, start, end)
     return {
         "start": start.isoformat(),
         "end": end.isoformat(),
@@ -243,6 +244,6 @@ def summary(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str) -> dic
         "daily": daily,
         "groups": groups_table,
         "ads": ads_table,
-        "coverage": _coverage(detail, today),
+        "coverage": _coverage(conn, org_id, brand_id, detail, today),
         "last_data_at": last_data_at,
     }

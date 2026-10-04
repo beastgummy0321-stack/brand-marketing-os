@@ -11,9 +11,8 @@ stays unknown: a window whose spend or result can't be known reads 資料不足 
 """
 
 from collections import defaultdict
-from datetime import timedelta
 
-from app.ads import targets, triage
+from app.ads import coverage, targets, triage
 
 # Display order of the buckets (Contract C): 划算, 偏貴, 太貴, 沒賣出, then the ungraded ones.
 BUCKET_ORDER = ("on_target", "watch", "over", "wasted", "insufficient", "no_target")
@@ -143,9 +142,10 @@ def summarize(rows) -> dict:
 
 def missing(conn, org_id, brand_id, start, end) -> list[dict]:
     """Per campaign that delivered inside `[start, end]`: the days (from its first delivered day in
-    the window to the last complete day) that have no ad row AND sit outside the campaign's
-    recorded sync coverage -- a day inside coverage with no row was synced and simply had no
-    delivery. `[{campaign_id, name, missing_days}]`, only campaigns with at least one."""
+    the window to the last complete day, clipped to the campaign's own dates) nobody read --
+    `coverage.load` (F49 Contract V): a day with a row, or inside a clean read range with no row
+    (synced, simply no delivery), is read. `[{campaign_id, name, missing_days}]`, only campaigns
+    with at least one."""
     days_by_campaign = defaultdict(set)
     for row in conn.execute(
         "SELECT DISTINCT campaign_id,day FROM ads_external_daily WHERE org_id=%s AND brand_id=%s "
@@ -167,15 +167,13 @@ def missing(conn, org_id, brand_id, start, end) -> list[dict]:
         campaign = campaigns.get(campaign_id)
         if campaign is None:
             continue
-        present = days_by_campaign[campaign_id]
-        coverage = triage._coverage(campaign)
+        first = min(days_by_campaign[campaign_id])
         last = min(end, triage._account_cutoff(conn, org_id, brand_id, campaign_id))
-        day, gaps = min(present), []
-        while day <= last:
-            covered = coverage is not None and coverage[0] <= day <= coverage[1]
-            if day not in present and not covered:
-                gaps.append(day.isoformat())
-            day += timedelta(days=1)
+        gaps = (
+            coverage.load(conn, org_id, brand_id, campaign, first, last).missing(
+                first, last, cap=None,
+            ) if first <= last else []
+        )
         if gaps:
             out.append({"campaign_id": campaign_id, "name": campaign["name"], "missing_days": gaps})
     return out

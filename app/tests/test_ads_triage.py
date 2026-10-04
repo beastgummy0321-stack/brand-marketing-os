@@ -77,6 +77,9 @@ class TriageTest(unittest.TestCase):
         self.conn.commit()
 
     def set_coverage(self, start, end):
+        """The campaign's recorded read ranges become exactly `[start, end]` (F49 Contract V:
+        `record_sync` keeps a union, so the earlier ranges are cleared first)."""
+        self.clear_coverage()
         external.record_sync(
             self.conn, self.org, self.brand, self.campaign, section="observations",
             state={
@@ -89,8 +92,16 @@ class TriageTest(unittest.TestCase):
     def clear_coverage(self):
         self.conn.execute(
             "UPDATE ads_campaign SET context_json = context_json "
-            "#- '{external_sync,observations,coverage}' WHERE id=%s",
+            "#- '{external_sync,observations,coverage}' "
+            "#- '{external_sync,observations,ranges}' WHERE id=%s",
             (self.campaign,),
+        )
+        self.conn.commit()
+
+    def drop_day(self, day):
+        """Remove every row of `day` -- a day neither read by a range nor proven by a row."""
+        self.conn.execute(
+            "DELETE FROM ads_external_daily WHERE campaign_id=%s AND day=%s", (self.campaign, day),
         )
         self.conn.commit()
 
@@ -220,6 +231,9 @@ class TriageTest(unittest.TestCase):
             self.conn, self.org, self.brand, self.campaign,
             self.cutoff - timedelta(days=6), self.cutoff, self.cutoff,
         )
+        # F49 Contract V: a row proves its day, so with no recorded range the window is unread
+        # only where a day has no row either.
+        self.drop_day(self.cutoff - timedelta(days=3))
         item = self.classify_one()
         self.assertEqual(item["class"], "insufficient")
         self.assertEqual(item["reason_code"], "needs_resync")
@@ -228,15 +242,15 @@ class TriageTest(unittest.TestCase):
         self.assertEqual((item["grade"], item["grade_label"]), ("insufficient", "資料不足"))
 
     def test_partially_covered_window_never_yields_stop_loss_or_comparison(self):
-        # Coverage only reaches 3 days back -- the smallest (7-day) window is not fully covered,
-        # even though the underlying data shape would otherwise fire stop-loss.
+        # Coverage only reaches 3 days back and days 4-6 back have no row either -- the smallest
+        # (7-day) window is not fully read, even though the data shape would fire stop-loss.
         self.set_coverage(self.cutoff - timedelta(days=3), self.cutoff)
         self.set_target(100, result_kind="purchase")
         self.obs(
             self.cutoff - timedelta(days=10), spend=50, result_count=5, attribution_key="demo",
         )
-        for offset in range(7):
-            self.obs(self.cutoff - timedelta(days=offset), spend=50, result_count=None,
+        for offset in range(4):
+            self.obs(self.cutoff - timedelta(days=offset), spend=100, result_count=None,
                       attribution_key=f"target{offset}")
         tracked_zero.apply(
             self.conn, self.org, self.brand, self.campaign,
@@ -483,7 +497,12 @@ class TriageTest(unittest.TestCase):
         def count_daily_reads():
             counting = _CountingConn(self.conn)
             triage.classify(counting, self.org, self.brand, self.campaign)
-            return sum(1 for sql in counting.calls if "ads_external_daily" in sql)
+            rows = sum(1 for sql in counting.calls if "SELECT * FROM ads_external_daily" in sql)
+            # F49 Contract V: one read of the campaign's row days (`coverage.load`), not per ad.
+            days = sum(1 for sql in counting.calls
+                       if "SELECT DISTINCT day FROM ads_external_daily" in sql)
+            self.assertEqual(days, 1)
+            return rows
 
         one_ad_reads = count_daily_reads()
 
@@ -596,9 +615,15 @@ class TriageDataViewTest(unittest.TestCase):
         self.conn.commit()
 
     def test_never_synced(self):
+        # F49 Contract V: every day of the judged window is served with its state -- all
+        # `missing` here, while `missing_days` stays [] (never read is its own answer).
+        days = [
+            {"day": (self.cutoff - timedelta(days=offset)).isoformat(), "state": "missing"}
+            for offset in range(triage.WINDOW_STEPS[-1] - 1, -1, -1)
+        ]
         self.assertEqual(
             self.data(), {"sync": {"state": "never", "error": None, "last_success_at": None},
-                          "coverage": None, "missing_days": [],
+                          "coverage": None, "missing_days": [], "days": days,
                           "capacity": {"daily_budget": None, "currency": None, "target": None,
                                        "can_support": None, "active_ads": 0},
                           "status": {"state": "never", "label": "還沒讀過平台資料。",
@@ -1081,6 +1106,8 @@ class TriageGradeTest(TriageTest):
         self.set_target(100, result_kind="purchase")
         self.two_weeks(previous_spend=80, current_spend=150)
         self.set_coverage(self.cutoff - timedelta(days=6), self.cutoff)
+        # One previous day with no row and outside the read range (F49 Contract V).
+        self.drop_day(self.cutoff - timedelta(days=10))
         item = self.classify_one()
         self.assertEqual(item["grade"], "over")
         self.assertIsNone(item["previous_grade"])

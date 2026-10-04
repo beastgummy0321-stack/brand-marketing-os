@@ -214,19 +214,10 @@ def write_rows(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, row
 
 def extend_coverage(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str,
                     campaign: dict, start: date, end: date) -> None:
-    """Record `[start, end]` as read. The recorded coverage is one range, so the new range joins
-    it only when the two overlap or touch; a disjoint range keeps the recorded one (the days in
-    between were never read and must stay missing). Nothing recorded yet: the new range."""
-    sync = (campaign.get("context_json") or {}).get("external_sync") or {}
-    recorded = (sync.get("observations") or {}).get("coverage") or {}
-    if recorded.get("start") and recorded.get("end"):
-        rec_start = date.fromisoformat(recorded["start"])
-        rec_end = date.fromisoformat(recorded["end"])
-        one_day = timedelta(days=1)
-        if start <= rec_end + one_day and end >= rec_start - one_day:
-            start, end = min(start, rec_start), max(end, rec_end)
-        else:
-            start, end = rec_start, rec_end
+    """Record `[start, end]` as read (F49 Contract V): `record_sync` joins it to the campaign's
+    recorded ranges (`coverage.with_range`), so a disjoint range is kept beside the earlier ones
+    and the days in between stay missing. `campaign` is kept in the signature for its callers."""
+    del campaign
     external_repository.record_sync(
         conn, org_id, brand_id, campaign_id, section="observations",
         state={"status": "success", "last_success_at": now_utc().isoformat(),

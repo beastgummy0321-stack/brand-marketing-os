@@ -5,7 +5,15 @@ from unittest.mock import patch
 
 from pydantic import ValidationError
 
-from app.ads import closeout, outcome, repository, simulation_mode, simulation_recovery, strategy
+from app.ads import (
+    closeout,
+    coverage,
+    outcome,
+    repository,
+    simulation_mode,
+    simulation_recovery,
+    strategy,
+)
 from app.ads.adapters import manual, simulated
 from app.ads.simulation_routes import Save
 from app.brand_intelligence import repository as bi_repo
@@ -68,18 +76,20 @@ class SimulationRecoveryTest(SimulatedPublishTestBase):
         self.save([self.row()], day=first)
         self.save([self.row()], day=first + timedelta(days=2))
 
-        sync = repository.get_campaign(*self.args)["context_json"]["external_sync"]
-        self.assertEqual(sync["observations"]["coverage"],
-                         {"start": first.isoformat(), "end": first.isoformat()})
+        # F49 Contract V: both saved days are kept as their own ranges; the gap stays unread.
+        third = first + timedelta(days=2)
+        self.assertEqual(coverage.served(repository.get_campaign(*self.args)), [
+            {"start": first.isoformat(), "end": first.isoformat()},
+            {"start": third.isoformat(), "end": third.isoformat()},
+        ])
         missing = outcome.summary(*self.args)["coverage"]["missing_days"]
         self.assertIn((first + timedelta(days=1)).isoformat(), missing)
         self.assertNotIn(first.isoformat(), missing)
+        self.assertNotIn(third.isoformat(), missing)
 
         self.save([self.row()], day=first + timedelta(days=1))
-        sync = repository.get_campaign(*self.args)["context_json"]["external_sync"]
-        self.assertEqual(sync["observations"]["coverage"],
-                         {"start": first.isoformat(),
-                          "end": (first + timedelta(days=1)).isoformat()})
+        self.assertEqual(coverage.served(repository.get_campaign(*self.args)),
+                         [{"start": first.isoformat(), "end": third.isoformat()}])
 
     def test_zero_and_missing_are_distinct_and_resend_does_not_accumulate(self):
         self.start()
