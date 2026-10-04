@@ -17,6 +17,14 @@ export function usePauseView(brandId: string, campaignId: string, entityId: stri
   );
 }
 
+/** The pause's reason (F48 Contract R "reason texts"): the served `reason_text`, built from this ad's own grade and
+ * numbers. Without one the ad has no score yet — said as such, with the server's grade word when there is one. */
+export function pauseReason(view: PauseView): string {
+  if (view.reason_text?.trim()) return view.reason_text.trim();
+  const label = view.triage?.grade_label;
+  return label ? `這則還沒有分數：${label}` : "這則還沒有分數";
+}
+
 export interface PauseBack { label: string; to: string }
 
 /** `?from=perf|review|verify&ref=…` → where 「←」 goes and what it is called (prototype `FROM`). A review or

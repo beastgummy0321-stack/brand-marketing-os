@@ -32,7 +32,7 @@ import { AdoptLatestButton } from "./CleanupRebuild";
 import { createCleanupSet, declinedIdsOf, samePick, useCleanupPick, useCleanupRebuild } from "./cleanupDraft";
 import { NewAdEvidence } from "./NewAdEvidence";
 import { ANGLE_MAX, BudgetEvidence, CopyEvidence, PauseEvidence, PauseGone, PauseLearnCard } from "./confirmParts";
-import { closedNote, monthDay, pauseBack, usePauseView, windowText } from "./usePauseView";
+import { closedNote, monthDay, pauseBack, pauseReason, usePauseView, windowText } from "./usePauseView";
 import { formatRevisitLabel } from "../home/status";
 import {
   AHEAD_LABEL,
@@ -55,6 +55,7 @@ import {
   nextOpenQueueItem,
   pauseTitle,
   queueItemEntityId,
+  servedReason,
   stepFromChangeSet,
   stepRoute,
   toChangeInput,
@@ -285,7 +286,7 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
         operation_id: operationId,
         title: budgetTitle(scale.owner.name),
         month: currentBudgetMonth(timezone),
-        items: [buildBudgetDraftItem(scale.owner.id, scale.to)],
+        items: [buildBudgetDraftItem(scale.owner.id, scale.to, servedReason(scale.reason_text))],
       };
     }
     if (proposeKind === "cleanup") {
@@ -302,12 +303,12 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
     // F45-I06: the draft is built from Contract P (the ad's own name and id), never from a queue row.
     if (!pauseView) throw new Error("這則廣告的資料還沒讀到，請重新整理後再試。");
     // Contract C: whatever the user picked (a candidate tag or the custom input) at the moment of
-    // this first write — `undefined` reason keeps `buildPauseDraftItem`'s own default.
+    // this first write. F48 Contract R: the reason is the ad's own served sentence (`pauseReason`).
     return {
       operation_id: operationId,
       title: pauseTitle(pauseView.name ?? pauseView.triage?.name ?? null),
       month: currentBudgetMonth(timezone),
-      items: [buildPauseDraftItem(pauseView.entity_id, undefined, angleChoice)],
+      items: [buildPauseDraftItem(pauseView.entity_id, pauseReason(pauseView), angleChoice)],
     };
   }
 
@@ -628,7 +629,7 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
           <PauseEvidence
             triage={headTriage}
             fallbackName={item?.target.name ?? "（未命名廣告）"}
-            fallbackReason={item?.reason ?? ""}
+            reason={adClosed ? null : item?.reason ?? (pauseView ? pauseReason(pauseView) : null)}
             closed={adClosed && pauseView ? closedNote(pauseView, timezone) : null}
             windowLine={headTriage ? windowText(headTriage.window) : null}
           />

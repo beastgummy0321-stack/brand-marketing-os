@@ -121,8 +121,6 @@ export function LearningExits({ brandId, campaignId, view, onLeave, size = "defa
   );
 }
 
-const plannedAds = (c: CampaignDetail) => c.groups.reduce((sum, g) => sum + g.ads.length, 0);
-
 type Learned = { status: "ready"; view: CoordinateLearnings } | { status: "error" };
 
 /** Prototype `#/close` result: ✓ 已結案：留下 N 則、換掉 M 則, the served rule line, the ranked rows (compact, headless).
@@ -240,7 +238,9 @@ export function CloseCampaignDialog({ brandId, campaign: c, onClose, onCampaignC
       <DialogContent className="bg-card sm:max-w-[560px]">
         <DialogTitle>結案</DialogTitle>
         <DialogDescription className="text-foreground">
-          結案後會把這期 {plannedAds(c)} 則廣告照每筆成本排名、判定留下或換掉，寫進品牌智庫「投放學到的」。活動之後鎖定，不能再改。
+          {/* F48-I11: no count — the planned ads are not the platform ads closeout ranks, and that count is not on
+              this payload. */}
+          結案後會把這期的廣告照每筆成本排名、判定留下或換掉，寫進品牌智庫「投放學到的」。活動之後鎖定，不能再改。
           {c.status === "live" && ` ${EARLY_CLOSE_SENTENCE}`}
         </DialogDescription>
         {coverageGap && (

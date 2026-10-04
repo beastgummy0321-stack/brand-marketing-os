@@ -7,10 +7,15 @@
  *    `2 成`, `3 成`, `7 天`, `10 筆`, `SAMPLE_FEW`) — thresholds, labels and sentences come from `useAdsRules()`.
  * 3. F48-I08: no branch on a label — no equality against a `*_label` field, and no `…label === "中文"` (the frontend's
  *    own `step.label` navigation is allowed). Branches use `grade`／`reason_code`／`verdict`／`offer_key`.
+ * 4. F48-I11: no fact written into words — a number with a unit (`N 天`, `N–M 天`, `N%`, `N 期`, `N 則`, `N 倍`,
+ *    `N 成`, `N 筆`) in a string or JSX text. A fact a screen prints comes from a served field through `${…}`／`{…}`;
+ *    the revisit quick picks 「N 天後」 are the frontend's own choices, and a zero (「0 筆」) is a grade's definition, not
+ *    a figure. A `%` counts only after a space or a CJK character (`w-[30%]`, `width="100%"` are layout).
  *
  * Comments are not code: every scan reads the source with comments blanked out (line numbers kept); the numeric
- * literals are read in code only (a class name such as `gap-1.5` is a string). `ALLOWLIST` names the files a later
- * issue of feature F48 rewires; that issue removes its own entries. */
+ * literals are read in code only (a class name such as `gap-1.5` is a string). A hit that is not a served fact is
+ * excused one line at a time in `NOT_A_RULER`, with the reason. F48-I11 emptied the per-file allowlist (the last
+ * frontend issue of feature F48): every ads source is scanned. */
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -41,6 +46,13 @@ const RULER_WORDS = [
   /(?<![\d.])3 ?倍/, /(?<![\d.])2 ?成/, /(?<![\d.])3 ?成/, /(?<![\d.])7 ?天(?!後)/, /(?<![\d.])10 ?筆/,
 ];
 
+/** A fact in words (F48-I11): a non-zero number with a unit, read in strings and JSX text (comments blanked). The
+ * number must not continue a word, a class name or a bigger number; 「N 天後」 is allowed. */
+const FACT_LITERALS = [
+  /(?<![\w.\-[(,/–~])[1-9]\d*(?:[–~]\d+)? ?(?:天(?!後)|期|則|倍|成|筆)/,
+  /(?<=[\s　-〿㐀-鿿＀-￯])[1-9]\d*(?:[–~]\d+)? ?%/,
+];
+
 /** A branch on a label: `x.grade_label === …`, `… !== y.offer_label`, or `label === "中文"` on any identifier
  * ending in `label`. `step.label` and `action.label` (navigation words the frontend builds itself) are allowed. */
 const LABEL_COMPARE = [
@@ -50,17 +62,22 @@ const LABEL_COMPARE = [
   /["'`][\u4e00-\u9fff][^"'`]*["'`]\s*[!=]==?\s*(?!(?:step|action)\.)[\w$.?]*[lL]abel\b/,
 ];
 
-/** Hits that are not the ruler, excused one line at a time (`text` must appear on the hit line), with the reason. */
+/** Hits that are not the ruler, excused one line at a time (`text` must appear on the hit line), with the reason. An
+ * entry whose line is gone fails the stale-entry test. Entries marked "debt" are numbers the backend owns that a later
+ * feature serves (F48 Decisions: time／input rules are W11–W14, feature C); they are excused here, not fixed. */
 const NOT_A_RULER: { file: string; text: string; why: string }[] = [
   { file: "components/ads/home/MonthMoney.tsx", text: "(cpp ?? 0) * 1.3", why: "axis headroom of the home money meter, not NEAR_BEST" },
-  { file: "components/ads/ReviewPanel.tsx", text: "預設每 7 天自動檢查", why: "the review round's revisit cadence, not the grading window" },
+  { file: "components/ads/ReviewPanel.tsx", text: "預設每 7 天自動檢查", why: "the review round's revisit cadence (a default the user edits in 追蹤設定), not the grading window; debt: W13 serves the cadence" },
+  { file: "components/ads/ReviewPanel.tsx", text: "一次最多 31 天", why: "debt (W13 input rules): the observation-range limit `app/ads/review_monitor.py` checks" },
+  { file: "components/ads/ReviewTracking.tsx", text: "請填 1 至 31 天", why: "debt (W13 input rules): the same limit, validated before the request" },
+  { file: "components/ads/NewCampaignPage.tsx", text: "從今天起算 30 天", why: "debt (W11 time rules): the brief's default period (`app/ads/brief.py`)" },
+  { file: "components/ads/review/CopyPage.tsx", text: "（最多 5 則）", why: "debt (W13 input rules): the copy editor's per-list cap, enforced beside it" },
+  { file: "components/ads/workspace/OverviewBody.tsx", text: "\"近 14 天數字\"", why: "debt (W11 time rules): the overview window's name; its dates print from `t.start`／`t.end`" },
+  { file: "components/ads/workspace/OverviewBody.tsx", text: ">近 14 天花費<", why: "debt (W11 time rules): the same window's name" },
+  { file: "components/ads/patterns/SlotGrid.tsx", text: "\"缺 1 則\"", why: "a slot placeholder is one missing ad by construction, not a figure" },
+  { file: "components/ads/ExperimentPlan.tsx", text: "0.1 代表 10%", why: "explains the input's number format (a fraction), not a fact" },
+  { file: "components/ads/StrategyTab.tsx", text: "剛好 100%", why: "percent shares sum to 100 by definition, not a fact" },
 ];
-
-/** Files a later F48 issue rewires (it removes its own entries; the last frontend issue leaves this empty). */
-const ALLOWLIST: Record<string, string> = {
-  "components/ads/flow/confirmParts.tsx": "F48-I11",
-  "components/ads/flow/changeFlow.ts": "F48-I11",
-};
 
 /** Test data that lives beside the sources: the served rules as a test fixture (the app never imports it). */
 const TEST_DATA = new Set(["rulesFixture.ts"]);
@@ -158,21 +175,21 @@ const classComparisons = (text: string) => hits(text, CLASS_COMPARE);
 const rulerLiterals = (text: string) =>
   [...new Set([...hits(text, RULER_NUMBERS, true), ...hits(text, RULER_WORDS)])].sort((a, b) => a - b);
 const labelComparisons = (text: string) => hits(text, LABEL_COMPARE);
+const factLiterals = (text: string) => hits(text, FACT_LITERALS);
 
 const FILES = () => [...sources(ADS_DIR, () => true), ...sources(LIB_DIR, (name) => name.startsWith("ads"))];
 const rel = (full: string) => relative(SRC_DIR, full).split("\\").join("/");
 
-function offenders(scan: (text: string) => number[], allow: boolean): string[] {
+/** Every hit of `scan` across the ads sources as `file:line`; with `excuse`, the `NOT_A_RULER` lines are left out. */
+function offenders(scan: (text: string) => number[], excuse: boolean): string[] {
   const files = FILES();
   expect(files.length).toBeGreaterThan(20);
-  return files
-    .filter((full) => !(allow && rel(full) in ALLOWLIST))
-    .flatMap((full) => {
-      const text = readFileSync(full, "utf-8");
-      const lines = text.split("\n");
-      const excused = (line: number) => allow && NOT_A_RULER.some((x) => x.file === rel(full) && lines[line - 1].includes(x.text));
-      return scan(text).filter((line) => !excused(line)).map((line) => `${rel(full)}:${line}`);
-    });
+  return files.flatMap((full) => {
+    const text = readFileSync(full, "utf-8");
+    const lines = text.split("\n");
+    const excused = (line: number) => excuse && NOT_A_RULER.some((x) => x.file === rel(full) && lines[line - 1].includes(x.text));
+    return scan(text).filter((line) => !excused(line)).map((line) => `${rel(full)}:${line}`);
+  });
 }
 
 describe("one ruler (ads.md §6.33)", () => {
@@ -192,27 +209,54 @@ describe("one ruler (ads.md §6.33)", () => {
 });
 
 describe("rules come from the API (F48 Contract R-API, decision 11)", () => {
-  it("no ads source writes a ruler number down (outside the allowlist)", () => {
+  it("no ads source writes a ruler number down", () => {
     expect(offenders(rulerLiterals, true)).toEqual([]);
   });
 
-  it("no ads source branches on a label (outside the allowlist)", () => {
+  it("no ads source branches on a label", () => {
     expect(offenders(labelComparisons, true)).toEqual([]);
   });
 
-  it("every allowlisted file exists and every excused line is still there (stale entries go)", () => {
+  it("no ads source writes a fact into its words (F48-I11)", () => {
+    expect(offenders(factLiterals, true)).toEqual([]);
+  });
+
+  it("every excused line is still there and still a hit (stale entries go)", () => {
     const present = new Set(FILES().map(rel));
-    expect(Object.keys(ALLOWLIST).filter((path) => !present.has(path))).toEqual([]);
-    const stale = NOT_A_RULER.filter((x) => !present.has(x.file) || !readFileSync(join(SRC_DIR, x.file), "utf-8").includes(x.text));
+    const stale = NOT_A_RULER.filter((x) => {
+      if (!present.has(x.file)) return true;
+      const text = readFileSync(join(SRC_DIR, x.file), "utf-8");
+      const lines = text.split("\n");
+      const hit = [...rulerLiterals(text), ...labelComparisons(text), ...factLiterals(text)];
+      return !hit.some((line) => lines[line - 1].includes(x.text));
+    });
     expect(stale).toEqual([]);
   });
 
-  it("every allowlisted file still has a hit (a file that is clean leaves the allowlist and stays guarded)", () => {
-    const clean = Object.keys(ALLOWLIST).filter((path) => {
-      const text = readFileSync(join(SRC_DIR, path), "utf-8");
-      return rulerLiterals(text).length === 0 && labelComparisons(text).length === 0;
-    });
-    expect(clean).toEqual([]);
+  it("the fact scan sees each planted literal", () => {
+    expect(factLiterals('{ title: "學習期", note: "3–5 天" }')).toEqual([1]);
+    expect(factLiterals("<div>加碼後等 3–5 天再看</div>")).toEqual([1]);
+    expect(factLiterals('const r = "近兩期每筆都沒超過上限，加碼 20% 擴量";')).toEqual([1]);
+    expect(factLiterals('const s = "已結案 2 期";')).toEqual([1]);
+    expect(factLiterals("<p>這期 12 則廣告</p>")).toEqual([1]);
+    expect(factLiterals('const s = "花到上限 3 倍";')).toEqual([1]);
+    expect(factLiterals('const s = "加 2成";')).toEqual([1]);
+    expect(factLiterals("const s = `賣出 ${n} 筆，另有 5 筆退款`;")).toEqual([1]);
+    expect(factLiterals('const s = "等 1~2 天";')).toEqual([1]);
+    expect(factLiterals('const s = cond ? "最多 31 天" : "";')).toEqual([1]);
+  });
+
+  it("the fact scan leaves served numbers, quick picks, zeros, layout and comments alone", () => {
+    expect(factLiterals("const s = `${days} 天・${count} 則`;")).toEqual([]);
+    expect(factLiterals("<span>{n} 筆</span>")).toEqual([]);
+    expect(factLiterals('const picks = [{ label: "3 天後" }, { label: "7 天後" }];')).toEqual([]);
+    expect(factLiterals('const s = "0 筆"; const t = "確認上架清單（0 則）";')).toEqual([]);
+    expect(factLiterals('<i className="w-[30%] mt-1.5 top-[calc(100%+6px)]" />')).toEqual([]);
+    expect(factLiterals('<svg width="100%" />')).toEqual([]);
+    expect(factLiterals("const w = `${pct}%`;")).toEqual([]);
+    expect(factLiterals('const k = "F48-I11 2026-10-04";')).toEqual([]);
+    expect(factLiterals("// 學習期 3–5 天")).toEqual([]);
+    expect(factLiterals("/* 加碼 20% */ const a = 1;")).toEqual([]);
   });
 
   it("the ruler scan sees each planted literal", () => {

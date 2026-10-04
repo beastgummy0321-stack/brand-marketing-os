@@ -660,12 +660,14 @@ describe("F46 結案對話框：結果與兩個出口", () => {
     return { user, closed, ...utils };
   }
 
-  it("confirm names the planned ad count; 結案中… holds until the learnings are read; result = counts, rule, ranked rows, exits", async () => {
+  it("confirm names no ad count (F48-I11); 結案中… holds until the learnings are read; result = counts, rule, ranked rows, exits", async () => {
     let release: (v: CoordinateLearnings) => void = () => {};
     vi.mocked(getCoordinateLearnings).mockReturnValue(new Promise((resolve) => { release = resolve; }));
     const { user, closed, onCampaignChange } = await openAndConfirm(campaign({ status: "ended", groups: planned() }));
     const dialog = screen.getByRole("dialog");
-    expect(dialog.textContent).toContain("結案後會把這期 3 則廣告照每筆成本排名、判定留下或換掉，寫進品牌智庫「投放學到的」。活動之後鎖定，不能再改。");
+    // F48-I11: the planned ads are not the platform ads closeout ranks (that count is not on this payload) -- no count.
+    expect(dialog.textContent).toContain("結案後會把這期的廣告照每筆成本排名、判定留下或換掉，寫進品牌智庫「投放學到的」。活動之後鎖定，不能再改。");
+    expect(dialog.textContent).not.toMatch(/這期 \d+ 則/);
     expect(dialog.textContent).not.toContain(EARLY_CLOSE_TEXT); // ended: no early-close sentence
 
     await user.click(screen.getByRole("button", { name: "確認結案" }));

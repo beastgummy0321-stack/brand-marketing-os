@@ -123,6 +123,10 @@ export interface LaunchItem {
  * order. `blocker_text` is printed verbatim; the browser never recomputes the rule. */
 export interface LaunchMonthBudget extends MonthlyBudget {
   extra: number;
+  /** F48 Contract M "month portion": what `extra` is made of — the launch's `days` inside month number `month` and
+   * the campaign's whole-period total (`null` when the campaign has none). The card prints it as served. Absent from
+   * an older backend (and from test literals): the card keeps its plain 「這期要花」. */
+  extra_basis?: { month: number; days: number; period_total: number | null } | null;
   blocker: "unset" | "uncertain" | "short" | null;
   blocker_text: string | null;
 }

@@ -273,6 +273,15 @@ export interface QueueScale {
   cost_per_result: number | null; previous_cost_per_result: number | null;
   target: TriageTargetView; window_days: number;
   month: { available: number | null; extra_needed: number };
+  /** F48 Contract R "reason texts" (`triage_scale.scale_reason_text`): why this raise, built from the owner's cheapest
+   * 划算 ad's own numbers. The budget draft's reason is this sentence as served. Always served; optional only for older
+   * hand-written fixtures. */
+  reason_text?: string | null;
+}
+/** F48 Contract R (a money action states its reason): a budget owner whose raise is held back on sample size
+ * (`triage_scale.scale_candidates` `holds`) — `reason_text` is the served 「樣本少，先不加碼」. */
+export interface QueueScaleHold {
+  owner_id: string; owner_name: string | null; campaign_id: string; sales: number; reason_text: string;
 }
 /** F25-I01: the `refresh_creative` row's own payload -- `thumbnails` is at most 4 entries (never
  * padded to 4; the frontend adds hollow tiles for the remainder), each `null` when that ad has
@@ -373,6 +382,8 @@ export interface QueuePayload {
   /** F29-I03: the open settle row, `null` when none. Always set by `getQueue`/`refreshQueue`
    * (`splitQueue`); optional only so existing hand-written payload fixtures stay valid. */
   settle?: SettleQueueRow | null;
+  /** F48-I02: the owners whose raise is held back on sample size. Always served; optional for older fixtures. */
+  scale_hold?: QueueScaleHold[];
 }
 /** The backend's queue as it arrives: ad rows plus, at most, one brand-level settle row. */
 type WireSettleRow = SettleQueueRow & { kind_key: "settle"; triage: null };
@@ -408,10 +419,13 @@ export function splitQueue(wire: WireQueuePayload): QueuePayload {
  * campaign, or deleted (`triage` is then `null`). `triage` is the `GET …/triage` item computed for
  * this one ad (closed ads too). `closed_at` = when its status last changed, `last_read_at` = its
  * last successful read (ISO instants, either may be `null`). `change_set_id` = the open plain pause
- * set on this ad (draft, or approved and not yet confirmed), else `null`. */
+ * set on this ad (draft, or approved and not yet confirmed), else `null`. F48 Contract R "reason texts":
+ * `reason_text` is the pause's reason built from this ad's own grade and numbers (`triage_capacity.reason_text`),
+ * `null` when `triage` is; always served, optional only for older hand-written fixtures. */
 export type PauseViewState = "active" | "closed" | "gone";
 export interface PauseView {
   state: PauseViewState; entity_id: string; name: string | null; triage: TriageItem | null;
+  reason_text?: string | null;
   closed_at: string | null; last_read_at: string | null; change_set_id: string | null;
 }
 

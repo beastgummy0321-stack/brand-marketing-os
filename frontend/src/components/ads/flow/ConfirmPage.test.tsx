@@ -31,6 +31,11 @@ vi.mock("@/lib/adsAnglesApi", async (importOriginal) => ({
   getAngles: vi.fn(),
 }));
 
+/** F48 Contract R "reason texts" as the backend builds them (`triage_capacity.reason_text`, `triage_scale
+ * .scale_reason_text`); the drafts carry them as served. */
+const PAUSE_REASON_TEXT = "花了 1420，一筆都沒賣出";
+const SCALE_REASON_TEXT = "近期每筆 306 都在上限 450 內，加碼 2 成擴量";
+
 function triage(overrides: Partial<TriageItem> = {}): TriageItem {
   return {
     entity_id: "aex_1", native_id: "native_1", name: "1150706 健身情境單圖", campaign_id: "cmp_1",
@@ -50,6 +55,8 @@ function triage(overrides: Partial<TriageItem> = {}): TriageItem {
 function pauseView(overrides: Partial<PauseView> = {}): PauseView {
   return {
     state: "active", entity_id: "aex_1", name: "1150706 健身情境單圖", triage: triage(),
+    // F48 Contract R: `triage_capacity.reason_text` of this ad's own grade (沒賣出) and spend.
+    reason_text: PAUSE_REASON_TEXT,
     closed_at: null, last_read_at: "2026-09-30T16:05:00+00:00", change_set_id: null,
     ...overrides,
   };
@@ -73,6 +80,7 @@ function scale(overrides: Partial<QueueScale> = {}): QueueScale {
     from: 1000, to: 1200, cost_per_result: 306, previous_cost_per_result: 330,
     target: { value: 450, basis: "own", result_kind: "purchase", result_label: "購買", missing: [] },
     window_days: 14, month: { available: 10000, extra_needed: 1800 },
+    reason_text: SCALE_REASON_TEXT,
     ...overrides,
   };
 }
@@ -100,8 +108,8 @@ function cleanupQueueItem(overrides: Partial<QueueItem> = {}): QueueItem {
     cleanup: {
       campaign_id: "cmp_1", campaign_name: "【銷售】測試活動", can_support: 3, active_ads: 5,
       ads: [
-        { entity_id: "aex_low1", name: "1150701 情境圖 A", thumbnail_url: null, spend_7d: 120, grade: "wasted", cost_per_result: null, spend: 1540, result_count: 0, daily_spend: 120 / 7, rejected_before: null },
-        { entity_id: "aex_low2", name: "1150702 情境圖 B", thumbnail_url: "https://cdn.example/b.jpg", spend_7d: 340, grade: "over", cost_per_result: 620, spend: 2480, result_count: 4, daily_spend: 340 / 7, rejected_before: null },
+        { entity_id: "aex_low1", name: "1150701 情境圖 A", thumbnail_url: null, spend_7d: 120, grade: "wasted", cost_per_result: null, spend: 1540, result_count: 0, daily_spend: 120 / 7, rejected_before: null, reason_text: "花了 1540，一筆都沒賣出" },
+        { entity_id: "aex_low2", name: "1150702 情境圖 B", thumbnail_url: "https://cdn.example/b.jpg", spend_7d: 340, grade: "over", cost_per_result: 620, spend: 2480, result_count: 4, daily_spend: 340 / 7, rejected_before: null, reason_text: "第 5／5 名，每筆 620 對上限 450（太貴）" },
       ],
       keep: [
         { entity_id: "aex_keep1", name: "晨光隨行杯・日常出發", thumbnail_url: null, spend_7d: 300, grade: "on_target", cost_per_result: 48, spend: 1440, result_count: 30, daily_spend: 300 / 7, rejected_before: null },
@@ -290,7 +298,7 @@ describe("ConfirmPage（F22-I02）propose 路由：延遲建立草稿", () => {
     expect(body.operation_id).toMatch(/^triage-pause:aex_1:/);
     expect(body.title).toBe("暫停「1150706 健身情境單圖」");
     expect(body.month).toMatch(/^\d{4}-\d{2}$/);
-    expect(body.items).toEqual([{ kind: "pause", target_id: "aex_1", after: { status: "PAUSED" }, reason: "花到上限 3 倍的錢，還一筆都沒賣出（上限 × 3）" }]);
+    expect(body.items).toEqual([{ kind: "pause", target_id: "aex_1", after: { status: "PAUSED" }, reason: PAUSE_REASON_TEXT }]);
 
     await waitFor(() => expect(changeApi.approveChangeSet).toHaveBeenCalled());
     await waitFor(() => expect(screen.getByTestId("probe-path").textContent).toBe("/brands/brd_1/ads/campaigns/cmp_1/changes/acs_1/handoff"));
@@ -361,7 +369,7 @@ describe("ConfirmPage（F27-I16 Contract C/D）這則主打什麼？", () => {
     const body = vi.mocked(changeApi.createChangeSet).mock.calls[0][2];
     expect(body.items).toEqual([{
       kind: "pause", target_id: "aex_1", after: { status: "PAUSED" },
-      reason: "花到上限 3 倍的錢，還一筆都沒賣出（上限 × 3）", angle: "辦公室情境",
+      reason: PAUSE_REASON_TEXT, angle: "辦公室情境",
     }]);
   });
 
@@ -515,7 +523,7 @@ describe("ConfirmPage（F22-I02）步驟導正", () => {
 });
 
 describe("ConfirmPage（F25-I03）propose/budget 路由", () => {
-  it("畫出完整證據卡：同組則數、每日預算＋漲幅、購買成本量尺、主力穩定、本月預算放得下", async () => {
+  it("畫出完整證據卡：同組則數、每日預算＋漲幅、購買成本量尺、後端給的加碼理由、本月預算放得下", async () => {
     vi.mocked(triageApi.getQueue).mockResolvedValue(queue([scaleQueueItem()]));
     vi.mocked(changeApi.getMonthlyBudget).mockResolvedValue({
       month: "2026-09", currency: "TWD", amount: 60000, revision: 2, known_spend: 22000, ongoing_estimate: 28000,
@@ -529,9 +537,11 @@ describe("ConfirmPage（F25-I03）propose/budget 路由", () => {
     expect(screen.getByText(/1,200/)).toBeTruthy();
     expect(screen.getByText("+20%")).toBeTruthy();
     expect(screen.getByText(/購買成本 306/)).toBeTruthy();
-    expect(screen.getByText(/上限 450/)).toBeTruthy();
-    expect(screen.getByText("主力穩定 2 個觀察期")).toBeTruthy();
-    expect(screen.getByText("加碼後等 3–5 天再看")).toBeTruthy();
+    expect(screen.getByText("上限 450")).toBeTruthy();
+    // F48-I11: the reason is `scale.reason_text` as served; no fixed 「主力穩定 N 期」／「等 N–M 天」 words.
+    expect(screen.getByText(SCALE_REASON_TEXT)).toBeTruthy();
+    expect(screen.getByText("核准後會排一次檢查")).toBeTruthy();
+    expect(screen.queryByText(/主力穩定|3–5 天/)).toBeNull();
     expect(await screen.findByText("本月預算放得下")).toBeTruthy();
     expect(screen.getByText(/這次要花 1,800/)).toBeTruthy();
     expect(screen.getByText(/還剩 8,200/)).toBeTruthy();
@@ -563,7 +573,7 @@ describe("ConfirmPage（F25-I03）propose/budget 路由", () => {
     const body = vi.mocked(changeApi.createChangeSet).mock.calls[0][2];
     expect(body.operation_id).toMatch(/^triage-budget:aex_owner_G:/);
     expect(body.title).toBe("加碼「廣告組 G・廣泛受眾」");
-    expect(body.items).toEqual([{ kind: "budget", target_id: "aex_owner_G", after: { daily_amount: 1200 }, reason: "近兩期每筆都沒超過上限，加碼 20% 擴量" }]);
+    expect(body.items).toEqual([{ kind: "budget", target_id: "aex_owner_G", after: { daily_amount: 1200 }, reason: SCALE_REASON_TEXT }]);
     await waitFor(() => expect(changeApi.approveChangeSet).toHaveBeenCalled());
   });
 
@@ -766,7 +776,7 @@ describe("ConfirmPage（F27-I15 Contract F／F28-I11）cleanup propose 路由", 
     expect(screen.getByText("關 2 則、留 3 則")).toBeTruthy();
     expect(screen.getByText("✓ 不會新增花費")).toBeTruthy();
     const rows = screen.getAllByRole("listitem").filter((li) => seen(li).endsWith("關"));
-    expect(rows.map(seen)).toEqual(["1150701 情境圖 A沒賣出購買0 筆關", "1150702 情境圖 B太貴每賣一筆620 元關"]);
+    expect(rows.map(seen)).toEqual(["1150701 情境圖 A花了 1540，一筆都沒賣出沒賣出購買0 筆關", "1150702 情境圖 B第 5／5 名，每筆 620 對上限 450（太貴）太貴每賣一筆620 元關"]);
     // v10: the grade words are glossary terms and the legend (grade rules + money rule) sits under the card.
     expect(document.querySelector("[data-slot=grade-rules]")).toBeTruthy();
     expect(screen.queryByText(/花費最低/)).toBeNull();
@@ -802,8 +812,8 @@ describe("ConfirmPage（F27-I15 Contract F／F28-I11）cleanup propose 路由", 
     expect(body.operation_id).toMatch(/^triage-cleanup:cmp_1:/);
     expect(body.title).toBe("清理「【銷售】測試活動」");
     expect(body.items).toEqual([
-      { kind: "pause", target_id: "aex_low1", after: { status: "PAUSED" }, reason: "沒賣出的先關，再關超過上限、每筆成本最高的幾則；划算的不動" },
-      { kind: "pause", target_id: "aex_low2", after: { status: "PAUSED" }, reason: "沒賣出的先關，再關超過上限、每筆成本最高的幾則；划算的不動" },
+      { kind: "pause", target_id: "aex_low1", after: { status: "PAUSED" }, reason: "花了 1540，一筆都沒賣出" },
+      { kind: "pause", target_id: "aex_low2", after: { status: "PAUSED" }, reason: "第 5／5 名，每筆 620 對上限 450（太貴）" },
     ]);
     expect(body.source).toBe("cleanup");
     await waitFor(() => expect(changeApi.approveChangeSet).toHaveBeenCalled());
@@ -862,8 +872,8 @@ describe("ConfirmPage（F28-I15）清理草稿與最新提議不同", () => {
     expect(screen.getByText("關 2 則、留 3 則")).toBeTruthy();
     const rows = screen.getAllByRole("listitem").filter((li) => li.hasAttribute("data-mark"));
     expect(rows.map((r) => [r.getAttribute("data-mark"), seen(r)])).toEqual([
-      ["close", "1150701 情境圖 A沒賣出購買0 筆關"],
-      ["added", "1150702 情境圖 B新增太貴每賣一筆620 元關"],
+      ["close", "1150701 情境圖 A花了 1540，一筆都沒賣出沒賣出購買0 筆關"],
+      ["added", "1150702 情境圖 B新增第 5／5 名，每筆 620 對上限 450（太貴）太貴每賣一筆620 元關"],
       ["dropped", "晨光隨行杯・日常出發划算每賣一筆48 元不關"],
     ]);
     expect(screen.queryByRole("button", { name: /核准清理/ })).toBeNull();
@@ -981,7 +991,7 @@ describe("ConfirmPage（F29-I14）清理：自己挑要關哪幾則", () => {
     renderAt(`${proposeCleanupPath}?step=confirm&keep=aex_low2`);
     expect(await screen.findByText("關 1 則、留 4 則")).toBeTruthy();
     const rows = screen.getAllByRole("listitem").filter((li) => seen(li).endsWith("關"));
-    expect(rows.map(seen)).toEqual(["1150701 情境圖 A沒賣出購買0 筆關"]);
+    expect(rows.map(seen)).toEqual(["1150701 情境圖 A花了 1540，一筆都沒賣出沒賣出購買0 筆關"]);
     await user.click(screen.getByRole("button", { name: "核准清理（關 1 則） →" }));
 
     await waitFor(() => expect(changeApi.approveChangeSet).toHaveBeenCalled());
@@ -1172,6 +1182,7 @@ describe("ConfirmPage（F45-I06）暫停提議頁讀廣告本身", () => {
     expect(within(card).getByText("沒賣出", { selector: "[data-slot=chip]" }).getAttribute("data-grade")).toBe("wasted");
     expect(seen(card)).toContain("花到 NT$ 1,350 還一筆都沒賣，就算「沒賣出」（上限 × 3）");
     expect(screen.getByText("這則廣告自己的數字・08/25～09/21・9 天")).toBeTruthy();
+    expect(seen(card)).toContain(`原因：${PAUSE_REASON_TEXT}`);
     expect(screen.getByText("✓ 不會新增花費")).toBeTruthy();
     expect(screen.getByText("這則主打什麼？")).toBeTruthy();
     expect(screen.queryByText(/第 \d+ 件／共/)).toBeNull();
@@ -1183,7 +1194,7 @@ describe("ConfirmPage（F45-I06）暫停提議頁讀廣告本身", () => {
     await waitFor(() => expect(changeApi.createChangeSet).toHaveBeenCalled());
     const body = vi.mocked(changeApi.createChangeSet).mock.calls[0][2];
     expect(body.title).toBe("暫停「1150706 健身情境單圖」");
-    expect(body.items).toEqual([{ kind: "pause", target_id: "aex_1", after: { status: "PAUSED" }, reason: "花到上限 3 倍的錢，還一筆都沒賣出（上限 × 3）" }]);
+    expect(body.items).toEqual([{ kind: "pause", target_id: "aex_1", after: { status: "PAUSED" }, reason: PAUSE_REASON_TEXT }]);
   });
 
   it("有成交的廣告：每筆成本對照上限；這則在佇列裡時多「第幾件」", async () => {
@@ -1201,6 +1212,46 @@ describe("ConfirmPage（F45-I06）暫停提議頁讀廣告本身", () => {
     expect(seen(card)).toContain("每筆 NT$ 676");
     expect(seen(card)).toContain("上限 NT$ 450");
     expect(within(card).getByText("太貴")).toBeTruthy();
+  });
+
+  it("F48-I11（drill 11 c3-09）：太貴的廣告用它自己的理由建草稿，不再是「花到上限 3 倍…沒賣出」", async () => {
+    const user = userEvent.setup();
+    vi.mocked(triageApi.getPauseView).mockResolvedValue(pauseView({
+      triage: triage({
+        grade: "over", grade_label: "太貴",
+        current: { spend: 2588, result_count: 2, cost_per_result: 1294, result_kind: "purchase", result_label: "購買", derived_zero_days: 0, reason: null },
+      }),
+      reason_text: "每筆 1294 對上限 450（太貴）",
+    }));
+    const draft = changeSet({ status: "approved", items: [changeItem({ verification_state: "pending", reported_at: null })] });
+    vi.mocked(changeApi.createChangeSet).mockResolvedValue({ ...draft, status: "draft", approved_at: null });
+    vi.mocked(changeApi.approveChangeSet).mockResolvedValue(draft);
+    renderAt(proposePath);
+    expect(await screen.findByRole("heading", { name: "提議：暫停這則廣告" })).toBeTruthy();
+    const card = document.querySelector("[data-state=active]") as HTMLElement;
+    expect(seen(card)).toContain("原因：每筆 1294 對上限 450（太貴）");
+    expect(seen(card)).not.toContain("沒賣出");
+    await user.click(screen.getByRole("button", { name: /核准暫停，接著到平台操作/ }));
+    await waitFor(() => expect(changeApi.createChangeSet).toHaveBeenCalled());
+    expect(vi.mocked(changeApi.createChangeSet).mock.calls[0][2].items[0].reason).toBe("每筆 1294 對上限 450（太貴）");
+  });
+
+  it("F48-I11：沒有理由句（還沒有分數）時照實說「這則還沒有分數」＋後端給的評級字", async () => {
+    const user = userEvent.setup();
+    vi.mocked(triageApi.getPauseView).mockResolvedValue(pauseView({
+      triage: triage({ grade: "insufficient", grade_label: "剛開始、數字還不夠", reason_code: "too_new" }),
+      reason_text: null,
+    }));
+    const draft = changeSet({ status: "approved", items: [changeItem({ verification_state: "pending", reported_at: null })] });
+    vi.mocked(changeApi.createChangeSet).mockResolvedValue({ ...draft, status: "draft", approved_at: null });
+    vi.mocked(changeApi.approveChangeSet).mockResolvedValue(draft);
+    renderAt(proposePath);
+    expect(await screen.findByRole("heading", { name: "提議：暫停這則廣告" })).toBeTruthy();
+    const card = document.querySelector("[data-state=active]") as HTMLElement;
+    expect(seen(card)).toContain("原因：這則還沒有分數：剛開始、數字還不夠");
+    await user.click(screen.getByRole("button", { name: /核准暫停，接著到平台操作/ }));
+    await waitFor(() => expect(changeApi.createChangeSet).toHaveBeenCalled());
+    expect(vi.mocked(changeApi.createChangeSet).mock.calls[0][2].items[0].reason).toBe("這則還沒有分數：剛開始、數字還不夠");
   });
 
   it("已經停了：「這則已經停了」、已暫停・日期、只有一顆回上一頁（覆盤）；不問主打、不能核准", async () => {
