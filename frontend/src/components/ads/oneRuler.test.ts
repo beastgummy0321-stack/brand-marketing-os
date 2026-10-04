@@ -295,9 +295,8 @@ const LIFECYCLE_PENDING: { rule: LifecycleRule; file: string; issue: string; tex
   { rule: "lifecycle", file: "components/ads/workspace/WorkspaceHead.tsx", issue: "F49-I09" },
   { rule: "lifecycle", file: "components/ads/DeliveryTab.tsx", issue: "F49-I13" },
   { rule: "lifecycle", file: "components/ads/UserAssetPlacements.tsx", issue: "F49-I14" },
-  // Not in any F49 screen issue's touch (F49-I01 report): the lead assigns them.
-  { rule: "lifecycle", file: "components/ads/CloseCampaignDialog.tsx", issue: "unassigned" },
-  { rule: "lifecycle", file: "components/ads/ManualSettings.tsx", issue: "unassigned" },
+  { rule: "lifecycle", file: "components/ads/CloseCampaignDialog.tsx", issue: "F49-I09" },
+  { rule: "lifecycle", file: "components/ads/ManualSettings.tsx", issue: "F49-I12" },
 ];
 const LIFECYCLE_SCANS: Record<LifecycleRule, (text: string) => number[]> = { native: nativeStatus, lifecycle: lifecycleCodes };
 
