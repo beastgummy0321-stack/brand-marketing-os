@@ -185,8 +185,11 @@ def meta_creative(ad_id: str, expected: dict | None) -> dict | None:
     copy = expected.get("copy") or {}
     creative = {"id": ad_id + "1", "image_url": "https://example.invalid/drill.jpg",
                 "title": copy.get("title"), "body": copy.get("body") or expected.get("copy_text")}
-    if copy.get("description"):
-        creative["object_story_spec"] = {"link_data": {"description": copy["description"]}}
+    # F49 Contract B: the readback compares the ad's link with the planned landing URL.
+    link_data = {k: v for k, v in (("description", copy.get("description")),
+                                   ("link", expected.get("landing_url"))) if v}
+    if link_data:
+        creative["object_story_spec"] = {"link_data": link_data}
     utm = (expected.get("launch_settings") or {}).get("utm")
     if utm:
         creative["url_tags"] = utm
@@ -465,6 +468,9 @@ def _tree_nodes(brand_id: str) -> tuple[str, list]:
                                      "daily_budget": group["daily_budget"],
                                      "launch_settings": (expected.get(group["id"]) or {})
                                      .get("launch_settings"),
+                                     "audience_id": ((expected.get(group["id"]) or {})
+                                                     .get("manual_settings") or {})
+                                     .get("audience_id"),
                                      "children": [{"name": a["name"], "children": [],
                                                    "expected": expected.get(a["id"])}
                                                   for a in ads]})
@@ -545,6 +551,11 @@ def cmd_mirror(brand_id: str, append: bool = False) -> None:
                           **({"stop_time": f"{stop}T23:59:59+0800"} if stop else {})})
         for child in node["children"]:
             sid = new_id("230")
+            settings = meta_adset_settings(child.get("launch_settings"))
+            if child.get("audience_id"):
+                # F49 Contract B: the planned audience is among the ad set's custom audiences.
+                settings.setdefault("targeting", {})["custom_audiences"] = [
+                    {"id": child["audience_id"]}]
             adsets.append({"id": sid, "campaign_id": cid, "brand_id": brand_id,
                            "account_id": account_id, "name": child["name"],
                            "effective_status": "PAUSED",
@@ -552,7 +563,7 @@ def cmd_mirror(brand_id: str, append: bool = False) -> None:
                               if child.get("daily_budget") is not None else {}),
                            **({"start_time": f"{start}T00:00:00+0800"} if start else {}),
                            **({"end_time": f"{stop}T23:59:59+0800"} if stop else {}),
-                           **meta_adset_settings(child.get("launch_settings"))})
+                           **settings})
             for grandchild in child["children"]:
                 aid = new_id("340")
                 creative = meta_creative(aid, grandchild.get("expected"))
@@ -867,6 +878,10 @@ def cmd_selfcheck() -> None:
         assert compared["utm"]["state"] == "match", compared
         summary = meta_read.creative_summary(ad["creative"])
         assert summary["kind"] == "image" and summary["fields"]["title"] == "標", summary
+        # F49 Contract B: the mirrored ad links to the planned landing URL (read back, compared)
+        linked = meta_creative("341", {**expected_ad, "landing_url": "https://shop.example/p"})
+        links = meta_read.creative_links({"creative": meta_read.creative_summary(linked)})
+        assert links == ["https://shop.example/p"], (links, linked)
     finally:
         load = original
     print("selfcheck ok")
