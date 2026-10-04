@@ -13,8 +13,12 @@ import { AssetApiError, assetRequest, type CopyFields, type Placement } from "./
  * F44 Contract D: `blocked` = the slot's automatic confirmation was refused (or its file failed); the slot says why
  * (`Slot.blocked`) and is not ready. Nothing changes it by itself, so it is not `in_progress`.
  * F45 Contract W (ads.md §6.49): `in_progress` only while a background job for the slot runs (`Slot.job`); nothing
- * running, nothing refused and not ready → `waiting` with the user's next action (`Slot.waiting`). */
-export type SlotState = "ready" | "missing" | "in_progress" | "waiting" | "copy_only" | "image_only" | "blocked";
+ * running, nothing refused and not ready → `waiting` with the user's next action (`Slot.waiting`).
+ * F49 Contract T: `retrying` = the original's preview failed and is tried again (its error and `Slot.retry_at`);
+ * `failed` = the ad's workbench set failed to write copy (its error, exit `workbench_href`). Every slot serves its chip
+ * (`state_label`) and sentence (`state_text`) — screens print them, never a local word table. */
+export type SlotState =
+  | "ready" | "missing" | "in_progress" | "retrying" | "failed" | "waiting" | "copy_only" | "image_only" | "blocked";
 /** F45 Contract W: the user's next action on a `waiting` slot — `pick_on_workbench` (the ad's set has no selected copy;
  * the slot's `workbench_href` goes there) or `confirm_copy` (an unconfirmed placement; the button runs `recheckSlot`).
  * `text` is the server's sentence (「等你：…」). */
@@ -36,6 +40,15 @@ export interface SlotCopy {
 export interface SlotStatutory { terms: { term: string; tier_label: string }[]; sentence: string; href: string }
 export interface Slot {
   ad_id: string | null; entity_id: string | null; name: string; state: SlotState;
+  /** F49 Contract T: the state's chip word (已確認／處理中／失敗／卡住／等你／缺). Optional only for older fixtures. */
+  state_label?: string;
+  /** F49 Contract T: the state's sentence, filled from the slot's own facts. Optional only for older fixtures. */
+  state_text?: string;
+  /** F49 Contract T: when a `retrying` preview is tried again (ISO time); null on every other state. */
+  retry_at?: string | null;
+  /** F49 Contract T: a ready planned ad whose copy can still change (`chooseSlotCopy`／`editSlotCopy`) — true until
+   * the launch is approved. Optional only for older fixtures. */
+  copy_editable?: boolean;
   /** A platform creative URL, or an authenticated same-origin user-asset path (see `isAuthThumbnail`). */
   thumbnail_url: string | null;
   confirmed: boolean;
@@ -68,10 +81,12 @@ export interface Slot {
    * block. Optional only for older fixtures. */
   format_note?: string | null;
 }
-/** One workbench copy version for the picker (= `workbench.material_options(part="copy")`). */
+/** One workbench copy version for the picker (= `workbench.material_options(part="copy")`, the campaign's sell-way
+ * only since F49 Contract T). */
 export interface SlotCopyOption { set_id: string; version_id: string; label: string; copy_fields: CopyFields }
 export interface SlotGroup { group_id: string | null; name: string; slots: Slot[] }
-export type ReplaceRequestLabel = "等素材工作檯" | "有候選圖" | "已採用";
+/** F49 Contract T: the request's served word (還沒交棒／交棒沒送出・可重試／工作檯製作中／工作檯沒做成／有候選圖／已採用). */
+export type ReplaceRequestLabel = string;
 export interface ReplaceRequest {
   task_id: string; replaces: MaterialReplaces; created_at: string; state_label: ReplaceRequestLabel;
 }

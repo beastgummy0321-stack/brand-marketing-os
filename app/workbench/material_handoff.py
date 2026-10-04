@@ -92,20 +92,31 @@ def start(conn, org, brand, pack_id):
             raise ValueError("找不到這個品牌的素材任務包。")
         if row["status"] != "idle":
             return
-        repository.run_product(
-            conn, org, brand, row["id"], next(iter(row["required_outputs_json"]))
-        )
+        try:
+            repository.run_product(
+                conn, org, brand, row["id"], next(iter(row["required_outputs_json"]))
+            )
+        except Exception:
+            # `run_part` marks the set queued (committed) before it enqueues; a failed enqueue
+            # left nothing queued, so the set goes back to idle and the upstream's retry starts
+            # this same pack once (F49 Contract T) instead of finding it "already queued".
+            conn.rollback()
+            repository.mark_brief_status(conn, org, brand, row["id"], "idle")
+            raise
 
 
-def options(conn, org, brand, *, part=None):
+def options(conn, org, brand, *, part=None, product_id=None):
+    """Saved copy／image-prompt versions, newest first (100 at most). F49 Contract T: with
+    `product_id`, only the sets made for that sell-way; `None` keeps the brand-wide list."""
     _brand(conn, org, brand)
     rows = conn.execute(
         "SELECT o.id,o.brief_id,o.part,o.body_json,o.version_index,b.name,b.request_json"
         " FROM workbench_output o JOIN workbench_brief b"
         " ON b.org_id=o.org_id AND b.brand_id=o.brand_id AND b.id=o.brief_id"
         " WHERE o.org_id=%s AND o.brand_id=%s AND o.part IN ('copy','image_prompt')"
-        " AND (%s::text IS NULL OR o.part=%s) ORDER BY o.created_at DESC,o.id LIMIT 100",
-        (org, brand, part, part),
+        " AND (%s::text IS NULL OR o.part=%s) AND (%s::text IS NULL OR b.product_id=%s)"
+        " ORDER BY o.created_at DESC,o.id LIMIT 100",
+        (org, brand, part, part, product_id, product_id),
     ).fetchall()
     result = []
     for row in rows:

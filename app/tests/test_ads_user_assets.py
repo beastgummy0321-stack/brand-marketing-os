@@ -294,7 +294,8 @@ class UserAssetsTest(unittest.TestCase):
 
     def test_a_preview_that_fails_for_good_blocks_the_slot_with_the_file_exit(self):
         """F44-I04: the failure `process_preview` writes (`error` + its sentence) is the slot's
-        reason; a failure that is still retried keeps the slot `in_progress`."""
+        reason; a failure that is still retried reads `retrying` with the stored sentence (F49
+        Contract T), never a silent `in_progress`."""
         item = self.original(FULL_COPY)
         campaign, ad = self.internal_ad()
         slots.upload(
@@ -307,7 +308,10 @@ class UserAssetsTest(unittest.TestCase):
         asset = repo.get_asset(self.conn, self.org, self.brand, item["asset_id"])
         self.assertEqual(asset["status"], "retryable")
         retried = self.slot(campaign, ad)
-        self.assertEqual((retried["state"], retried["blocked"]), ("in_progress", None))
+        self.assertEqual((retried["state"], retried["blocked"]), ("retrying", None))
+        self.assertEqual(retried["state_label"], "處理中")
+        self.assertIn("預覽暫時無法完成，原檔保留，可重試。", retried["state_text"])
+        self.assertEqual(retried["retry_at"], asset["next_attempt_at"])
 
         with patch.object(
             service.media_probe, "preview", side_effect=service.media_probe.MediaError("損毀")

@@ -21,6 +21,7 @@ from app.ads import (
     handoff_assignment,
     home_overview,
     repository,
+    slots,
     triage,
     workspace_reads,
 )
@@ -679,6 +680,7 @@ class ImportedStructureTest(_WithReader):
             "spend": 400.0, "grade": "on_target", "grade_label": "划算", "cost_per_result": 80.0,
             "reason_code": None, "sample": _fake_sample(5),
             "results": 5, "closing": False, "missing_material": False,
+            "slot_state": None, "slot_label": None,
         })
         self.assertTrue(a_ads[0]["closing"])  # approved pause, readback not confirmed yet
         self.assertEqual(a_ads[0]["results"], 0)
@@ -741,31 +743,52 @@ class AppBuiltStructureTest(_WithReader):
                                             coordinates_snapshot={})["id"]
         conn.commit()
 
-    def snapshot(self, conn_, org_, brand_, campaign_, ad, **_kw):
-        return {"assignment_status": "confirmed"} if ad["id"] == self.ready else None
+    def slots_read(self, states):
+        """`slots.read` (the one slot-state source, F49 Contract T) answering `states`."""
+        def read(conn_, org_, brand_, campaign_):
+            return {"groups": [{"slots": [
+                {"ad_id": ad_id, "state": state, "state_label": label}
+                for ad_id, (state, label) in states.items()
+            ]}]}
+
+        return mock.patch.object(slots, "read", side_effect=read)
 
     def test_draft_plan_groups_with_missing_material(self):
         # A manual 就位 tick without a confirmed material binding is still missing (F30-I16).
         repository.set_ad_asset_ready(self.conn, self.org, self.brand, self.missing,
                                       actor="t", ready=True)
         self.conn.commit()
-        with (
-            mock.patch.object(handoff_assignment, "material_snapshot",
-                              side_effect=self.snapshot),
-            mock.patch.object(change_control_launch, "ready_material",
-                              wraps=change_control_launch.ready_material) as ready,
-        ):
-            groups = workspace_reads.structure(self.conn, self.org, self.brand,
-                                               self.campaign)["groups"]
-        # The launch batch's predicate decides, not a copy of it.
-        self.assertEqual(ready.call_count, 2)
+        groups = workspace_reads.structure(self.conn, self.org, self.brand,
+                                           self.campaign)["groups"]
         self.assertEqual(len(groups), 1)
         self.assertEqual((groups[0]["group_id"], groups[0]["name"], groups[0]["daily_budget"]),
                          (self.group, "新客", 400))
-        self.assertEqual([(a["ad_id"], a["entity_id"], a["missing_material"])
-                          for a in groups[0]["ads"]],
-                         [(self.ready, None, False), (self.missing, None, True)])
+        # F49 Contract T: the real slot read decides -- neither ad has a file.
+        self.assertEqual([(a["ad_id"], a["entity_id"], a["slot_state"], a["slot_label"],
+                           a["missing_material"]) for a in groups[0]["ads"]],
+                         [(self.ready, None, "missing", "缺", True),
+                          (self.missing, None, "missing", "缺", True)])
         self.assertTrue(all(a["grade"] is None and a["spend"] is None
+                            for a in groups[0]["ads"]))
+
+    def test_the_structure_reads_each_planned_ads_slot_state_from_one_slots_read(self):
+        """Audit W10 #4: one 缺素材 used to stand for six slot states. The structure serves the
+        slot's own state and chip (one `slots.read`), `missing_material` only as not ready."""
+        states = {self.ready: ("ready", "已確認"), self.missing: ("blocked", "卡住")}
+        with self.slots_read(states) as read:
+            groups = workspace_reads.structure(self.conn, self.org, self.brand,
+                                               self.campaign)["groups"]
+        self.assertEqual(read.call_count, 1)
+        self.assertEqual([(a["ad_id"], a["slot_state"], a["slot_label"], a["missing_material"])
+                          for a in groups[0]["ads"]],
+                         [(self.ready, "ready", "已確認", False),
+                          (self.missing, "blocked", "卡住", True)])
+
+    def test_a_failed_slot_read_leaves_the_slot_state_null(self):
+        with mock.patch.object(slots, "read", side_effect=RuntimeError("boom")):
+            groups = workspace_reads.structure(self.conn, self.org, self.brand,
+                                               self.campaign)["groups"]
+        self.assertTrue(all(a["slot_state"] is None and a["missing_material"]
                             for a in groups[0]["ads"]))
 
     def test_launched_plan_ads_carry_their_platform_ad_and_a_replacement_joins_its_group(self):
@@ -781,8 +804,8 @@ class AppBuiltStructureTest(_WithReader):
         ])
         grades = {bound: ("watch", "偏貴", 110.0, 12, 1320.0),
                   extra: ("on_target", "划算", 60.0, 20, 1200.0)}
-        with mock.patch.object(handoff_assignment, "material_snapshot",
-                               side_effect=self.snapshot), \
+        states = {self.ready: ("ready", "已確認"), self.missing: ("missing", "缺")}
+        with self.slots_read(states), \
                 mock.patch.object(triage, "classify", side_effect=_fake_classify(grades)):
             groups = workspace_reads.structure(conn, org, brand, campaign)["groups"]
         self.assertEqual(len(groups), 1)

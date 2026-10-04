@@ -25,6 +25,9 @@ export interface MaterialTask {
   replaces: MaterialReplaces | null;
   /** Set once withdrawn; a cancelled task leaves the list but stays readable by id. */
   cancelled_at: string | null;
+  /** F49 Contract T: the request's state word from `dispatch_status` and its workbench pack (還沒交棒／交棒沒送出・可重試
+   * ／工作檯製作中／工作檯沒做成／有候選圖／已採用); `unknown` is retried by dispatching again. Optional only for older fixtures. */
+  state_label?: string;
 }
 export interface MaterialReplaces { entity_id: string; name: string | null; thumbnail_url: string | null }
 export interface MaterialOption {

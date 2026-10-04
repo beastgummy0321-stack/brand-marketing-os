@@ -1236,5 +1236,152 @@ class RulesEndpointTest(unittest.TestCase):
         self.assertIn("差不到 5%", glossary["money"])
 
 
+# -- F49 Contract T: slot states told as they are -------------------------------------------------
+
+SLOTS_FILE = "slots.py"
+# The stored vocabularies a slot is derived from: `ads_user_asset.status` (an original's preview)
+# and `workbench_brief.status` (a set's generation). Only these functions compare them.
+ASSET_STATUS_WORDS = frozenset({"pending", "processing", "retryable", "error"})
+BRIEF_STATUS_WORDS = frozenset({"queued", "running", "failed"})
+SLOT_SOURCE_WORDS = ASSET_STATUS_WORDS | BRIEF_STATUS_WORDS
+SLOT_STATE_READERS = {(SLOTS_FILE, "_original_state"), (SLOTS_FILE, "brief_state")}
+# A file reads asset rows or workbench sets when it names one of these (the scan's scope: the same
+# words mean other things in sync jobs, LLM tasks and review rounds).
+_READS_SLOT_SOURCES = re.compile(
+    r"\bget_asset\(|\bbriefs_for_source\(|\basset_status\b|\bads_user_asset\b"
+)
+_STATUS_KEYS = {"status", "asset_status"}
+
+
+def _module_constants(tree) -> dict:
+    """Module-level `NAME = <literal>` bindings (a tuple／set of words compared through a name)."""
+    found = {}
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 \
+                and isinstance(node.targets[0], ast.Name):
+            found[node.targets[0].id] = node.value
+    return found
+
+
+def _words_in(node, constants) -> set:
+    """The string constants an operand stands for: a literal, a tuple／list／set of literals, or a
+    module constant bound to one of those."""
+    if isinstance(node, ast.Name) and node.id in constants:
+        node = constants[node.id]
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return {node.value}
+    if isinstance(node, ast.Tuple | ast.List | ast.Set):
+        return {e.value for e in node.elts if isinstance(e, ast.Constant)
+                and isinstance(e.value, str)}
+    return set()
+
+
+def _reads_a_status(node) -> bool:
+    """`x["status"]`, `x.get("status")` (or `asset_status`), or a variable named `status`."""
+    if isinstance(node, ast.Name):
+        return node.id in _STATUS_KEYS
+    if isinstance(node, ast.Subscript):
+        return isinstance(node.slice, ast.Constant) and node.slice.value in _STATUS_KEYS
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
+            and node.func.attr == "get" and node.args:
+        return isinstance(node.args[0], ast.Constant) and node.args[0].value in _STATUS_KEYS
+    return False
+
+
+def _slot_source_comparisons(tree):
+    """Yield `(function, lineno)` for every `==`／`!=`／`in`／`not in` between a status read and
+    an asset or brief status word (directly, in a literal collection, or through a module
+    constant)."""
+    parents = _parents(tree)
+    constants = _module_constants(tree)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Compare):
+            continue
+        operands = [node.left, *node.comparators]
+        if any(_reads_a_status(o) for o in operands) and any(
+            _words_in(o, constants) & SLOT_SOURCE_WORDS for o in operands
+        ):
+            yield _enclosing(parents, node), node.lineno
+
+
+def _slot_calls(tree):
+    """Yield the state literal of every slot built in `slots.py`: `_slot(…)`'s fourth positional
+    argument, and the first of the per-ad `slot(…)` closure (whose own `_slot` call forwards its
+    `state` and is not a slot built)."""
+    parents = _parents(tree)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
+            continue
+        if _enclosing(parents, node) == "slot":
+            continue
+        index = {"_slot": 3, "slot": 0}.get(node.func.id)
+        if index is None or len(node.args) <= index:
+            continue
+        arg = node.args[index]
+        yield arg.value if isinstance(arg, ast.Constant) else None
+
+
+class SlotStatesTest(unittest.TestCase):
+    """F49 Contract T: every state a slot is built with has its chip and sentence in
+    `slots.STATE_TEXT` (and every entry is used); the asset／brief status words are compared only
+    by `slots._original_state`／`slots.brief_state` (plus `user_assets*.py` and `app/workbench`,
+    their owners)."""
+
+    def test_every_slot_state_has_its_chip_and_sentence(self):
+        from app.ads import slots
+
+        tree = ast.parse((ADS_DIR / SLOTS_FILE).read_text(encoding="utf-8"))
+        built = list(_slot_calls(tree))
+        self.assertNotIn(None, built, "a slot built with a computed state -- name it literally")
+        self.assertEqual(set(built), set(slots.STATE_TEXT))
+        for state, (label, sentence) in slots.STATE_TEXT.items():
+            self.assertTrue(label and sentence, state)
+
+    def test_asset_and_brief_statuses_are_compared_only_by_the_slot_state_functions(self):
+        offenders, scanned = [], 0
+        for path in _ads_files():
+            relative = path.relative_to(ADS_DIR).as_posix()
+            if relative.startswith("user_assets"):
+                continue
+            text = path.read_text(encoding="utf-8")
+            if not _READS_SLOT_SOURCES.search(text):
+                continue
+            scanned += 1
+            for function, line in _slot_source_comparisons(ast.parse(text, filename=str(path))):
+                if (relative, function) not in SLOT_STATE_READERS:
+                    offenders.append(f"app/ads/{relative}:{line} in {function}()")
+        self.assertGreater(scanned, 5)
+        self.assertEqual(
+            offenders, [],
+            "an asset／brief status compared outside slots._original_state／brief_state (F49 T)",
+        )
+        # The readers themselves still hold the comparisons (the list only moves with them).
+        tree = ast.parse((ADS_DIR / SLOTS_FILE).read_text(encoding="utf-8"))
+        self.assertEqual(
+            {(SLOTS_FILE, f) for f, _ in _slot_source_comparisons(tree)}, SLOT_STATE_READERS
+        )
+
+    def test_the_scans_see_each_planted_shape(self):
+        tree = ast.parse(
+            "RUNNING = ('queued', 'running')\n"
+            "def rule(asset, brief, task, status):\n"
+            "    if asset['status'] == 'retryable':\n"
+            "        pass\n"
+            "    if brief.get('status') in RUNNING:\n"
+            "        pass\n"
+            "    if status not in {'pending', 'processing'}:\n"
+            "        pass\n"
+            "    if task['dispatch_status'] == 'queued':\n"
+            "        pass\n"
+            "    if slots.brief_state(brief) == 'failed':\n"
+            "        pass\n"
+            "    if asset['status'] != 'ready':\n"
+            "        pass\n"
+            "    return _slot(a, b, c, 'ready', d) or slot('missing', None, None)\n"
+        )
+        self.assertEqual(sorted(line for _, line in _slot_source_comparisons(tree)), [3, 5, 7])
+        self.assertEqual(sorted(_slot_calls(tree)), ["missing", "ready"])
+
+
 if __name__ == "__main__":
     unittest.main()
