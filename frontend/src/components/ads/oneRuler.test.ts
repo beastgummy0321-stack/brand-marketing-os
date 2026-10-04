@@ -39,6 +39,14 @@ import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
+/** F49 (lead): the *_PENDING lists live one file per removing issue in `oneRulerPending/<issue>.ts`, so screen issues
+ * that empty their own entries never share this file. An issue empties its file (or deletes it); stale entries still
+ * fail below. */
+const PENDING_FILES = import.meta.glob<Record<string, unknown[]>>("./oneRulerPending/*.ts", { eager: true });
+function pending(key: string): unknown[] {
+  return Object.values(PENDING_FILES).flatMap((mod) => (mod[key] as unknown[] | undefined) ?? []);
+}
+
 const ADS_DIR = dirname(fileURLToPath(import.meta.url));
 const SRC_DIR = join(ADS_DIR, "..", "..");
 const LIB_DIR = join(SRC_DIR, "lib");
@@ -117,6 +125,7 @@ function sources(dir: string, keep: (name: string) => boolean): string[] {
   for (const name of readdirSync(dir)) {
     const full = join(dir, name);
     if (statSync(full).isDirectory()) {
+      if (name === "oneRulerPending") continue; // this test's own pending lists (test data)
       out.push(...sources(full, keep));
       continue;
     }
@@ -282,32 +291,7 @@ const lifecycleCodes = (text: string) =>
  * stale-entry test, so every screen issue deletes its own entries. The W19 entries (the change-set pause payload is
  * the platform's own word, feature D) stay. */
 type LifecycleRule = "native" | "lifecycle";
-const LIFECYCLE_PENDING: { rule: LifecycleRule; file: string; issue: string; text?: string }[] = [
-  { rule: "native", file: "components/ads/detail/GradeGroups.tsx", issue: "F49-I09" },
-  { rule: "native", file: "components/ads/OverviewTab.tsx", issue: "F49-I09" },
-  { rule: "native", file: "components/ads/flow/VerifyPage.tsx", issue: "F49-I11" },
-  { rule: "native", file: "components/ads/AssetsTab.tsx", issue: "F49-I13" },
-  { rule: "native", file: "components/ads/DeliveryTab.tsx", issue: "F49-I13" },
-  { rule: "native", file: "components/ads/ExistingCampaignDialog.tsx", issue: "F49-I14" },
-  { rule: "native", file: "components/ads/ExternalCampaignPanel.tsx", issue: "F49-I14" },
-  { rule: "native", file: "components/ads/ChangeSetView.tsx", issue: "F49-I14" },
-  { rule: "native", file: "components/ads/patterns/campaignWords.ts", issue: "F49-I14" },
-  { rule: "native", file: "components/ads/flow/changeFlow.ts", issue: "W19", text: 'after: { status: "PAUSED" }' },
-  { rule: "native", file: "components/ads/ChangeComposer.tsx", issue: "W19", text: '{ status: "PAUSED" }' },
-  { rule: "lifecycle", file: "components/ads/AllCampaignsPage.tsx", issue: "F49-I08" },
-  { rule: "lifecycle", file: "components/ads/patterns/campaignWords.ts", issue: "F49-I08" },
-  { rule: "lifecycle", file: "components/ads/home/status.ts", issue: "F49-I08" },
-  { rule: "lifecycle", file: "components/ads/nextStep.tsx", issue: "F49-I09" },
-  { rule: "lifecycle", file: "components/ads/PerformanceTab.tsx", issue: "F49-I09" },
-  { rule: "lifecycle", file: "components/ads/detail/CampaignDetailPage.tsx", issue: "F49-I09" },
-  { rule: "lifecycle", file: "components/ads/detail/PeriodStatusRow.tsx", issue: "F49-I09" },
-  { rule: "lifecycle", file: "components/ads/workspace/OverviewBody.tsx", issue: "F49-I09" },
-  { rule: "lifecycle", file: "components/ads/workspace/WorkspaceHead.tsx", issue: "F49-I09" },
-  { rule: "lifecycle", file: "components/ads/DeliveryTab.tsx", issue: "F49-I13" },
-  { rule: "lifecycle", file: "components/ads/UserAssetPlacements.tsx", issue: "F49-I14" },
-  { rule: "lifecycle", file: "components/ads/CloseCampaignDialog.tsx", issue: "F49-I09" },
-  { rule: "lifecycle", file: "components/ads/ManualSettings.tsx", issue: "F49-I12" },
-];
+const LIFECYCLE_PENDING = pending("lifecycle") as { rule: LifecycleRule; file: string; issue: string; text?: string }[];
 const LIFECYCLE_SCANS: Record<LifecycleRule, (text: string) => number[]> = { native: nativeStatus, lifecycle: lifecycleCodes };
 
 /** Every hit of `rule` as `file:line`, the `LIFECYCLE_PENDING` ones left out. */
@@ -539,15 +523,7 @@ const SYNC_JOB_READ = [
   /(?<!function\s+)\bsyncJob\(/,
 ];
 const syncJobReads = (text: string) => hits(text, SYNC_JOB_READ);
-const SYNC_PENDING: { file: string; issue: string; text?: string; why?: string }[] = [
-  { file: "components/ads/wait/WaitPage.tsx", issue: "F49-I10" },
-  { file: "components/ads/CampaignWorkspace.tsx", issue: "F49-I09" },
-  { file: "components/ads/connections/DataConnectionsPage.tsx", issue: "F49-I14" },
-  { file: "components/ads/ExistingCampaignDialog.tsx", issue: "F49-I14" },
-  { file: "components/ads/ExternalCampaignPanel.tsx", issue: "F49-I14" },
-  { file: "components/ads/settle/SettleAngles.tsx", issue: "W14", text: "found?.job.status",
-    why: "an AI (LLM) job's queue status, not a platform read; background job outcomes are W14 (feature C)" },
-];
+const SYNC_PENDING = pending("sync") as { file: string; issue: string; text?: string; why?: string }[];
 
 describe("one sync outcome (F49 Contract O)", () => {
   it("no ads source reads a sync job's status／error or polls syncJob( outside useSyncOutcome", () => {
@@ -642,13 +618,7 @@ function wordTables(text: string, twoOf: (codes: string[]) => boolean): number[]
   return [...new Set(lines)].sort((a, b) => a - b);
 }
 
-const STATE_WORDS_PENDING: { file: string; issue: string }[] = [
-  { file: "components/ads/flow/CleanupVerifyRows.tsx", issue: "F49-I11" },
-  { file: "components/ads/home/status.ts", issue: "F49-I08" },
-  { file: "components/ads/publish/PublishVerify.tsx", issue: "F49-I12" },
-  { file: "components/ads/ChangeSetView.tsx", issue: "F49-I14" },
-  { file: "components/ads/ManualHandoffPanel.tsx", issue: "F49-I14" },
-];
+const STATE_WORDS_PENDING = pending("stateWords") as { file: string; issue: string }[];
 const STATE_WORDS_NOT_A_TABLE: { file: string; text: string; why: string }[] = [
   { file: "components/ads/PlannedMaterialAssignments.tsx", text: "const statusLabel = { unassigned:",
     why: "a placement's `assignment_status` (unassigned|confirmed|stale), another vocabulary that shares two words" },
@@ -744,14 +714,7 @@ const QUEUE_SCANS: Record<QueueRule, (text: string) => number[]> = {
   kinds: (text) => codeTables(text, QUEUE_KINDS),
   reasons: (text) => codeTables(text, WAIT_REASONS),
 };
-const QUEUE_PENDING: { rule: QueueRule; file: string; issue: string }[] = [
-  { rule: "kinds", file: "components/ads/home/status.ts", issue: "F49-I08" },
-  { rule: "kinds", file: "components/ads/home/QueueRow.tsx", issue: "F49-I08" },
-  { rule: "kinds", file: "components/ads/settle/SettlePage.tsx", issue: "F49-I08" },
-  { rule: "kinds", file: "components/ads/workspace/OverviewBody.tsx", issue: "F49-I09" },
-  { rule: "kinds", file: "components/ads/review/ReviewEvidencePage.tsx", issue: "F49-I11" },
-  { rule: "reasons", file: "components/ads/wait/WaitPage.tsx", issue: "F49-I10" },
-];
+const QUEUE_PENDING = pending("queue") as { rule: QueueRule; file: string; issue: string }[];
 
 describe("one decision queue (F49 Contract Q)", () => {
   for (const rule of ["kinds", "reasons"] as const) {
@@ -814,11 +777,7 @@ const SLOT_SCANS: Record<SlotRule, (text: string) => number[]> = {
   table: (text) => wordTables(text, (codes) => new Set(codes.filter((c) => SLOT_STATES.includes(c))).size >= 2),
   missing: (text) => hits(text, [/\bmissing_material\b/]),
 };
-const SLOT_PENDING: { rule: SlotRule; file: string; issue: string }[] = [
-  { rule: "chip", file: "components/ads/workspace/SlotTiles.tsx", issue: "F49-I13" },
-  { rule: "chip", file: "components/ads/workspace/AssetsBody.tsx", issue: "F49-I13" },
-  { rule: "missing", file: "components/ads/workspace/StructureTab.tsx", issue: "F49-I13" },
-];
+const SLOT_PENDING = pending("slot") as { rule: SlotRule; file: string; issue: string }[];
 
 describe("slot states told as served (F49 Contract T)", () => {
   for (const rule of ["chip", "table", "missing"] as const) {
