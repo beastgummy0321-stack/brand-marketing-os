@@ -19,7 +19,7 @@ from datetime import date, timedelta
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
-from app.ads import channels, repository, tracked_zero, triage
+from app.ads import channels, queue_done, repository, tracked_zero, triage
 from app.ads import external_repository as external
 from app.brand_intelligence import repository as brands
 from app.core import db
@@ -166,8 +166,8 @@ class QueueEndToEndTest(unittest.TestCase):
 
         self.assertEqual(
             result["kinds_available"],
-            ["worse", "scale_budget", "refresh_creative", "insufficient_data", "cleanup",
-             "settle"],
+            ["cleanup", "worse", "closeout", "settle", "refresh_creative", "scale_budget",
+             "insufficient_data"],
         )
         self.assertEqual(result["kinds_pending"], [])
         # `class` keeps its meaning: the 沒賣出 ad still counts as the stop_loss trend class.
@@ -526,11 +526,12 @@ class QueuePlumbingTest(unittest.TestCase):
         self.assertEqual(queue["total_ads"], 0)
         self.assertEqual(
             queue["kinds_available"],
-            ["worse", "scale_budget", "refresh_creative", "insufficient_data", "cleanup",
-             "settle"],
+            ["cleanup", "worse", "closeout", "settle", "refresh_creative", "scale_budget",
+             "insufficient_data"],
         )
         self.assertEqual(queue["kinds_pending"], [])
         self.assertEqual(queue["counts"], dict.fromkeys(triage.ALL_CLASSES, 0))
+        self.assertEqual(queue["decisions"], {"kinds": list(queue_done.DECISION_KINDS), "open": 0})
 
 
 class QueueReviewProposalTest(unittest.TestCase):
@@ -618,7 +619,7 @@ class QueueReviewProposalTest(unittest.TestCase):
             "kind": "review", "review_id": round_id, "status": "queued", "decision": None,
             "reason": None, "revisit_at": None, "recommendation_id": None,
             "change_set_id": None, "change_set_status": None, "verification_state": None,
-            "multi": False,
+            "verification_label": None, "multi": False,
         })
 
     def test_ready_round_recommendation_id_is_first_adjust(self):
@@ -793,21 +794,36 @@ class ScaleRefreshQueueTest(unittest.TestCase):
                 result["scale_hold"],
             )
 
-    def test_scale_row_is_idempotent_and_supersedes_across_windows(self):
+    def test_scale_row_is_a_notice_never_an_interrupt(self):
+        """F49 Contract Q: `scale_budget` is a money-card notice -- served from its candidate
+        (`id` = its dedupe key, `decision: false`), never enqueued; an open row left from before
+        resolves at the next refresh."""
         w1, w2 = date(2026, 1, 7), date(2026, 1, 8)
+        legacy = core_interrupts.enqueue(
+            self.conn, org_id=self.org, brand_id=self.brand, category="ads_triage_scale_budget",
+            dedupe_key="ads-triage:scale_budget:legacy:2026-01-01", message="舊的加預算列",
+        )
+        self.conn.commit()
         first = self._refresh_queue([self._scale_item(self.ad, self.campaign, w1)])
-        first_id = first["items"][0]["id"]
-        # Same window again -- no duplicate row.
+        [row] = first["items"]
+        self.assertEqual(row["id"], row["dedupe_key"])
+        self.assertIs(row["decision"], False)
+        self.assertIsNone(row["position"])
+        self.assertEqual(first["decisions"]["open"], 0)
         again = self._refresh_queue([self._scale_item(self.ad, self.campaign, w1)])
-        self.assertEqual(again["items"][0]["id"], first_id)
-
+        self.assertEqual(again["items"][0]["id"], row["id"])
         second = self._refresh_queue([self._scale_item(self.ad, self.campaign, w2)])
         self.assertEqual(len(second["items"]), 1)
-        self.assertNotEqual(second["items"][0]["id"], first_id)
-        old_row = self.conn.execute(
-            "SELECT status FROM interrupt WHERE id=%s", (first_id,)
-        ).fetchone()
-        self.assertEqual(old_row["status"], "resolved")
+        self.assertNotEqual(second["items"][0]["id"], row["id"])
+        self.assertEqual(
+            core_interrupts.list_open(self.conn, brand_id=self.brand,
+                                      category="ads_triage_scale_budget", archive_stale=False),
+            [],
+        )
+        status = self.conn.execute(
+            "SELECT status FROM interrupt WHERE id=%s", (legacy,),
+        ).fetchone()["status"]
+        self.assertEqual(status, "resolved")
 
     def test_scale_row_never_raised_when_budget_gate_fails(self):
         window_end = date(2026, 1, 7)
@@ -998,23 +1014,28 @@ class InsufficientDataQueueTest(unittest.TestCase):
         rows = self._insufficient_rows(triage.refresh_queue(self.conn, self.org, self.brand))
         self.assertEqual(rows, [])
 
-    def test_deduped_within_the_same_window_and_superseded_when_it_recovers(self):
+    def test_served_as_a_notice_and_gone_when_it_recovers(self):
+        """F49 Contract Q: `insufficient_data` is a notice (the campaign row and `/wait`) --
+        served from its candidate, never an interrupt."""
         self.set_coverage(self.cutoff - timedelta(days=10), self.cutoff)
         first_row = self._insufficient_rows(
             triage.refresh_queue(self.conn, self.org, self.brand),
         )[0]
+        self.assertIs(first_row["decision"], False)
         again_row = self._insufficient_rows(
             triage.refresh_queue(self.conn, self.org, self.brand),
         )[0]
-        self.assertEqual(again_row["id"], first_row["id"])  # same window -> no duplicate row
+        self.assertEqual(again_row["id"], first_row["id"])  # same window -> same row
+        self.assertEqual(
+            core_interrupts.list_open(self.conn, brand_id=self.brand,
+                                      category="ads_triage_insufficient_data",
+                                      archive_stale=False),
+            [],
+        )
 
         self.set_coverage(self.cutoff - timedelta(days=90), self.cutoff)  # recovers
         recovered = triage.refresh_queue(self.conn, self.org, self.brand)
         self.assertEqual(self._insufficient_rows(recovered), [])
-        row = self.conn.execute(
-            "SELECT status FROM interrupt WHERE id=%s", (first_row["id"],),
-        ).fetchone()
-        self.assertEqual(row["status"], "resolved")
 
     def test_category_registered_with_expected_severity_and_label(self):
         self.assertEqual(
@@ -1532,6 +1553,246 @@ class GradedCleanupEndToEndTest(unittest.TestCase):
         worse = next(row for row in result["items"] if row["kind_key"] == "worse")
         self.assertEqual(worse["triage"]["entity_id"], self.ids["pricey"])
         self.assertEqual(result["counts"]["stop_loss"], 1)  # the trend class keeps its meaning
+
+
+class _RealCampaignQueue(unittest.TestCase):
+    """F49 Contract Q fixtures through the real pipeline: an ad that spent 500 with no sale against
+    a cap of 100 (沒賣出) raises its campaign's cleanup row."""
+
+    def setUp(self):
+        self.conn, self.org = db.current(), db.DEV_ORG_ID
+        self.brand = brands.create_brand(
+            self.conn, org_id=self.org, name="佇列與收件匣測試", actor="test", client_name=None,
+        )["id"]
+        patcher = patch.object(channels, "external_reader", return_value=_Reader())
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.cutoff = (
+            db.now_utc().astimezone(ZoneInfo(ACCOUNT_TZ)) - timedelta(days=1)
+        ).date()
+
+    def _internal(self, name, *, end_date):
+        campaign_id = repository.create_campaign(self.conn, self.org, self.brand, {
+            "name": name, "goal_text": "g", "objective": "購買", "target_cost": 100,
+            "start_date": self.cutoff - timedelta(days=60), "end_date": end_date,
+            "status": "live",
+        }, created_by="test")["id"]
+        self.conn.commit()
+        return campaign_id
+
+    def _imported(self, name, native_id, **root):
+        campaign_id = external.create_imported_campaign(
+            self.conn, self.org, self.brand, name=name,
+        )["id"]
+        self.conn.commit()
+        self._entity(campaign_id, "campaign", native_id, native_status="ACTIVE", **root)
+        repository.save_campaign_target(
+            self.conn, self.org, self.brand, campaign_id, result_kind="purchase", basis="own",
+            value=100, expected_revision=0, actor="test",
+        )
+        self.conn.commit()
+        return campaign_id
+
+    def _entity(self, campaign_id, kind, native_id, parent=None, **extra):
+        row = {"platform": "meta", "source_account": "act_1", "native_kind": kind,
+               "native_id": native_id, "name": native_id, **extra}
+        if parent is not None:
+            row["parent_native_kind"], row["parent_native_id"] = parent
+        entity = external.upsert_entity(self.conn, self.org, self.brand, campaign_id, row)
+        self.conn.commit()
+        return entity["id"]
+
+    def _wasted_ad(self, campaign_id, root_native_id, ad_native_id, day):
+        ad = self._entity(campaign_id, "ad", ad_native_id, ("campaign", root_native_id),
+                          native_status="ACTIVE")
+        external.record_sync(
+            self.conn, self.org, self.brand, campaign_id, section="observations",
+            state={"status": "success", "last_success_at": db.now_utc().isoformat(),
+                   "coverage": {"start": (self.cutoff - timedelta(days=90)).isoformat(),
+                                "end": self.cutoff.isoformat()}},
+        )
+        external.upsert_observation(
+            self.conn, self.org, self.brand, campaign_id,
+            {"entity_id": ad, "day": day, "metric_scope": "ad", "attribution_key": "a",
+             "currency": "TWD", "source": "meta", "spend": 500, "impressions": 100,
+             "purchases": None},
+            result_kind="purchase", result_count=0, result_action="omni_purchase",
+            result_attribution="7d_click+1d_view",
+        )
+        self.conn.commit()
+        return ad
+
+    def _open(self, kind):
+        return core_interrupts.list_open(
+            self.conn, brand_id=self.brand, category=triage.QUEUE_CATEGORY[kind],
+            archive_stale=False,
+        )
+
+    @staticmethod
+    def _rows(queue, kind):
+        return [row for row in queue["items"] if row["kind_key"] == kind]
+
+
+class EndedCampaignQueueTest(_RealCampaignQueue):
+    """F49 Contract Q, decision 6: an ended campaign gets a closeout row instead of new proposals;
+    a row raised before the end stays until closeout; an imported ended campaign leaves the
+    queue."""
+
+    def test_a_row_raised_before_the_end_stays_and_the_closeout_row_joins_it(self):
+        campaign = self._internal("夏季活動", end_date=self.cutoff + timedelta(days=5))
+        self._entity(campaign, "campaign", "c_end")
+        self._wasted_ad(campaign, "c_end", "a_end", self.cutoff - timedelta(days=1))
+        before = triage.refresh_queue(self.conn, self.org, self.brand)
+        [cleanup] = self._rows(before, "cleanup")
+        self.assertEqual(self._rows(before, "closeout"), [])
+
+        # The campaign ends the day before the account's last complete day: its judged window
+        # now ends at the end date, so the candidate's own key names another day.
+        self.conn.execute("UPDATE ads_campaign SET end_date=%s WHERE id=%s",
+                          (self.cutoff - timedelta(days=1), campaign))
+        self.conn.commit()
+        after = triage.refresh_queue(self.conn, self.org, self.brand)
+        [kept] = self._rows(after, "cleanup")
+        self.assertEqual(kept["id"], cleanup["id"])
+        self.assertEqual(kept["campaign_id"], campaign)
+        self.assertEqual(len(self._open("cleanup")), 1)
+        [closeout] = self._rows(after, "closeout")
+        self.assertEqual(closeout["category"], "ads_triage_closeout")
+        self.assertEqual(closeout["message"], "「夏季活動」已結束，待結案")
+        self.assertEqual(
+            closeout["action_url"],
+            f"/brands/{self.brand}/ads/campaigns/{campaign}?tab=perf&close=1",
+        )
+        self.assertIsNone(closeout["triage"])
+        self.assertEqual(closeout["closeout"], {
+            "campaign_id": campaign, "campaign_name": "夏季活動",
+            "end_date": self.cutoff - timedelta(days=1),
+            "running": {"count": 1, "read_at": None},
+        })
+        self.assertEqual(
+            [(r["kind_key"], r["position"]) for r in after["items"] if r["decision"]],
+            [("cleanup", 1), ("closeout", 2)],
+        )
+        self.assertEqual(after["decisions"]["open"], 2)
+        # Read-only `get_queue` serves the same rows.
+        self.assertEqual(
+            {r["id"] for r in triage.get_queue(self.conn, self.org, self.brand)["items"]},
+            {cleanup["id"], closeout["id"]},
+        )
+
+        # Closing the campaign resolves every row of it.
+        self.conn.execute("UPDATE ads_campaign SET status='closed' WHERE id=%s", (campaign,))
+        self.conn.commit()
+        triage.resolve_campaign(self.conn, self.org, self.brand, campaign)
+        self.assertEqual(self._open("cleanup"), [])
+        self.assertEqual(self._open("closeout"), [])
+
+    def test_an_ended_campaign_raises_no_new_proposal(self):
+        campaign = self._internal("已結束活動", end_date=self.cutoff - timedelta(days=1))
+        self._entity(campaign, "campaign", "c_done")
+        self._wasted_ad(campaign, "c_done", "a_done", self.cutoff - timedelta(days=1))
+        # The cleanup candidate exists (the ad is 沒賣出 inside the judged window) ...
+        self.assertIsNotNone(triage.campaign_cleanup(self.conn, self.org, self.brand, campaign))
+        queue = triage.refresh_queue(self.conn, self.org, self.brand)
+        # ... but an ended campaign only gets its closeout row.
+        self.assertEqual([r["kind_key"] for r in queue["items"]], ["closeout"])
+        self.assertEqual(self._open("cleanup"), [])
+        self.assertEqual(len(self._open("closeout")), 1)
+        # Idempotent: one closeout row per campaign.
+        triage.refresh_queue(self.conn, self.org, self.brand)
+        self.assertEqual(len(self._open("closeout")), 1)
+
+    def test_an_imported_ended_campaign_has_no_rows(self):
+        live = self._imported("進行中", "c_live")
+        self._wasted_ad(live, "c_live", "a_live", self.cutoff)
+        raised = triage.refresh_queue(self.conn, self.org, self.brand)
+        self.assertEqual(len(self._rows(raised, "cleanup")), 1)
+
+        # Its root is switched off on the platform: imported and ended -- no closeout exists for it.
+        self._entity(live, "campaign", "c_live", native_status="PAUSED")
+        queue = triage.refresh_queue(self.conn, self.org, self.brand)
+        self.assertEqual(queue["items"], [])
+        self.assertEqual(self._open("cleanup"), [])
+        self.assertEqual(self._open("closeout"), [])
+
+
+class InboxFollowsTheQueueTest(_RealCampaignQueue):
+    """F49 Contract Q: a row whose `done` turns true has no open interrupt once the decision has
+    committed -- in the same request, not at the next refresh."""
+
+    def setUp(self):
+        super().setUp()
+        self.campaign = self._imported("春季活動", "c_spring")
+        self.ad = self._wasted_ad(self.campaign, "c_spring", "a_spring", self.cutoff)
+        queue = triage.refresh_queue(self.conn, self.org, self.brand)
+        [self.row] = self._rows(queue, "cleanup")
+
+    def _cleanup_set(self):
+        from app.ads import change_control
+
+        return change_control.create(self.conn, self.org, self.brand, self.campaign, {
+            "operation_id": db.new_id("op"), "title": "清理", "source": "cleanup",
+            "month": self.cutoff.strftime("%Y-%m"),
+            "items": [{"kind": "pause", "target_id": self.ad, "after": {"status": "PAUSED"},
+                       "reason": "清理"}],
+        }, "test")
+
+    def test_rejecting_the_cleanup_set_empties_the_inbox_row(self):
+        from app.ads import change_control
+
+        created = self._cleanup_set()
+        self.assertEqual(len(self._open("cleanup")), 1)
+        change_control.decide(self.conn, self.org, self.brand, self.campaign, created["id"],
+                              "rejected", "先不關", None, "test")
+        self.assertEqual(self._open("cleanup"), [])
+
+    def test_deferring_resolves_the_row_the_queue_serves_as_done(self):
+        from app.ads import change_control
+
+        created = self._cleanup_set()
+        change_control.decide(self.conn, self.org, self.brand, self.campaign, created["id"],
+                              "deferred", "下週再看",
+                              (db.now_utc() + timedelta(days=3)).isoformat(), "test")
+        self.assertEqual(self._open("cleanup"), [])
+        # Resolved because it is done, not because it stopped qualifying: the candidate is still
+        # raised, and its resolved key is never raised again within the same window.
+        self.assertIsNotNone(triage.campaign_cleanup(self.conn, self.org, self.brand,
+                                                     self.campaign))
+        queue = triage.refresh_queue(self.conn, self.org, self.brand)
+        self.assertEqual(self._rows(queue, "cleanup"), [])
+        self.assertEqual(queue["decisions"]["open"], 0)
+
+    def test_a_draft_set_leaves_the_row_open(self):
+        self._cleanup_set()
+        triage.resolve_done(self.conn, self.org, self.brand, kind="cleanup",
+                            identity_id=self.campaign)
+        self.assertEqual([r["id"] for r in self._open("cleanup")], [self.row["id"]])
+
+    def test_a_launch_set_answers_no_queue_row(self):
+        """The launch handoff (whose re-approval carries `confirmed` forward,
+        `handoff_data.carry_launch`) answers no decision row: resolving for it leaves the
+        campaign's waiting cleanup row open."""
+        set_id = db.new_id("acs")
+        self.conn.execute(
+            "INSERT INTO ads_change_set(id,org_id,brand_id,campaign_id,operation_id,request_hash,"
+            "content_hash,title,month,plan_json,created_by,status) "
+            "VALUES(%s,%s,%s,%s,%s,'h','h','上架','2026-01',%s,'test','approved')",
+            (set_id, self.org, self.brand, self.campaign, db.new_id("op"),
+             db.jsonb({"launch_snapshot": {}, "items": [{"id": "x", "kind": "launch"}]})),
+        )
+        self.conn.commit()
+        triage.resolve_change_set(self.conn, self.org, self.brand, set_id)
+        self.assertEqual([r["id"] for r in self._open("cleanup")], [self.row["id"]])
+
+    def test_one_count_everywhere(self):
+        from app.ads import digest, status_summary
+
+        queue = triage.get_queue(self.conn, self.org, self.brand)
+        summary = status_summary.get_status_summary(self.conn, self.org, self.brand)
+        built = digest.build(self.conn, self.org, self.brand, self.cutoff)
+        self.assertEqual(queue["decisions"]["open"], 1)
+        self.assertEqual(summary["open_items"], queue["decisions"]["open"])
+        self.assertEqual(built["open_count"], queue["decisions"]["open"])
 
 
 if __name__ == "__main__":

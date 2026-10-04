@@ -323,6 +323,11 @@ def decide(conn, org, brand, campaign, review_id, decision, reason, revisit_at=N
     review_monitor.on_decision(conn, result, commit=False)
     _resolve_ready_notice(conn, org, brand, review_id)
     conn.commit()
+    # F49 Contract Q: a deferred／unjudgeable round (or a completed one whose copy set is done)
+    # leaves the inbox now, not at the next refresh.
+    from app.ads import triage
+
+    triage.resolve_done(conn, org, brand, kind="worse", identity_id=result["entity_id"])
     return result
 
 

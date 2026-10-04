@@ -278,4 +278,10 @@ def check(conn, org, brand, campaign, set_id, action_id, actor):
             ads_learnings.record_for_item(conn, org, brand, campaign, set_id, action)
         # F29-I04 Contract F: the confirmed pause of an A/B set writes its comparison result.
         ads_learnings.record_for_ab_item(conn, org, brand, campaign, current, action)
+    if state == "confirmed":
+        # F49 Contract Q: once the confirmation has committed, the queue row this set answers
+        # (a cleanup row, a review copy set's `worse` row) leaves the inbox if it is done now.
+        from app.ads import triage
+
+        triage.resolve_action(conn, org, brand, action_id)
     return data.get(conn, org, brand, campaign, set_id)

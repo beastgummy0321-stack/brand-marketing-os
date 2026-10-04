@@ -42,6 +42,12 @@ F49-I06 (Contract B, readback): `except (ValueError, AttributeError)` anywhere i
 (a code bug is not a refusal); every verification state named in `app/ads` code -- and every value
 the `ads_action.verification_state`／`ads_handoff_item.status` CHECKs allow -- has its word in
 `change_control_data.VERIFICATION_LABELS`.
+
+F49-I05 (Contract Q, one decision queue): a list／tuple／set literal naming two or more queue kinds
+in `app/ads` outside `queue_done.py` fails, naming file and variable (or function); every kind the
+queue serves has its interrupt category and a done rule; every `reason_code` `triage.py` emits --
+and every window reason `review_evidence` passes through to it -- has its `triage.reasons()` entry
+(read by AST), served as `reasons` in `GET …/rules`.
 """
 
 import ast
@@ -61,6 +67,7 @@ from app.ads import (
     experiments,
     learning_rank,
     month_summary,
+    queue_done,
     triage,
 )
 from app.brand_intelligence import repository as brands
@@ -966,6 +973,174 @@ class ReadbackVocabularyTest(unittest.TestCase):
         self.assertNotEqual(labels["unknown"], labels["reported"])
 
 
+# -- F49 Contract Q: one decision queue ------------------------------------------------------------
+
+QUEUE_FILE = "queue_done.py"
+# (file relative to app/ads, variable or function) -> why that literal is not a list of queue kinds.
+# Never widen this to hide one: read `queue_done.DECISION_KINDS`／`NOTICE_KINDS` instead.
+NOT_A_KIND_LIST = {
+    ("triage.py", "ALL_CLASSES"):
+        "the trend classes (`class`); `stop_loss`／`worse` name a class there, not a queue row",
+}
+
+
+def _queue_kind_lists(tree, kinds):
+    """Yield `(name, lineno)` for every list／tuple／set literal with two or more `kinds` strings --
+    `name` is the variable it is assigned to (else the enclosing function)."""
+    parents = _parents(tree)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.List | ast.Tuple | ast.Set):
+            continue
+        named = {e.value for e in node.elts
+                 if isinstance(e, ast.Constant) and isinstance(e.value, str)} & kinds
+        if len(named) < 2:
+            continue
+        parent = parents.get(node)
+        if isinstance(parent, ast.Call):  # frozenset({...}) / set([...])
+            parent = parents.get(parent)
+        if isinstance(parent, ast.Assign | ast.AnnAssign):
+            targets = parent.targets if isinstance(parent, ast.Assign) else [parent.target]
+            names = [t.id for t in targets if isinstance(t, ast.Name)]
+            if names:
+                yield names[0], node.lineno
+                continue
+        yield _enclosing(parents, node), node.lineno
+
+
+def _strings_of(node):
+    """The string constants `node` can evaluate to: a constant, either side of `a or "x"`, either
+    branch of `"x" if c else "y"`."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        yield node.value
+    elif isinstance(node, ast.BoolOp):
+        for value in node.values:
+            yield from _strings_of(value)
+    elif isinstance(node, ast.IfExp):
+        yield from _strings_of(node.body)
+        yield from _strings_of(node.orelse)
+
+
+# The functions whose returned tuple carries a reason code, and where in the tuple.
+_REASON_RETURNS = {"grade_window": -1, "_compare": 1}
+
+
+def _triage_reason_codes(tree):
+    """Every `reason_code` string `triage.py` emits: the code argument of each `finish(cls, code,
+    …)`, the code slot of `grade_window`'s and `_compare`'s returned tuples, and every constant
+    `"reason"` value a window view carries."""
+    parents = _parents(tree)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) \
+                and node.func.id == "finish" and len(node.args) > 1:
+            yield from _strings_of(node.args[1])
+        elif isinstance(node, ast.Return) and isinstance(node.value, ast.Tuple):
+            slot = _REASON_RETURNS.get(_enclosing(parents, node))
+            if slot is not None and len(node.value.elts) > abs(slot):
+                yield from _strings_of(node.value.elts[slot])
+        elif isinstance(node, ast.Dict):
+            for key, value in zip(node.keys, node.values, strict=True):
+                if isinstance(key, ast.Constant) and key.value == "reason":
+                    yield from _strings_of(value)
+
+
+def _window_reasons(tree):
+    """Every reason `review_evidence` gives a window (`reason = "…"`), which triage passes on."""
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and any(
+            isinstance(t, ast.Name) and t.id == "reason" for t in node.targets
+        ):
+            yield from _strings_of(node.value)
+
+
+class OneDecisionQueueTest(unittest.TestCase):
+    """F49 Contract Q: the decision kinds are one list (`queue_done`), every served kind has its
+    interrupt category and done rule, and every reason code has its served words."""
+
+    def test_no_list_of_queue_kinds_outside_queue_done(self):
+        kinds = set(triage.QUEUE_CATEGORY)
+        offenders, seen = [], set()
+        for path in _ads_files():
+            relative = path.relative_to(ADS_DIR).as_posix()
+            if relative == QUEUE_FILE:
+                continue
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for name, line in _queue_kind_lists(tree, kinds):
+                if (relative, name) in NOT_A_KIND_LIST:
+                    seen.add((relative, name))
+                    continue
+                offenders.append(f"app/ads/{relative}:{line} {name}")
+        self.assertEqual(
+            offenders, [],
+            "a list of queue kinds outside queue_done.py -- read queue_done.DECISION_KINDS／"
+            "NOTICE_KINDS (F49 Q)",
+        )
+        # An allow entry whose literal is gone must go too (the list only ever shrinks).
+        self.assertEqual(set(NOT_A_KIND_LIST), seen)
+
+    def test_the_kind_scan_sees_each_planted_shape(self):
+        tree = ast.parse(
+            "ORDER = ['cleanup', 'worse']\n"
+            "def pick(row):\n"
+            "    return row['kind'] in {'settle', 'closeout'} or row in ('cleanup',)\n"
+            "SEEN = frozenset({'scale_budget', 'insufficient_data'})\n"
+            "MAP = {'cleanup': 1, 'worse': 2}\n"
+        )
+        self.assertEqual(
+            sorted(name for name, _ in _queue_kind_lists(tree, set(triage.QUEUE_CATEGORY))),
+            ["ORDER", "SEEN", "pick"],
+        )
+
+    def test_every_served_kind_has_a_category_and_a_done_rule(self):
+        self.assertEqual(
+            triage.KINDS_AVAILABLE,
+            [*queue_done.DECISION_KINDS, *queue_done.NOTICE_KINDS],
+        )
+        for kind in triage.KINDS_AVAILABLE:
+            with self.subTest(kind=kind):
+                self.assertIn(kind, triage.QUEUE_CATEGORY)
+                self.assertIn(kind, queue_done.DONE_RULES)
+
+    def test_every_emitted_reason_code_has_served_words(self):
+        codes = set(_triage_reason_codes(ast.parse(
+            (ADS_DIR / "triage.py").read_text(encoding="utf-8"))))
+        codes |= set(_window_reasons(ast.parse(
+            (ADS_DIR / "review_evidence.py").read_text(encoding="utf-8"))))
+        # The contract's wait reasons are among them (the scan is not finding nothing).
+        self.assertLessEqual(
+            {"too_new", "result_unknown_days", "needs_resync", "mixed_currency",
+             "no_previous_window", "result_kind_unknown", "target_unresolved"},
+            codes,
+        )
+        reasons = triage.reasons()
+        self.assertEqual(sorted(codes - set(reasons)), [], "a reason code without words")
+        for code, words in reasons.items():
+            with self.subTest(code=code):
+                self.assertEqual(set(words), {"title", "text", "fix"})
+                self.assertTrue(words["title"] and words["text"])
+                self.assertIn(words["fix"], {*triage.REASON_FIXES, None})
+        self.assertEqual(triage.rules()["reasons"], reasons)
+
+    def test_the_reason_scan_sees_each_planted_shape(self):
+        tree = ast.parse(
+            "def grade_window(v):\n"
+            "    if v:\n"
+            "        return (*X, 'a_code')\n"
+            "    return 'g', 'l', v or 'b_code'\n"
+            "def _compare(c):\n"
+            "    return 'worse', 'c_code', 1\n"
+            "def walk(finish):\n"
+            "    finish('insufficient', 'd_code', 1)\n"
+            "    finish('x', g[2] or 'e_code')\n"
+            "    return {'reason': 'f_code', 'other': 'nope'}\n"
+        )
+        self.assertEqual(
+            sorted(_triage_reason_codes(tree)),
+            ["a_code", "b_code", "c_code", "d_code", "e_code", "f_code"],
+        )
+        tree = ast.parse("def view(r):\n    reason = 'x' if r else 'y'\n    other = 'z'\n")
+        self.assertEqual(sorted(_window_reasons(tree)), ["x", "y"])
+
+
 class RulesEndpointTest(unittest.TestCase):
     """`GET /api/ads/brands/{b}/rules` (Contract R-API) serves the ruler modules' own constants."""
 
@@ -980,7 +1155,9 @@ class RulesEndpointTest(unittest.TestCase):
         response = TestClient(main.app).get(f"/api/ads/brands/{self.brand}/rules")
         self.assertEqual(response.status_code, 200, response.text)
         body = response.json()
-        self.assertEqual(set(body), {"grade", "ab", "labels", "glossary"})
+        self.assertEqual(set(body), {"grade", "ab", "labels", "glossary", "reasons"})
+        # F49 Contract Q: the wait reasons, as `triage.reasons()` builds them.
+        self.assertEqual(body["reasons"], triage.reasons())
         self.assertEqual(body["grade"], {
             "watch_band": triage.WATCH_BAND,
             "unsold_spend_multiple": triage.STOP_LOSS_SPEND_MULTIPLE,

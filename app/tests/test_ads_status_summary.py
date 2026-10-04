@@ -8,7 +8,7 @@ enrichments).
 import unittest
 from unittest.mock import patch
 
-from app.ads import channels, connections, repository, status_summary, triage
+from app.ads import channels, connections, queue_done, repository, status_summary, triage
 from app.ads import external_repository as external
 from app.brand_intelligence import repository as brands
 from app.core import db, interrupts
@@ -159,16 +159,21 @@ class StatusSummaryTest(unittest.TestCase):
         """drill-10 Q2: a deferred row is done, so the top bar no longer says 「1 項待處理」 while
         the home says 「今天沒有要決定的事」. Only the home board's kinds count."""
         rows = [
-            {"kind_key": "cleanup", "done": True},
-            {"kind_key": "cleanup", "done": False},
-            {"kind_key": "worse", "done": False},
-            {"kind_key": "refresh_creative", "done": False},
-            {"kind_key": "settle", "done": False},
-            {"kind_key": "scale_budget", "done": False},
-            {"kind_key": "insufficient_data", "done": False},
+            {"kind_key": "cleanup", "proposal": {"status": "rejected"}},
+            {"kind_key": "cleanup", "proposal": None},
+            {"kind_key": "worse", "proposal": None},
+            {"kind_key": "closeout", "proposal": None},
+            {"kind_key": "refresh_creative", "proposal": None},
+            {"kind_key": "settle", "proposal": None},
+            {"kind_key": "scale_budget", "proposal": None},
+            {"kind_key": "insufficient_data", "proposal": None},
         ]
-        with patch.object(triage, "get_queue", return_value={"items": rows}):
-            self.assertEqual(self.summary()["open_items"], 4)
+        # F49 Contract Q: the count is the queue's own `decisions.open` (`queue_done.stamp`).
+        decisions = queue_done.stamp(rows)
+        with patch.object(triage, "get_queue",
+                          return_value={"items": rows, "decisions": decisions}):
+            self.assertEqual(self.summary()["open_items"], 5)
+        self.assertEqual(decisions["open"], 5)
 
 
 class CampaignObjectiveFamilyCardTest(unittest.TestCase):

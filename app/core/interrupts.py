@@ -41,6 +41,10 @@ CATEGORIES = {
     # money_loss right after stop_loss, never lower than the rows it replaced.
     "ads_triage_cleanup": {"severity": "money_loss", "label": "花錢沒效的廣告待決定"},
     "ads_triage_worse": {"severity": "rule_warning", "label": "廣告變差待決定"},
+    # F49 Contract Q: an ended internal campaign's closeout row (`app/ads/triage.py`) -- never done
+    # until the campaign closes, so never auto-archived (not informational); ranked after `worse`,
+    # matching the board order cleanup > worse > closeout.
+    "ads_triage_closeout": {"severity": "rule_warning", "label": "活動已結束待結案"},
     "ads_runtime_attention": {"severity": "rule_warning", "label": "廣告追蹤待確認"},
     # F26-I01: the campaign-level "insufficient data" row (missing sync days, or a failed/
     # disconnected sync, over an otherwise-live campaign) -- a rule about the data itself, not yet

@@ -48,6 +48,7 @@ def create(conn, org, brand, campaign, payload, actor, decision=None):
     except Exception:
         conn.rollback()
         raise
+    _resolve_queue_row(conn, org, brand, created["id"])
     return data.get(conn, org, brand, campaign, created["id"])
 
 
@@ -414,7 +415,16 @@ def approve(conn, org, brand, campaign, set_id, expected_hash, actor):
     except Exception:
         conn.rollback()
         raise
+    _resolve_queue_row(conn, org, brand, set_id)
     return data.get(conn, org, brand, campaign, set_id)
+
+
+def _resolve_queue_row(conn, org, brand, set_id):
+    """F49 Contract Q: once the decision has committed, the queue row this set answers leaves the
+    inbox if it is done now (`triage.resolve_change_set`; each resolve commits)."""
+    from app.ads import triage
+
+    triage.resolve_change_set(conn, org, brand, set_id)
 
 
 def _decision_input(decision, reason, revisit_at):
@@ -474,6 +484,7 @@ def decide(conn, org, brand, campaign, set_id, decision, reason, revisit_at, act
     except Exception:
         conn.rollback()
         raise
+    _resolve_queue_row(conn, org, brand, set_id)
     return data.get(conn, org, brand, campaign, set_id)
 
 

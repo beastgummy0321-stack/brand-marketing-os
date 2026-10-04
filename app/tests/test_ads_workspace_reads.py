@@ -332,14 +332,55 @@ class LiveWorkspaceTest(_WithReader):
         self.assertEqual(ws["pending_count"], 1)
         self.assertEqual(ws["stage"]["key"], "decide")
 
+    def test_a_confirmed_cleanup_is_not_waiting(self):
+        """drill-11 controls/c3-06 (F49 Contract Q): the cleanup set was approved and its pause
+        read back `confirmed` -- the row the queue still serves is done, so the workspace counts
+        no open decision and the stage is not 決定."""
+        second = _ad(self.conn, self.org, self.brand, self.campaign, "a_live2",
+                     ("campaign", "c_live"))
+        _synced(self.conn, self.org, self.brand, self.campaign,
+                self.cutoff - timedelta(days=90), self.cutoff)
+        for ad in (self.ad, second):
+            _obs(self.conn, self.org, self.brand, self.campaign, ad, self.cutoff, spend=500)
+        queue = triage.refresh_queue(self.conn, self.org, self.brand)
+        [row] = [r for r in queue["items"] if r["kind_key"] == "cleanup"]
+        self.assertEqual({ad["entity_id"] for ad in row["cleanup"]["ads"]}, {self.ad, second})
+        # The user closed the first ad; the readback confirmed it and the platform read shows it
+        # paused (the second one stays proposed, outside this set).
+        action_id = db.new_id("adx")
+        set_id, _ = _set(self.conn, self.org, self.brand, self.campaign, plan={
+            "source": "cleanup",
+            "items": [{"id": action_id, "kind": "pause", "target_id": self.ad}],
+        })
+        self.conn.execute(
+            "INSERT INTO ads_action(id,org_id,brand_id,campaign_id,target_kind,target_id,kind,"
+            "change_set_id,verification_state) VALUES(%s,%s,%s,%s,'ad',%s,'pause',%s,'confirmed')",
+            (action_id, self.org, self.brand, self.campaign, self.ad, set_id),
+        )
+        _entity(self.conn, self.org, self.brand, self.campaign, "ad", "a_live",
+                ("campaign", "c_live"), native_status="PAUSED")
+        self.conn.commit()
+        [served] = [r for r in triage.get_queue(self.conn, self.org, self.brand)["items"]
+                    if r["kind_key"] == "cleanup"]
+        self.assertTrue(served["done"])
+        ws = self.workspace(self.brand, self.campaign)
+        self.assertEqual(ws["pending_count"], 0)
+        self.assertNotEqual(ws["stage"]["key"], "decide")
+
     def test_the_brand_settle_row_is_not_this_campaigns(self):
-        rows = [{"kind_key": "settle", "triage": None},
-                {"kind_key": "worse", "triage": {"campaign_id": self.campaign}}]
+        # F49 Contract Q: rows carry their `campaign_id` (None on the brand's settle row) and
+        # only open decision rows count -- a notice or a done row does not.
+        rows = [{"kind_key": "settle", "campaign_id": None, "done": False},
+                {"kind_key": "worse", "campaign_id": self.campaign, "done": False},
+                {"kind_key": "closeout", "campaign_id": self.campaign, "done": False},
+                {"kind_key": "cleanup", "campaign_id": self.campaign, "done": True},
+                {"kind_key": "scale_budget", "campaign_id": self.campaign, "done": False},
+                {"kind_key": "worse", "campaign_id": "another_campaign", "done": False}]
         with mock.patch.object(triage, "get_queue", return_value={"items": rows}) as queue:
             count = workspace_reads._open_queue_count(
                 self.conn, self.org, self.brand, self.campaign, [{"entity_id": self.ad}],
             )
-        self.assertEqual(count, 1)
+        self.assertEqual(count, 2)
         self.assertEqual(queue.call_args.kwargs["items"], [{"entity_id": self.ad}])
 
     def test_the_count_never_grades_the_brand_month_for_a_settle_row_it_drops(self):

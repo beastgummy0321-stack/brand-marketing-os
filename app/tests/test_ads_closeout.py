@@ -115,6 +115,38 @@ class BeatTargetClosesAchievedTest(CloseoutTestBase):
         self._facts_and_rules_untouched()
 
 
+class CloseResolvesTheQueueRowsTest(CloseoutTestBase):
+    def test_closing_resolves_every_queue_row_of_the_campaign(self):
+        """F49 Contract Q: the closeout row and any row raised before the end leave the inbox
+        with the close; another campaign's row stays."""
+        start = self.today - timedelta(days=2)
+        campaign = self._campaign(cap=300, start_date=start, end_date=self.today)
+        other = self._campaign(cap=200, start_date=start, end_date=self.today)
+        self._three_days(campaign, spend=1000.0, purchases=5, revenue=2500.0)
+        day = start.isoformat()
+        rows = {
+            key: interrupts.enqueue(
+                self.conn, org_id=self.org_id, brand_id=self.brand_id, category=category,
+                dedupe_key=key, message="待處理",
+            )
+            for key, category in (
+                (f"ads-triage:closeout:{campaign['id']}:{day}", "ads_triage_closeout"),
+                (f"ads-triage:cleanup:{campaign['id']}:{day}", "ads_triage_cleanup"),
+                (f"ads-triage:cleanup:{other['id']}:{day}", "ads_triage_cleanup"),
+            )
+        }
+        self.conn.commit()
+
+        closeout.close(self.conn, self.org_id, self.brand_id, campaign["id"], actor=ACTOR)
+
+        still_open = {
+            row["dedupe_key"]
+            for row in interrupts.list_open(self.conn, brand_id=self.brand_id,
+                                            archive_stale=False)
+        }
+        self.assertEqual(still_open & set(rows), {f"ads-triage:cleanup:{other['id']}:{day}"})
+
+
 class MissedTargetClosesUnachievedTest(CloseoutTestBase):
     def test_over_the_cap_closes_as_unachieved(self):
         start = self.today - timedelta(days=2)

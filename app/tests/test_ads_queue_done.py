@@ -93,6 +93,57 @@ class OpenCountTest(unittest.TestCase):
     def test_empty_queue_is_zero(self):
         self.assertEqual(queue_done.open_count([]), 0)
 
+    def test_a_closeout_row_counts_and_is_never_done(self):
+        self.assertFalse(queue_done.done(_row("closeout", _set("rejected"))))
+        self.assertEqual(queue_done.open_count([{"kind_key": "closeout", "done": False}]), 1)
+
+
+class DecisionKindsTest(unittest.TestCase):
+    """F49 Contract Q: one ordered list of decision kinds; notices are served, never counted."""
+
+    def test_the_board_order(self):
+        self.assertEqual(
+            queue_done.DECISION_KINDS,
+            ("cleanup", "worse", "closeout", "settle", "refresh_creative"),
+        )
+        self.assertEqual(queue_done.NOTICE_KINDS, ("scale_budget", "insufficient_data"))
+        self.assertFalse(set(queue_done.DECISION_KINDS) & set(queue_done.NOTICE_KINDS))
+
+    def test_every_served_kind_has_a_done_rule(self):
+        served = {*queue_done.DECISION_KINDS, *queue_done.NOTICE_KINDS}
+        self.assertLessEqual(served, set(queue_done.DONE_RULES))
+
+    def test_is_decision(self):
+        self.assertTrue(queue_done.is_decision({"kind_key": "closeout"}))
+        self.assertFalse(queue_done.is_decision({"kind_key": "scale_budget"}))
+        self.assertFalse(queue_done.is_decision({"kind_key": "insufficient_data"}))
+
+    def test_stamp_positions_open_decision_rows_in_board_order(self):
+        rows = [
+            _row("refresh_creative", None),
+            _row("scale_budget", None),
+            _row("settle", None),
+            _row("cleanup", _set("rejected")),  # done: no position
+            _row("worse", _review("queued")),
+            _row("closeout", None),
+            _row("cleanup", _set("draft")),
+        ]
+        decisions = queue_done.stamp(rows)
+        self.assertEqual(decisions, {"kinds": list(queue_done.DECISION_KINDS), "open": 5})
+        self.assertEqual(
+            [(r["kind_key"], r["decision"], r["done"], r["position"]) for r in rows],
+            [
+                ("refresh_creative", True, False, 5),
+                ("scale_budget", False, False, None),
+                ("settle", True, False, 4),
+                ("cleanup", True, True, None),
+                ("worse", True, False, 2),
+                ("closeout", True, False, 3),
+                ("cleanup", True, False, 1),
+            ],
+        )
+        self.assertEqual(decisions["open"], queue_done.open_count(rows))
+
 
 if __name__ == "__main__":
     unittest.main()

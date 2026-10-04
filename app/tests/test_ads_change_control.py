@@ -1207,6 +1207,47 @@ class ChangeControlTest(unittest.TestCase):
             "SELECT decision_grades FROM ads_change_set WHERE id=%s", (set_id,),
         ).fetchone()["decision_grades"]
 
+    def _pause_readback(self, approved, status):
+        ad = copy.deepcopy(self.ad)
+        ad["native_status"] = status
+        proof = {"entity": ad, "parents": [self.group, self.root]}
+
+        class Reader:
+            def verify_native(self, *args, **kwargs):
+                return proof
+
+        with patch.object(external_sync, "account_reader", return_value=(Reader(), {})):
+            return verification.check(self.conn, self.org, self.brand, self.campaign,
+                                      approved["id"], approved["items"][0]["id"], "test")
+
+    def _open_cleanup_rows(self):
+        from app.core import interrupts
+
+        return [r["dedupe_key"] for r in interrupts.list_open(
+            self.conn, brand_id=self.brand, category="ads_triage_cleanup", archive_stale=False,
+        )]
+
+    def test_a_cleanup_pause_confirmed_by_readback_leaves_the_inbox_in_the_same_call(self):
+        """F49 Contract Q: the readback that confirms the cleanup set's pause resolves the
+        campaign's cleanup row in the same call; a readback still showing the old status does
+        not."""
+        from app.core import interrupts
+
+        approved = self.approve(self.create(items=[self._pause(self.ad["id"])], source="cleanup"))
+        key = f"ads-triage:cleanup:{self.campaign}:2026-01-07"
+        interrupts.enqueue(self.conn, org_id=self.org, brand_id=self.brand,
+                           category="ads_triage_cleanup", dedupe_key=key,
+                           message="「持續活動」花錢沒效，待決定")
+        self.conn.commit()
+
+        still = self._pause_readback(approved, "ACTIVE")
+        self.assertEqual(still["items"][0]["verification_state"], "pending")
+        self.assertEqual(self._open_cleanup_rows(), [key])
+
+        done = self._pause_readback(approved, "PAUSED")
+        self.assertEqual(done["items"][0]["verification_state"], "confirmed")
+        self.assertEqual(self._open_cleanup_rows(), [])
+
     def test_rejecting_a_cleanup_set_remembers_each_paused_ads_grade(self):
         other = self._second_ad()
         created = self.create(items=[self._pause(self.ad["id"]), self._pause(other)],

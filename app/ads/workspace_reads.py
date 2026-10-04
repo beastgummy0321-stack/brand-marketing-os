@@ -4,8 +4,8 @@ Read-only: no LLM call, no write, no platform call (ARCHITECTURE.md §0 "程式�
 
 Every number and state here comes from a function that already owns it, never a second copy:
 - stage: `campaign_stage.stage`, fed by `lifecycle.state`, `targets.resolve`,
-  `change_control_launch.launch_set`, triage `data.status` and this campaign's open queue rows
-  (`triage.get_queue`, over this campaign's own `classify()` items);
+  `change_control_launch.launch_set`, triage `data.status` and this campaign's open decision
+  rows (`triage.campaign_queue`, counted by `queue_done.open_count`);
 - grades: `triage.classify` (the one cap ruler), never the trend `class`;
 - `daily_budget`／`can_support`／`active_ads`: see `_capacity`;
 - `next_sync_at`: `home_overview._sync_block` (the home's `sync.next_at`);
@@ -26,6 +26,7 @@ from app.ads import (
     home_overview,
     lifecycle,
     month_summary,
+    queue_done,
     repository,
     review_evidence,
     targets,
@@ -63,16 +64,14 @@ def _entities(conn, org_id, brand_id, campaign_id) -> list[dict]:
 
 
 def _open_queue_count(conn, org_id, brand_id, campaign_id, items) -> int:
-    """This campaign's open queue rows: the brand queue's own candidate rules and open-row filter
-    (`triage.get_queue`) over this campaign's own `classify()` items. Every row kind but the
-    brand's `settle` row is raised from one campaign's items and carries that campaign's triage
-    item, so the rows it returns for these items are exactly this campaign's rows of the brand
-    queue; `settle` (no triage item, the whole brand's month) is not this campaign's, so it is
-    not even graded here."""
-    queue = triage.get_queue(conn, org_id, brand_id, items=items, settle=False)
-    return sum(
-        1 for row in queue["items"]
-        if (row.get("triage") or {}).get("campaign_id") == campaign_id
+    """F49 Contract Q: this campaign's open decision rows of the brand queue -- its rows of
+    `triage.campaign_queue` (the brand queue's candidate rules and open-row filter over this
+    campaign's own `classify()` items, without the brand's `settle` row, which is not this
+    campaign's; items of a campaign the queue does not cover are left out there), counted
+    by `queue_done.open_count`, the same function the top bar's count comes from."""
+    queue = triage.campaign_queue(conn, org_id, brand_id, campaign_id, items)
+    return queue_done.open_count(
+        row for row in queue["items"] if row["campaign_id"] == campaign_id
     )
 
 
@@ -221,9 +220,8 @@ def workspace(conn, org_id: str, brand_id: str, campaign_id: str) -> dict:
             lambda: triage.classify(conn, org_id, brand_id, campaign_id),
         )
     if draft or closed:
-        # No queue row can be open: every row but the brand's settle is raised from a campaign's
-        # active platform ads, a draft has none, and the queue never covers a closed campaign
-        # (`triage._non_closed_campaign_ids`).
+        # No queue row can be open: the queue covers live and internal ended campaigns only
+        # (`triage._queue_scope`).
         pending = 0
     elif triaged is None:
         pending = None

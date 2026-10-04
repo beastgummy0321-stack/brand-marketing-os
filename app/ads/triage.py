@@ -11,6 +11,7 @@ from datetime import timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.ads import (
+    change_control_data,
     coverage,
     external_sync,
     learning_rank,
@@ -457,17 +458,102 @@ def _figure(value) -> str:
     return f"{round(value, 6):g}"
 
 
+# F49 Contract Q: what to do about each reason. `resync` = read the platform again, `connections`
+# = fix the data connection, `cap` = set the campaign's cap／result, `wait` = give it time, None =
+# nothing the user can do here.
+REASON_FIXES = ("resync", "connections", "cap", "wait")
+
+
+def reasons() -> dict:
+    """F49 Contract Q: `{reason_code: {title, text, fix}}` for every `reason_code` an item can
+    carry -- the codes this module emits and the window reasons `review_evidence.aggregate` passes
+    through (`app/tests/test_ads_one_ruler.py` checks the coverage by AST). The wait page prints
+    these; the numbers come from the ruler constants."""
+    unsold = _figure(STOP_LOSS_SPEND_MULTIPLE)
+    flat = _figure(FLAT_BAND * 10)
+    return {
+        "too_new": {
+            "title": TOO_NEW_LABEL,
+            "text": f"這則廣告還沒賣出，也還沒花到上限 {unsold} 倍；再跑幾天數字才夠判斷",
+            "fix": "wait",
+        },
+        "result_unknown_days": {
+            "title": "有幾天的成果沒讀到",
+            "text": (
+                "平台沒回報這幾天的花費或成果數，系統不把沒讀到當成 0；"
+                "重新讀取平台資料後再判斷"
+            ),
+            "fix": "resync",
+        },
+        "needs_resync": {
+            "title": "有幾天的資料要重新讀",
+            "text": "這段期間有幾天沒讀到，或是在系統開始記成果數之前讀的；重新讀取一次就會補上",
+            "fix": "resync",
+        },
+        "mixed_currency": {
+            "title": "混了兩種幣別",
+            "text": "這段期間的花費有兩種幣別，系統不會自己換算加總，所以先不判斷",
+            "fix": None,
+        },
+        "mixed_result_definition": {
+            "title": "成果的算法不一致",
+            "text": (
+                "這段期間平台用了不只一種方式算成果（例如歸因設定改過），"
+                "數字不能直接相加，所以先不判斷"
+            ),
+            "fix": None,
+        },
+        "no_previous_window": {
+            "title": "沒有上一段可以比",
+            "text": "這則廣告照常判斷划不划算；只是前一段同樣天數的資料不完整，看不出變好還是變差",
+            "fix": "wait",
+        },
+        "result_kind_unknown": {
+            "title": "還不知道要算哪種成果",
+            "text": "這個活動還沒設定要看哪種成果（例如購買），平台資料也沒說；設定後才能判斷",
+            "fix": "cap",
+        },
+        "target_unresolved": {
+            "title": "還沒設定上限",
+            "text": "這個活動還沒設定一筆訂單願意付多少廣告費，沒有尺可以量；設定上限後就會判斷",
+            "fix": "cap",
+        },
+        "spend_over_target_no_result": {
+            "title": GRADE_LABELS["wasted"],
+            "text": f"花到上限 {unsold} 倍的錢，還一筆都沒賣出",
+            "fix": None,
+        },
+        "cost_per_result_up": {
+            "title": "比上一段貴",
+            "text": f"跟前一段同樣天數比，每筆廣告費多了超過 {flat} 成",
+            "fix": None,
+        },
+        "cost_per_result_down": {
+            "title": "比上一段便宜",
+            "text": f"跟前一段同樣天數比，每筆廣告費少了超過 {flat} 成",
+            "fix": None,
+        },
+        "cost_per_result_flat": {
+            "title": "跟上一段差不多",
+            "text": f"跟前一段同樣天數比，每筆廣告費差不到 {flat} 成",
+            "fix": None,
+        },
+    }
+
+
 def rules() -> dict:
     """F48 Contract R-API: every threshold, label and glossary sentence the screens print, read
     from this module and `learning_rank` (the two ruler modules) and `experiments.DEFAULT_RULES`
     (the A/B rules) -- the frontend keeps no copy. Brand-independent today; served per brand so a
-    per-brand rule can land without moving the endpoint."""
+    per-brand rule can land without moving the endpoint. F49 Contract Q: `reasons` (`reasons()`)
+    names every `reason_code` with its title, sentence and fix."""
     from app.ads import experiments  # lazy: experiments imports triage
 
     watch_tenths = _figure((WATCH_BAND - 1) * 10)
     band_pct = _figure(BREAK_EVEN_BAND * 100)
     unsold = _figure(STOP_LOSS_SPEND_MULTIPLE)
     return {
+        "reasons": reasons(),
         "grade": {
             "watch_band": WATCH_BAND, "unsold_spend_multiple": STOP_LOSS_SPEND_MULTIPLE,
             "min_results": MIN_RESULT_EVENTS, "min_days": WINDOW_STEPS[0],
@@ -669,24 +755,46 @@ QUEUE_CATEGORY = {
     "insufficient_data": "ads_triage_insufficient_data", "cleanup": "ads_triage_cleanup",
     # F29-I03 Contract E: the brand's period settle (`app/ads/settle.py::queue_candidate`).
     "settle": "ads_triage_settle",
+    # F49 Contract Q: an ended internal campaign's closeout row.
+    "closeout": "ads_triage_closeout",
 }
 ALL_CLASSES = ("stop_loss", "worse", "better", "flat", "insufficient", "no_target")
-KINDS_AVAILABLE = [
-    "worse", "scale_budget", "refresh_creative", "insufficient_data", "cleanup", "settle",
-]
+# F49 Contract Q: every kind the queue serves -- the decisions in board order, then the notices
+# (`queue_done` owns both lists).
+KINDS_AVAILABLE = [*queue_done.DECISION_KINDS, *queue_done.NOTICE_KINDS]
 KINDS_PENDING = []
 _NAME_BUDGET = 20  # keeps every queue message <= interrupts.MAX_MESSAGE_LEN (10 fixed chars).
+_KEY_PREFIX = "ads-triage"
 
 
 def _non_closed_campaign_ids(conn, org_id, brand_id):
     return lifecycle.campaign_ids(conn, org_id, brand_id, lifecycle.NOT_CLOSED)
 
 
-def _classify_brand(conn, org_id, brand_id):
-    """Every imported ad of every non-closed campaign of this brand, own program triage
-    (`classify()`) -- a campaign with no imported ad entities contributes no items on its own."""
+def _queue_scope(conn, org_id, brand_id) -> dict:
+    """F49 Contract Q: the campaigns the queue covers -- live ones, and ended ones that close
+    internally (`lifecycle.can_close`: an imported ended campaign has no closeout, so it leaves the
+    queue). `ids` keeps `lifecycle.campaigns`' order (oldest first); `ended` are the internal ended
+    campaigns' rows, by id; `left` the ended campaigns the queue leaves (imported)."""
+    rows = lifecycle.campaigns(conn, org_id, brand_id, ("live", "ended"))
+    ended_ids = set(lifecycle.campaign_ids(conn, org_id, brand_id, ("ended",)))
+    ended = {
+        row["id"]: row for row in rows
+        if row["id"] in ended_ids and lifecycle.can_close(row, "ended")
+    }
+    left = ended_ids - set(ended)
+    ids = [row["id"] for row in rows if row["id"] not in left]
+    return {"ids": ids, "ended": ended, "left": left}
+
+
+def _classify_brand(conn, org_id, brand_id, campaign_ids=None):
+    """Every imported ad of every non-closed campaign of this brand (or of `campaign_ids`), own
+    program triage (`classify()`) -- a campaign with no imported ad entities contributes no items
+    on its own."""
+    if campaign_ids is None:
+        campaign_ids = _non_closed_campaign_ids(conn, org_id, brand_id)
     items = []
-    for campaign_id in _non_closed_campaign_ids(conn, org_id, brand_id):
+    for campaign_id in campaign_ids:
         items.extend(classify(conn, org_id, brand_id, campaign_id)["items"])
     return items
 
@@ -718,14 +826,31 @@ def _cleanup_message(campaign_name):
     return f"「{_safe_name(campaign_name)}」花錢沒效，待決定"
 
 
+def _closeout_message(campaign_name):
+    return f"「{_safe_name(campaign_name)}」已結束，待結案"
+
+
+def _key_prefix(kind, identity_id):
+    """The part of a row's dedupe key that names it whatever its window (`_dedupe_key`)."""
+    return f"{_KEY_PREFIX}:{kind}:{identity_id}:"
+
+
+def _key_identity(dedupe_key):
+    """The identity id inside a queue row's dedupe key (`_dedupe_key`), else None."""
+    parts = dedupe_key.split(":")
+    return parts[2] if len(parts) == 4 and parts[0] == _KEY_PREFIX else None
+
+
 def _dedupe_key(kind, identity_id, window_end):
     # Window end in the key (feature Decisions #3): a resolved decision stays resolved until the
     # window moves on to a new `window_end` -- a fresh dedupe key `interrupts.enqueue` never
     # confuses with the old, resolved-or-not, row. `identity_id`: the ad's `entity_id` for
     # `worse` (and the retired `stop_loss`), the budget owner's `id` for `scale_budget`, the
     # campaign's `id` for `refresh_creative`/`insufficient_data`/`cleanup`, the brand's `id` for
-    # `settle` (window_end = the settled month's last day).
-    return f"ads-triage:{kind}:{identity_id}:{window_end.isoformat()}"
+    # `settle` (window_end = the settled month's last day), the campaign's `id` for `closeout`
+    # (window_end = its end date; `-` for a campaign stored ended without one).
+    day = window_end.isoformat() if window_end is not None else "-"
+    return f"{_key_prefix(kind, identity_id)}{day}"
 
 
 def _classified_items_by_campaign(items):
@@ -794,7 +919,7 @@ def _insufficient_candidates(conn, org_id, brand_id, by_campaign) -> list:
         window_end = info["cutoff"]
         triage_item = campaign_items[0]
         candidates.append({
-            "kind": "insufficient_data", "identity_id": campaign_id,
+            "kind": "insufficient_data", "identity_id": campaign_id, "campaign_id": campaign_id,
             "window_start": window_end, "window_end": window_end,
             "message": _insufficient_message(info["campaign_name"]),
             "action_url": f"/brands/{brand_id}/ads/campaigns/{campaign_id}/wait",
@@ -866,7 +991,7 @@ def _cleanup_candidates(conn, org_id, brand_id, by_campaign, scale_owner_by_camp
         if cleanup is None or not cleanup["ads"]:
             continue
         candidates.append({
-            "kind": "cleanup", "identity_id": campaign_id,
+            "kind": "cleanup", "identity_id": campaign_id, "campaign_id": campaign_id,
             "window_start": window_start, "window_end": cutoff,
             "message": _cleanup_message(info["campaign_name"]),
             "action_url": f"/brands/{brand_id}/ads/campaigns/{campaign_id}"
@@ -919,7 +1044,7 @@ def _queue_candidates(conn, org_id, brand_id, items, *, settle=True, holds=None)
         owner_id = scale["owner_id"]
         scale_owner_by_campaign.setdefault(scale["campaign_id"], owner_id)
         candidates.append({
-            "kind": "scale_budget", "identity_id": owner_id,
+            "kind": "scale_budget", "identity_id": owner_id, "campaign_id": scale["campaign_id"],
             "window_start": scale["window_start"], "window_end": scale["window_end"],
             "message": _scale_message(scale["scale"]["owner"]["name"]),
             "action_url": f"/brands/{brand_id}/ads/campaigns/{scale['campaign_id']}/detail"
@@ -939,7 +1064,7 @@ def _queue_candidates(conn, org_id, brand_id, items, *, settle=True, holds=None)
         if not _became_costly(item) or item["entity_id"] in in_cleanup:
             continue
         candidates.append({
-            "kind": "worse", "identity_id": item["entity_id"],
+            "kind": "worse", "identity_id": item["entity_id"], "campaign_id": item["campaign_id"],
             "window_start": item["window"]["start"], "window_end": item["window"]["end"],
             "message": _queue_message("worse", item["name"]),
             "action_url": f"/brands/{brand_id}/ads/campaigns/{item['campaign_id']}/detail"
@@ -955,7 +1080,7 @@ def _queue_candidates(conn, org_id, brand_id, items, *, settle=True, holds=None)
         if campaign_id in cleanup_campaign_ids:
             continue
         candidates.append({
-            "kind": "refresh_creative", "identity_id": campaign_id,
+            "kind": "refresh_creative", "identity_id": campaign_id, "campaign_id": campaign_id,
             "window_start": refresh["window_start"], "window_end": refresh["window_end"],
             "message": _refresh_message(refresh["campaign_name"]),
             "action_url": f"/brands/{brand_id}/ads/campaigns/{campaign_id}"
@@ -976,7 +1101,88 @@ def _settle_candidates(conn, org_id, brand_id) -> list:
     from app.ads import settle
 
     candidate = settle.queue_candidate(conn, org_id, brand_id)
-    return [candidate] if candidate is not None else []
+    return [{"campaign_id": None, **candidate}] if candidate is not None else []
+
+
+def _closeout_candidates(conn, org_id, brand_id, ended) -> list:
+    """F49 Contract Q: one `closeout` row per internal ended campaign (`_queue_scope`) -- identity
+    the campaign, window end its end date, payload `closeout {campaign_id, campaign_name, end_date,
+    running {count, read_at}}` (`lifecycle.running_view`). Never done: it leaves when the campaign
+    closes. One read of the ended campaigns' ad entities."""
+    if not ended:
+        return []
+    ads_by_campaign = defaultdict(list)
+    for row in conn.execute(
+        "SELECT * FROM ads_external_entity WHERE org_id=%s AND brand_id=%s "
+        "AND campaign_id = ANY(%s) AND native_kind='ad'",
+        (org_id, brand_id, list(ended)),
+    ).fetchall():
+        ads_by_campaign[row["campaign_id"]].append(dict(row))
+    reported = lifecycle.newest_reported(conn, org_id, brand_id)
+    candidates = []
+    for campaign_id, campaign in ended.items():
+        end_date = lifecycle.end_date(campaign, None)
+        running = lifecycle.running_view(
+            campaign, ads_by_campaign.get(campaign_id, []), reported.get(campaign_id),
+        )
+        candidates.append({
+            "kind": "closeout", "identity_id": campaign_id, "campaign_id": campaign_id,
+            "window_start": end_date, "window_end": end_date,
+            "message": _closeout_message(campaign["name"]),
+            "action_url": f"/brands/{brand_id}/ads/campaigns/{campaign_id}?tab=perf&close=1",
+            "payload": {
+                "triage": None,
+                "closeout": {
+                    "campaign_id": campaign_id, "campaign_name": campaign["name"],
+                    "end_date": end_date,
+                    "running": {"count": running["count"], "read_at": running["read_at"]},
+                },
+            },
+        })
+    return candidates
+
+
+def _scoped_candidates(conn, org_id, brand_id, items, open_rows, *, settle=True, holds=None,
+                       scope=None):
+    """F49 Contract Q: the queue's candidates over the campaigns it covers (`_queue_scope`), each
+    with its `key`. An ended campaign raises its closeout row and nothing new: any other decision
+    candidate of it is kept only while an open row of the same kind and identity exists (raised
+    before the end), and keeps that row's key -- the judged window stops moving at the end date,
+    but a row raised on the last live day still names the day before in its key. Notices of an
+    ended campaign are dropped. Returns `(scoped items, candidates)`."""
+    scope = scope or _queue_scope(conn, org_id, brand_id)
+    items = [item for item in items if item["campaign_id"] not in scope["left"]]
+    candidates = [
+        *_queue_candidates(conn, org_id, brand_id, items, settle=settle, holds=holds),
+        *_closeout_candidates(conn, org_id, brand_id, scope["ended"]),
+    ]
+    open_keys = [row["dedupe_key"] for row in open_rows]
+    kept = []
+    for candidate in candidates:
+        kind = candidate["kind"]
+        candidate["ended"] = candidate["campaign_id"] in scope["ended"] and kind != "closeout"
+        if not candidate["ended"]:
+            candidate["key"] = _dedupe_key(kind, candidate["identity_id"],
+                                           candidate["window_end"])
+            kept.append(candidate)
+            continue
+        if kind not in queue_done.DECISION_KINDS:
+            continue
+        prefix = _key_prefix(kind, candidate["identity_id"])
+        key = next((k for k in open_keys if k.startswith(prefix)), None)
+        if key is not None:
+            candidate["key"] = key
+            kept.append(candidate)
+    return items, kept
+
+
+def _open_queue_rows(conn, brand_id) -> list:
+    """This brand's open rows in every queue category (`archive_stale=False`: no side effect)."""
+    categories = set(QUEUE_CATEGORY.values())
+    return [
+        row for row in interrupts.list_open(conn, brand_id=brand_id, archive_stale=False)
+        if row["category"] in categories
+    ]
 
 
 def _supersede_stale_open_rows(conn, org_id, brand_id, live_keys) -> None:
@@ -989,7 +1195,8 @@ def _supersede_stale_open_rows(conn, org_id, brand_id, live_keys) -> None:
     existing public `interrupts.resolve()` -- never a direct UPDATE from `app/ads` (architecture
     boundary). `"system"` actor precedent: `app/llm/methodology.py`. Result: at most one open row
     per (kind, identity) at any time; a user-resolved key is already not 'open', so this loop
-    never touches it and never re-raises it."""
+    never touches it and never re-raises it. F49 Contract Q: a notice (`scale_budget`／
+    `insufficient_data`) is never live here, so its open rows resolve."""
     for category in QUEUE_CATEGORY.values():
         stale = [
             row for row in interrupts.list_open(conn, brand_id=brand_id, category=category,
@@ -1001,31 +1208,34 @@ def _supersede_stale_open_rows(conn, org_id, brand_id, live_keys) -> None:
 
 
 def refresh_queue(conn, org_id, brand_id) -> dict:
-    """`POST .../queue/refresh` (Done #3): classify every non-closed campaign, raise one
-    interrupt per queue-worthy row across all four kinds (`_queue_candidates`). One transaction
-    -- every enqueue below, then a single commit. Afterward, supersede every open row this
-    brand's four triage categories no longer match (`_supersede_stale_open_rows`) -- each call
-    its own `resolve()`, not part of the enqueue transaction. The returned payload is read back
-    afterward, same shape as `get_queue()`.
+    """`POST .../queue/refresh` (Done #3): classify the campaigns the queue covers
+    (`_queue_scope`), raise one interrupt per decision row (`queue_done.DECISION_KINDS`; notices
+    are served, never enqueued, F49 Contract Q). An ended campaign gets its closeout row and no
+    new interrupt of any other kind (`_scoped_candidates`). One transaction -- every enqueue below,
+    then a single commit. Afterward, supersede every open queue row no longer live
+    (`_supersede_stale_open_rows`) -- each call its own `resolve()`, not part of the enqueue
+    transaction. The returned payload is read back afterward, same shape as `get_queue()`.
 
     F27-I00 Contract J: also records one `queue_refresh` runtime event for this brand (Contract K's
     recovery step 4, a later F27 issue, reads it back) -- same transaction as the enqueue loop."""
-    items = _classify_brand(conn, org_id, brand_id)
+    scope = _queue_scope(conn, org_id, brand_id)
+    items = _classify_brand(conn, org_id, brand_id, scope["ids"])
     holds = []
-    candidates = _queue_candidates(conn, org_id, brand_id, items, holds=holds)
-    for candidate in candidates:
+    items, candidates = _scoped_candidates(
+        conn, org_id, brand_id, items, _open_queue_rows(conn, brand_id), holds=holds, scope=scope,
+    )
+    decisions = [c for c in candidates if c["kind"] in queue_done.DECISION_KINDS]
+    for candidate in decisions:
+        if candidate["ended"]:
+            continue  # kept on its open row; nothing new for an ended campaign
         interrupts.enqueue(
             conn, org_id=org_id, brand_id=brand_id, category=QUEUE_CATEGORY[candidate["kind"]],
-            dedupe_key=_dedupe_key(candidate["kind"], candidate["identity_id"],
-                                    candidate["window_end"]),
+            dedupe_key=candidate["key"],
             message=candidate["message"], action_url=candidate["action_url"],
         )
     runtime_events.record(conn, "queue_refresh", org_id=org_id, brand_id=brand_id)
     conn.commit()
-    live_keys = {
-        _dedupe_key(c["kind"], c["identity_id"], c["window_end"]) for c in candidates
-    }
-    _supersede_stale_open_rows(conn, org_id, brand_id, live_keys)
+    _supersede_stale_open_rows(conn, org_id, brand_id, {c["key"] for c in decisions})
     return _queue_payload(conn, org_id, brand_id, items, candidates, holds)
 
 
@@ -1041,15 +1251,138 @@ def get_queue(conn, org_id, brand_id, items=None, *, settle=True) -> dict:
     window's open row whose kind no longer qualifies (e.g. an ad now flat, or an owner's ads no
     longer all stable) is filtered out of this payload the same way, without writing anything.
     Each listed row carries the current triage item that produced it (F19-I01, `_queue_payload`).
-    `items` lets a caller that already classified the brand (`month_summary`) skip a second pass;
-    `settle=False` skips the brand's month `settle` row (it grades the previous month) for a caller
-    that only counts one campaign's rows (`workspace_reads`). `scale_hold` (F48-I02) lists the
-    budget owners whose raise is held back on sample size: `[{owner_id, owner_name, campaign_id,
-    sales, reason_text}]` (`triage_scale.scale_candidates`)."""
-    items = _classify_brand(conn, org_id, brand_id) if items is None else items
+    `items` lets a caller that already classified the brand (`month_summary`) skip a second pass
+    (items of a campaign the queue does not cover are left out); `settle=False` skips the brand's
+    month `settle` row (it grades the previous month) for a caller that only counts one campaign's
+    rows (`campaign_queue`). `scale_hold` (F48-I02) lists the budget owners whose raise is held
+    back on sample size: `[{owner_id, owner_name, campaign_id, sales, reason_text}]`
+    (`triage_scale.scale_candidates`). F49 Contract Q: every row carries `decision`, `done`,
+    `position` and `campaign_id`; the payload carries `decisions {kinds, open}`."""
+    scope = _queue_scope(conn, org_id, brand_id)
+    if items is None:
+        items = _classify_brand(conn, org_id, brand_id, scope["ids"])
     holds = []
-    candidates = _queue_candidates(conn, org_id, brand_id, items, settle=settle, holds=holds)
+    items, candidates = _scoped_candidates(
+        conn, org_id, brand_id, items, _open_queue_rows(conn, brand_id), settle=settle,
+        holds=holds, scope=scope,
+    )
     return _queue_payload(conn, org_id, brand_id, items, candidates, holds)
+
+
+# ---------------------------------------------------------------------------
+# F49 Contract Q: the inbox follows the queue -- a row that turned done has no open interrupt.
+# ---------------------------------------------------------------------------
+
+
+def campaign_queue(conn, org_id, brand_id, campaign_id, items=None) -> dict:
+    """The brand queue over one campaign's items (`classify()`'s, or `items` when the caller
+    already has them), without the brand's `settle` row: its rows whose `campaign_id` is this
+    campaign are exactly that campaign's rows of the brand queue. A campaign the queue no longer
+    covers (closed; imported and ended) contributes no item."""
+    if items is None:
+        scope = _queue_scope(conn, org_id, brand_id)
+        items = (
+            classify(conn, org_id, brand_id, campaign_id)["items"]
+            if campaign_id in scope["ids"] else []
+        )
+    return get_queue(conn, org_id, brand_id, items=items, settle=False)
+
+
+def _resolve_unless_waiting(conn, org_id, brand_id, open_rows, campaign_id) -> None:
+    """Resolve each of `open_rows` (open queue interrupts) that the campaign's queue no longer
+    serves, or serves as `done` (`queue_done.done`). Each `interrupts.resolve` commits."""
+    if not open_rows:
+        return
+    served = {
+        row["dedupe_key"]: row
+        for row in campaign_queue(conn, org_id, brand_id, campaign_id)["items"]
+    }
+    for row in open_rows:
+        current = served.get(row["dedupe_key"])
+        if current is None or current["done"]:
+            interrupts.resolve(conn, row["id"], actor="system", org_id=org_id)
+
+
+def _identity_campaign(conn, org_id, brand_id, kind, identity_id):
+    """The campaign a queue row belongs to: its identity for a campaign row, the ad's campaign for
+    a `worse` row (an `ads_external_entity` id)."""
+    if kind != "worse":
+        return identity_id
+    row = conn.execute(
+        "SELECT campaign_id FROM ads_external_entity WHERE org_id=%s AND brand_id=%s AND id=%s",
+        (org_id, brand_id, identity_id),
+    ).fetchone()
+    return row["campaign_id"] if row is not None else None
+
+
+def resolve_done(conn, org_id, brand_id, *, kind, identity_id) -> None:
+    """F49 Contract Q: resolve the open interrupt(s) of the `kind` row of `identity_id` once
+    `queue_done.done` holds for it (or the queue no longer serves it). Called after the write that
+    made it done has committed: `change_control` decide／approve, the readback confirmation
+    (`handoff_check`), `review_rounds.decide`. The brand's `settle` row is not resolved here."""
+    if kind not in queue_done.DECISION_KINDS or kind == "settle":
+        return
+    prefix = _key_prefix(kind, identity_id)
+    open_rows = [
+        row for row in interrupts.list_open(
+            conn, brand_id=brand_id, category=QUEUE_CATEGORY[kind], archive_stale=False,
+        )
+        if row["dedupe_key"].startswith(prefix)
+    ]
+    if not open_rows:
+        return
+    campaign_id = _identity_campaign(conn, org_id, brand_id, kind, identity_id)
+    if campaign_id is not None:
+        _resolve_unless_waiting(conn, org_id, brand_id, open_rows, campaign_id)
+
+
+def resolve_change_set(conn, org_id, brand_id, change_set_id) -> None:
+    """`resolve_done` for the queue row a change set answers: a cleanup set's `cleanup` row (the
+    campaign), a review copy set's `worse` row (the ad its copy item targets). Any other set
+    answers no decision row."""
+    row = conn.execute(
+        "SELECT campaign_id,plan_json FROM ads_change_set WHERE org_id=%s AND brand_id=%s "
+        "AND id=%s",
+        (org_id, brand_id, change_set_id),
+    ).fetchone()
+    if row is None:
+        return
+    plan = row["plan_json"] or {}
+    if plan.get("source") == "cleanup":
+        resolve_done(conn, org_id, brand_id, kind="cleanup", identity_id=row["campaign_id"])
+    if plan.get("review_id"):
+        for item in plan.get("items") or ():
+            if item.get("kind") == "copy" and item.get("target_id"):
+                resolve_done(conn, org_id, brand_id, kind="worse", identity_id=item["target_id"])
+
+
+def resolve_action(conn, org_id, brand_id, action_id) -> None:
+    """`resolve_change_set` for the set an `ads_action` belongs to (the readback confirmation)."""
+    row = conn.execute(
+        "SELECT change_set_id FROM ads_action WHERE org_id=%s AND brand_id=%s AND id=%s",
+        (org_id, brand_id, action_id),
+    ).fetchone()
+    if row is not None and row["change_set_id"] is not None:
+        resolve_change_set(conn, org_id, brand_id, row["change_set_id"])
+
+
+def resolve_campaign(conn, org_id, brand_id, campaign_id) -> None:
+    """Every open queue row of this campaign -- its own rows and its ads' and budget owners' rows,
+    by the identity in the dedupe key -- that its queue no longer serves as waiting.
+    `closeout.close` calls it once the campaign is closed, which leaves none of them open."""
+    identities = {campaign_id} | {
+        row["id"] for row in conn.execute(
+            "SELECT id FROM ads_external_entity WHERE org_id=%s AND brand_id=%s "
+            "AND campaign_id=%s",
+            (org_id, brand_id, campaign_id),
+        ).fetchall()
+    }
+    settle_category = QUEUE_CATEGORY["settle"]
+    open_rows = [
+        row for row in _open_queue_rows(conn, brand_id)
+        if row["category"] != settle_category and _key_identity(row["dedupe_key"]) in identities
+    ]
+    _resolve_unless_waiting(conn, org_id, brand_id, open_rows, campaign_id)
 
 
 # ---------------------------------------------------------------------------
@@ -1171,6 +1504,7 @@ def _row_review_proposal(rounds_by_entity, sets_by_campaign, action_states, tria
         "change_set_id": change_set_id,
         "change_set_status": change_set_status,
         "verification_state": verification_state,
+        "verification_label": change_control_data.verification_label(verification_state),
         "multi": multi,
     }
 
@@ -1215,7 +1549,9 @@ def _row_scale_proposal(sets_by_campaign, action_states, candidate):
     return {
         "change_set_id": change_set["id"], "campaign_id": change_set["campaign_id"],
         "kind": matched_item["kind"], "status": change_set["status"],
-        "verification_state": verification_state, "reason": change_set["decision_reason"],
+        "verification_state": verification_state,
+        "verification_label": change_control_data.verification_label(verification_state),
+        "reason": change_set["decision_reason"],
         "revisit_at": change_set["revisit_at"],
         "multi": len(change_set["plan_json"].get("items", ())) > 1,
     }
@@ -1242,16 +1578,13 @@ def _row_cleanup_proposal(sets_by_campaign, action_states, candidate):
     reports, `kind` always `"cleanup"` and `multi` always `True`
     (a cleanup set is inherently the multi-item kind, never computed from item count). A cleanup
     set carries several `pause` items (one per proposed ad); `verification_state` reads
-    `"confirmed"` only once every one of them does, else the first item's own state that isn't
-    (same "worst state wins" aggregate `handoff_check.py::_finish` uses for one action's own
-    multi-handoff readback)."""
+    `"confirmed"` only once every one of them does, else the worst state present -- F49 Contract
+    B's one aggregate (`change_control_data.worst_state`, the same one `handoff_check` uses)."""
     change_set, pause_items = _matching_cleanup_set(sets_by_campaign, candidate["identity_id"])
     if change_set is None or pause_items is None:
         return None
-    states = [action_states.get(item["id"], "pending") for item in pause_items]
-    verification_state = (
-        "confirmed" if all(s == "confirmed" for s in states)
-        else next((s for s in states if s != "confirmed"), "pending")
+    verification_state = change_control_data.worst_state(
+        action_states.get(item["id"], "pending") for item in pause_items
     )
     if change_set["status"] == "deferred":
         revisit_at = change_set["revisit_at"]
@@ -1278,7 +1611,9 @@ def _row_cleanup_proposal(sets_by_campaign, action_states, candidate):
     return {
         "change_set_id": change_set["id"], "campaign_id": change_set["campaign_id"],
         "kind": "cleanup", "status": change_set["status"],
-        "verification_state": verification_state, "reason": change_set["decision_reason"],
+        "verification_state": verification_state,
+        "verification_label": change_control_data.verification_label(verification_state),
+        "reason": change_set["decision_reason"],
         "revisit_at": change_set["revisit_at"], "multi": True,
     }
 
@@ -1293,30 +1628,49 @@ def _trend_counts(items) -> dict:
     return counts
 
 
+def _notice_row(org_id, brand_id, candidate) -> dict:
+    """F49 Contract Q: a notice (`queue_done.NOTICE_KINDS`) is served from its candidate, never an
+    interrupt -- the same columns an interrupt row carries, `id` = its dedupe key."""
+    category = QUEUE_CATEGORY[candidate["kind"]]
+    return {
+        "id": candidate["key"], "org_id": org_id, "brand_id": brand_id,
+        "campaign_period_id": None, "dedupe_key": candidate["key"], "category": category,
+        "kind": None, "severity": interrupts.CATEGORIES[category]["severity"],
+        "message": candidate["message"], "action_url": candidate["action_url"],
+        "visible_from": None, "status": "open", "created_at": None, "resolved_at": None,
+    }
+
+
 def _queue_payload(conn, org_id, brand_id, items, candidates, holds=()) -> dict:
-    # F19-I01/F25-I01: each open row's own triage item (and, for `scale_budget`/`refresh_creative`
-    # rows, their own extra `scale`/`refresh` payload), keyed by the same dedupe key the enqueue
-    # used -- the frontend never parses `dedupe_key` strings itself. Every candidate produces a
-    # key (see `_queue_candidates`), so this doubles as the "still live" filter below.
-    candidates_by_key = {
-        _dedupe_key(c["kind"], c["identity_id"], c["window_end"]): c for c in candidates
+    """The served queue: every decision candidate with an open interrupt (its key, F49 Contract
+    Q), in the inbox's order, then every notice built from its candidate. Each row carries its
+    current triage item (F19-I01; `None` on the brand's settle row and a closeout row), the
+    candidate's extra payload (`scale`／`refresh`／`insufficient`／`cleanup`／`settle`／`closeout`),
+    its `campaign_id` and its `proposal`; `queue_done.stamp` adds `decision`, `done` and
+    `position` and gives the payload's `decisions {kinds, open}` -- the one count every screen
+    reads. The frontend never parses `dedupe_key` strings itself."""
+    decision_by_key = {
+        c["key"]: c for c in candidates if c["kind"] in queue_done.DECISION_KINDS
     }
     queue_categories = set(QUEUE_CATEGORY.values())
     # archive_stale=False: this is a read inside a read-only path too (`get_queue`), and
     # `refresh_queue` already committed its own writes above -- neither call should also trigger
     # the unrelated informational-archival side effect of `list_open(archive_stale=True)`.
-    rows = [
-        row
+    listed = [
+        (row, decision_by_key[row["dedupe_key"]])
         for row in interrupts.list_open(conn, brand_id=brand_id, archive_stale=False)
-        if row["category"] in queue_categories and row["dedupe_key"] in candidates_by_key
+        if row["category"] in queue_categories and row["dedupe_key"] in decision_by_key
     ]
+    listed.extend(
+        (_notice_row(org_id, brand_id, c), c)
+        for c in candidates if c["kind"] in queue_done.NOTICE_KINDS
+    )
     sets_by_campaign = _brand_change_sets_by_campaign(conn, org_id, brand_id)
     action_states = _brand_action_verification_states(conn, org_id, brand_id)
     # F23-I01: `worse` rows' own proposal -- the matching review round (if any), brand-wide.
     rounds_by_entity = _brand_review_rounds(conn, org_id, brand_id)
     open_rows = []
-    for row in rows:
-        candidate = candidates_by_key[row["dedupe_key"]]
+    for row, candidate in listed:
         kind = candidate["kind"]
         triage_item = candidate["payload"]["triage"]
         if kind == "worse":
@@ -1328,19 +1682,19 @@ def _queue_payload(conn, org_id, brand_id, items, candidates, holds=()) -> dict:
         elif kind == "cleanup":
             proposal = _row_cleanup_proposal(sets_by_campaign, action_states, candidate)
         else:
-            # refresh_creative/insufficient_data/settle: no change set -- the row's own button
-            # goes elsewhere (the workbench / the F24 wait page / the settle page) instead.
+            # refresh_creative/insufficient_data/settle/closeout: no change set -- the row's own
+            # button goes elsewhere (the workbench / the wait page / the settle page / closeout).
             proposal = None
         extra = {k: v for k, v in candidate["payload"].items() if k != "triage"}
-        queue_row = {
-            **row, "kind_key": kind, "triage": triage_item, **extra, "proposal": proposal,
-        }
-        # F47 Contract D: the one owner of done-ness (`queue_done.done`), read by the top bar, the
-        # home list and 「下一件」 alike.
-        queue_row["done"] = queue_done.done(queue_row)
-        open_rows.append(queue_row)
+        open_rows.append({
+            **row, "kind_key": kind, "campaign_id": candidate["campaign_id"],
+            "triage": triage_item, **extra, "proposal": proposal,
+        })
+    # F47 Contract D, F49 Contract Q: the one owner of done-ness and of "which rows count"
+    # (`queue_done`), read by the top bar, the home list, 「第 N 件／共 M 件」 and 「下一件」 alike.
+    decisions = queue_done.stamp(open_rows)
     return {
         "items": open_rows, "counts": _trend_counts(items), "total_ads": len(items),
         "kinds_available": KINDS_AVAILABLE, "kinds_pending": KINDS_PENDING,
-        "scale_hold": list(holds),
+        "scale_hold": list(holds), "decisions": decisions,
     }

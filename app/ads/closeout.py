@@ -207,6 +207,11 @@ def close(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, *, actor
     # F49 Contract N: a closed campaign is no longer monitored -- its open runtime alerts resolve
     # with the close (each `interrupts.resolve` commits, so the close lands with the first one).
     runtime.resolve_alerts(conn, org_id, brand_id, campaign_id)
+    # F49 Contract Q: every queue row of the campaign -- its closeout row and any row raised before
+    # its end -- leaves the inbox with the close.
+    from app.ads import triage  # lazy: triage reads modules that import this one
+
+    triage.resolve_campaign(conn, org_id, brand_id, campaign_id)
     row = repository.get_campaign(conn, org_id, brand_id, campaign_id)
     assert row is not None  # 剛更新過的那一列，一定讀得到
     return row

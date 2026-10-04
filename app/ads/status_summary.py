@@ -3,10 +3,11 @@
 Read-only, brand-wide: the freshest cleanly-synced moment among this brand's own non-closed
 campaigns, how many data sources need the user, and how many decisions are still waiting.
 
-F47 Contract D: `open_items` is read from the same brand queue the home board reads
-(`triage.get_queue`, each row carrying `done` from `queue_done.done`) and counts exactly the rows
-the home 「需要你決定」 counts (`queue_done.open_count`) -- a deferred or decided row is not
-waiting, so the top bar and the home can never disagree. Never a recount of open interrupts alone.
+F47 Contract D, F49 Contract Q: `open_items` is the brand queue's own `decisions.open`
+(`triage.get_queue`, stamped by `queue_done.stamp`) -- the open decision rows the home
+「需要你決定」, 「第 N 件／共 M 件」 and the inbox count; a deferred or decided row, or a notice,
+is not waiting, so the top bar and the home can never disagree. Never a recount of open
+interrupts alone.
 
 F47 Contract H: `attention` is the connections page's own read (`connections.get_connections`):
 `count` is that page's `attention_count` and `note` the note of the first source it counts, in the
@@ -14,7 +15,7 @@ page's order (null when none) -- the top bar links to that page, so the two can 
 draft never on a platform has no source row there, so it is never counted.
 """
 
-from app.ads import connections, lifecycle, queue_done, repository, triage
+from app.ads import connections, lifecycle, repository, triage
 
 
 def _attention(conn, org_id: str, brand_id: str) -> dict:
@@ -42,5 +43,5 @@ def get_status_summary(conn, org_id: str, brand_id: str) -> dict:
     return {
         "last_success_at": last_success_at,
         "attention": _attention(conn, org_id, brand_id),
-        "open_items": queue_done.open_count(queue["items"]),
+        "open_items": queue["decisions"]["open"],
     }

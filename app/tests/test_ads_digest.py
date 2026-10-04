@@ -12,7 +12,7 @@ import unittest
 from datetime import date
 from unittest.mock import patch
 
-from app.ads import digest, jobs, settle, status_summary, triage
+from app.ads import digest, jobs, queue_done, settle, status_summary, triage
 from app.ads import external_repository as external
 from app.brand_intelligence import repository as brands
 from app.core import db, interrupts
@@ -140,19 +140,29 @@ class DigestTest(unittest.TestCase):
 
 
 class DigestShapeTest(unittest.TestCase):
-    def rows(self, n, name="很長很長很長很長很長很長很長很長很長很長的活動名稱"):
-        return {"items": [
-            {"kind_key": "cleanup", "message": f"「{name}{i}」花錢沒效，待決定",
-             "action_url": f"/brands/b/ads/campaigns/c{i}/detail"}
-            for i in range(n)
-        ]}
+    def rows(self, n, name="很長很長很長很長很長很長很長很長很長很長的活動名稱", notices=0):
+        # F49 Contract Q: a served payload -- rows stamped by `queue_done.stamp` -- plus `notices`
+        # scale_budget rows, which are served but never counted nor listed in the digest.
+        items = [
+            *({"kind_key": "scale_budget", "proposal": None, "message": f"「預算{i}」可加預算",
+               "action_url": "/x"} for i in range(notices)),
+            *({"kind_key": "cleanup", "proposal": None,
+               "message": f"「{name}{i}」花錢沒效，待決定",
+               "action_url": f"/brands/b/ads/campaigns/c{i}/detail"} for i in range(n)),
+        ]
+        return {"items": items, "decisions": queue_done.stamp(items)}
 
     def test_at_most_five_items_and_the_full_open_count(self):
-        built = digest.build(None, "org", "b", date(2026, 9, 25), queue=self.rows(7))
+        built = digest.build(None, "org", "b", date(2026, 9, 25), queue=self.rows(7, notices=2))
         self.assertEqual(built["date"], "2026-09-25")
         self.assertEqual(built["open_count"], 7)
         self.assertEqual(len(built["items"]), 5)
-        self.assertEqual(built["items"][0]["kind"], "cleanup")
+        self.assertEqual({item["kind"] for item in built["items"]}, {"cleanup"})
+
+    def test_notices_alone_send_no_digest(self):
+        self.assertIsNone(
+            digest.build(None, "org", "b", date(2026, 9, 25), queue=self.rows(0, notices=3))
+        )
 
     def test_inbox_message_stays_within_the_inbox_limit(self):
         long_digest = digest.build(None, "org", "b", date(2026, 9, 25), queue=self.rows(12))

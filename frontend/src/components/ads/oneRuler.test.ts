@@ -23,6 +23,9 @@
  *    `lib/useSyncOutcome.ts` — screens print the served `outcome`. Today's hits are listed in `SYNC_PENDING`.
  * 8. F49-I06 (Contract B): no local word table for verification or launch-item states — screens print the served
  *    `verification_label`／`status_label`／`state_label`. Today's hits are listed in `STATE_WORDS_PENDING`.
+ * 9. F49-I05 (Contract Q): no local list of queue kinds (an array, `Set` or object keyed by two or more) and no table
+ *    keyed by two or more wait reason codes — the queue serves `decision`／`position`／`decisions {kinds, open}` and
+ *    `GET …/rules` serves `reasons`. Type unions are not literals. Today's hits are listed in `QUEUE_PENDING`.
  *
  * Comments are not code: every scan reads the source with comments blanked out (line numbers kept); the numeric
  * literals are read in code only (a class name such as `gap-1.5` is a string). A hit that is not a served fact is
@@ -681,5 +684,105 @@ describe("one verification vocabulary (F49 Contract B)", () => {
     expect(stateWordTables("interface R { count: number; unknown: number; stale: boolean }")).toEqual([]);
     expect(stateWordTables("<Chip>{item.verification_label}</Chip>")).toEqual([]);
     expect(stateWordTables('// const W = { pending: "a", confirmed: "b" };')).toEqual([]);
+  });
+});
+
+/** F49-I05 (Contract Q, decision 11): which rows are decisions, their board order and the wait reasons' words are served
+ * (`app/ads/queue_done.py` `DECISION_KINDS`, each row's `decision`／`position`, `decisions {kinds, open}`; `GET …/rules`
+ * `reasons`). No ads source keeps an array, `Set` or object keyed by two or more queue kinds, nor one of two or more wait
+ * reason codes (type unions are not literals). Today's hits are listed in `QUEUE_PENDING`, each naming the issue that
+ * moves the screen onto the served fields and deletes the entry; an entry whose file no longer hits fails the stale-entry
+ * test. */
+const QUEUE_KINDS = ["cleanup", "worse", "closeout", "settle", "refresh_creative", "scale_budget", "insufficient_data", "stop_loss"];
+const WAIT_REASONS = [
+  "too_new", "result_unknown_days", "needs_resync", "mixed_currency", "mixed_result_definition", "no_previous_window",
+  "result_kind_unknown", "target_unresolved",
+];
+
+/** Each array literal (no nested brackets) quoting two or more of `codes`, and each object literal keyed by two or more
+ * of them at its own level (comments blanked; a `case "x":` and a ternary's `? "x" :` are not keys), at its first line. */
+function codeTables(text: string, codes: string[]): number[] {
+  const code = strip(text, false);
+  const lineOf = (index: number) => code.slice(0, index).split("\n").length;
+  const alternatives = codes.join("|");
+  const quoted = new RegExp(String.raw`["'\x60](${alternatives})["'\x60]`, "g");
+  const lines: number[] = [];
+  for (const m of code.matchAll(/\[[^[\]]*\]/g)) {
+    if (new Set([...m[0].matchAll(quoted)].map((k) => k[1])).size >= 2) lines.push(lineOf(m.index ?? 0));
+  }
+  // The innermost `{` that holds each position, in one pass.
+  const owner: number[] = new Array(code.length).fill(-1);
+  const open: number[] = [];
+  for (let i = 0; i < code.length; i++) {
+    if (code[i] === "{") open.push(i);
+    owner[i] = open.length ? open[open.length - 1] : -1;
+    if (code[i] === "}") open.pop();
+  }
+  const key = new RegExp(String.raw`(?:^|[\s{,;])(?<!\bcase\s+)(?<!\?\s*)["']?(${alternatives})["']?\s*:`, "gm");
+  const keysByBlock = new Map<number, Set<string>>();
+  for (const m of code.matchAll(key)) {
+    const at = (m.index ?? 0) + m[0].indexOf(m[1]);
+    const block = owner[at];
+    if (block < 0) continue;
+    if (!keysByBlock.has(block)) keysByBlock.set(block, new Set());
+    keysByBlock.get(block)?.add(m[1]);
+  }
+  for (const [block, keys] of keysByBlock) if (keys.size >= 2) lines.push(lineOf(block));
+  return [...new Set(lines)].sort((a, b) => a - b);
+}
+
+type QueueRule = "kinds" | "reasons";
+const QUEUE_SCANS: Record<QueueRule, (text: string) => number[]> = {
+  kinds: (text) => codeTables(text, QUEUE_KINDS),
+  reasons: (text) => codeTables(text, WAIT_REASONS),
+};
+const QUEUE_PENDING: { rule: QueueRule; file: string; issue: string }[] = [
+  { rule: "kinds", file: "components/ads/home/status.ts", issue: "F49-I08" },
+  { rule: "kinds", file: "components/ads/home/QueueRow.tsx", issue: "F49-I08" },
+  { rule: "kinds", file: "components/ads/settle/SettlePage.tsx", issue: "F49-I08" },
+  { rule: "kinds", file: "components/ads/workspace/OverviewBody.tsx", issue: "F49-I09" },
+  { rule: "kinds", file: "components/ads/review/ReviewEvidencePage.tsx", issue: "F49-I11" },
+  { rule: "reasons", file: "components/ads/wait/WaitPage.tsx", issue: "F49-I10" },
+];
+
+describe("one decision queue (F49 Contract Q)", () => {
+  for (const rule of ["kinds", "reasons"] as const) {
+    it(`no ads source keeps its own table of ${rule === "kinds" ? "queue kinds" : "wait reason codes"}`, () => {
+      const files = FILES();
+      expect(files.length).toBeGreaterThan(20);
+      const offenders = files.flatMap((full) => {
+        if (QUEUE_PENDING.some((x) => x.rule === rule && x.file === rel(full))) return [];
+        return QUEUE_SCANS[rule](readFileSync(full, "utf-8")).map((line) => `${rel(full)}:${line}`);
+      });
+      expect(offenders).toEqual([]);
+    });
+  }
+
+  it("every pending entry still hits (an issue that moved its screen onto the served fields deletes its entry)", () => {
+    const present = new Set(FILES().map(rel));
+    const stale = QUEUE_PENDING.filter(
+      (x) => !present.has(x.file) || QUEUE_SCANS[x.rule](readFileSync(join(SRC_DIR, x.file), "utf-8")).length === 0,
+    );
+    expect(stale).toEqual([]);
+  });
+
+  it("the queue scans see arrays, sets and object keys and leave unions, branches and comments alone", () => {
+    const kinds = QUEUE_SCANS.kinds;
+    expect(kinds('const ORDER: QueueKind[] = ["cleanup", "worse", "refresh_creative"];')).toEqual([1]);
+    expect(kinds('const BEFORE = new Set(["cleanup", "worse"]);')).toEqual([1]);
+    expect(kinds('const MARK = {\n  cleanup: { kind: "cut", label: "清理" },\n  worse: { kind: "worse", label: "變貴" },\n};')).toEqual([1]);
+    expect(kinds('const W = { "settle": 1, "closeout": 2 };')).toEqual([1]);
+    expect(kinds('export type QueueKind = "cleanup" | "worse" | "closeout";')).toEqual([]);
+    expect(kinds('if (item.kind_key === "cleanup" || item.kind_key === "worse") x();')).toEqual([]);
+    expect(kinds('const k = a ? "cleanup" : b ? "worse" : "pause";')).toEqual([]);
+    expect(kinds('switch (k) { case "cleanup": return 1; case "worse": return 2; }')).toEqual([]);
+    expect(kinds('const one = ["cleanup"]; const two = { cleanup: { worse: 1 } };')).toEqual([]);
+    expect(kinds('// const ORDER = ["cleanup", "worse"];')).toEqual([]);
+    expect(kinds('interface P { cleanup?: X; settle?: Y }')).toEqual([]);
+    const reasons = QUEUE_SCANS.reasons;
+    expect(reasons('const REASON_ORDER = ["too_new", "result_unknown_days"] as const;')).toEqual([1]);
+    expect(reasons('const T = { too_new: "剛開始", needs_resync: "重讀" };')).toEqual([1]);
+    expect(reasons('if (code === "too_new") x();')).toEqual([]);
+    expect(reasons("const r = rules.reasons[item.reason_code];")).toEqual([]);
   });
 });

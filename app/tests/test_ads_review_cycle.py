@@ -198,6 +198,24 @@ class ReviewCycleTest(unittest.TestCase):
             "closed",
         )
 
+    def test_deferring_the_round_resolves_the_ads_worse_row(self):
+        """F49 Contract Q: the deferred round's `worse` row leaves the inbox with the decision."""
+        from app.core import interrupts
+
+        row = self.request()
+        key = f"ads-triage:worse:{self.ad['id']}:2026-01-07"
+        interrupts.enqueue(self.conn, org_id=self.org, brand_id=self.brand,
+                           category="ads_triage_worse", dedupe_key=key, message="廣告變貴，待決定")
+        self.conn.commit()
+        review_rounds.decide(self.conn, self.org, self.brand, self.campaign, row["id"],
+                             "deferred", "待補資料",
+                             (db.now_utc() + timedelta(days=1)).isoformat())
+        self.assertNotIn(key, {
+            r["dedupe_key"] for r in interrupts.list_open(
+                self.conn, brand_id=self.brand, category="ads_triage_worse", archive_stale=False,
+            )
+        })
+
     def test_imported_campaign_target_set_on_target_page_counts_as_a_goal(self):
         # Drill 5: target set on the ads-centre target page, no wizard goal_text/objective.
         goal_missing = "請先補活動目標與目的，再重新建立檢討。"
