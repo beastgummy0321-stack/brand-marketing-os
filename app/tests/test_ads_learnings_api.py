@@ -55,9 +55,9 @@ class CoordinateLearningsRouteTest(unittest.TestCase):
         campaign = ads_repo.create_campaign(self.conn, self.org_id, self.brand_id, {
             "name": name, "goal_text": "x", "objective": "購買", "target_cost": 450,
             "start_date": "2026-09-05", "end_date": "2026-09-18", "status": "closed",
+            # F48 Contract M: a non-draft campaign's sell-way is fixed (no PATCH after adoption).
+            "context_json": {"product_ids": [product_id]},
         }, created_by=ACTOR)
-        ads_repo.update_campaign(self.conn, self.org_id, self.brand_id, campaign["id"],
-                                 {"product_ids": [product_id]})
         self.conn.execute("UPDATE ads_campaign SET closed_at = %s WHERE id = %s",
                           (closed_at, campaign["id"]))
         return campaign

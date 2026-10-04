@@ -15,6 +15,7 @@ a unit test can drive without a database.
 """
 
 import math
+from typing import SupportsFloat, overload
 
 from app.brand_intelligence import repository as bi_repo
 
@@ -51,8 +52,81 @@ def breakeven_cpa(economics: dict | None) -> float | None:
     return value if close_rate is None else value * float(close_rate)
 
 
-def _round_money(value: float | None) -> float | None:
-    return None if value is None else round(value)
+# -- F48 Contract M: the one money calculator -----------------------------------------------------
+
+
+@overload
+def whole(value: None) -> None: ...
+@overload
+def whole(value: SupportsFloat | str) -> int: ...
+def whole(value):
+    """A money figure as a whole number, half up (`floor(x + 0.5)`) -- the only rounding of a
+    money figure in `app/ads` (Python's `round` is banker's rounding: 2.5 -> 2). `None` passes
+    through."""
+    return None if value is None else math.floor(float(value) + 0.5)
+
+
+def daily_of(total, days):
+    """One day's whole budget of a period total -- `floor(total / days)`, the one exception to
+    half-up, so the structure never commits more than the chosen total and never trips the cap
+    gate by rounding. `None` without a total or a positive length."""
+    if total is None or days is None or days <= 0:
+        return None
+    return math.floor(float(total) / days)
+
+
+def total_of(daily_sum, days):
+    """The period total of a daily amount -- `daily_sum x days`, exact. `None` when either side is
+    unknown (no daily amount, or no positive length)."""
+    if daily_sum is None or days is None or days <= 0:
+        return None
+    product = float(daily_sum) * days
+    return int(product) if product.is_integer() else product
+
+
+def preview(chosen, days) -> dict | None:
+    """`budget_preview` of a chosen period total (Contract M): the whole daily budget the structure
+    will get and the period total that daily really spends; `note` only when the two totals
+    differ. `None` before a total is chosen."""
+    if chosen is None:
+        return None
+    chosen = float(chosen)
+    chosen = int(chosen) if chosen.is_integer() else chosen
+    daily = daily_of(chosen, days)
+    total = total_of(daily, days)
+    note = None
+    if total is not None and total != chosen:
+        note = f"每天要是整數，這期實際 {total:,}"
+    return {"daily": daily, "total": total, "chosen": chosen, "note": note}
+
+
+def resplit(daily_total: int, groups: list[dict], allocation: list[dict]) -> dict:
+    """Decision 8: a new total after adoption re-splits the ad sets by the stored allocation
+    pcts -> `{group_id: new daily}` summing exactly to `daily_total` (`split`). A role's share is
+    divided evenly among that role's groups; a group whose role is not in the allocation (added
+    by hand after adoption) keeps its current share of the daily sum, the allocation roles share
+    the rest."""
+    pct = {row["role"]: float(row.get("pct") or 0) / 100 for row in allocation}
+    old_sum = sum(float(g["daily_budget"] or 0) for g in groups)
+    outside = [g for g in groups if g["role"] not in pct]
+    outside_share = (
+        sum(float(g["daily_budget"] or 0) for g in outside) / old_sum if old_sum > 0 else 0.0
+    )
+    present = {g["role"] for g in groups if g["role"] in pct}
+    # Normalise only when an allocation role has no group left (its share goes to the others).
+    role_sum = 1.0 if present == set(pct) else sum(pct[r] for r in present)
+    weights = {}
+    for group in groups:
+        role = group["role"]
+        if role in pct:
+            count = sum(1 for g in groups if g["role"] == role)
+            share = pct[role] / role_sum if role_sum > 0 else 1 / len(present)
+            weights[group["id"]] = (1 - outside_share) * share / count
+        else:
+            weights[group["id"]] = (
+                float(group["daily_budget"] or 0) / old_sum if old_sum > 0 else 0.0
+            )
+    return {row["label"]: row["amount"] for row in split(daily_total, weights)}
 
 
 def _economics_for(
@@ -100,8 +174,8 @@ def _cold_start_scenarios(
 ) -> dict:
     scenario_rows = []
     for key, label, events in _COLD_START_EVENTS:
-        daily = _round_money(cap * events) if cap is not None else None
-        total = _round_money(daily * days) if daily is not None and days else None
+        daily = whole(cap * events) if cap is not None else None
+        total = total_of(daily, days)
         scenario_rows.append({
             "key": key, "label": label, "daily": daily, "total": total,
             "caption": f"冷啟動估算：上限 x 每天 {events} 筆{conversion_label}",
@@ -122,8 +196,8 @@ def _history_scenarios(history: dict, days: int) -> dict:
     base_text = history.get("source_text") or "上一期日預算"
     scenario_rows = []
     for key, label, mult in _HISTORY_MULTIPLIERS:
-        daily = round(last_daily * mult)
-        total = round(daily * days) if days else None
+        daily = whole(last_daily * mult)
+        total = total_of(daily, days)
         scenario_rows.append({
             "key": key, "label": label, "daily": daily, "total": total,
             # F03-I05 corrects this caption: the multiplication is base x0.6/1/1.6 — the
@@ -132,7 +206,7 @@ def _history_scenarios(history: dict, days: int) -> dict:
             # 迴圈 or its bound ad account) — never a hard-coded platform name here.
             # F36-I05: printed unchanged — the day count (「有投放的 N 天」) already lives in
             # `source_text`; this caption never re-adds a 「30 天」 of its own.
-            "caption": f"{base_text} NT${round(last_daily)} ×{mult:g}",
+            "caption": f"{base_text} NT${whole(last_daily)} ×{mult:g}",
         })
     basis = {
         "mode": "history", "cpa": cpa, "source": history.get("source"),
@@ -150,7 +224,7 @@ def split(total: float, weights: dict) -> list:
     leftover goes to the largest share so the table always adds up."""
     if not weights:
         return []
-    total = round(total)
+    total = whole(total)
     amounts = {label: int(total * share) for label, share in weights.items()}
     remainder = total - sum(amounts.values())
     if remainder:
@@ -175,7 +249,7 @@ def budget_cap_of(constraints: dict | None) -> int | None:
             return None
     if not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
         return None
-    return round(value)
+    return whole(value)
 
 
 def amount_over_cap(total: float | None, budget_cap: float | None) -> int | None:
@@ -183,7 +257,7 @@ def amount_over_cap(total: float | None, budget_cap: float | None) -> int | None
     (a total exactly at the cap is not over)."""
     if total is None or budget_cap is None:
         return None
-    return max(round(float(total) - budget_cap), 0)
+    return max(whole(float(total) - budget_cap), 0)
 
 
 def _with_budget_cap(result: dict, budget_cap: int | None, days: int) -> dict:
@@ -196,9 +270,13 @@ def _with_budget_cap(result: dict, budget_cap: int | None, days: int) -> dict:
     if recommended == CAP_KEY or recommended not in {r["key"] for r in rows}:
         recommended = "recommended"
     if budget_cap is not None:
+        # Contract M: the cap row's daily is `daily_of(cap)` and its total what that daily really
+        # spends, so `over_cap` is 0 by construction. Without a period there is no daily and the
+        # cap itself stays the row's total.
+        cap_daily = daily_of(budget_cap, days)
         rows.insert(min(1, len(rows)), {
-            "key": CAP_KEY, "label": _CAP_LABEL,
-            "daily": round(budget_cap / days) if days else None, "total": budget_cap,
+            "key": CAP_KEY, "label": _CAP_LABEL, "daily": cap_daily,
+            "total": budget_cap if cap_daily is None else total_of(cap_daily, days),
             "caption": f"用滿你設的預算上限 NT${budget_cap:,}",
         })
     rows = [{**r, "over_cap": amount_over_cap(r.get("total"), budget_cap)} for r in rows]
@@ -228,8 +306,7 @@ def current_scenarios(stored: dict, campaign: dict, conversion_label: str = "購
     old product estimate. Called on every detail/selection read so stored snapshots reconcile,
     including the budget cap (`constraints_json.budget`, F28-I03) and the current row labels.
     """
-    start, end = campaign.get("start_date"), campaign.get("end_date")
-    days = max((end - start).days + 1, 0) if start and end else 0
+    days = period_days(campaign)
     budget_cap = budget_cap_of(campaign.get("constraints_json"))
     if stored.get("mode") == "cold_start":
         result = _cold_start_scenarios(cap, None, days, conversion_label)
@@ -241,10 +318,16 @@ def current_scenarios(stored: dict, campaign: dict, conversion_label: str = "購
     result = {**stored, "basis": {**stored.get("basis", {}), "days": days}}
     result["scenarios"] = [
         {**r, "label": labels.get(r["key"], r.get("label")),
-         "total": round(r["daily"] * days) if r.get("daily") is not None and days else None}
+         "total": total_of(r.get("daily"), days)}
         for r in stored.get("scenarios", []) if r.get("key") != CAP_KEY
     ]
     return _with_budget_cap(result, budget_cap, days)
+
+
+def period_days(campaign: dict) -> int:
+    """The campaign's length in days, both ends inclusive; 0 without both dates."""
+    start, end = campaign.get("start_date"), campaign.get("end_date")
+    return max((end - start).days + 1, 0) if start and end else 0
 
 
 def reconcile_campaign(campaign: dict, conversion_label: str = "購買",
@@ -254,7 +337,14 @@ def reconcile_campaign(campaign: dict, conversion_label: str = "購買",
     This is the campaign read every screen gets its scenarios from, so the recommendation is
     narrowed here to one that has an amount (`_recommended_with_amount`, may be `None`).
     `current_scenarios` itself keeps a row key: `strategy.generate` looks its recommended row up
-    without a default (a total of `None` is fine there, a missing row is not)."""
+    without a default (a total of `None` is fine there, a missing row is not).
+
+    F48 Contract M: serves `budget_preview` (`preview` of `budget_planned`). Allocation amounts
+    are a projection only while nothing is chosen (`budget_planned is None`); once a total is
+    selected the stored amounts stand (no re-split on read), and once groups exist the campaign
+    detail serves them from the groups (`adopted_allocation`)."""
+    campaign = {**campaign, "budget_preview": preview(campaign.get("budget_planned"),
+                                                      period_days(campaign))}
     basis = campaign.get("budget_basis_json") or {}
     stored = basis.get("scenarios")
     if not stored:
@@ -263,14 +353,12 @@ def reconcile_campaign(campaign: dict, conversion_label: str = "購買",
     scenarios_now["recommended"] = _recommended_with_amount(scenarios_now)
     strategy_now = dict(basis.get("strategy") or {})
     allocation = strategy_now.get("allocation") or []
-    selected = campaign.get("budget_planned")
-    if selected is None:
+    if allocation and campaign.get("budget_planned") is None:
         recommended = next((r for r in scenarios_now["scenarios"]
                             if r["key"] == scenarios_now["recommended"]), {})
         selected = recommended.get("total")
-    if allocation:
-        amounts = split(selected, {str(i): r["pct"] / 100 for i, r in enumerate(allocation)}) \
-            if selected is not None else []
+        weights = {str(i): r["pct"] / 100 for i, r in enumerate(allocation)}
+        amounts = split(selected, weights) if selected is not None else []
         strategy_now["allocation"] = [
             {**r, "amount": amounts[i]["amount"] if amounts else None}
             for i, r in enumerate(allocation)
@@ -278,3 +366,12 @@ def reconcile_campaign(campaign: dict, conversion_label: str = "購買",
     return {**campaign, "budget_basis_json": {
         **basis, "scenarios": scenarios_now, "strategy": strategy_now,
     }}
+
+
+def adopted_allocation(allocation: list[dict], groups: list[dict], days: int) -> list[dict]:
+    """After adoption the money lives in the groups: each allocation row's amount is
+    `total_of(Σ that role's group daily, days)` (Contract M)."""
+    by_role: dict = {}
+    for group in groups:
+        by_role[group["role"]] = by_role.get(group["role"], 0) + float(group["daily_budget"] or 0)
+    return [{**row, "amount": total_of(by_role.get(row["role"], 0), days)} for row in allocation]

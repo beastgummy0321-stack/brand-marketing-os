@@ -14,6 +14,13 @@ from app.brand_intelligence import repository as bi_repo
 ACTOR = "測試員"
 
 
+class MoneyTextTest(unittest.TestCase):
+    def test_money_is_half_up_like_every_other_figure(self):
+        # F48 Contract M: `budget.whole`, never Python's banker's `round` (2.5 -> 2).
+        self.assertEqual(judgment._fmt_money(2.5), "NT$ 3")
+        self.assertEqual(judgment._fmt_money(1234.5), "NT$ 1,235")
+
+
 class CampaignJudgmentLiveTest(unittest.TestCase):
     def test_budget_spent_faster_than_time_is_warn(self):
         campaign = {

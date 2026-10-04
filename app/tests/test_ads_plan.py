@@ -1,7 +1,8 @@
 """app/tests/test_ads_plan.py — F03-I06 falsifiers: adopting a strategy writes group daily
-budgets that sum exactly to `round(budget_planned / days)` even on an awkward split (proves
-`budget.split()`'s remainder rule, not a naive `total / groups`); `budget_planned` survives both
-the adopt and a later group edit unchanged; every ad carries all seven coordinates and a name
+budgets that sum exactly to `budget.daily_of(budget_planned, days)` even on an awkward split
+(proves `budget.split()`'s remainder rule, not a naive `total / groups`); adopt rounds
+`budget_planned` to `total_of(Σ group daily, days)` (F48 Contract M) and a later group edit leaves
+it unchanged; every ad carries all seven coordinates and a name
 unique inside the campaign; adopting twice is refused; editing a bound group's budget writes
 exactly one `ads_action` row (unbound edits write none); a budget raise above the brand's
 approved `max_daily_amount` is refused before anything is written.
@@ -104,8 +105,9 @@ class GroupBudgetsSumExactlyTest(PlanTestBase):
 
         detail = self._adopt(campaign["id"])
 
-        days = 14
-        expected_daily_total = round(30001 / days)  # 2144 — 50/30/20 floors to 2143, +1 remainder
+        # F48 Contract M: `floor(30001 / 14)` = 2142 -- 50/30/20 floors to 1071／642／428, the +1
+        # remainder goes to the largest share.
+        expected_daily_total = 2142
         group_budgets = [float(g["daily_budget"]) for g in detail["groups"]]
         self.assertEqual(sum(group_budgets), expected_daily_total)
         self.assertEqual(len(detail["groups"]), 3)
@@ -113,11 +115,13 @@ class GroupBudgetsSumExactlyTest(PlanTestBase):
 
 
 class BudgetPlannedNeverRewrittenTest(PlanTestBase):
-    def test_budget_planned_survives_adopt_and_a_later_group_edit(self):
+    def test_adopt_rounds_budget_planned_and_a_later_group_edit_leaves_it(self):
         campaign = self._create_adopted_campaign()
         plan.PROVIDER = _fake(_VALID_PLAN_REPLY)
         detail = self._adopt(campaign["id"])
-        self.assertEqual(float(detail["budget_planned"]), 30001)
+        # F48 Contract M: adopt rounds the total -- 2142 a day x 14 days.
+        self.assertEqual(float(detail["budget_planned"]), 29988)
+        self.assertEqual(float(detail["budget_total"]), float(detail["budget_planned"]))
 
         group = detail["groups"][0]
         plan.update_group(
@@ -125,7 +129,7 @@ class BudgetPlannedNeverRewrittenTest(PlanTestBase):
             {"daily_budget": float(group["daily_budget"]) + 10}, actor=ACTOR,
         )
         reloaded = ads_repo.campaign_detail(web.conn, self.org_id, self.brand_id, campaign["id"])
-        self.assertEqual(float(reloaded["budget_planned"]), 30001)
+        self.assertEqual(float(reloaded["budget_planned"]), 29988)
 
 
 class AdCoordinatesAndNamesTest(PlanTestBase):
@@ -343,10 +347,9 @@ def _seed_closed(org_id: str, brand_id: str, rows: list[dict], *,
         "name": name, "goal_text": "上一期衝購買", "objective": "購買",
         "target_cost": 300, "start_date": "2026-09-01", "end_date": "2026-09-14",
         "status": "closed",
+        # F48 Contract M: a non-draft campaign's sell-way is fixed (no PATCH after adoption).
+        "context_json": {"product_ids": [product_id]} if product_id is not None else {},
     }, created_by=ACTOR)
-    if product_id is not None:
-        ads_repo.update_campaign(web.conn, org_id, brand_id, closed["id"],
-                                 {"product_ids": [product_id]})
     web.conn.execute("UPDATE ads_campaign SET closed_at = now() WHERE id = %s", (closed["id"],))
     group = plan.create_group(
         web.conn, org_id, brand_id, closed["id"], name="上一期新客組", role="new",

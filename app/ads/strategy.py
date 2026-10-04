@@ -8,8 +8,9 @@ only `routes.py` imports `generate`/`select_scenario`.
 
 The model never does arithmetic: it returns percentages (`allocation[].pct`) and reasons only;
 `budget.split()` (the program) turns a percentage into a NT$ amount. `budget_planned` is a record
-of what the user adopted — after 採用策略 the group daily budgets are the truth, and nothing here
-ever recomputes `budget_planned` from them (F03.md "One source of truth for money").
+of what the user adopted — after 採用策略 the group daily budgets are the truth (F03.md "One source
+of truth for money"); F48 Contract M: adopt, and a new total chosen after adoption
+(`select_scenario` -> `plan.resplit_groups`), store `total_of(Σ group daily, days)` as it.
 
 F48 (Contracts P and S): the prompt is built from `planner_context` (the sell-way, its 「不能講」,
 the offers, the groups, its learnings, last period's goals, the capacity line). The facts under
@@ -29,6 +30,7 @@ from app.ads import (
     launch_settings,
     learning,
     learning_rank,
+    plan,
     planner_context,
     sell_way,
     targets,
@@ -332,7 +334,7 @@ def _available_roles_section(roles: list[str]) -> str:
 
 def _cap_text(cap: float | None) -> str:
     """The one cap as the strategy prompt reads it (F28-I01) -- `未設定`, never a guessed number."""
-    return "未設定" if cap is None else learning_rank.whole(cap)
+    return "未設定" if cap is None else f"{budget.whole(cap):,}"
 
 
 def generate(conn, org_id: str, brand_id: str, campaign_id: str, *, actor: str) -> dict:
@@ -580,7 +582,11 @@ def select_scenario(conn, org_id: str, brand_id: str, campaign_id: str, *,
 
     F28-I03：總額超過預算上限（`constraints_json.budget`）時必須帶 `confirm_over_cap=True`，
     否則 `OverCapUnconfirmed`；確認過就存，並在 `budget_basis_json.over_cap_confirmation`
-    記下誰、何時、總額、上限、超出多少。上限內或沒有上限時照舊（不留確認紀錄）。"""
+    記下誰、何時、總額、上限、超出多少。上限內或沒有上限時照舊（不留確認紀錄）。
+
+    F48 Contract M／decision 8: a draft stores the chosen total unchanged (the read serves
+    `budget_preview`). After adoption the ad sets are re-split (`plan.resplit_groups`, unbound
+    `ready` only, else `campaign_bound`) and the returned detail carries `resplit`."""
     ads_repo.require_internal_campaign(conn, org_id, brand_id, campaign_id)
     campaign = ads_repo.get_campaign(conn, org_id, brand_id, campaign_id)
     if campaign is None:
@@ -605,6 +611,9 @@ def select_scenario(conn, org_id: str, brand_id: str, campaign_id: str, *,
             raise ValueError("scenario_amount_unknown")
         total = row["total"]
 
+    # F48 Contract M: a total below the day count buys a daily of 0 -- nothing to split.
+    if budget.daily_of(total, budget.period_days(campaign)) == 0:
+        raise ValueError("total_below_one_per_day")
     budget_cap = budget.budget_cap_of(campaign.get("constraints_json"))
     over = budget.amount_over_cap(total, budget_cap)
     budget_basis_json = {
@@ -619,16 +628,22 @@ def select_scenario(conn, org_id: str, brand_id: str, campaign_id: str, *,
             "cap": budget_cap, "over": over,
         }
 
+    # F48 decision 8: after adoption a new total re-splits the (still unbound) ad sets and the
+    # stored total is adopt's rounding of it; a draft stores the chosen total unchanged.
+    resplit = None
+    budget_planned = total
+    if campaign["status"] != "draft":
+        resplit, budget_planned = plan.resplit_groups(conn, org_id, brand_id, campaign, total)
     strategy_payload = dict(strategy_payload)
     strategy_payload["allocation"] = _apply_amounts(strategy_payload["allocation"], total)
     budget_basis_json = {**budget_basis_json, "strategy": strategy_payload}
     ads_repo.select_scenario(
         conn, org_id, brand_id, campaign_id, scenario_key=scenario_key,
-        budget_planned=total, budget_basis_json=budget_basis_json,
+        budget_planned=budget_planned, budget_basis_json=budget_basis_json,
     )
     detail = ads_repo.campaign_detail(conn, org_id, brand_id, campaign_id)
     assert detail is not None
-    return detail
+    return {**detail, "resplit": resplit}
 
 
 def set_allocation(conn, org_id: str, brand_id: str, campaign_id: str, *,

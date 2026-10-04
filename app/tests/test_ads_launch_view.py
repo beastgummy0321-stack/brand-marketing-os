@@ -848,6 +848,13 @@ class LaunchViewTest(unittest.TestCase):
             self.assertIsNone(fit["blocker"])
             self.assertIsNone(fit["blocker_text"])
             self.assertGreater(fit["extra"], 0)
+            # F48 N1: `extra` names its basis -- this month's number, the launch's days inside
+            # it (the days `month_budget` reserves: 300/day x days) and the whole-period total.
+            basis = fit["extra_basis"]
+            self.assertEqual(basis["month"], self.month_number())
+            self.assertGreater(basis["days"], 0)
+            self.assertEqual(fit["extra"], 300 * basis["days"])
+            self.assertIn("period_total", basis)
             # The month as it stands without this launch (what `getMonthlyBudget` reads); the card
             # stacks `extra` on top.
             before = month_budget.view(self.conn, self.org, self.brand, month)

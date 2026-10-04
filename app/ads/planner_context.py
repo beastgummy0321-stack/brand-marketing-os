@@ -10,10 +10,9 @@ Headers that already existed elsewhere keep their exact wording (`customer_group
 「- offer=〈key〉｜〈sentence〉」 lines), so `providers.ScriptedProvider`'s parsers keep working.
 """
 
-import math
-
 from app import workbench
 from app.ads import (
+    budget,
     coordinate_learning,
     customer_groups,
     learning_rank,
@@ -294,15 +293,6 @@ def _previous_text(previous: dict | None) -> str:
 # -- capacity (Contract C) ----------------------------------------------------------------------
 
 
-def daily_of(total, days: int):
-    """One day's whole budget of a period total -- `floor(total / days)`, so the structure never
-    commits more than the chosen total (Contract M; `budget.daily_of` replaces this once it lands).
-    `None` without a total or a positive length."""
-    if total is None or days <= 0:
-        return None
-    return math.floor(float(total) / days)
-
-
 def capacity_of(daily, cap, roles: int = 0) -> dict | None:
     """Contract C: `{daily, cap, can_support, ceiling}` -- `ceiling = max(can_support + 1, roles)`
     (one explore slot; every adopted role needs an ad). `None` when either number is unknown."""
@@ -355,8 +345,8 @@ def planner_context(conn, org_id: str, brand_id: str, product_id: str | None, *,
         cap = targets.resolve(conn, org_id, brand_id, campaign)["value"]
         allocation = ((campaign.get("budget_basis_json") or {}).get("strategy") or {}).get(
             "allocation") or []
-        capacity = capacity_of(daily_of(campaign.get("budget_planned"), _days(campaign)), cap,
-                               len(allocation))
+        daily = budget.daily_of(campaign.get("budget_planned"), _days(campaign))
+        capacity = capacity_of(daily, cap, len(allocation))
     basis = prices_basis(blocks)
     return {
         "product": product,

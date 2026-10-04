@@ -10,7 +10,6 @@ entity in a scenario is inserted through `external.upsert_entity`, and the class
 `entity_id` is that inserted ad row's own `id` (never a literal like `"ent_1"`).
 """
 
-import math
 import unittest
 from datetime import date, timedelta
 
@@ -161,7 +160,7 @@ class ScaleCandidatesTest(_CandidateFixture):
         self.assertEqual(len(candidates), 1)
         candidate = candidates[0]
         self.assertEqual(candidate["scale"]["from"], 1000.0)
-        self.assertEqual(candidate["scale"]["to"], 1200)  # ceil(1000*1.2)
+        self.assertEqual(candidate["scale"]["to"], 1200)  # whole(1000*1.2)
         self.assertEqual(candidate["scale"]["owner"]["ads_count"], 2)
         # F28-I02: the row's own triage item is the cheapest 划算 ad.
         self.assertEqual(candidate["triage"]["entity_id"], ad1)
@@ -218,12 +217,14 @@ class ScaleCandidatesTest(_CandidateFixture):
                            campaign_id=self.campaign)]
         self.assertEqual(self.candidates(items), [])
 
-    def test_to_is_ceil_of_from_times_1_2(self):
-        self.campaign_entity(budget_type="daily", budget_amount=999)
+    def test_to_is_whole_of_from_times_1_2(self):
+        # F48 Contract M: half up through `budget.whole` -- 1001 x 1.2 = 1201.2 -> 1201 (the old
+        # ceil gave 1202).
+        self.campaign_entity(budget_type="daily", budget_amount=1001)
         ad1 = self.ad_entity(native_id="ad1")["id"]
         items = [self.item(entity_id=ad1, cls="flat", campaign_id=self.campaign)]
         candidates = self.candidates(items)
-        self.assertEqual(candidates[0]["scale"]["to"], math.ceil(999 * 1.2))
+        self.assertEqual(candidates[0]["scale"]["to"], 1201)
 
     def test_every_other_grade_among_active_ads_blocks_the_owner(self):
         # 偏貴／太貴／沒賣出 and 資料不足／未判斷 each block; only 划算 and 剛開始 pass.

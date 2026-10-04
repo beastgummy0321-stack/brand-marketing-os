@@ -2,15 +2,30 @@
 cold-start scenarios are 2/5/10x the one cap (F28-I01) with the 冷啟動估算 flag, history
 scenarios are x0.6/x1/x1.6 of the previous daily budget with the sample named, and `split`
 always sums exactly to the total.
+
+F48 Contract M: `whole`／`daily_of`／`total_of` are the one money calculator; adopt (and a new
+total after adoption) leaves `budget_planned == budget_total == Σ group daily × days`, a draft's
+chosen total is stored unchanged with a `budget_preview` note, and the period is fixed after
+adoption.
 """
 
+import json
+import random
 import unittest
-from datetime import date
+from datetime import date, timedelta
+from uuid import uuid4
 
+from fastapi.testclient import TestClient
+
+import app.main as main
 import app.shared.web as web
-from app.ads import budget
+from app.ads import budget, channels, learning_rank, plan
+from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi_repo
 from app.core import db as coredb
+from app.llm import providers
+
+from .identity_test_helpers import mint_hs256
 
 
 class BreakevenCpaTest(unittest.TestCase):
@@ -307,3 +322,297 @@ class RecommendedWithAmountTest(unittest.TestCase):
             ],
         }
         self.assertIsNone(self._read(dates=False, stored=stored)["recommended"])
+
+
+# -- F48 Contract M: one money calculator ---------------------------------------------------------
+
+_ROLES = ("new", "retarget", "explore")
+_LABELS = {"new": "新客", "retarget": "再行銷", "explore": "探索"}
+
+
+def _allocation(pcts) -> list[dict]:
+    return [
+        {"role": role, "label": _LABELS[role], "pct": pct, "rationale": None}
+        for role, pct in zip(_ROLES, pcts, strict=True)
+    ]
+
+
+def _random_pcts(rng) -> tuple:
+    first = rng.randint(5, 85)
+    second = rng.randint(5, 95 - first)
+    return first, second, 100 - first - second
+
+
+def _fake(rendered_output: str) -> providers.FakeProvider:
+    return providers.FakeProvider(response=providers.ProviderResponse(
+        output_text=rendered_output, structured=None,
+        usage=providers.Usage(input_tokens=100, output_tokens=50), stop_reason="end_turn",
+    ))
+
+
+def _coordinates(tag: str) -> dict:
+    return {
+        "audience": f"aud_{tag}", "pain": f"pain_{tag}", "angle": f"angle_{tag}",
+        "hook": f"hook_{tag}", "proof": f"proof_{tag}", "offer": f"offer_{tag}",
+        "format": f"format_{tag}",
+    }
+
+
+_PLAN_REPLY = json.dumps({"groups": [
+    {"role": "new", "name": "新客組", "ads": [
+        {"name": "新客-廣告一", "coordinates": _coordinates("new1"),
+         "scene": "上班族午休在辦公室滑手機找點心"}]},
+    {"role": "retarget", "name": "再行銷組", "ads": [
+        {"name": "再行銷-廣告一", "coordinates": _coordinates("rt1"),
+         "scene": "看過商品頁的人晚上在家猶豫要不要下單"}]},
+    {"role": "explore", "name": "探索組", "ads": [
+        {"name": "探索-廣告一", "coordinates": _coordinates("ex1"),
+         "scene": "健身房的人運動完在櫃檯看補給品"}]},
+]}, ensure_ascii=False)
+
+
+class MoneyCalculatorTest(unittest.TestCase):
+    """`whole` is half up (never banker's), `daily_of` floors, `total_of` is exact."""
+
+    def test_whole_is_half_up_and_passes_none(self):
+        self.assertEqual([budget.whole(v) for v in (2.5, 3.5, 0.49, 1999.5, -0.5)],
+                         [3, 4, 0, 2000, 0])
+        self.assertIsNone(budget.whole(None))
+        # The owner-facing string and the wizard's break-even are the same rounding.
+        self.assertEqual(learning_rank.whole(2.5), "3")
+        self.assertEqual(learning_rank.whole(1234.5), "1,235")
+
+    def test_daily_of_floors_and_total_of_is_exact(self):
+        self.assertEqual(budget.daily_of(10000, 7), 1428)
+        self.assertEqual(budget.daily_of(30001, 30), 1000)
+        self.assertEqual(budget.daily_of(800, 31), 25)
+        self.assertIsNone(budget.daily_of(None, 7))
+        self.assertIsNone(budget.daily_of(1000, 0))
+        self.assertEqual(budget.total_of(1428, 7), 9996)
+        self.assertIsNone(budget.total_of(None, 7))
+        self.assertIsNone(budget.total_of(1000, 0))
+
+    def test_preview_notes_only_a_total_the_daily_cannot_reach(self):
+        self.assertEqual(budget.preview(800, 31), {
+            "daily": 25, "total": 775, "chosen": 800,
+            "note": "每天要是整數，這期實際 775",
+        })
+        self.assertEqual(budget.preview(15000, 10)["note"], None)
+        self.assertIsNone(budget.preview(None, 10))
+
+    def test_cap_row_never_goes_over_its_own_cap(self):
+        campaign = {"start_date": date(2026, 10, 1), "end_date": date(2026, 10, 31),
+                    "constraints_json": {"budget": 10000}}
+        result = budget.current_scenarios({"mode": "cold_start"}, campaign, cap=300)
+        cap_row = next(r for r in result["scenarios"] if r["key"] == budget.CAP_KEY)
+        self.assertEqual((cap_row["daily"], cap_row["total"], cap_row["over_cap"]),
+                         (322, 9982, 0))
+
+    def test_split_of_the_daily_total_always_adds_up(self):
+        rng = random.Random(48)
+        cases = [(10000, 7, (50, 30, 20)), (30001, 30, (50, 30, 20))]
+        cases += [(rng.randint(100, 500000), rng.randint(1, 60), _random_pcts(rng))
+                  for _ in range(300)]
+        for total, days, pcts in cases:
+            with self.subTest(total=total, days=days, pcts=pcts):
+                daily = budget.daily_of(total, days)
+                amounts = [row["amount"] for row in budget.split(
+                    daily, {str(i): p / 100 for i, p in enumerate(pcts)})]
+                self.assertEqual(sum(amounts), daily)
+                self.assertTrue(all(isinstance(a, int) for a in amounts))
+                adopted = budget.total_of(sum(amounts), days)
+                self.assertLessEqual(adopted, total)
+                self.assertGreater(adopted, total - days)
+
+    def test_resplit_keeps_a_hand_added_groups_share(self):
+        groups = [
+            {"id": "a", "role": "new", "daily_budget": 500},
+            {"id": "b", "role": "explore", "daily_budget": 300},
+            {"id": "c", "role": "retarget", "daily_budget": 200},  # not in the allocation
+        ]
+        allocation = [{"role": "new", "pct": 60}, {"role": "explore", "pct": 40}]
+        after = budget.resplit(2000, groups, allocation)
+        self.assertEqual(sum(after.values()), 2000)
+        self.assertEqual(after, {"a": 960, "b": 640, "c": 400})
+
+
+class AdoptRoundsTheTotalPropertyTest(unittest.TestCase):
+    """Done 2／7: after adopt `budget_planned == budget_total == Σ group daily × days`, every group
+    daily is whole and Σ daily == `daily_of(chosen, days)` -- over random totals／days／pcts."""
+
+    def setUp(self):
+        self.org_id = coredb.DEV_ORG_ID
+        self.brand_id = bi_repo.create_brand(
+            web.conn, org_id=self.org_id, name="測試品牌：一套算錢", client_name=None,
+            actor="測試員",
+        )["id"]
+        self._orig_provider = plan.PROVIDER
+
+    def tearDown(self):
+        plan.PROVIDER = self._orig_provider
+
+    def test_adopt_leaves_planned_equal_to_the_derived_total(self):
+        rng = random.Random(7)
+        cases = [(10000, 7, (50, 30, 20)), (30001, 30, (50, 30, 20))]
+        cases += [(rng.randint(1000, 300000), rng.randint(1, 45), _random_pcts(rng))
+                  for _ in range(10)]
+        start = date(2026, 10, 1)
+        for n, (total, days, pcts) in enumerate(cases):
+            with self.subTest(total=total, days=days, pcts=pcts):
+                campaign = ads_repo.create_campaign(web.conn, self.org_id, self.brand_id, {
+                    "name": f"一套算錢 第 {n} 期", "goal_text": "衝購買",
+                    "objective": "購買", "target_cost": 300,
+                    "start_date": start, "end_date": start + timedelta(days=days - 1),
+                    "status": "draft", "budget_planned": total,
+                    "budget_scenario": "custom",
+                    "budget_basis_json": {"strategy": {"allocation": _allocation(pcts)}},
+                }, created_by="測試員")
+                plan.PROVIDER = _fake(_PLAN_REPLY)
+                detail = plan.adopt_strategy(
+                    web.conn, self.org_id, self.brand_id, campaign["id"], actor="測試員",
+                )
+                dailies = [float(g["daily_budget"]) for g in detail["groups"]]
+                self.assertTrue(all(d.is_integer() for d in dailies))
+                self.assertEqual(sum(dailies), budget.daily_of(total, days))
+                self.assertEqual(float(detail["budget_planned"]), sum(dailies) * days)
+                self.assertEqual(float(detail["budget_total"]), float(detail["budget_planned"]))
+                self.assertIsNone(detail["budget_preview"]["note"])
+                # The strategy tab's role amounts are the groups' money after adoption.
+                amounts = [r["amount"] for r in
+                           detail["budget_basis_json"]["strategy"]["allocation"]]
+                self.assertEqual(sum(amounts), float(detail["budget_planned"]))
+
+
+class BudgetRoutesTest(unittest.TestCase):
+    """Route contract: a draft's custom total is stored unchanged with `budget_preview.note`; on a
+    `ready` campaign a new total re-splits the unbound ad sets (`resplit`), a bound one is 409;
+    PATCH of the period after adoption is 409 `plan_already_adopted`."""
+
+    START = date(2026, 10, 1)
+
+    def setUp(self):
+        self.client = TestClient(main.app)
+        user = uuid4()
+        token = mint_hs256(sub=str(user), email=f"adsmoney-{user.hex[:8]}@example.com")
+        self.headers = {"Authorization": f"Bearer {token}"}
+        self.org_id = self.client.get(
+            "/api/identity/me", headers=self.headers).json()["org"]["id"]
+        self.brand_id = bi_repo.create_brand(
+            web.conn, org_id=self.org_id, name="測試品牌：預算路由", client_name=None,
+            actor="測試員",
+        )["id"]
+
+    def _campaign(self, *, days: int, status: str = "draft", planned=None) -> dict:
+        allocation = [dict(row, amount=None) for row in _allocation((50, 30, 20))]
+        campaign = ads_repo.create_campaign(web.conn, self.org_id, self.brand_id, {
+            "name": "預算路由", "goal_text": "衝購買", "objective": "購買", "target_cost": 300,
+            "start_date": self.START, "end_date": self.START + timedelta(days=days - 1),
+            "status": status, "budget_planned": planned, "budget_scenario": "custom",
+            "budget_basis_json": {
+                "scenarios": {"mode": "history", "recommended": "recommended", "basis": {},
+                              "scenarios": [{"key": "recommended", "label": "照上一期",
+                                             "daily": 1000, "total": 1000 * days,
+                                             "caption": "x"}]},
+                "strategy": {"allocation": allocation},
+            },
+        }, created_by="測試員")
+        web.conn.commit()
+        return campaign
+
+    def _ready(self) -> tuple[dict, list[dict]]:
+        campaign = self._campaign(days=10, status="ready", planned=10000)
+        channel_key = channels.default_channel_key(web.conn, self.org_id, self.brand_id, None)
+        groups = [
+            ads_repo.create_group(web.conn, self.org_id, self.brand_id, campaign["id"],
+                                  channel_key=channel_key, name=_LABELS[role], role=role,
+                                  daily_budget=daily)
+            for role, daily in (("new", 500), ("retarget", 300), ("explore", 200))
+        ]
+        web.conn.commit()
+        return campaign, groups
+
+    def _url(self, campaign_id: str, suffix: str = "") -> str:
+        return f"/api/ads/brands/{self.brand_id}/campaigns/{campaign_id}{suffix}"
+
+    def _choose_total(self, campaign_id: str, total):
+        return self.client.post(
+            self._url(campaign_id, "/strategy/scenario"),
+            json={"scenario_key": "custom", "custom_total": total}, headers=self.headers,
+        )
+
+    def test_a_custom_total_is_stored_unchanged_and_the_preview_notes_the_real_total(self):
+        campaign = self._campaign(days=31)
+        response = self._choose_total(campaign["id"], 800)
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertIsNone(body["resplit"])
+        self.assertEqual(float(body["campaign"]["budget_planned"]), 800)
+        self.assertEqual(body["campaign"]["budget_preview"], {
+            "daily": 25, "total": 775, "chosen": 800, "note": "每天要是整數，這期實際 775",
+        })
+        read = self.client.get(self._url(campaign["id"]), headers=self.headers)
+        self.assertEqual(read.json()["campaign"]["budget_preview"]["note"],
+                         "每天要是整數，這期實際 775")
+
+    def test_a_total_below_one_a_day_is_refused_and_nothing_is_stored(self):
+        campaign = self._campaign(days=31)
+        response = self._choose_total(campaign["id"], 30)
+        self.assertEqual(response.status_code, 400, response.text)
+        error = response.json()["error"]
+        self.assertEqual(error["code"], "total_below_one_per_day")
+        self.assertEqual(error["message"], "總預算太少：每天不到 1 元")
+        self.assertIsNone(
+            ads_repo.get_campaign(web.conn, self.org_id, self.brand_id,
+                                  campaign["id"])["budget_planned"])
+        # Exactly one a day is enough.
+        self.assertEqual(self._choose_total(campaign["id"], 31).status_code, 200)
+
+    def test_a_new_total_on_a_ready_campaign_resplits_the_ad_sets(self):
+        campaign, groups = self._ready()
+        response = self._choose_total(campaign["id"], 20005)
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        by_id = {g["id"]: g for g in groups}
+        self.assertEqual(
+            sorted((r["role"], r["before"], r["after"]) for r in body["resplit"]),
+            [("explore", 200, 400), ("new", 500, 1000), ("retarget", 300, 600)],
+        )
+        self.assertEqual({r["group_id"] for r in body["resplit"]}, set(by_id))
+        detail = body["campaign"]
+        self.assertEqual(sorted(float(g["daily_budget"]) for g in detail["groups"]),
+                         [400, 600, 1000])
+        # Adopt's rounding: 2000 a day x 10 days, and the derived total agrees.
+        self.assertEqual(float(detail["budget_planned"]), 20000)
+        self.assertEqual(float(detail["budget_total"]), 20000)
+
+    def test_a_bound_ad_set_refuses_the_new_total_and_changes_nothing(self):
+        campaign, groups = self._ready()
+        web.conn.execute("UPDATE ads_delivery_group SET local_state = 'bound' WHERE id = %s",
+                         (groups[0]["id"],))
+        web.conn.commit()
+        response = self._choose_total(campaign["id"], 20005)
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertEqual(response.json()["error"]["code"], "campaign_bound")
+        detail = ads_repo.campaign_detail(web.conn, self.org_id, self.brand_id, campaign["id"])
+        self.assertEqual(float(detail["budget_planned"]), 10000)
+        self.assertEqual(sorted(float(g["daily_budget"]) for g in detail["groups"]),
+                         [200, 300, 500])
+
+    def test_the_period_cannot_change_after_adoption_but_the_cap_can(self):
+        campaign, _groups = self._ready()
+        for body in ({"start_date": "2026-10-02"}, {"end_date": "2026-10-20"},
+                     {"product_ids": []}, {"customer_group_ids": []},
+                     {"constraints_json": {"platform": "google_ads"}}):
+            with self.subTest(body=body):
+                response = self.client.patch(self._url(campaign["id"]), json=body,
+                                             headers=self.headers)
+                self.assertEqual(response.status_code, 409, response.text)
+                self.assertEqual(response.json()["error"]["code"], "plan_already_adopted")
+        response = self.client.patch(self._url(campaign["id"]),
+                                     json={"constraints_json": {"budget": 30000}},
+                                     headers=self.headers)
+        self.assertEqual(response.status_code, 200, response.text)
+        draft = self._campaign(days=10)
+        response = self.client.patch(self._url(draft["id"]), json={"end_date": "2026-10-20"},
+                                     headers=self.headers)
+        self.assertEqual(response.status_code, 200, response.text)
