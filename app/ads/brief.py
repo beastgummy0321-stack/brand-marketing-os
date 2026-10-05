@@ -24,7 +24,9 @@ cap (`field_sources.cap = "sell_way"`; unset -> break-even, resolved by `targets
 request's (the page preselects the brand's goal), platform = the plan default. Request values win
 (`"user"`). `audience_hint` stays readable on old campaigns and is still accepted from the
 request, but the model's audience guess is no longer stored on a structured create (the audience
-is the groups). The sentence path gets no sell-way defaults.
+is the groups). F50 (R6 B1): the sentence path takes the platform and cap defaults of the
+sell-way the sentence named (else the brand's platform); a value the model read from the
+sentence is `"parsed"`, never `"user"`.
 
 F46-I08 (feature F46 Contract D, user ruling 2026-10-02, supersedes ads §6.47 for these three
 fields): a structured create starts from the same sell-way's previous campaign
@@ -478,8 +480,6 @@ def create_draft(conn, org_id: str, brand_id: str, *, goal_text: str, start_date
     checked = _check_picks(conn, brand_id, picks) if structured else None
     if checked is None and picks.get("customer_group_ids") not in (None, []):
         raise ValueError("customer_group_unknown")  # groups belong to a picked sell-way
-    # The sentence path resolves its defaults after the model named a sell-way (below).
-    defaults = _sell_way_defaults(conn, org_id, brand_id, checked) if checked else None
     goal_composed = False
     dates_source = "user"
     if checked is not None:
@@ -591,11 +591,12 @@ def create_draft(conn, org_id: str, brand_id: str, *, goal_text: str, start_date
         # The user's picks win over whatever the model read back from the composed sentence.
         product_ids = checked["product_ids"]
         fields["objective"] = checked["objective"]
+        way = checked
     else:
         # F50 (R6 B1): the sentence path fills platform and cap defaults exactly like the
         # structured path -- from the sell-way the sentence named, else the brand's platform.
-        defaults = _sell_way_defaults(
-            conn, org_id, brand_id, _sentence_sell_way(conn, brand_id, product_ids))
+        way = _sentence_sell_way(conn, brand_id, product_ids)
+    defaults = _sell_way_defaults(conn, org_id, brand_id, way)
 
     # A stated value (request first, then what the sentence said) wins; F43-I04: whatever is
     # still empty comes from the picked sell-way (`defaults`), named `"sell_way"`.
