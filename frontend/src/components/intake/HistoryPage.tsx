@@ -185,7 +185,8 @@ export function HistoryPage({ brandId }: { brandId: string }) {
   );
 
   if (data.backfill && data.backfill.ad_rows === 0) {
-    const ended = outcome !== null && outcome.state !== "running";
+    // A done pull with no row for this brand says nothing about it (see `BackfillOutcomeLine`): the start view stays.
+    const ended = outcome?.state === "empty" || outcome?.state === "failed";
     return (
       <div className="surface">
         <div className="surface-body flex flex-col items-start gap-3 pt-5">
@@ -292,7 +293,8 @@ function BackfillLine({
   ) : (
     <BackfillOutcomeLine backfill={backfill} retrying={starting} onRetry={onStart} />
   );
-  if (!running && !backfill?.outcome && !statusError && !startError) return null;
+  const shows = !!backfill?.outcome && (backfill.outcome.state !== "done" || backfill.ad_rows > 0);
+  if (!running && !shows && !statusError && !startError) return null;
   return (
     <div className="flex flex-col items-start gap-2">
       {line}
@@ -305,7 +307,9 @@ function BackfillLine({
 /** F50-I16 (Contract J, R7 A12): how the last 37-month pull ended, from `GET …/backfill`'s stored `outcome` (F50-I10):
  * done → 「拉完了」 with the stored date range and row count (done carries no sentence); empty → 「拉完了：這段期間沒有廣告
  * 資料」 with the served range sentence; failed → the served reason and 「再試一次」 (starts the pull again). Nothing while
- * it runs or when no pull ever ran. Shared by the history page and the onboarding Meta panel. */
+ * it runs or when no pull ever ran. The pull is one per org while the rows are this brand's: a done pull with no row for
+ * this brand (an account bound after the org's pull) claims nothing, so the page keeps its start button. Shared by the
+ * history page and the onboarding Meta panel. */
 export function BackfillOutcomeLine({
   backfill,
   retrying,
@@ -321,6 +325,7 @@ export function BackfillOutcomeLine({
   const text = compact ? "text-[12.5px]" : "text-sm";
   if (!backfill || !outcome) return null;
   if (outcome.state === "done") {
+    if (backfill.ad_rows === 0) return null;
     const range =
       backfill.earliest_spend_date && backfill.latest_spend_date
         ? `${formatDay(backfill.earliest_spend_date, "ymd")}～${formatDay(backfill.latest_spend_date, "ymd")}，`

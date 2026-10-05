@@ -81,6 +81,15 @@ describe("HistoryPage backfill outcome", () => {
     expect(await screen.findByText("拉完了：2023/09/01～2026/10/04，共 120 筆廣告每日數字")).toBeTruthy();
   });
 
+  it("a done org pull with no row for this brand (an account bound after it) claims nothing and keeps the start button", async () => {
+    mockHistory.mockResolvedValue(history(0));
+    mockStatus.mockResolvedValue(status({ ad_rows: 0, outcome: { state: "done", code: null, text: null, finished_at: "2026-10-01T03:00:00+00:00" } }));
+    render(<HistoryPage brandId="brd_x" />);
+    expect(await screen.findByRole("button", { name: "開始拉 37 個月的數字" })).toBeTruthy();
+    await waitFor(() => expect(mockStatus).toHaveBeenCalled());
+    expect(screen.queryByText(/拉完了/)).toBeNull();
+  });
+
   it("never pulled: the start button stays and nothing claims an outcome", async () => {
     mockHistory.mockResolvedValue(history(0));
     mockStatus.mockResolvedValue(status({ outcome: null }));
