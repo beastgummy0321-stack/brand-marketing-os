@@ -26,7 +26,9 @@ request's (the page preselects the brand's goal), platform = the plan default. R
 request, but the model's audience guess is no longer stored on a structured create (the audience
 is the groups). F50 (R6 B1): the sentence path takes the platform and cap defaults of the
 sell-way the sentence named (else the brand's platform); a value the model read from the
-sentence is `"parsed"`, never `"user"`.
+sentence is `"parsed"`, never `"user"`. F50-I18: that named sell-way also gives the audience
+exactly like the structured path -- its customer groups (`field_sources.audience = "sell_way"`),
+the model's audience guess not stored beside them; a sentence naming none keeps the parsed guess.
 
 F46-I08 (feature F46 Contract D, user ruling 2026-10-02, supersedes ads §6.47 for these three
 fields): a structured create starts from the same sell-way's previous campaign
@@ -634,9 +636,10 @@ def create_draft(conn, org_id: str, brand_id: str, *, goal_text: str, start_date
 
     # A stated value (request first, then what the sentence said) wins; F43-I04: whatever is
     # still empty comes from the picked sell-way (`defaults`), named `"sell_way"`.
-    if checked is not None:
-        # The audience of a structured create is the sell-way's customer groups: the model's
-        # audience guess is not stored beside them (only a request's own hint is).
+    if way is not None:
+        # The audience of a create with a sell-way -- picked, or named by the sentence (F50-I18) --
+        # is the sell-way's customer groups: the model's audience guess is not stored beside them
+        # (only a request's own hint is).
         audience_hint = extras["audience_hint"]
     else:
         audience_hint = extras["audience_hint"] or fields["audience_hint"]
@@ -690,7 +693,7 @@ def create_draft(conn, org_id: str, brand_id: str, *, goal_text: str, start_date
     if "audience" in parsed_keys:
         audience_source = "parsed"  # the model's guess is not the user's pick (planning #12)
     customer_group_ids = None
-    if checked is not None:
+    if way is not None:
         if defaults["customer_group_ids"] is not None:
             customer_group_ids, audience_source = defaults["customer_group_ids"], "user"
         else:

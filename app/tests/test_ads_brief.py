@@ -568,7 +568,27 @@ class SentencePathDefaultsTest(_SellWayBase):
         self.assertEqual(detail["cap"]["own_value"], 600)  # 1000 − 300 − 100
         self.assertEqual(sources["cap"], "break_even")
         self.assertEqual(detail["constraints_json"]["budget"], 20000)
-        self.assertEqual((sources["budget"], sources["audience"]), ("parsed", "parsed"))
+        self.assertEqual(sources["budget"], "parsed")
+
+    def test_a_sentence_naming_a_sell_way_gets_its_groups_as_the_audience(self):
+        # F50-I18: exactly like the structured path -- the named sell-way's customer groups are
+        # the audience (`"sell_way"`) and the model's audience guess is not stored beside them.
+        self._reply()  # the model also guessed 「上班族」
+        detail = self._sentence()
+        groups = bi_repo.list_customer_groups(web.conn, self.brand_id, self.product["id"])
+        self.assertTrue(groups)
+        context = detail["context_json"]
+        self.assertEqual(context["customer_group_ids"], [g["id"] for g in groups])
+        self.assertEqual(context["field_sources"]["audience"], "sell_way")
+        self.assertIsNone(context["audience_hint"])
+
+    def test_a_sentence_naming_no_sell_way_keeps_the_parsed_audience(self):
+        self._reply(product_ids=[])
+        detail = self._sentence()
+        context = detail["context_json"]
+        self.assertNotIn("customer_group_ids", context)
+        self.assertEqual(context["audience_hint"], "上班族")
+        self.assertEqual(context["field_sources"]["audience"], "parsed")
 
     def test_a_platform_the_model_read_is_parsed(self):
         self._reply(platform="meta")
@@ -603,7 +623,7 @@ class SentencePathDefaultsTest(_SellWayBase):
         self.assertEqual((sources["cap"], sources["dates"]), ("user", "user"))
 
     def test_chips_the_user_set_stay_the_users(self):
-        self._reply(platform="meta")
+        self._reply(platform="meta", product_ids=[])  # a named sell-way's groups would win
         with patch.object(brief.wizard_options, "default_platform", return_value="meta"):
             detail = self._create(goal_text="夜跑背心衝一波買氣",
                                   constraints={"budget": 5000, "platform": "meta"},
