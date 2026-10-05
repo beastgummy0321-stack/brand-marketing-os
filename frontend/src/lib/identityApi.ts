@@ -1,4 +1,4 @@
-import { apiFetch, errorMessageFrom } from "./http";
+import { apiFetch, readJson } from "./http";
 import { setOrgId } from "./auth";
 export interface OrgOut {
   id: string;
@@ -19,10 +19,7 @@ export interface Identity {
 }
 export async function fetchIdentity(): Promise<Identity> {
   const res = await apiFetch("/api/identity/me");
-  const body = await res.json();
-  if (!res.ok)
-    throw new Error(errorMessageFrom(body, "無法讀取工作區，請重新載入。"));
-  const identity = body as Identity;
+  const identity = await readJson<Identity>(res, "無法讀取工作區，請重新載入。");
   // HTTP may recover from forbidden_org. Only server-resolved identity can scope preferences.
   setOrgId(identity.org.id);
   return identity;

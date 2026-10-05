@@ -2,7 +2,7 @@
  * 型別逐欄對照 `app/dashboard/routes_jobs_api.py`：資料來源是 procrastinate 佇列本身，每件
  * 工作都有它在整條佇列裡的位置（進行中排最前面）；其他組織的工作只算進 `other_count`。 */
 
-import { apiFetch, throwIfFailed } from "./http";
+import { apiFetch, readJson } from "./http";
 
 export type ActiveJobKind =
   | "scan" | "persona" | "product_scan" | "product_research" | "library_convert"
@@ -70,6 +70,5 @@ export const ACTIVE_JOB_KIND_LABELS: Record<ActiveJobKind, string> = {
 
 export async function fetchActiveJobs(): Promise<ActiveJobsSnapshot> {
   const res = await apiFetch("/api/jobs/active");
-  await throwIfFailed(res, `讀取失敗（狀態碼 ${res.status}）`);
-  return (await res.json()) as ActiveJobsSnapshot;
+  return readJson<ActiveJobsSnapshot>(res, `讀取失敗（狀態碼 ${res.status}）`);
 }

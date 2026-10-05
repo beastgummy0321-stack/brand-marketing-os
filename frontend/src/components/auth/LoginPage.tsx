@@ -20,16 +20,18 @@ export function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [magicLinkSent, setMagicLinkSent] = useState(false);
-  // F47-I02: `apiFetch` marks a 401 redirect; read-and-clear once in an effect (StrictMode runs it
-  // twice in dev, and the second read is already false — so only ever set it to true here).
-  const [expired, setExpired] = useState(false);
+  // F47-I02／F51 Contract H: `lib/http.ts` marks an expired session (and a write it did not send);
+  // read-and-clear once in an effect (StrictMode runs it twice in dev, and the second read is already
+  // empty — so only ever set it here, never clear it from the read).
+  const [expired, setExpired] = useState<null | { actionLost: boolean }>(null);
   useEffect(() => {
-    if (takeSessionExpired()) setExpired(true);
+    const mark = takeSessionExpired();
+    if (mark.expired) setExpired({ actionLost: mark.actionLost });
   }, []);
 
   const form = useFormSubmit(async () => {
     setMagicLinkSent(false);
-    setExpired(false);
+    setExpired(null);
     let errorMessage: string | null;
     if (mode === "signin") {
       errorMessage = await signInWithPassword(email, password);
@@ -100,6 +102,7 @@ export function LoginPage() {
           {expired && (
             <p role="status" className="mt-4 rounded-md bg-warning/10 px-3 py-2 text-sm text-warning">
               登入已過期，請重新登入
+              {expired.actionLost && "。剛才按的那一下沒有送出，沒有資料被改；回到原頁後請再按一次。"}
             </p>
           )}
 

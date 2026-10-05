@@ -5,7 +5,7 @@
  * 與它們的型別隨 `app/ads/` 一起刪掉——那些欄位全部是廣告成效數字。這支檔案現在只剩
  * 跨品牌總覽與警示「知道了」兩件事。 */
 
-import { apiFetch, throwIfFailed } from "./http";
+import { apiFetch, readJson, throwIfFailed } from "./http";
 
 /** 下一步指南卡（票 04-guide-card-engine）：一件事＋一鍵前往。
  * 對應 app/dashboard/guide_cards.py build() 的輸出形狀。 */
@@ -31,8 +31,7 @@ interface Envelope<T> {
 
 export async function fetchOverview(): Promise<DashboardBrandCard[]> {
   const res = await apiFetch("/api/dashboard/overview");
-  await throwIfFailed(res, `儀表板 API 回應異常（狀態碼 ${res.status}）`);
-  const body: Envelope<DashboardBrandCard[]> = await res.json();
+  const body = await readJson<Envelope<DashboardBrandCard[]>>(res, `儀表板 API 回應異常（狀態碼 ${res.status}）`);
   return body.data;
 }
 
@@ -44,8 +43,7 @@ export interface ArchivedBrand {
 
 export async function fetchArchivedBrands(): Promise<ArchivedBrand[]> {
   const res = await apiFetch("/api/dashboard/archived-brands");
-  await throwIfFailed(res, `讀不到已封存的品牌（狀態碼 ${res.status}）`);
-  const body: Envelope<ArchivedBrand[]> = await res.json();
+  const body = await readJson<Envelope<ArchivedBrand[]>>(res, `讀不到已封存的品牌（狀態碼 ${res.status}）`);
   return body.data;
 }
 
@@ -69,8 +67,7 @@ export interface BrandMonthMoney {
 
 export async function fetchBrandMonth(brandId: string): Promise<BrandMonthMoney> {
   const res = await apiFetch(`/api/dashboard/brands/${encodeURIComponent(brandId)}/month`);
-  await throwIfFailed(res, `本月營收讀取失敗（狀態碼 ${res.status}）`);
-  const body: Envelope<BrandMonthMoney> = await res.json();
+  const body = await readJson<Envelope<BrandMonthMoney>>(res, `本月營收讀取失敗（狀態碼 ${res.status}）`);
   return body.data;
 }
 
