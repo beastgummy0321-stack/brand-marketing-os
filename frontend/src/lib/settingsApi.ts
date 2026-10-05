@@ -123,10 +123,12 @@ export async function fetchRuleCards(brandId: string): Promise<RuleCardsData> {
   return body.data;
 }
 
+/** F50 Contract I: each field as typed (`typedValue`); the server parses it and refuses with the field's Bounds
+ * sentence (`field_errors`). A percent field is the typed percent (70 = 70%). */
 export async function saveRuleCard(
   brandId: string,
   cardKey: string,
-  fields: Record<string, number>,
+  fields: Record<string, string>,
 ): Promise<RuleCard> {
   const res = await apiFetch(
     `/api/settings/rule-cards/brands/${encodeURIComponent(brandId)}/${encodeURIComponent(cardKey)}`,

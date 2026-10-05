@@ -44,8 +44,7 @@ export const RULES: Record<Rule, RegExp[]> = {
 interface Pending { file: string; rule: Rule; text: string; issue: string }
 
 /** Today's hits (file relative to `src/`, the trimmed line) with the issue that removes each: the product done page
- * reads the served checklist in F50-I15. The rule-card editor's `Number(` stays until `lib/settingsApi.ts`
- * `saveRuleCard` takes the typed text (outside F50-I04's touch; reported to the lead). */
+ * reads the served checklist in F50-I15. */
 const PENDING: Pending[] = [
   { file: "components/intake/product/ProductDoneStep.tsx", rule: "length_ready", issue: "F50-I15",
     text: '{ step: 1, ok: saved(1) && whatParts.length > 0, label: "商品是什麼", detail: whatParts.join("、") },' },
@@ -55,8 +54,6 @@ const PENDING: Pending[] = [
     text: "ok: saved(3) && proof.length + claims.length > 0," },
   { file: "components/intake/product/ProductDoneStep.tsx", rule: "length_ready", issue: "F50-I15",
     text: '{ step: 4, ok: saved(4) && ways.length > 0, label: `賣法 ${ways.length} 種`, detail: ways.map(sellWayText).join("・") },' },
-  { file: "components/settings/RuleCardsSection.tsx", rule: "number_cast", issue: "F50-I04",
-    text: 'for (const [key, raw] of Object.entries(values)) if (raw.trim() !== "") typed[key] = Number(raw);' },
 ];
 
 /** Permanent: hits that do not read a typed field, with the reason (a stale entry still fails). */

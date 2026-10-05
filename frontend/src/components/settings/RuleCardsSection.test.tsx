@@ -137,7 +137,7 @@ describe("RuleCardsSection 規則卡範圍與重設", () => {
     expect(max.closest("label")?.textContent).toContain(sentence);
     expect(margin.closest("label")?.textContent).toContain("毛利率要大於 0、小於 100（例如填 70 代表毛利 70%）。");
     // What was typed is sent as typed; the emptied margin is left out (never 0).
-    expect(vi.mocked(saveRuleCard)).toHaveBeenCalledWith("a", "plan_count", { min: 6, max: 3 });
+    expect(vi.mocked(saveRuleCard)).toHaveBeenCalledWith("a", "plan_count", { min: "6", max: "3" });
     expect(min).toHaveProperty("value", "6");
 
     await userEvent.type(margin, "60");

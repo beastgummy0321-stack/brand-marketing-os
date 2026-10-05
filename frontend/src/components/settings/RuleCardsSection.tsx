@@ -3,6 +3,7 @@ import { EmptyState } from "@/components/layout/EmptyState";
 import { Skeleton } from "@/components/layout/Skeleton";
 import type { BrandOption, RuleCard } from "@/lib/settingsApi";
 import { fetchBrandOptions, fetchRuleCards, resetRuleCard, saveRuleCard } from "@/lib/settingsApi";
+import { typedValue } from "@/lib/typedNumber";
 import { SectionCard } from "./shared/SectionCard";
 import { SaveButton } from "./shared/SaveButton";
 import { ApiResponseError } from "@/lib/http";
@@ -167,12 +168,15 @@ function RuleCardItem({
   /** The server's refusal of each field (its `field_errors`), shown under that field. */
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
-  // F47-I03 (drill-10 V3 front): send what was typed. A field left empty is not sent (the server
-  // reads a missing field as empty and refuses it with that field's sentence) -- never Number("") = 0.
+  // F47-I03 / F50 Contract I: send what was typed, as text (the server parses it). A field left empty is
+  // not sent (the server reads a missing field as empty and refuses it with that field's sentence).
   const saveForm = useFormSubmit(async () => {
     setFieldErrors({});
-    const typed: Record<string, number> = {};
-    for (const [key, raw] of Object.entries(values)) if (raw.trim() !== "") typed[key] = Number(raw);
+    const typed: Record<string, string> = {};
+    for (const [key, raw] of Object.entries(values)) {
+      const value = typedValue(raw);
+      if (value !== null) typed[key] = value;
+    }
     try {
       onUpdated(await saveRuleCard(brandId, card.key, typed));
     } catch (err) {
