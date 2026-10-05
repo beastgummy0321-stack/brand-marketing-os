@@ -521,7 +521,7 @@ describe("TodayDecisions", () => {
 
 
 it("queue rows preserve an unknown readable count", () => {
-  wrap(<QueueRow brandId="b" item={row("unknown", "refresh_creative", {refresh: null})} recovering={false} />);
+  wrap(<QueueRow brandId="b" item={row("unknown", "refresh_creative", {refresh: undefined})} recovering={false} />);
   expect(screen.getByText("能判讀的素材只剩 不明 則")).toBeTruthy();
   expect(screen.queryByText(/只剩 0 則/)).toBeNull();
 });

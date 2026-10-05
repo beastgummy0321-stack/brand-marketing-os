@@ -16,7 +16,7 @@ export function GroupSummary({ groups }: { groups: LearningGroup[] }) {
         const cap = g.caps_differ ? null : g.cap;
         const judged = per !== null && cap !== null;
         const ok = judged && per <= (cap as number);
-        const showCapLabel = cap !== null && (i === 0 || groups[i - 1].cap !== g.cap);
+        const showCapLabel = cap !== null && (i === 0 || groups[i - 1].caps_differ || groups[i - 1].cap !== g.cap);
         return (
           <div
             key={g.customer_group_id}

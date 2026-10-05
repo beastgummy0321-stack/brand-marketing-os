@@ -126,7 +126,7 @@ function SuggestionCard({ brandId, month, suggestion, onDismissed }: {
       <div className="flex flex-wrap gap-2">
         {suggestion.action_url
           ? <Button size="sm" variant="outline" asChild><Link to={suggestion.action_url}>{actionLabel}</Link></Button>
-          : <Button size="sm" variant="outline" disabled>{actionLabel}</Button>}
+          : <Button size="sm" variant="outline" disabledReason="提議連結目前無法取得，請重新整理再試。">{actionLabel}</Button>}
         <Button size="sm" variant="ghost" busy={busy} onClick={skip}>先不要</Button>
       </div>
     </section>

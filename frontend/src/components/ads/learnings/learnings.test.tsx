@@ -208,7 +208,7 @@ describe("LearningsTable compact / GroupSummary", () => {
 
 
 it("different campaign caps cannot produce one group cap or a judgment", () => {
-  render(<GroupSummary groups={[{customer_group_id: "mixed", who: "跨活動顧客", ads: 2, spend: null, sales: null, cap: 450, caps_differ: true, cost_per_sale: null}]} />);
+  render(<GroupSummary groups={[{customer_group_id: "mixed", who: "跨活動顧客", ads: 2, spend: 900, sales: 3, cap: 450, caps_differ: true, cost_per_sale: null}]} />);
   expect(screen.getByText("各活動上限或幣別不同")).toBeTruthy();
   expect(screen.queryByText("上限 450")).toBeNull();
   expect(screen.queryByText(/低於上限|高於上限|沒賣出/)).toBeNull();
