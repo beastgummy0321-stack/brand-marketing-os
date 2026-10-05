@@ -18,6 +18,7 @@ import math
 from typing import SupportsFloat, overload
 
 from app.brand_intelligence import repository as bi_repo
+from app.core import input_rules
 
 # key, 中文 label, 每天想要的購買數 — ruling 4: 2 / 5 / 10; labels per F28 (keys unchanged).
 _COLD_START_EVENTS = (
@@ -37,7 +38,8 @@ _CAP_LABEL = "照預算上限"
 def breakeven_cpa(economics: dict | None) -> float | None:
     """打平 CPA＝一次轉換的價值 = (售價 − 單位成本 − 運費) x 成交率，from one `product_economics`
     row. 商品（`close_rate` 是 `None`）不帶成交率，一次轉換就是一次成交，行為與 F05 之前完全
-    相同；服務／名單型帶 `close_rate`，值是每筆名單／每次成交的期望毛利。`None` when the row is
+    相同；服務／名單型帶 `close_rate`（百分比 0–100，乘數經 `input_rules.rate_fraction`，F50
+    Contract I），值是每筆名單／每次成交的期望毛利。`None` when the row is
     missing or `unit_variable_cost` is `None` — an unknown cost stays unknown, never a guessed
     margin (Blocked-if: no fallback to the `gross_margin` rule card)."""
     if not economics:
@@ -49,7 +51,7 @@ def breakeven_cpa(economics: dict | None) -> float | None:
     shipping = economics.get("shipping_cost") or 0
     value = float(price) - float(unit_cost) - float(shipping)
     close_rate = economics.get("close_rate")
-    return value if close_rate is None else value * float(close_rate)
+    return value if close_rate is None else value * input_rules.rate_fraction(close_rate)
 
 
 # -- F48 Contract M: the one money calculator -----------------------------------------------------

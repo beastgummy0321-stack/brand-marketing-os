@@ -1230,9 +1230,8 @@ def get_product_economics(conn: Conn | ConnProxy, brand_id: str, product_id: str
 
 _ASSUMPTION_FIELDS = frozenset({"cost", "shipping", "close_rate"})
 
-# F50 Contract I: the one 成交率 range of every economics path (stored 0–1 until F50-I04 moves it
-# to a 0–100 percent). Readers: this module, product onboarding, the products economics route.
-CLOSE_RATE_BOUNDS = input_rules.Bounds(0, 1, low_open=True, hint="例如 0.2＝20%")
+# F50 Contract I (decision 9): 成交率 is a percent stored 0–100 (20 = 20%), checked by
+# `input_rules.percent` on every economics path; a multiplier goes through `rate_fraction`.
 
 
 class _Keep:
@@ -1294,7 +1293,7 @@ def _write_product_economics(conn: Conn, brand_id: str, product_id: str, *, acto
         input_rules.ordered_pair(selling_price, list_price, "售價", "原價")
     if not isinstance(cap_per_sale, _Keep):
         cap_per_sale = input_rules.positive(cap_per_sale, "每筆上限", optional=True)
-    close_rate = input_rules.within(close_rate, "成交率", CLOSE_RATE_BOUNDS, optional=True)
+    close_rate = input_rules.percent(close_rate, "成交率", optional=True)
     effective_from = input_rules.iso_date(effective_from, "生效日", optional=True)
     effective_to = input_rules.iso_date(effective_to, "失效日", optional=True)
     if assumptions is not None and not set(assumptions) <= _ASSUMPTION_FIELDS:
@@ -1573,8 +1572,8 @@ def _check_sell_way_economics(economics, *, composed: bool) -> dict:
         input_rules.positive(None, "售價")
     input_rules.ordered_pair(checked.get("selling_price"), checked.get("list_price"), "售價", "原價")
     if "close_rate" in economics:
-        checked["close_rate"] = input_rules.within(economics["close_rate"], "成交率",
-                                                   CLOSE_RATE_BOUNDS, optional=True)
+        checked["close_rate"] = input_rules.percent(economics["close_rate"], "成交率",
+                                                    optional=True)
     return checked
 
 

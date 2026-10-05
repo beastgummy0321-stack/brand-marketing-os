@@ -2,6 +2,7 @@ import { useState, type FormEvent } from "react";
 import { X } from "lucide-react";
 import { SidePanel } from "@/components/layout/SidePanel";
 import { ApiResponseError } from "@/lib/http";
+import { typedValue } from "@/lib/typedNumber";
 import {
   CURRENCIES,
   saveProductEconomics,
@@ -11,16 +12,12 @@ import {
 import { useFormSubmit } from "@/lib/useFormSubmit";
 import { PanelSaveButton } from "../shared/PanelSaveButton";
 
-type NumberField = "selling_price" | "fixed_cost" | "unit_variable_cost" | "shipping_cost";
-
-/** What was typed, as sent (F47 Contract A): empty = `null` (unset), never 0 and never clamped. */
-function typed(raw: string): number | null {
-  return raw.trim() === "" ? null : Number(raw);
-}
+type NumberField = "selling_price" | "fixed_cost" | "unit_variable_cost" | "shipping_cost" | "close_rate";
 
 /** 新增／更新產品經濟數字側板（契約 S6.33）：售價必填，三個成本留空＝未填（送 null，不補 0）。
- * F47-I03: a refused number shows the server's sentence under its own field (the route's
- * `field_errors`); every message clears as soon as any field changes. */
+ * F47-I03 / F50 Contract I: every number is sent as typed (`typedValue`: empty = `null`, never 0, never clamped) and
+ * a refused one shows the server's sentence under its own field (the route's `field_errors`); every message clears as
+ * soon as any field changes. 成交率 is a percent 0–100 (20 = 20%), shown and sent as typed — no ×100 / ÷100. */
 export function EconomicsPanel({
   brandId,
   productId,
@@ -53,15 +50,15 @@ export function EconomicsPanel({
     setFieldErrors({});
     try {
       await saveProductEconomics(brandId, productId, {
-        selling_price: typed(sellingPrice),
-        fixed_cost: typed(fixedCost),
-        unit_variable_cost: typed(unitVariableCost),
-        shipping_cost: typed(shippingCost),
+        selling_price: typedValue(sellingPrice),
+        fixed_cost: typedValue(fixedCost),
+        unit_variable_cost: typedValue(unitVariableCost),
+        shipping_cost: typedValue(shippingCost),
         currency,
         // ADR 0053 §5：生效日一律是今天，這裡不再收使用者輸入，固定送空字串（後端視為未填）。
         effective_from: "",
         confirmed_by: confirmedBy,
-        close_rate: typed(closeRate),
+        close_rate: typedValue(closeRate),
         assumptions,
       });
     } catch (err) {
@@ -159,21 +156,24 @@ export function EconomicsPanel({
         </label>
         <label className="flex flex-col gap-1 text-sm">
           <span className="font-medium text-foreground">成交率（選填）</span>
-          <input
-            type="number"
-            step="0.01"
-            min="0.01"
-            max="1"
-            value={closeRate}
-            onChange={(e) => {
-              setCloseRate(e.target.value);
-              dropAssumption("close_rate");
-            }}
-            className="rounded-md border border-border px-3 py-2 text-sm text-foreground"
-          />
-          <span className="text-xs text-muted-foreground">
-            留空＝賣一次算一次轉換。0.2 代表五筆名單成交一筆。
+          <span className="flex items-center gap-2">
+            <input
+              type="number"
+              step="any"
+              value={closeRate}
+              onChange={(e) => {
+                setCloseRate(e.target.value);
+                dropAssumption("close_rate");
+              }}
+              aria-invalid={fieldErrors.close_rate ? true : undefined}
+              className="w-full rounded-md border border-border px-3 py-2 text-sm text-foreground"
+            />
+            <span aria-hidden="true" className="text-sm text-muted-foreground">%</span>
           </span>
+          <span className="text-xs text-muted-foreground">
+            留空＝賣一次算一次轉換。填 20 代表五筆名單成交一筆。
+          </span>
+          <FieldError message={fieldErrors.close_rate} />
         </label>
         <label className="flex flex-col gap-1 text-sm">
           <span className="font-medium text-foreground">幣別</span>

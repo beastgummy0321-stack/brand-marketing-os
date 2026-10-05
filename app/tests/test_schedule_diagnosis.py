@@ -190,12 +190,20 @@ class BreakevenFallbackTest(unittest.TestCase):
         return org_id, brand_id
 
     def test_breakeven_roas_falls_through_the_four_layers_in_order(self):
-        # 層 2：沒有任何訂單、沒有登記任何 SKU 成本——規則卡尚未被使用者改過，用 CARDS 預設
-        # 值 0.70（打平線 1÷0.70 ≈ 1.43）。
+        # 層 3：沒有任何訂單、沒有登記任何 SKU 成本——規則卡尚未被使用者改過，用 CARDS 預設
+        # 值＝同業參考值 45%（使用者裁決 2026-10-04；打平線 1÷0.45 ≈ 2.22）。
         org_2, brand_2 = self._new_brand("card_default")
         roas_2, source_2 = diagnosis.breakeven_roas(web.conn, org_2, brand_2)
-        self.assertEqual(roas_2, 1.43)
-        self.assertIn("規則卡", source_2)
+        self.assertEqual((roas_2, source_2), (2.22, "規則卡毛利率 45%"))
+
+        # 層 3（使用者改過）：卡上存百分比 0–100（F50 Contract I），70 代表 70%，打平線 1÷0.7。
+        org_70, brand_70 = self._new_brand("card_70")
+        rule_cards.set_value(
+            web.conn, brand_70, "gross_margin", "gross_margin_rate", 70.0,
+            actor="測試員", org_id=org_70,
+        )
+        roas_70, source_70 = diagnosis.breakeven_roas(web.conn, org_70, brand_70)
+        self.assertEqual((roas_70, source_70), (1.43, "規則卡毛利率 70%"))
 
         # 層 1：這個月官網訂單登記過 SKU 成本，算得出實際毛利率（60%），優先用它，不用規則卡。
         org_1, brand_1 = self._new_brand("actual_margin")

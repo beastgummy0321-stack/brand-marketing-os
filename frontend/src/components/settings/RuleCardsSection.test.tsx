@@ -110,12 +110,12 @@ describe("RuleCardsSection 規則卡範圍與重設", () => {
       fields: [
         { key: "min", label: "下限", unit: "個", help: "", value: 1, customized: false },
         { key: "max", label: "上限", unit: "個", help: "", value: 5, customized: false },
-        { key: "margin", label: "毛利率", unit: "", help: "", value: 0.7, customized: false },
+        { key: "margin", label: "毛利率", unit: "%", help: "例如填 70 代表毛利 70%", value: 45, customized: false },
       ],
     };
     const sentence = "下限（6）不能大於上限（3）。";
     vi.mocked(saveRuleCard).mockRejectedValue(
-      new ApiResponseError(sentence, 400, { min: sentence, max: sentence, margin: "毛利率要大於 0、小於 1。" }),
+      new ApiResponseError(sentence, 400, { min: sentence, max: sentence, margin: "毛利率要大於 0、小於 100（例如填 70 代表毛利 70%）。" }),
     );
     mockFetchBrands.mockResolvedValue([{ brand_id: "a", brand_name: "甲品牌" }]);
     mockFetchCards.mockResolvedValue({ brand_id: "a", cards: [pair] });
@@ -135,12 +135,12 @@ describe("RuleCardsSection 規則卡範圍與重設", () => {
     await waitFor(() => expect(screen.getAllByRole("alert")).toHaveLength(3));
     expect(min.closest("label")?.textContent).toContain(sentence);
     expect(max.closest("label")?.textContent).toContain(sentence);
-    expect(margin.closest("label")?.textContent).toContain("毛利率要大於 0、小於 1。");
+    expect(margin.closest("label")?.textContent).toContain("毛利率要大於 0、小於 100（例如填 70 代表毛利 70%）。");
     // What was typed is sent as typed; the emptied margin is left out (never 0).
-    expect(vi.mocked(saveRuleCard)).toHaveBeenCalledWith("a", "plan_count", { min: 6, max: 3 });
+    expect(vi.mocked(saveRuleCard)).toHaveBeenCalledWith("a", "plan_count", { min: "6", max: "3" });
     expect(min).toHaveProperty("value", "6");
 
-    await userEvent.type(margin, "0.6");
+    await userEvent.type(margin, "60");
     expect(screen.queryAllByRole("alert")).toHaveLength(0);
   });
 });

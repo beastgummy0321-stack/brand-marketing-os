@@ -16,8 +16,9 @@ ADR 0057 §6）→ 存回同一輪第三列 `llm_task.structured_output_json`（
     SKU 才算數；一個都沒登記＝已知營收為 0＝往下一層）
   ②這一期方案選的產品，自己填的售價與單位變動成本（`product_economics`）——issue
     diagnosis-lacks-checkable-numbers：使用者兩個產品的數字都填好了（1880／520、990／240，
-    毛利 72%／76%），中間卻沒有這一層，打平線用的是預設 0.70。填了資料就要被用到。
-  ③規則卡 `gross_margin`（決定 1b，`app/core/rule_cards.py` 新增一筆，default 0.70）
+    毛利 72%／76%），中間卻沒有這一層，打平線用的是規則卡預設值。填了資料就要被用到。
+  ③規則卡 `gross_margin`（決定 1b，`app/core/rule_cards.py`；百分比 0–100，沒改過＝同業參考值
+    45%，使用者裁決 2026-10-04）
   ④三層都沒有算出一個 >0 的毛利率＝回 (None, 人話原因)，畫面明說算不出來。
 """
 
@@ -27,7 +28,7 @@ from datetime import timedelta
 
 from app.background import job_outcome as background_job_outcome
 from app.brand_intelligence import repository as bi_repo
-from app.core import rule_cards, vocab
+from app.core import input_rules, rule_cards, vocab
 from app.core import settings as coresettings
 from app.orders import repository as orders_repo
 from app.schedule import performance, state
@@ -86,9 +87,13 @@ def breakeven_roas(conn, org_id: str, brand_id: str) -> tuple[float | None, str]
     if plan_margin is not None:
         return round(1 / plan_margin, 2), f"這一期產品填的售價與成本，毛利率 {plan_margin:.0%}"
 
-    card_margin_rate = rule_cards.get_value(conn, brand_id, "gross_margin", "gross_margin_rate")
-    if card_margin_rate and card_margin_rate > 0:
-        return round(1 / card_margin_rate, 2), f"規則卡毛利率 {card_margin_rate:.0%}"
+    # The card stores a percent 0–100 (F50 Contract I); an unset card reads its default, the
+    # benchmark 45 % (user ruling 2026-10-04). The one multiplier is `input_rules.rate_fraction`.
+    card_margin_pct = rule_cards.get_value(conn, brand_id, "gross_margin", "gross_margin_rate")
+    if card_margin_pct:
+        card_margin_rate = input_rules.rate_fraction(card_margin_pct)
+        if card_margin_rate > 0:
+            return round(1 / card_margin_rate, 2), f"規則卡毛利率 {card_margin_rate:.0%}"
 
     return None, "還沒有毛利率"
 

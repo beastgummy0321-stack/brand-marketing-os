@@ -11,13 +11,18 @@ the screen must say so out loud rather than pretend otherwise.
 
 The model never supplies these numbers. The honest replacement path is this
 brand's own closed-loop results (F06), not a nicer-looking blog post.
+
+Scale (F50 Contract I, decision 9): a rate is served as the percent a user would type -- gross
+margin 45, close rate 20, `unit: "%"`; a multiplier goes through `input_rules.rate_fraction`.
+The gross margin is also the one assumed margin default: the `gross_margin` rule card's default
+(`app/core/rule_cards.py`) is this value, pinned by `app/tests/test_benchmarks.py`.
 """
 
 BENCHMARKS = {
     "gross_margin": {
         "key": "gross_margin",
-        "value": 0.45,
-        "unit": "ratio",
+        "value": 45,
+        "unit": "%",
         "label": "毛利率假設 45%",
         "note": "美國 2025 基準，起點用",
         "source": (
@@ -39,8 +44,8 @@ BENCHMARKS = {
     },
     "close_rate": {
         "key": "close_rate",
-        "value": 0.20,
-        "unit": "ratio",
+        "value": 20,
+        "unit": "%",
         "label": "成交率假設 20%",
         "note": "海外平均，非台灣",
         "source": "HubSpot 2024 銷售調查：全業平均成交率 20%",

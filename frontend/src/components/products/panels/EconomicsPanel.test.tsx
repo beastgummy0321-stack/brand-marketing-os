@@ -47,8 +47,31 @@ describe("EconomicsPanel sends what was typed (F47-I03, drill-10 乙 #8 #9)", ()
     fireEvent.click(screen.getByRole("button", { name: "儲存這筆經濟數字" }));
     await waitFor(() => expect(onSaved).toHaveBeenCalled());
     expect(vi.mocked(saveProductEconomics).mock.calls[0][2]).toMatchObject({
-      selling_price: 500, fixed_cost: null, unit_variable_cost: null, shipping_cost: null, close_rate: null,
+      selling_price: "500", fixed_cost: null, unit_variable_cost: null, shipping_cost: null, close_rate: null,
     });
+  });
+
+  it("成交率 is a percent: shown and sent as typed (20 = 20%), the server's sentence under it", async () => {
+    vi.mocked(saveProductEconomics).mockRejectedValue(
+      new ApiResponseError("成交率要大於 0、最多 100（填 20 代表 20%）。", 400, {
+        close_rate: "成交率要大於 0、最多 100（填 20 代表 20%）。",
+      }),
+    );
+    render(
+      <EconomicsPanel brandId="b1" productId="p1" onClose={vi.fn()} onSaved={vi.fn()}
+        economics={{
+          selling_price: 5000, fixed_cost: null, unit_variable_cost: 1000, shipping_cost: 0, currency: "TWD",
+          effective_from: null, status: "confirmed", confirmed_by: "小陳", close_rate: 20, assumptions: [],
+        }} />,
+    );
+    expect(input("成交率（選填）").value).toBe("20");
+    expect(screen.getByText("成交率（選填）").closest("label")?.textContent).toContain("%");
+    fireEvent.change(input("成交率（選填）"), { target: { value: "120" } });
+    fireEvent.click(screen.getByRole("button", { name: "儲存修改" }));
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toBe("成交率要大於 0、最多 100（填 20 代表 20%）。");
+    expect(screen.getByText("成交率（選填）").closest("label")?.contains(alert)).toBe(true);
+    expect(vi.mocked(saveProductEconomics).mock.calls[0][2]).toMatchObject({ close_rate: "120" });
   });
 
   it("shows the server's sentence under the refused field, keeps the value, and clears it on edit", async () => {
@@ -66,7 +89,7 @@ describe("EconomicsPanel sends what was typed (F47-I03, drill-10 乙 #8 #9)", ()
     // Under its own field, once (not repeated at the bottom of the form).
     expect(screen.getByText("運費").closest("label")?.contains(alert)).toBe(true);
     expect(screen.getAllByText("運費不能是負數。")).toHaveLength(1);
-    expect(vi.mocked(saveProductEconomics).mock.calls[0][2]).toMatchObject({ shipping_cost: -20 });
+    expect(vi.mocked(saveProductEconomics).mock.calls[0][2]).toMatchObject({ shipping_cost: "-20" });
     expect(input("運費").value).toBe("-20");
     expect(onSaved).not.toHaveBeenCalled();
 

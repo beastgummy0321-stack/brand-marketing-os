@@ -217,9 +217,10 @@ class _PeriodTestBase(unittest.TestCase):
     def _prepare_scored_period(self, org_id: str, brand_id: str, start: date,
                                 end: date) -> tuple:
         """Break-even 1.0 (a 100% margin -- the file's fixture path via the `gross_margin`
-        rule card, same shortcut the ticket's own plan review flagged for production data),
-        a bound Meta account, and one running period covering [start, end]."""
-        rule_cards.set_value(web.conn, brand_id, "gross_margin", "gross_margin_rate", 1.0,
+        rule card, stored as a percent since F50-I04; same shortcut the ticket's own plan review
+        flagged for production data), a bound Meta account, and one running period covering
+        [start, end]."""
+        rule_cards.set_value(web.conn, brand_id, "gross_margin", "gross_margin_rate", 100.0,
                               actor=ACTOR, org_id=org_id)
         account_id = self._bind_account(org_id, brand_id)
         period_id = self._insert_period(org_id=org_id, brand_id=brand_id, start=start, end=end)

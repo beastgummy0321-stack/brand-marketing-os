@@ -64,6 +64,7 @@ export interface ProductEconomics {
   effective_from: string | null;
   status: "confirmed" | "pending";
   confirmed_by: string | null;
+  /** A percent 0–100 as typed (20 = 20%; F50 Contract I) — printed 「20%」, never scaled on the page. */
   close_rate: number | null;
   assumptions: AssumptionField[];
 }
@@ -281,17 +282,18 @@ export function deleteProductFact(brandId: string, productId: string, factId: st
 export function saveProductEconomics(
   brandId: string,
   productId: string,
-  /** A field left empty is sent as `null` (F47 Contract A: unset, never 0); the server refuses an
-   * empty selling price and any negative cost with the field's own sentence. */
+  /** Each number as typed (`typedValue`; F50 Contract I): a field left empty is sent as `null` (F47 Contract A: unset,
+   * never 0); the server parses it and refuses an empty selling price, any negative cost or a 成交率 outside 0–100
+   * (a percent, 20 = 20%) with the field's own sentence. */
   fields: {
-    selling_price: number | null;
-    fixed_cost: number | null;
-    unit_variable_cost: number | null;
-    shipping_cost: number | null;
+    selling_price: string | null;
+    fixed_cost: string | null;
+    unit_variable_cost: string | null;
+    shipping_cost: string | null;
     currency: string;
     effective_from: string;
     confirmed_by: string;
-    close_rate?: number | null;
+    close_rate?: string | null;
     assumptions?: AssumptionField[];
   },
 ): Promise<void> {

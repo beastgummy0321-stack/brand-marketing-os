@@ -497,8 +497,8 @@ _ECONOMICS_NUMBERS = (
 
 
 def _economics_numbers(body: dict) -> tuple[dict, dict]:
-    """Every typed field through the one input-rule table: the money fields, 成交率 (0–1 until
-    F50-I04) and 生效日 (`iso_date`); each refusal is kept under its own field."""
+    """Every typed field through the one input-rule table: the money fields, 成交率 (a percent
+    0–100, `percent`) and 生效日 (`iso_date`); each refusal is kept under its own field."""
     numbers, field_errors = {}, {}
     for key, label, rule, optional in _ECONOMICS_NUMBERS:
         try:
@@ -506,8 +506,8 @@ def _economics_numbers(body: dict) -> tuple[dict, dict]:
         except input_rules.InputRuleError as exc:
             field_errors[key] = str(exc)
     try:
-        numbers["close_rate"] = input_rules.within(body.get("close_rate"), "成交率",
-                                                   repo.CLOSE_RATE_BOUNDS, optional=True)
+        numbers["close_rate"] = input_rules.percent(body.get("close_rate"), "成交率",
+                                                    optional=True)
     except input_rules.InputRuleError as exc:
         field_errors["close_rate"] = str(exc)
     try:

@@ -28,23 +28,16 @@ export interface BaseOption {
   product?: { id: string; name: string; thumbnail_url: string | null };
 }
 
-export const qtyOf = (raw: string): number | null => (/^\d+$/.test(raw.trim()) && Number(raw) > 0 ? Number(raw) : null);
-
-/** Why the contents cannot be saved (the server refuses the same): none in, a bad quantity, or Σqty 1 (= the base). */
-export function contentsError(items: ContentItem[], nameOf: (key: string) => string): string | null {
-  if (items.length === 0) return "至少放一種賣法";
-  if (items.some((it) => qtyOf(it.qty) === null)) return "數量要是正整數";
-  if (items.length === 1 && qtyOf(items[0].qty) === 1) return `只放 1 份就跟「${nameOf(items[0].base)}」一樣；數量至少 2`;
-  return null;
-}
-
-export function SellWayContents({ idPrefix, items, bases, picking, showErrors, cross = false, empty, onQty, onRemove, onAdd, onPicking, onNewBase }: {
+/** F50 Contract I: a quantity is sent as typed; the server (`input_rules.count`, at least 1; Σqty at least 2) refuses
+ * with its sentence. `errors` are those refusals for this sell-way: `components` (the contents as a whole) and
+ * `components.{i}.qty` (row i's quantity). */
+export function SellWayContents({ idPrefix, items, bases, picking, errors, cross = false, empty, onQty, onRemove, onAdd, onPicking, onNewBase }: {
   idPrefix: string;
   items: ContentItem[];
   /** The bases that can be picked (step 4: this product's; bundle page: every finished product's). */
   bases: BaseOption[];
   picking: boolean;
-  showErrors: boolean;
+  errors: Partial<Record<string, string>>;
   /** The bundle page: rows name their product, the picker groups by product; the server checks the product count. */
   cross?: boolean;
   /** The picker's body when nothing is left to pick (default: 「這個商品的基本賣法都放進來了」 + 「＋新增基本賣法」). */
@@ -62,7 +55,6 @@ export function SellWayContents({ idPrefix, items, bases, picking, showErrors, c
     const product = byKey.get(key)?.product;
     return cross && product ? `${product.name}・${nameOf(key)}` : nameOf(key);
   };
-  const one = !cross && items.length === 1 && qtyOf(items[0].qty) === 1;
   const remaining = bases.filter((b) => !items.some((it) => it.base === b.key));
   const groups: { product: BaseOption["product"]; list: BaseOption[] }[] = [];
   for (const b of remaining) {
@@ -77,7 +69,8 @@ export function SellWayContents({ idPrefix, items, bases, picking, showErrors, c
           const base = byKey.get(it.base);
           const name = nameOf(it.base);
           const label = labelOf(it.base);
-          const bad = qtyOf(it.qty) === null && (showErrors || it.qty.trim() !== "");
+          const qtyError = errors[`components.${i}.qty`];
+          const bad = Boolean(qtyError);
           return (
             <li key={it.base}>
               <div className="flex items-center gap-2.5 rounded-[10px] border border-border bg-card px-3 py-2 max-[480px]:flex-wrap">
@@ -102,13 +95,12 @@ export function SellWayContents({ idPrefix, items, bases, picking, showErrors, c
                 <button type="button" aria-label={`拿掉${label}`} onClick={() => onRemove(i)}
                   className="rounded-md p-1.5 text-lg leading-none text-muted-foreground hover:bg-muted hover:text-danger">×</button>
               </div>
-              {bad && <Err>數量要是正整數</Err>}
+              {qtyError && <Err>{qtyError}</Err>}
             </li>
           );
         })}
       </ul>
-      {one && <Err>只放 1 份就跟「{nameOf(items[0].base)}」一樣；數量至少 2</Err>}
-      {showErrors && items.length === 0 && <Err>至少放一種賣法</Err>}
+      {errors.components && <Err>{errors.components}</Err>}
       {picking ? (
         <div data-slot="sell-way-picker" className="mt-2 rounded-[10px] bg-muted/60 p-3">
           <div className="mb-2 flex items-center justify-between gap-2 text-xs font-semibold text-muted-foreground">

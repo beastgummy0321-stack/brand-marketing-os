@@ -14,7 +14,8 @@ vi.mock("@/lib/intakeProductApi", async () => {
   return { ...actual, fetchProductSellWays: vi.fn(), saveProductSellWays: vi.fn(), completeProductOnboarding: vi.fn() };
 });
 
-import type { ProductSellWays, SellWayRow } from "@/lib/intakeProductApi";
+import { ApiResponseError } from "@/lib/http";
+import type { ProductSellWays, SellWayInput, SellWayRow } from "@/lib/intakeProductApi";
 import { completeProductOnboarding, fetchProductSellWays, saveProductSellWays } from "@/lib/intakeProductApi";
 import type { StepNav } from "../OnboardingStepHead";
 import { SellWaysStep } from "./SellWaysStep";
@@ -82,7 +83,7 @@ function sellWays(list: SellWayRow[] = [TRIAL, BOX, C12, C52], over: Partial<Pro
     sell_ways: list,
     show_close_rate: false,
     assumptions: {
-      gross_margin: { value: 0.65, source_text: "軟糖類同業毛利約 65%（假設值，之後拿到真成本再改）" },
+      gross_margin: { value: 65, source_text: "軟糖類同業毛利約 65%（假設值，之後拿到真成本再改）" },
       shipping_cost: { value: 80, source_text: "運費假設 NT$80 · 台灣宅配均價" },
     },
     ...over,
@@ -104,6 +105,26 @@ const field = (label: string) => within(editor()).getByLabelText(label) as HTMLI
 const edit = async (name: string) => userEvent.click(await screen.findByRole("button", { name: `編輯「${name}」` }));
 const finish = () => screen.getByRole("button", { name: "完成商品建檔 →" });
 const lastBody = () => mockSave.mock.calls[mockSave.mock.calls.length - 1][2];
+
+/** A PUT answered like `product_onboarding._check_row_components` (F50 Contract I): every row is sent as typed, so a
+ * composed row saved on blur before its contents are in is refused keyed by row; `qtyRefusals` maps a typed quantity
+ * to the refusal of the contents (`"0"` → the quantity's sentence, `"1"` → Σqty < 2). Anything else saves -> `ok`. */
+function refuseLikeTheServer(ok: ProductSellWays, qtyRefusals: Record<string, string> = {}) {
+  return async (_brand: string, _product: string, body: SellWayInput[]) => {
+    const fieldErrors: Record<string, string> = {};
+    body.forEach((row, i) => {
+      if (!row.components) return;
+      if (row.components.length === 0) fieldErrors[`sell_ways.${i}.components`] = `「${row.name}」的內容至少要放一種賣法。`;
+      row.components.forEach((c, j) => {
+        if (c.qty === "") fieldErrors[`sell_ways.${i}.components.${j}.qty`] = `「${row.name}」裡「${c.base}」的數量要是 1 以上的整數。`;
+        else if (qtyRefusals[c.qty]) fieldErrors[c.qty === "0" ? `sell_ways.${i}.components.${j}.qty` : `sell_ways.${i}.components`] = qtyRefusals[c.qty];
+      });
+    });
+    const first = Object.values(fieldErrors)[0];
+    if (first) throw new ApiResponseError(first, 400, fieldErrors);
+    return ok;
+  };
+}
 
 describe("SellWaysStep", () => {
   it("基本賣法／組合賣法兩段摘要：內容、售價、打平（推算）、成本還沒填、優惠句", async () => {
@@ -188,13 +209,16 @@ describe("SellWaysStep", () => {
     await userEvent.click(within(editor()).getByRole("button", { name: "填好了，回到「5 盒＋2 包」" }));
 
     await waitFor(() => expect(editor().getAttribute("data-sw-row")).toBe("5 盒＋2 包"));
-    expect(lastBody().find((r) => r.name === "單盒")).toMatchObject({ id: "sw_box", cost: 50 });
+    expect(lastBody().find((r) => r.name === "單盒")).toMatchObject({ id: "sw_box", cost: "50" });
     expect(screen.getByRole("status").textContent).toBe("「5 盒＋2 包」的打平算出來了：每筆最多花 NT$630");
     expect(within(editor()).getByText("每筆最多花 NT$630")).toBeTruthy();
   });
 
-  it("新增組合：只能挑這個商品的基本賣法、數量要是正整數、只放 1 份不算組合；都放進來了就給「＋新增基本賣法」", async () => {
+  it("新增組合：只能挑這個商品的基本賣法；數量照打的送，伺服器的句子寫在數量／內容下面；都放進來了就給「＋新增基本賣法」", async () => {
     mockFetch.mockResolvedValue(sellWays());
+    const qtySentence = "「6 盒」裡「單盒」的數量要是 1 以上的整數。";
+    const oneSentence = "「6 盒」只放 1 份就跟「單盒」一樣；數量至少 2。";
+    mockSave.mockImplementation(refuseLikeTheServer(sellWays(), { "0": qtySentence, "1": oneSentence }));
     renderStep();
     await userEvent.click(await screen.findByRole("button", { name: "＋組合賣法（例如 6 盒）" }));
 
@@ -205,12 +229,18 @@ describe("SellWaysStep", () => {
     const qty = within(editor()).getByRole("textbox", { name: "單盒的數量" });
     expect(document.activeElement).toBe(qty);
     await userEvent.type(qty, "0");
-    expect(within(editor()).getByText("數量要是正整數")).toBeTruthy();
+    // No rule of the page's own: nothing is said until the server answers.
+    expect(within(editor()).queryByText(/數量要是/)).toBeNull();
+    await userEvent.click(within(editor()).getByRole("button", { name: "完成" }));
+    await waitFor(() => expect(lastBody()[4]).toMatchObject({ name: "6 盒", components: [{ base: "單盒", qty: "0" }] }));
+    expect(await within(editor()).findByText(qtySentence)).toBeTruthy();
+    expect(editor().getAttribute("data-sw-row")).toBe("6 盒");
+
     await userEvent.clear(qty);
     await userEvent.type(qty, "1");
-    expect(within(editor()).getByText("只放 1 份就跟「單盒」一樣；數量至少 2")).toBeTruthy();
     await userEvent.click(within(editor()).getByRole("button", { name: "完成" }));
-    expect(mockSave).not.toHaveBeenCalled();
+    expect(await within(editor()).findByText(oneSentence)).toBeTruthy();
+    expect(within(editor()).queryByText(qtySentence)).toBeNull();
 
     await userEvent.click(within(editor()).getByRole("button", { name: "＋再放一種賣法" }));
     await userEvent.click(within(editor()).getByRole("button", { name: /體驗包/ }));
@@ -222,7 +252,7 @@ describe("SellWaysStep", () => {
   it("新組合存檔：PUT 帶整份清單，組合用名字指基本賣法、沒有 qty；售價空著＝null（推算）", async () => {
     mockFetch.mockResolvedValue(sellWays());
     const six = way({ id: "sw_c6", name: "6 盒", shape: "composed", components: [{ sell_way_id: "sw_box", name: "單盒", qty: 6, price: 180, cost: 50 }], price: 1080, price_derived: true, price_note: "推算：單盒 180 × 6", break_even: 720, break_even_derived: true });
-    mockSave.mockResolvedValue(sellWays([TRIAL, BOX, C12, C52, six]));
+    mockSave.mockImplementation(refuseLikeTheServer(sellWays([TRIAL, BOX, C12, C52, six])));
     renderStep();
     await userEvent.click(await screen.findByRole("button", { name: "＋組合賣法（例如 6 盒）" }));
     await userEvent.type(field("名稱"), "6 盒");
@@ -233,13 +263,14 @@ describe("SellWaysStep", () => {
     await waitFor(() => expect(mockSave).toHaveBeenCalled());
     const body = lastBody();
     expect(body.map((r) => r.name)).toEqual(["體驗包（3 顆）", "單盒", "12 盒", "5 盒＋2 包", "6 盒"]);
+    // Every number and quantity as typed (F50 Contract I): the server parses and refuses.
     expect(body[4]).toEqual({
       id: null, name: "6 盒", price: null, list_price: null, cost: null, shipping: null, cap_per_sale: null, landing_url: null,
-      assumptions: [], free_shipping: false, components: [{ base: "單盒", qty: 6 }],
+      assumptions: [], free_shipping: false, components: [{ base: "單盒", qty: "6" }],
     });
-    expect(body[2]).toMatchObject({ id: "sw_c12", price: 1980, list_price: null, cost: null, free_shipping: true, components: [{ base: "單盒", qty: 12 }] });
+    expect(body[2]).toMatchObject({ id: "sw_c12", price: "1980", list_price: null, cost: null, free_shipping: true, components: [{ base: "單盒", qty: "12" }] });
     expect(body[1]).toEqual({
-      id: "sw_box", name: "單盒", price: 180, list_price: null, cost: 50, shipping: 60, cap_per_sale: null, landing_url: null,
+      id: "sw_box", name: "單盒", price: "180", list_price: null, cost: "50", shipping: "60", cap_per_sale: null, landing_url: null,
       assumptions: [], free_shipping: false,
     });
     for (const row of body) expect(row).not.toHaveProperty("qty");
@@ -279,20 +310,56 @@ describe("SellWaysStep", () => {
     expect(editor().getAttribute("data-sw-row")).toBe("12 盒");
   });
 
-  it("基本賣法：售價要填、不能 0；不送出", async () => {
+  it("基本賣法：售價空著送 null（不是 0），伺服器的句子寫在售價下面；被擋就不完成", async () => {
     mockFetch.mockResolvedValue(sellWays());
+    const blank = "「單盒」的售價請填數字。";
+    const zero = "「單盒」的售價要大於 0。";
+    mockSave
+      .mockRejectedValueOnce(new ApiResponseError(blank, 400, { "sell_ways.1.price": blank }))
+      .mockRejectedValueOnce(new ApiResponseError(zero, 400, { "sell_ways.1.price": zero }));
     const onNext = renderStep();
     await edit("單盒");
 
     await userEvent.clear(field("售價"));
     await userEvent.click(within(editor()).getByRole("button", { name: "完成" }));
-    expect(within(editor()).getByText("售價要填")).toBeTruthy();
+    await waitFor(() => expect(mockSave).toHaveBeenCalledTimes(1));
+    expect(lastBody()[1]).toMatchObject({ id: "sw_box", price: null });
+    const priceBox = field("售價").closest("div.min-w-0") as HTMLElement;
+    expect(await within(priceBox).findByText(blank)).toBeTruthy();
+    expect(field("售價").getAttribute("aria-invalid")).toBe("true");
+
     await userEvent.type(field("售價"), "0");
-    expect(within(editor()).getByText("售價要大於 0")).toBeTruthy();
     await userEvent.click(finish());
-    expect(mockSave).not.toHaveBeenCalled();
+    await waitFor(() => expect(mockSave).toHaveBeenCalledTimes(2));
+    expect(lastBody()[1]).toMatchObject({ price: "0" });
+    expect(await within(field("售價").closest("div.min-w-0") as HTMLElement).findByText(zero)).toBeTruthy();
     expect(mockComplete).not.toHaveBeenCalled();
     expect(onNext).not.toHaveBeenCalled();
+  });
+
+  it("成交率是百分比：照伺服器的 20 顯示 20、照打的送，打平寫「× 成交率 20%」，參考值照伺服器的 20 填", async () => {
+    const lead = way({ ...BOX, close_rate: 20, break_even: 14 });
+    const trial = way({ ...TRIAL, close_rate: null });
+    mockFetch.mockResolvedValue(sellWays([trial, lead], {
+      show_close_rate: true,
+      assumptions: {
+        gross_margin: { value: 45, source_text: "毛利率假設 45%" },
+        shipping_cost: { value: 80, source_text: "運費 NT$80" },
+        close_rate: { value: 20, source_text: "成交率假設 20%" },
+      },
+    }));
+    mockSave.mockResolvedValue(sellWays([way({ ...trial, close_rate: 20, assumptions: ["close_rate"] }), lead], { show_close_rate: true }));
+    renderStep();
+    await edit("單盒");
+
+    expect(field("成交率").value).toBe("20");
+    const result = editor().querySelector('[data-slot="sell-way-result"]') as HTMLElement;
+    expect(within(result).getByText("（售價 180 − 成本 50 − 運費成本 60） × 成交率 20%")).toBeTruthy();
+    await userEvent.click(screen.getByText("進階：不知道成本？用同業參考值（會標示是假設）"));
+    await userEvent.click(screen.getByRole("button", { name: "空著的成交率填參考值" }));
+    await waitFor(() => expect(mockSave).toHaveBeenCalled());
+    expect(lastBody()[0]).toMatchObject({ name: "體驗包（3 顆）", close_rate: "20", assumptions: ["close_rate"] });
+    expect(lastBody()[1]).toMatchObject({ name: "單盒", close_rate: "20" });
   });
 
   it("完成商品建檔：沒改過就不重送，直接 complete；complete 失敗留在這步並顯示原因", async () => {
@@ -327,8 +394,8 @@ describe("SellWaysStep", () => {
     await userEvent.click(finish());
     await waitFor(() => expect(onNext).toHaveBeenCalled());
     expect(lastBody()).toEqual([
-      { id: null, name: "三盒組", price: 499, list_price: 540, cost: null, shipping: null, cap_per_sale: null, landing_url: null, assumptions: [], free_shipping: false, components: [{ base: "單盒", qty: 3 }] },
-      { id: null, name: "單盒", price: 180, list_price: null, cost: null, shipping: null, cap_per_sale: null, landing_url: null, assumptions: [], free_shipping: false },
+      { id: null, name: "三盒組", price: "499", list_price: "540", cost: null, shipping: null, cap_per_sale: null, landing_url: null, assumptions: [], free_shipping: false, components: [{ base: "單盒", qty: "3" }] },
+      { id: null, name: "單盒", price: "180", list_price: null, cost: null, shipping: null, cap_per_sale: null, landing_url: null, assumptions: [], free_shipping: false },
     ]);
   });
 
@@ -341,17 +408,19 @@ describe("SellWaysStep", () => {
     expect(screen.getByText("還沒有組合")).toBeTruthy();
   });
 
-  it("進階：不知道成本就用同業參考值填空著的基本賣法成本，標「假設」並送出旗標", async () => {
+  it("進階：「空著的成本填參考值」只送旗標（成本 null），伺服器算好的成本回來才填進格子並標「假設」", async () => {
     mockFetch.mockResolvedValue(sellWays([TRIAL, NO_COST.box, NO_COST.c12, NO_COST.c52]));
-    mockSave.mockResolvedValue(sellWays());
+    // The server derived 單盒's cost from its price and the benchmark margin: whole(180 × (100 − 65) / 100) = 63.
+    mockSave.mockResolvedValue(sellWays([TRIAL, way({ ...BOX, cost: 63, assumptions: ["cost"] }), C12, C52]));
     renderStep();
 
     await userEvent.click(await screen.findByText("進階：不知道成本？用同業參考值（會標示是假設）"));
     await userEvent.click(screen.getByRole("button", { name: "空著的成本填參考值" }));
     await waitFor(() => expect(mockSave).toHaveBeenCalled());
     const body = lastBody();
-    expect(body[1]).toMatchObject({ name: "單盒", cost: 63, assumptions: ["cost"] });
-    // A composed cost comes from its bases: not filled.
+    // The page never multiplies: the cost goes empty with its flag.
+    expect(body[1]).toMatchObject({ name: "單盒", cost: null, assumptions: ["cost"] });
+    // A composed cost comes from its bases: not flagged.
     expect(body[2]).toMatchObject({ name: "12 盒", cost: null, assumptions: [] });
     await edit("單盒");
     expect(field("成本").value).toBe("63");

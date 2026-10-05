@@ -787,14 +787,72 @@ class SellWayNumbersTest(_Base):
                     "price": 1000,
                     "cost": 200,
                     "shipping": 0,
-                    "close_rate": 0.2,
+                    "close_rate": 20,
                 }
             ],
         )
         self.assertTrue(data["show_close_rate"])
-        self.assertIn("close_rate", data["assumptions"])
+        self.assertEqual(data["assumptions"]["close_rate"]["value"], 20)
         [row] = data["sell_ways"]
-        self.assertEqual((row["close_rate"], row["break_even"]), (0.2, 160.0))
+        # Stored as typed (20 = 20%); break-even (1000 - 200) x rate_fraction(20) = 160.
+        self.assertEqual((row["close_rate"], row["break_even"]), (20.0, 160.0))
+
+    def test_refusals_are_keyed_by_row_and_field(self):
+        """F50 Contract I (F50-I04): step 4 keeps no rule of its own -- it sends what was typed (a
+        blank price is null, a quantity is its text) and the PUT refuses every bad field at once,
+        keyed `sell_ways.{i}.{field}`, with the one input-rule sentence; nothing is saved."""
+        bid = self._brand()
+        bi_repo.set_brand_switches(
+            web.conn, bid, market_region=None, conversion_goal="lead", actor=ACTOR
+        )
+        pid = self._new_product(bid, "健身體驗課")
+        percent = "「單堂」的成交率要大於 0、最多 100（填 20 代表 20%）。"
+        for rows, field_errors in (
+            ([{"name": "單堂", "price": None}], {"sell_ways.0.price": "「單堂」的售價請填數字。"}),
+            ([{"name": "單堂", "price": 0, "close_rate": 0}],
+             {"sell_ways.0.price": "「單堂」的售價要大於 0。", "sell_ways.0.close_rate": percent}),
+            ([{"name": "單堂", "price": 1000, "close_rate": 120}],
+             {"sell_ways.0.close_rate": percent}),
+            ([{"name": "單堂", "price": 1000, "list_price": 900}],
+             {"sell_ways.0.list_price": "售價（1000）不能大於原價（900）。"}),
+            ([{"name": "單堂", "price": 1000},
+              {"name": "五堂", "components": [{"base": "單堂", "qty": "x"}]}],
+             {"sell_ways.1.components.0.qty": "「五堂」裡「單堂」的數量要是 1 以上的整數。"}),
+        ):
+            resp = self._put(bid, self._step(pid, "/sell-ways"), {"sell_ways": rows})
+            self.assertEqual(resp.status_code, 400, rows)
+            body = resp.json()
+            self.assertEqual(body["field_errors"], field_errors)
+            self.assertEqual(body["error"], next(iter(field_errors.values())))
+        self.assertEqual(bi_repo.list_sell_ways(web.conn, bid, pid), [])
+        # A quantity typed as text is the server's to parse.
+        saved = self._sell_ways(bid, pid, [
+            {"name": "單堂", "price": 1000},
+            {"name": "五堂", "components": [{"base": "單堂", "qty": "5"}]},
+        ])
+        self.assertEqual(saved["sell_ways"][1]["components"][0]["qty"], 5)
+
+    def test_assumed_cost_is_derived_by_the_server(self):
+        """「空著的成本填參考值」 (F50-I04): a base row flagged `assumptions: ["cost"]` with an
+        empty cost is stored with whole(price x (100 - 45) / 100) -- the benchmark margin -- and
+        returned flagged; the browser never multiplies. A composed row's cost stays its bases'."""
+        bid = self._brand()
+        pid = self._new_product(bid)
+        data = self._sell_ways(bid, pid, [
+            {"name": "單盒", "price": 1280, "cost": None, "assumptions": ["cost"]},
+            {"name": "三盒組", "components": [{"base": "單盒", "qty": 3}], "price": 3500,
+             "assumptions": ["cost"]},
+        ])
+        single, three = data["sell_ways"]
+        self.assertEqual((single["cost"], single["assumptions"]), (704.0, ["cost"]))
+        self.assertEqual((three["cost"], three["cost_derived"], three["assumptions"]),
+                         (2112.0, True, []))
+        # Saved back with the number it now holds, the flag and the value stay.
+        again = self._sell_ways(bid, pid, [
+            {"id": single["id"], "name": "單盒", "price": 1280, "cost": 704,
+             "assumptions": ["cost"]},
+        ])["sell_ways"][0]
+        self.assertEqual((again["cost"], again["assumptions"]), (704.0, ["cost"]))
 
 
 # ---------------------------------------------------------------------------

@@ -434,20 +434,20 @@ class EconomicsTest(_BaseProductsApiTest):
         self.assertEqual(repo.get_product_economics(web.conn, self.bid, pid, raw=True)["shipping_cost"], 0)
 
     def test_dates_and_close_rate_go_through_the_one_table(self):
-        """F50 Contract I: 生效日 is an ISO date (a non-ISO one used to be a 500) and 成交率 keeps
-        its 0–1 range through `within`; each refusal is keyed by its field, nothing is saved."""
+        """F50 Contract I: 生效日 is an ISO date (a non-ISO one used to be a 500) and 成交率 is a
+        percent 0–100 (`percent`, decision 9); each refusal is keyed by its field, nothing is saved."""
         pid = self._create_product()
         for field, value, sentence in (
                 ("effective_from", "01/06/2026", "生效日請用 YYYY-MM-DD 格式（例如 2026-10-05）。"),
-                ("close_rate", 0, "成交率要大於 0、最多 1（例如 0.2＝20%）。"),
-                ("close_rate", 20, "成交率要大於 0、最多 1（例如 0.2＝20%）。")):
+                ("close_rate", 0, "成交率要大於 0、最多 100（填 20 代表 20%）。"),
+                ("close_rate", 120, "成交率要大於 0、最多 100（填 20 代表 20%）。")):
             resp = self._save(pid, **{field: value})
             self.assertEqual((resp.status_code, resp.json()),
                              (400, {"error": sentence, "field_errors": {field: sentence}}))
         self.assertIsNone(repo.get_product_economics(web.conn, self.bid, pid))
-        self.assertEqual(self._save(pid, effective_from="2026-01-06", close_rate=0.2).status_code, 204)
+        self.assertEqual(self._save(pid, effective_from="2026-01-06", close_rate=20).status_code, 204)
         raw = repo.get_product_economics(web.conn, self.bid, pid, raw=True)
-        self.assertEqual((str(raw["effective_from"]), float(raw["close_rate"])), ("2026-01-06", 0.2))
+        self.assertEqual((str(raw["effective_from"]), float(raw["close_rate"])), ("2026-01-06", 20.0))
 
     def test_store_refuses_a_zero_cap_and_a_price_above_the_list_price(self):
         """F50 Contract I: the economics store runs the same rules as product onboarding."""

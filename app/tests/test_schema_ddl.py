@@ -1,7 +1,10 @@
-"""Fixture recovery using real PostgreSQL locks on disposable tables."""
+"""Fixture recovery using real PostgreSQL locks on disposable tables, and replays of data-moving
+migrations (F50-I04 percent scale) on disposable schemas."""
 
 import time
 from concurrent.futures import ThreadPoolExecutor
+from decimal import Decimal
+from pathlib import Path
 from uuid import uuid4
 
 import psycopg
@@ -105,3 +108,68 @@ def test_ddl_stops_after_second_deadlock_and_releases_advisory_lock(monkeypatch)
         acquired = peer.execute("SELECT pg_try_advisory_lock(%s)", (lock_key,)).fetchone()
         assert acquired == (True,)
         peer.execute("SELECT pg_advisory_unlock(%s)", (lock_key,))
+
+
+# ---------------------------------------------------------------------------
+# F50-I04 (feature F50 Contract I, decision 9): percents stored 0–100. Each migration is replayed
+# on a disposable schema holding the old 0–1 shape, so the stored-value move is proven, not
+# assumed (the module schemas are built from every migration and only ever see the new shape).
+# ---------------------------------------------------------------------------
+
+_MIGRATIONS = Path(__file__).resolve().parents[2] / "supabase" / "migrations"
+
+
+def _replay(schema: str, setup: str, migration: str) -> psycopg.Connection:
+    conn = _admin_conn()
+    conn.execute(f'CREATE SCHEMA "{schema}"')
+    conn.execute(f'SET search_path TO "{schema}"')
+    conn.execute(setup)
+    conn.execute((_MIGRATIONS / migration).read_text(encoding="utf-8"))
+    return conn
+
+
+def test_close_rate_migration_turns_fractions_into_percents():
+    schema = "f50_close_rate_" + uuid4().hex[:12]
+    old = ("(id text PRIMARY KEY, close_rate numeric(6,4)"
+           " CHECK (close_rate IS NULL OR (close_rate > 0 AND close_rate <= 1)))")
+    conn = _replay(
+        schema,
+        f"CREATE TABLE product_economics {old}; CREATE TABLE product_economics_version {old};"
+        " INSERT INTO product_economics VALUES ('a', 0.2), ('b', NULL), ('c', 1), ('d', 0.1234);"
+        " INSERT INTO product_economics_version VALUES ('a', 0.2), ('c', 1);",
+        "20261005000101_brand_intelligence_close_rate_percent.sql",
+    )
+    try:
+        rows = dict(conn.execute("SELECT id, close_rate FROM product_economics").fetchall())
+        assert rows == {"a": Decimal("20.00"), "b": None, "c": Decimal("100.00"),
+                        "d": Decimal("12.34")}
+        versions = dict(conn.execute(
+            "SELECT id, close_rate FROM product_economics_version").fetchall())
+        assert versions == {"a": Decimal("20.00"), "c": Decimal("100.00")}
+        for table in ("product_economics", "product_economics_version"):
+            conn.execute(f"INSERT INTO {table} VALUES ('ok', 100)")
+            for bad in (0, 120):
+                with pytest.raises(psycopg.errors.CheckViolation):
+                    conn.execute(f"INSERT INTO {table} VALUES ('bad', {bad})")
+    finally:
+        conn.execute(f'DROP SCHEMA "{schema}" CASCADE')
+        conn.close()
+
+
+def test_margin_card_migration_turns_fractions_into_percents():
+    schema = "f50_margin_card_" + uuid4().hex[:12]
+    conn = _replay(
+        schema,
+        "CREATE TABLE rule_card_value (brand_id text, card_key text, field_key text,"
+        " value double precision);"
+        " INSERT INTO rule_card_value VALUES ('b1', 'gross_margin', 'gross_margin_rate', 0.7),"
+        " ('b2', 'gross_margin', 'gross_margin_rate', 45),"
+        " ('b3', 'schedule_budget', 'step_rate', 1);",
+        "20261005000102_core_rule_card_margin_percent.sql",
+    )
+    try:
+        rows = dict(conn.execute("SELECT brand_id, value FROM rule_card_value").fetchall())
+        assert rows == {"b1": pytest.approx(70.0), "b2": 45.0, "b3": 1.0}
+    finally:
+        conn.execute(f'DROP SCHEMA "{schema}" CASCADE')
+        conn.close()

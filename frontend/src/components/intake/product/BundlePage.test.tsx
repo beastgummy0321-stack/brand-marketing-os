@@ -1,8 +1,8 @@
 /** frontend/src/components/intake/product/BundlePage.test.tsx — 新增組合 / 編輯組合 (F45-I03, prototype
  * `f45-sell-way-components/variant-bundle.html`): the picker groups every finished product's base sell-ways by product
  * (no composed sell-way, no draft product); each content row shows its product, the base's name and that base's own
- * 售價・成本 (`unit_price` / `unit_cost`); bodies carry `components: [{sell_way_id, qty}]` and raw inputs only (an empty
- * 售價 = derived); the price block shows the server's derived numbers with their 「推算：…」 notes and 推算 on 打平,
+ * 售價・成本 (`unit_price` / `unit_cost`); bodies carry `components: [{sell_way_id, qty}]` and raw inputs only, as typed
+ * (an empty 售價 = derived; F50 Contract I: the server parses and refuses, its sentences shown under their fields); the price block shows the server's derived numbers with their 「推算：…」 notes and 推算 on 打平,
  * 「這個賣法免運」 sends `free_shipping` and shows the server's 「這組免運」; a base without a cost says where to fill it
  * (no jump to another product); the server's refusals (one product only, a taken name) are shown as it words them.
  * Fixtures mirror `app/intake/product_onboarding.py::get_bundle()` / `list_page()` after F45 (shapes of
@@ -21,6 +21,7 @@ vi.mock("@/lib/useAuthedImage", () => ({
   useAuthedImage: (url: string | undefined) => ({ src: url ? `blob:${url}` : null, failed: !url }),
 }));
 
+import { ApiResponseError } from "@/lib/http";
 import type { Bundle, BundleComponent, BundlePreview, ProductsPage } from "@/lib/intakeProductApi";
 import { createBundle, fetchBundle, fetchProductsPage, previewBundle, saveBundle } from "@/lib/intakeProductApi";
 import { BundlePage } from "./BundlePage";
@@ -86,7 +87,7 @@ function bundle(over: Partial<Bundle> = {}): Bundle {
     offer_sentences: ["優惠價 NT$499（原價 NT$580）"], offer_labels: ["組合價 省 81"], offer_notes: [], assumptions: [],
     show_close_rate: false,
     benchmarks: {
-      gross_margin: { value: 0.45, source_text: "毛利率假設 45%" },
+      gross_margin: { value: 45, source_text: "毛利率假設 45%" },
       shipping_cost: { value: 80, source_text: "運費假設 NT$80" },
     },
     reused: {
@@ -177,15 +178,15 @@ describe("BundlePage — 新增組合", () => {
     await waitFor(() => expect(mockCreate).toHaveBeenCalledTimes(1));
     expect(mockCreate).toHaveBeenCalledWith(B, {
       name: NAME,
-      components: [{ sell_way_id: "sw_box", qty: 2 }, { sell_way_id: "sw_pbox", qty: 1 }],
-      price: null, list_price: null, cost: null, shipping: 60, cap_per_sale: null,
+      components: [{ sell_way_id: "sw_box", qty: "2" }, { sell_way_id: "sw_pbox", qty: "1" }],
+      price: null, list_price: null, cost: null, shipping: "60", cap_per_sale: null,
       landing_url: "https://beastgummy.tw/shop/duo", assumptions: [], free_shipping: false,
     });
     expect(mockSave).not.toHaveBeenCalled();
     await waitFor(() => expect(screen.getByTestId("where").textContent).toBe(`/brands/${B}/products`));
   });
 
-  it("名稱、數量、落地頁缺了不送出並寫出原因；只放一個商品時照伺服器的話說", async () => {
+  it("名稱、數量、落地頁缺了不送出（數量沒有自己的規則）；只放一個商品時照伺服器的話說", async () => {
     const one = "組合至少要放兩個不同商品的賣法；同一個商品的組合，請到那個商品的賣法新增。";
     mockPage.mockResolvedValue(PAGE);
     mockPreview.mockRejectedValue(new Error(one));
@@ -196,7 +197,8 @@ describe("BundlePage — 新增組合", () => {
     await pick(user, `${EN}・單盒`);
     await user.click(screen.getByRole("button", { name: "建立組合 →" }));
     expect(screen.getByText("請填組合名稱")).toBeTruthy();
-    expect(screen.getByText("數量要是正整數")).toBeTruthy();
+    // A quantity not typed yet is waited for, not judged on the page (F50 Contract I).
+    expect(screen.queryByText(/數量要是/)).toBeNull();
     expect(screen.getByText("落地頁要填")).toBeTruthy();
     expect(input("落地頁").getAttribute("aria-invalid")).toBe("true");
     expect(breakEven()).toContain("還算不出來：先填數量");
@@ -213,6 +215,34 @@ describe("BundlePage — 新增組合", () => {
     await waitFor(() => expect(mockCreate).toHaveBeenCalledTimes(1));
     expect(screen.getAllByText(one)).toHaveLength(1);
     expect(screen.getByTestId("where").textContent).toBe(`/brands/${B}/products/bundles/new`);
+  });
+
+  it("數量、售價照打的送；伺服器擋下的句子寫在那一格下面（F50 Contract I）", async () => {
+    const qtySentence = `「${EN}・單盒」的數量要是 1 以上的整數。`;
+    const priceSentence = "「能量＋益生菌 雙效組」的售價要大於 0。";
+    mockPage.mockResolvedValue(PAGE);
+    mockPreview.mockRejectedValue(new ApiResponseError(qtySentence, 400, { "components.0.qty": qtySentence, price: priceSentence }));
+    renderPage(null);
+    const user = userEvent.setup();
+
+    await pick(user, `${EN}・單盒`);
+    await user.type(input(`${EN}・單盒的數量`), "0");
+    await pick(user, `${PRO}・單盒`);
+    await user.type(input(`${PRO}・單盒的數量`), "1");
+    await user.type(input("組合名稱"), NAME);
+    await user.type(input("售價"), "0");
+    await user.tab();
+
+    await waitFor(() => expect(mockPreview).toHaveBeenCalled());
+    expect(mockPreview.mock.lastCall?.[1]).toMatchObject({
+      components: [{ sell_way_id: "sw_box", qty: "0" }, { sell_way_id: "sw_pbox", qty: "1" }], price: "0",
+    });
+    const rows = screen.getByRole("list", { name: "裡面有什麼" });
+    expect(await within(rows).findByText(qtySentence)).toBeTruthy();
+    expect(input(`${EN}・單盒的數量`).getAttribute("aria-invalid")).toBe("true");
+    expect(screen.getByText(priceSentence)).toBeTruthy();
+    expect(input("售價").getAttribute("aria-invalid")).toBe("true");
+    expect(breakEven()).toContain("還算不出來：先改好下面的紅字");
   });
 
   it("預覽：每列是那個基本賣法自己的售價・成本；空著的售價／原價／成本照內容推算並標推算，打平也標推算", async () => {
@@ -232,7 +262,7 @@ describe("BundlePage — 新增組合", () => {
     await waitFor(() => expect(breakEven()).toContain("每筆最多花 NT$350"));
     expect(mockPreview).toHaveBeenCalledWith(B, {
       name: NAME,
-      components: [{ sell_way_id: "sw_box", qty: 2 }, { sell_way_id: "sw_pbox", qty: 1 }],
+      components: [{ sell_way_id: "sw_box", qty: "2" }, { sell_way_id: "sw_pbox", qty: "1" }],
       price: null, list_price: null, cost: null, shipping: null, cap_per_sale: null, landing_url: null, assumptions: [],
       free_shipping: false,
     });
@@ -276,7 +306,7 @@ describe("BundlePage — 新增組合", () => {
 
     await user.click(screen.getByRole("checkbox", { name: "這個賣法免運" }));
     await waitFor(() => expect(mockPreview).toHaveBeenCalledTimes(calls + 1));
-    expect(mockPreview.mock.lastCall?.[1]).toMatchObject({ price: 499, free_shipping: true });
+    expect(mockPreview.mock.lastCall?.[1]).toMatchObject({ price: "499", free_shipping: true });
     expect(await screen.findByText("「這組免運」")).toBeTruthy();
   });
 
@@ -375,8 +405,8 @@ describe("BundlePage — 編輯組合", () => {
     await waitFor(() => expect(mockSave).toHaveBeenCalledTimes(1));
     expect(mockSave).toHaveBeenCalledWith(B, "sw_duo", {
       name: NAME,
-      components: [{ sell_way_id: "sw_box", qty: 3 }, { sell_way_id: "sw_pbox", qty: 1 }],
-      price: 499, list_price: null, cost: null, shipping: 60, cap_per_sale: null,
+      components: [{ sell_way_id: "sw_box", qty: "3" }, { sell_way_id: "sw_pbox", qty: "1" }],
+      price: "499", list_price: null, cost: null, shipping: "60", cap_per_sale: null,
       landing_url: "https://beastgummy.tw/shop/duo", assumptions: [], free_shipping: false,
     });
     await waitFor(() => expect(input("原價").placeholder).toBe("760"));

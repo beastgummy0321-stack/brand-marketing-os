@@ -84,7 +84,7 @@ export function EconomicsTab({
             </dd>
             <dt className="text-muted-foreground">成交率</dt>
             <dd className="text-foreground">
-              {economics.close_rate === null ? "未設定" : economics.close_rate}
+              {economics.close_rate === null ? "未設定" : `${economics.close_rate}%`}
               <AssumptionChip field="close_rate" assumptions={economics.assumptions} />
             </dd>
             <dt className="text-muted-foreground">幣別</dt>

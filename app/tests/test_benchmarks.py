@@ -10,9 +10,22 @@ def test_get_returns_record(key):
     assert isinstance(record["value"], (int, float))
 
 
-def test_ratio_values_in_range():
-    assert 0 < benchmarks.get("gross_margin")["value"] < 1
-    assert 0 < benchmarks.get("close_rate")["value"] < 1
+def test_rates_are_served_as_percents():
+    # F50 Contract I (decision 9): rates are served 0–100 with unit 「%」, as a user types them.
+    assert benchmarks.get("gross_margin")["value"] == 45
+    assert benchmarks.get("close_rate")["value"] == 20
+    for key in ("gross_margin", "close_rate"):
+        assert benchmarks.get(key)["unit"] == "%"
+        assert 0 < benchmarks.get(key)["value"] < 100
+
+
+def test_margin_rule_card_default_is_the_benchmark():
+    # User ruling 2026-10-04: one assumed gross margin default -- the benchmark 45 %. The rule
+    # card cannot import brand_intelligence (core is below it), so this pins the two together.
+    from app.core import rule_cards
+
+    field = rule_cards.CARDS["gross_margin"]["fields"]["gross_margin_rate"]
+    assert field["default"] == benchmarks.get("gross_margin")["value"]
 
 
 def test_shipping_cost_is_positive_integer():
