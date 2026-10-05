@@ -26,7 +26,7 @@ from app.brand_intelligence import repository as repo
 from app.brand_web import report_service
 from app.core import interrupts as core_interrupts
 from app.core.db import connection as core_db_connection
-from app.core.db import new_id, now_iso
+from app.core.db import new_id
 from app.shared import web
 from app.shared.web import JSONResponse, NotFoundKind, require_actor, require_brand
 
@@ -109,10 +109,10 @@ def background_brand_report(org_id: str, brand_id: str, actor: str) -> None:
     with core_db_connection() as conn:
         error = None
         try:
-            ok, message = report_service.generate(conn, brand_id, actor)
+            ok, _message = report_service.generate(conn, brand_id, actor)
         except Exception as exc:  # noqa: BLE001 — 先寄失敗通知，再往上丟讓 job 記成失敗
             conn.rollback()  # 失敗的交易先收掉，通知才寫得進去
-            ok, message, error = False, f"背景執行發生未預期錯誤：{exc}", exc
+            ok, error = False, exc
         if ok:
             _notify(brand_id, "顧問分析報告已生成")
         else:  # the reason itself is on the report page (`_job_shape` quotes the llm error)

@@ -47,8 +47,10 @@ have changed the picture out from under it before the worker gets to it.
 
 import logging
 
-from app import workbench  # module entry point only (docs/contracts/workbench.md)
-from app import background
+from app import (
+    background,
+    workbench,  # module entry point only (docs/contracts/workbench.md)
+)
 from app.brand_intelligence import repository as bi_repo
 from app.core import rule_cards
 from app.core.db import connection, jsonb, new_id

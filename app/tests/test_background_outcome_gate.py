@@ -17,9 +17,8 @@ import unittest
 from pathlib import Path
 
 import app.background as background_module
-from app import ads, intake, meta, schedule, workbench
+from app import ads, intake, main, meta, schedule, workbench
 from app import brand_web as brand_web_module
-from app import main
 
 APP_DIR = Path(__file__).resolve().parents[1]
 _SELF = Path(__file__).resolve()

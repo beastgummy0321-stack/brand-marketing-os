@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 import anthropic
+import psycopg
 
 from app.brand_intelligence import repository as repo
 from app.core import config, db, rule_cards, vocab
@@ -249,7 +250,7 @@ class LLMGatewayTest(unittest.TestCase):
             prompt_template_id="tpl", prompt_template_version="v1", provider_name="fake",
             model="claude-opus-5", attempt_no=1,
         )
-        with self.assertRaises(Exception):
+        with self.assertRaises(psycopg.errors.CheckViolation):
             gateway._mark_failed(self.conn, row["id"], status="failed", error="x",
                                  error_code="something_else")
         self.conn.rollback()

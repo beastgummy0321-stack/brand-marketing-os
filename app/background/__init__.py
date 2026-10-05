@@ -536,12 +536,13 @@ def job_state(lock: str, llm_row) -> dict:
     row_started = row["started_at"] if row is not None else None
     row_running = row is not None and row["status"] == "running"
     if found is not None and found["state"] == "running":
-        return {"status": "running", "started_at": row_started if row_running else found["started_at"],
-                "error": None}
+        started = row_started if row_running else found["started_at"]
+        return {"status": "running", "started_at": started, "error": None}
     if found is not None and found["state"] == "failed":
-        own_error = row is not None and row["status"] not in ("running", "succeeded") and row["error"]
+        own_error = (row["error"] if row is not None
+                     and row["status"] not in ("running", "succeeded") else None)
         return {"status": "failed", "started_at": row_started,
-                "error": row["error"] if own_error else found["text"]}
+                "error": own_error or found["text"]}
     if found is not None and found["state"] == "empty":
         return {"status": "empty", "started_at": row_started, "error": found["text"]}
     if row is None:

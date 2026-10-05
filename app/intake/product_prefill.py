@@ -441,7 +441,8 @@ def background_intake_product_prefill(org_id: str, brand_id: str, product_id: st
         background_job.notify(
             conn, brand_id, category="intake_ai_step_done", dedupe_key=new_id("itkjob"),
             message=core_interrupts.notice(
-                "AI 讀完商品頁，可以回去確認" if error is None else "商品頁沒讀成，可以重試或自己填",
+                "AI 讀完商品頁，可以回去確認" if error is None
+                else "商品頁沒讀成，可以重試或自己填",
                 product["name"]),
             action_url=f"/app/brands/{brand_id}/products/{product_id}/onboarding",
         )
