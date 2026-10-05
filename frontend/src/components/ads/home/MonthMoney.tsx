@@ -159,8 +159,8 @@ function MoneyColumn({ home }: { home: HomeOverview }) {
             <span className={cn("text-[13px] font-semibold", gain ? "text-success" : "text-danger")}>
               這個月估計{gain ? "多賺" : "少賺"}
             </span>
-            <span className={cn("numeric text-4xl leading-tight font-semibold tracking-tight", gain ? "text-success" : "text-danger")}>
-              約 <Figure basis="earn_after_cost_and_ads" value={Math.abs(rounded)} currency={home.currency} />
+            <span className={cn("numeric flex items-baseline gap-2 text-4xl leading-tight font-semibold tracking-tight", gain ? "text-success" : "text-danger")}>
+              約 <Figure basis="earn_after_cost_and_ads" value={Math.abs(rounded)} currency={home.currency} className="min-w-0" />
             </span>
           </>
         )}
