@@ -51,6 +51,7 @@ TASK_KINDS: dict[str, tuple[str, str]] = {
     "background.ads_external_sync": ("ads_sync", "讀取廣告平台成效中"),
     "background.ads_runtime_campaign": ("ads_runtime", "檢查活動狀態與預算中"),
     "background.ads_close_expired": ("ads_runtime", "檢查活動狀態與預算中"),
+    "background.ads_queue_refresh": ("ads_runtime", "整理今天的待辦中"),
     "background.ads_review_round": ("ads_review", "AI 判讀中"),
     "background.ads_angles": ("ads_angles", "AI 整理主打中"),
     "background.ads_user_asset_preview": ("ads_asset_preview", "產生預覽中"),

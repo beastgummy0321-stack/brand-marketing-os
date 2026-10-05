@@ -3,7 +3,7 @@
 import logging
 
 from app import background
-from app.core.db import connection
+from app.core.db import connection, set_tenant_scope
 
 logger = logging.getLogger(__name__)
 
@@ -38,34 +38,51 @@ def _dispatch_close_expired(timestamp: int) -> None:
     runtime.dispatch(timestamp)
 
 
-def _dispatch_queue_refresh(timestamp: int) -> None:  # noqa: ARG001 -- cron passes a timestamp
-    """Contract I / Done #1: the daily brand-wide triage queue refresh -- runs
-    `triage.refresh_queue` (re-classify + raise/supersede queue rows) for every brand that has at
-    least one non-closed `ads_campaign`, right after the 05:00 external sync periodic
-    (`ads_external_daily`, `_dispatch_close_expired`'s own `_CLOSE_CRON` runs at 04:00 -- this one
-    is offset later so a freshly synced day's numbers are already committed before the queue
-    re-reads them). Same "one distinct (org_id, brand_id) over non-closed campaigns" query shape
-    `_dispatch_runtime_beat` above already uses -- never a second, divergent "active brand" list.
+QUEUE_REFRESH_TASK = "background.ads_queue_refresh"
+QUEUE_REFRESH_FAILED = "queue_refresh_failed"
+QUEUE_REFRESH_FAILED_TEXT = "今天的待辦沒有整理完成，明天早上會再整理一次。"
 
-    F29-I08 Contract J: right after each brand's refresh, its daily digest is built from the
-    payload that refresh just returned and handed to every `digest.SENDERS` channel. One brand
-    failing (refresh or digest) is rolled back and logged; the other brands still run, and a brand
-    whose refresh raised gets no digest.
-    """
-    from app.ads import digest, lifecycle, triage
-    from app.core import settings as coresettings
+
+def _dispatch_queue_refresh(timestamp: int) -> None:  # noqa: ARG001 -- cron passes a timestamp
+    """Contract I / Done #1: the daily brand-wide triage queue refresh, right after the 05:00
+    external sync periodic (`ads_external_daily`; `_dispatch_close_expired`'s own `_CLOSE_CRON`
+    runs at 04:00 -- this one is offset later so a freshly synced day's numbers are already
+    committed before the queue re-reads them). Same "one distinct (org_id, brand_id) over
+    non-closed campaigns" selector `_dispatch_runtime_beat` below uses -- never a second,
+    divergent "active brand" list.
+
+    F50 Contract J: the dispatcher only enqueues one `background.ads_queue_refresh` job per
+    (org, brand) (`refresh_brand_queue`); a brand whose refresh fails fails its own job (the bell
+    counts it) and never stops another brand's."""
+    from app.ads import lifecycle
 
     with connection() as conn:
         active_brands = lifecycle.brands(conn, lifecycle.NOT_CLOSED)
-        for row in active_brands:
-            org_id, brand_id = row["org_id"], row["brand_id"]
-            try:
-                queue = triage.refresh_queue(conn, org_id, brand_id)
-                today = coresettings.today_for_org(conn, org_id=org_id)
-                digest.deliver(conn, org_id, brand_id, today, queue=queue)
-            except Exception:
-                conn.rollback()
-                logger.exception("daily queue refresh/digest failed for brand %s", brand_id)
+    for row in active_brands:
+        org_id, brand_id = row["org_id"], row["brand_id"]
+        lock = "ads-queue-refresh:" + brand_id
+        if not background.is_active(lock):
+            background.enqueue(QUEUE_REFRESH_TASK, org_id=org_id, lock=lock, brand_id=brand_id)
+
+
+def refresh_brand_queue(org_id: str, brand_id: str) -> None:
+    """One brand's daily refresh (`triage.refresh_queue`: re-classify + raise/supersede queue
+    rows), then -- F29-I08 Contract J -- its daily digest built from the payload that refresh just
+    returned and handed to every `digest.SENDERS` channel. A failure is rolled back, logged and
+    raised: this brand's job ends failed (F50 Contract J) and gets no digest."""
+    from app.ads import digest, triage
+    from app.core import settings as coresettings
+
+    with connection() as conn:
+        set_tenant_scope(conn, org_id)
+        try:
+            queue = triage.refresh_queue(conn, org_id, brand_id)
+            today = coresettings.today_for_org(conn, org_id=org_id)
+            digest.deliver(conn, org_id, brand_id, today, queue=queue)
+        except Exception as exc:
+            conn.rollback()
+            logger.exception("daily queue refresh/digest failed for brand %s", brand_id)
+            raise background.JobFailed(QUEUE_REFRESH_FAILED, QUEUE_REFRESH_FAILED_TEXT) from exc
 
 
 def _dispatch_runtime_beat(timestamp: int):
@@ -103,6 +120,7 @@ def register_tasks() -> None:
                         cron="0 5 * * *", periodic_id="ads_external_daily")
     background.register("ads.queue_refresh_daily", _dispatch_queue_refresh,
                         cron="30 6 * * *", periodic_id="ads_queue_refresh_daily")
+    background.register(QUEUE_REFRESH_TASK, refresh_brand_queue)
 
     from app.ads import user_assets
     background.register(user_assets.TASK, user_assets.process_preview)

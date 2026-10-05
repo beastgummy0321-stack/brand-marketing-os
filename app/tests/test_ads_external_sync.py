@@ -5,6 +5,7 @@ from datetime import UTC, date, datetime, timedelta
 from datetime import time as dt_time
 from unittest.mock import patch
 
+from app import background
 from app.ads import external_repository as repo
 from app.ads import external_sync as sync
 from app.ads import tracked_zero
@@ -1114,6 +1115,41 @@ class SyncOutcomeTest(unittest.TestCase):
         observed = next(t for t in job["tasks"].values() if t["section"] == "observations")
         self.assertEqual(observed["rows"], 0)
 
+    def test_job_result_follows_the_job_wide_outcome(self):
+        # F50 Contract J: what the sync job reports is Contract O's job-wide outcome.
+        campaign = self._import()
+        self.assertIsNone(sync.job_result(self.conn, self.org, self.brand, "aes_missing"))
+        with patch.object(self.reader, "read_observations", return_value=SourcePage([])):
+            job = sync.request_sync(self.conn, self.org, self.brand, "other", "account")
+            results = []
+            for _ in range(12):
+                results.append(sync.run_sync(self.org, self.brand, job["id"]))
+                job = repo.get_job(self.conn, self.org, self.brand, job["id"])
+                if job["status"] not in {"pending", "running"}:
+                    break
+        self.assertEqual(sync.outcome(job["tasks"], campaign_id=campaign)["state"], "empty")
+        # Pages before the last are done for their own invocation; the last reports empty.
+        self.assertTrue(all(result is None for result in results[:-1]))
+        empty = background.Empty("no_rows", sync.outcome(job["tasks"])["text"])
+        self.assertEqual(results[-1], empty)
+        # A found read is done; a run with nothing pending reads nothing and is done.
+        job = self.run_pages(sync.request_sync(self.conn, self.org, self.brand, "other", "account"))
+        self.assertEqual(sync.outcome(job["tasks"])["state"], "found")
+        self.assertIsNone(sync.job_result(self.conn, self.org, self.brand, job["id"]))
+        self.assertIsNone(sync.run_sync(self.org, self.brand, job["id"]))
+
+    def test_every_task_failed_returns_failed_with_the_outcome_code(self):
+        with patch.object(
+            self.reader, "list_existing", side_effect=SourceReadError("x", "permission_denied"),
+        ), patch.object(
+            self.reader, "read_monthly", side_effect=SourceReadError("x", "permission_denied"),
+        ):
+            job = self.run_pages(
+                sync.request_sync(self.conn, self.org, self.brand, "other", "account")
+            )
+        result = sync.job_result(self.conn, self.org, self.brand, job["id"])
+        self.assertEqual(result, background.Failed("permission_denied", job["error"]))
+
     def test_request_failure_is_an_account_failure_the_next_request_clears(self):
         self.run_pages(sync.request_sync(self.conn, self.org, self.brand, "other", "account"))
         sync.record_request_failure(
@@ -1128,3 +1164,78 @@ class SyncOutcomeTest(unittest.TestCase):
         self.assertEqual((job["status"], job["error"]), ("partial", read["text"]))
         job = sync.request_sync(self.conn, self.org, self.brand, "other", "account")
         self.assertNotIn(sync.REQUEST_TASK, job["tasks"])
+
+
+class SyncJobOutcomeTest(unittest.TestCase):
+    """F50 Contract J through the real queue: a sync job whose read failed is a failed
+    procrastinate job (the bell counts it) with Contract O's code; a clean read of zero rows is
+    `empty`. The account read is the fake `Reader`; every page runs on the worker."""
+
+    def setUp(self):
+        self.conn = db.current()
+        self.org, self.brand = setup_brand(self.conn)
+        self.reader = Reader()
+        reader_patch = patch.object(sync.channels, "external_reader", return_value=self.reader)
+        reader_patch.start()
+        self.addCleanup(reader_patch.stop)
+        # Only the sync task: a periodic one registered here would be deferred by the worker.
+        background.register(sync.TASK, sync.run_sync)
+
+    def _import(self):
+        with (
+            patch.object(sync.background, "enqueue", return_value=True),
+            patch.object(sync.background, "is_active", return_value=False),
+        ):
+            ExternalSyncTest.run_pages(
+                self, sync.request_sync(self.conn, self.org, self.brand, "other", "account")
+            )
+            campaign = repo.import_cached(
+                self.conn, self.org, self.brand, "other", "account", "portfolio", "root", "test"
+            )
+        self.conn.commit()
+        return campaign["id"]
+
+    def _read_on_the_worker(self):
+        job = sync.request_sync(self.conn, self.org, self.brand, "other", "account")
+        self.conn.commit()
+        background.app().run_worker(wait=False)
+        job = repo.get_job(self.conn, self.org, self.brand, job["id"])
+        self.assertNotIn(job["status"], {"pending", "running"}, job["tasks"])
+        last = self.conn.execute(
+            "SELECT lock,state,code,text FROM background_job_result WHERE org_id=%s "
+            "AND task_name=%s AND lock LIKE %s ORDER BY finished_at DESC, job_id DESC LIMIT 1",
+            (self.org, sync.TASK, f"external-sync:{job['id']}:%"),
+        ).fetchone()
+        self.assertIsNotNone(last)
+        return job, last
+
+    def _failed_today(self):
+        since = datetime(2000, 1, 1, tzinfo=UTC)
+        return background.queue_snapshot(since=since)["failed_today"].get(self.org, 0)
+
+    def test_one_failed_task_fails_the_job_with_the_outcome_code(self):
+        self._import()
+        before = self._failed_today()
+        with patch.object(
+            self.reader, "read_creatives", side_effect=SourceReadError("private", "page_limit"),
+        ):
+            job, last = self._read_on_the_worker()
+        read = sync.outcome(job["tasks"])
+        self.assertEqual((read["state"], read["code"]), ("partial", "page_limit"))
+        self.assertEqual((last["state"], last["code"], last["text"]),
+                         ("failed", "page_limit", read["text"]))
+        found = background.outcome(last["lock"])
+        self.assertEqual((found["state"], found["code"]), ("failed", "page_limit"))
+        self.assertEqual(self._failed_today(), before + 1)
+        # The job row keeps what F49 writes.
+        self.assertEqual((job["status"], job["error"]), ("partial", read["text"]))
+
+    def test_a_clean_read_of_zero_rows_is_empty(self):
+        self._import()
+        before = self._failed_today()
+        with patch.object(self.reader, "read_observations", return_value=SourcePage([])):
+            job, last = self._read_on_the_worker()
+        self.assertEqual((last["state"], last["code"]), ("empty", "no_rows"))
+        self.assertEqual(background.outcome(last["lock"])["state"], "empty")
+        self.assertEqual(job["status"], "succeeded")
+        self.assertEqual(self._failed_today(), before)

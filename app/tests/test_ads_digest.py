@@ -12,6 +12,7 @@ import unittest
 from datetime import date
 from unittest.mock import patch
 
+from app import background
 from app.ads import digest, jobs, queue_done, settle, status_summary, triage
 from app.ads import external_repository as external
 from app.brand_intelligence import repository as brands
@@ -60,7 +61,10 @@ class DigestTest(unittest.TestCase):
         return [dict(r) for r in self.conn.execute(sql, params).fetchall()]
 
     def run_daily(self):
-        jobs._dispatch_queue_refresh(int(db.now_utc().timestamp()))
+        # F50-I08: the 06:30 dispatcher only enqueues one `background.ads_queue_refresh` job per
+        # (org, brand); the refresh + digest runs in that job's handler.
+        for brand_id in (self.brand, self.quiet):
+            jobs.refresh_brand_queue(self.org, brand_id)
 
     def test_senders_hold_the_inbox_only(self):
         self.assertEqual(list(digest.SENDERS), ["inbox"])
@@ -134,6 +138,9 @@ class DigestTest(unittest.TestCase):
                           side_effect=lambda c, o, b: _settle_candidate(b)
                           if b in (self.brand, other) else None), \
                 patch.object(triage, "refresh_queue", side_effect=refresh):
+            # F50-I08: the failing brand's own job fails (the bell counts it) ...
+            with self.assertRaises(background.JobFailed):
+                jobs.refresh_brand_queue(self.org, other)
             self.run_daily()
         self.assertEqual(self.digest_rows(other), [])
         self.assertEqual(len(self.digest_rows(self.brand)), 1)

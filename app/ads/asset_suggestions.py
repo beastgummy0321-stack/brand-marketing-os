@@ -1,6 +1,7 @@
 """Durable single-call suggestions and explicit revision confirmation, owned by ads."""
 
 import hashlib
+import logging
 import math
 
 from app import background, workbench
@@ -15,6 +16,14 @@ TASK_TYPE = "ads_user_asset_suggestions"
 TASK = "background.ads_user_asset_suggestions"
 PROVIDER = providers.AnthropicProvider()
 PROMPT = db.APP_DIR / "departments" / "ads" / "user_asset_suggestions.md"
+#: F50 Contract J: a batch that failed before or around the call names why with one of these
+#: codes; a failed AI call keeps the gateway's own `llm_task.error_code` (timeout, refused, ...).
+INPUT_CHANGED = "input_changed"
+REPLY_INVALID = "reply_invalid"
+UNEXPECTED = "unexpected"
+UNKNOWN_ERROR = "執行狀態不明，預留已釋放；不自動重送，可先手動修訂安排。"
+
+logger = logging.getLogger(__name__)
 
 
 def get_batch(conn, org, brand, campaign, batch_id):
@@ -40,6 +49,14 @@ def get_batch(conn, org, brand, campaign, batch_id):
         else "每次生成最多 US$0.50 預留；與全站其他功能的並行預留未共用鎖。"
     )
     result["retry_notice"] = "失敗批次不自動重送；可先手動修訂文案與安排。"
+    # F50 Contract J (slots #7): a batch whose AI call did not succeed serves the call's own
+    # error and its kind (timeout／refused／provider／truncated／...), never a generic sentence.
+    result["error_code"] = None
+    task = gateway.get_task(conn, result["llm_task_id"]) if result.get("llm_task_id") else None
+    if task is not None and task.get("error_code"):
+        result["error_code"] = task["error_code"]
+        if task["status"] != "succeeded" and task.get("error"):
+            result["error"] = task["error"]
     result["stale"] = False
     if result["status"] == "succeeded":
         try:
@@ -295,14 +312,36 @@ def enqueue(org, brand, campaign, batch_id):
         )
 
 
+def _settle_unknown(conn, org, brand, batch_id):
+    """Slots #7: a batch marked `unknown` settles its reservation, so a stuck batch never keeps
+    holding the org's AI budget. The cost its AI call is known to have spent (a failed call's
+    row) is kept as `known_failed_cost`; a succeeded call's cost is already counted as spent."""
+    tasks = gateway.find_tasks_for_scope(
+        conn, org_id=org, brand_id=brand, task_type=TASK_TYPE,
+        context_scope={"brand_id": brand, "suggestion_batch_id": batch_id}, limit=2,
+    )
+    task = tasks[-1] if tasks else None
+    _settle(conn, org, batch_id, {
+        "cost": (task or {}).get("cost") or 0,
+        "status": (task or {}).get("status") or "failed",
+    })
+
+
 def dispatch_pending(timestamp):
     with db.connection() as conn:
-        conn.execute(
+        marked = conn.execute(
             "UPDATE ads_asset_suggestion_batch SET status='unknown',"
-            "error='執行狀態不明，預留保留；不自動重送，可先手動修訂安排。',updated_at=now() "
-            "WHERE status='running' AND updated_at<now()-interval '10 minutes'"
-        )
+            "error=%s,updated_at=now() "
+            "WHERE status='running' AND updated_at<now()-interval '10 minutes' "
+            "RETURNING org_id,brand_id,id",
+            (UNKNOWN_ERROR,),
+        ).fetchall()
         conn.commit()
+    for row in marked:
+        with db.connection() as conn:
+            db.set_tenant_scope(conn, row["org_id"])
+            _settle_unknown(conn, row["org_id"], row["brand_id"], row["id"])
+    with db.connection() as conn:
         rows = conn.execute(
             "SELECT org_id,brand_id,campaign_id,id FROM ads_asset_suggestion_batch WHERE "
             "status='queued' ORDER BY created_at LIMIT 100"
@@ -440,7 +479,7 @@ def run(org_id, brand_id, campaign_id, batch_id):
         ).rowcount
         conn.commit()
         if not changed:
-            return
+            return None
         data = batch["input_json"]
         try:
             current = snapshot(
@@ -465,7 +504,8 @@ def run(org_id, brand_id, campaign_id, batch_id):
                 (str(exc), batch_id),
             )
             conn.commit()
-            return
+            return background.Failed(INPUT_CHANGED, str(exc))
+        task = None
         try:
             task = gateway.run_task(
                 conn,
@@ -495,7 +535,16 @@ def run(org_id, brand_id, campaign_id, batch_id):
             )
             conn.commit()
             if task["status"] != "succeeded":
-                raise ValueError("生成未完成，費用不明時保留預留，不自動重送。")
+                # Slots #7: the call's own error stays the batch's error (never overwritten by
+                # a generic sentence); the job fails with the gateway's error kind.
+                reason = task.get("error") or "生成未完成，不自動重送。"
+                conn.execute(
+                    "UPDATE ads_asset_suggestion_batch SET status='failed',error=%s,"
+                    "updated_at=now() WHERE id=%s",
+                    (reason, batch_id),
+                )
+                conn.commit()
+                return background.Failed(task.get("error_code") or "provider", reason)
             if len(task.get("rendered_output") or "") > policy.OUTPUT_CHARS:
                 raise ValueError("回傳超過 16,384 字元接受上限，未採用；這不是生成用量硬上限。")
             parsed = gateway.parse_json_reply(task.get("rendered_output") or "")
@@ -512,13 +561,22 @@ def run(org_id, brand_id, campaign_id, batch_id):
             conn.commit()
         except Exception as exc:
             conn.rollback()
-            reason = str(exc) if isinstance(exc, ValueError) else "生成中斷，預留保留、不自動重送。"
+            if isinstance(exc, ValueError):
+                reason, code = str(exc), REPLY_INVALID
+                if task is not None and task.get("id"):
+                    # The program refused a paid reply: the row says why it was not used.
+                    gateway.record_refusal(conn, task["id"], REPLY_INVALID, reason)
+            else:
+                logger.exception("asset suggestion batch %s failed", batch_id)
+                reason, code = "生成中斷，預留保留、不自動重送。", UNEXPECTED
             conn.execute(
                 "UPDATE ads_asset_suggestion_batch SET status='failed',error=%s,"
                 "updated_at=now() WHERE id=%s",
                 (reason, batch_id),
             )
             conn.commit()
+            return background.Failed(code, reason)
+        return None
 
 
 def confirm(conn, org, brand, campaign, placement_id, expected_revision, batch_id, actor):

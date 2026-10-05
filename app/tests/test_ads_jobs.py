@@ -1,7 +1,7 @@
 """Expired imported source dates must never dispatch a legacy closeout."""
 
 import unittest
-from datetime import date
+from datetime import UTC, date, datetime
 from unittest.mock import patch
 
 from app import background
@@ -82,10 +82,84 @@ class QueueRefreshDailyTest(unittest.TestCase):
                        "dispatch task 必須真的用 periodic() 註冊，不能只是掛了普通 task")
         self.assertEqual(a.periodic_registry.periodic_tasks[key].cron, "30 6 * * *")
 
-    def test_dispatch_refreshes_queue_for_every_brand_with_a_non_closed_campaign(self):
+    def test_dispatch_enqueues_one_refresh_job_per_brand_with_a_non_closed_campaign(self):
+        # F50 Contract J: the dispatcher only enqueues; the refresh runs in each brand's own job.
         timestamp = int(db.now_utc().timestamp())
-        with patch.object(triage, "refresh_queue", return_value={"items": []}) as refresh:
+        with (
+            patch.object(triage, "refresh_queue") as refresh,
+            patch.object(background, "is_active", return_value=False),
+            patch.object(background, "enqueue", return_value=True) as enqueue,
+        ):
             jobs._dispatch_queue_refresh(timestamp)
-        called_brands = {call.args[2] for call in refresh.call_args_list}
-        self.assertIn(self.brand, called_brands)
-        self.assertNotIn(self.closed_brand, called_brands)
+        refresh.assert_not_called()
+        calls = {call.kwargs["brand_id"]: call for call in enqueue.call_args_list}
+        self.assertIn(self.brand, calls)
+        self.assertNotIn(self.closed_brand, calls)
+        call = calls[self.brand]
+        self.assertEqual(call.args, (jobs.QUEUE_REFRESH_TASK,))
+        self.assertEqual((call.kwargs["org_id"], call.kwargs["lock"]),
+                         (self.org, "ads-queue-refresh:" + self.brand))
+
+    def test_register_tasks_registers_the_per_brand_job_through_the_wrapper(self):
+        jobs.register_tasks()
+        task = background.app().tasks[jobs.QUEUE_REFRESH_TASK]
+        self.assertTrue(background.is_registered_through_register(task))
+
+    def test_a_refresh_raising_for_one_brand_fails_its_job_and_not_the_others(self):
+        other = brands.create_brand(
+            self.conn, org_id=self.org, name="每日佇列刷新（另一個）", actor="test",
+            client_name=None,
+        )["id"]
+        external.create_imported_campaign(self.conn, self.org, other, name="另一個活動")
+        self.conn.commit()
+        background.register(jobs.QUEUE_REFRESH_TASK, jobs.refresh_brand_queue)
+        task = background.app().tasks[jobs.QUEUE_REFRESH_TASK]
+
+        def refresh(conn, org_id, brand_id):
+            if brand_id == self.brand:
+                raise RuntimeError("private refresh failure")
+            return {"items": []}
+
+        with patch.object(triage, "refresh_queue", side_effect=refresh) as called:
+            with (
+                self.assertRaises(background.JobFailed) as raised,
+                self.assertLogs("app.ads.jobs", "ERROR"),
+            ):
+                task.func(org_id=self.org, brand_id=self.brand)
+            self.assertEqual(raised.exception.code, jobs.QUEUE_REFRESH_FAILED)
+            self.assertNotIn("private", raised.exception.text or "")
+            self.assertIsNone(task.func(org_id=self.org, brand_id=other))
+        self.assertEqual([c.args[2] for c in called.call_args_list], [self.brand, other])
+
+    def test_a_failed_refresh_job_is_counted_failed_by_the_queue(self):
+        # Real procrastinate: the raising brand's job ends failed (the bell's `failed_today`) with
+        # its stored code; the other brand's job succeeds.
+        other = brands.create_brand(
+            self.conn, org_id=self.org, name="每日佇列刷新（成功）", actor="test",
+            client_name=None,
+        )["id"]
+        self.conn.commit()
+        # Only this task: a periodic one registered here would be deferred by the worker too.
+        background.register(jobs.QUEUE_REFRESH_TASK, jobs.refresh_brand_queue)
+        since = datetime(2000, 1, 1, tzinfo=UTC)
+        before = background.queue_snapshot(since=since)["failed_today"].get(self.org, 0)
+        lock_bad = "ads-queue-refresh:" + self.brand + ":" + db.new_id("t")
+        lock_ok = "ads-queue-refresh:" + other + ":" + db.new_id("t")
+        background.enqueue(jobs.QUEUE_REFRESH_TASK, org_id=self.org, lock=lock_bad,
+                           brand_id=self.brand)
+        background.enqueue(jobs.QUEUE_REFRESH_TASK, org_id=self.org, lock=lock_ok,
+                           brand_id=other)
+
+        def refresh(conn, org_id, brand_id):
+            if brand_id == self.brand:
+                raise RuntimeError("boom")
+            return {"items": []}
+
+        with patch.object(triage, "refresh_queue", side_effect=refresh):
+            self.conn.commit()
+            background.app().run_worker(wait=False)
+        bad = background.outcome(lock_bad)
+        self.assertEqual((bad["state"], bad["code"]), ("failed", jobs.QUEUE_REFRESH_FAILED))
+        self.assertEqual(background.outcome(lock_ok)["state"], "done")
+        after = background.queue_snapshot(since=since)["failed_today"].get(self.org, 0)
+        self.assertEqual(after, before + 1)

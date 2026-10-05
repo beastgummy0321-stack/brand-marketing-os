@@ -3,7 +3,12 @@ no dedicated table. `get()` is a pure read plus an idempotent first enqueue; the
 task's own `context_scope_json` (`entity_id` + a hash of this ad's own copy), looked up through
 the existing `gateway.find_tasks_for_scope` the same way `review_jobs.recover` does. A later copy
 edit changes the hash, so it naturally falls back to a fresh `pending` -> a fresh background call,
-never a stale cached answer silently reused (correction 9: one call per ad per copy hash)."""
+never a stale cached answer silently reused (correction 9: one call per ad per copy hash).
+
+F50 Contract J (slots #9): a job that judged nothing (the ad is gone, or its copy changed since
+it was queued) ends `Empty("nothing_to_judge")` and writes no row. While no row exists, `get()`
+reads the job's own outcome (`background.outcome`) and enqueues only when no job ever carried
+the lock -- a finished job is never re-queued by a page load."""
 
 from app import background
 from app.ads import asset_binding_repository as bindings
@@ -19,6 +24,8 @@ PROVIDER = providers.AnthropicProvider()
 PROMPT = db.APP_DIR / "departments" / "ads" / "angles.md"
 MAX_TOKENS = 256
 TIMEOUT_SECONDS = 60
+NOTHING_TO_JUDGE = "nothing_to_judge"
+NOTHING_TO_JUDGE_TEXT = "這則廣告已經不在，或文案改過了，沒有可以判讀的主打。"
 
 
 def _copy_hash(entity):
@@ -58,8 +65,18 @@ def get(conn, org, brand, campaign, entity_id):
     )
     task = tasks[0] if tasks else None
     if task is None:
-        enqueue(org, brand, campaign, entity_id, copy_hash)
-        return {"status": "pending", "candidates": [], "error": None}
+        found = background.outcome(_lock(entity_id, copy_hash))
+        if found is None:
+            enqueue(org, brand, campaign, entity_id, copy_hash)
+            return {"status": "pending", "candidates": [], "error": None}
+        if found["state"] == "running":
+            return {"status": "pending", "candidates": [], "error": None}
+        if found["state"] == "failed":
+            return {"status": "failed", "candidates": [], "error": found["text"]}
+        # empty, or done without a row: nothing was judged for this copy. The screens' status
+        # set is pending／ready／failed, so it is served as failed with its own sentence.
+        return {"status": "failed", "candidates": [],
+                "error": found["text"] or NOTHING_TO_JUDGE_TEXT}
     if task["status"] == "running":
         return {"status": "pending", "candidates": [], "error": None}
     if task["status"] != "succeeded":
@@ -74,8 +91,12 @@ def get(conn, org, brand, campaign, entity_id):
     return {"status": "ready", "candidates": candidates, "error": None}
 
 
+def _lock(entity_id, copy_hash):
+    return f"ads-angles:{entity_id}:{copy_hash}"
+
+
 def enqueue(org, brand, campaign, entity_id, copy_hash):
-    lock = f"ads-angles:{entity_id}:{copy_hash}"
+    lock = _lock(entity_id, copy_hash)
     if not background.is_active(lock):
         background.enqueue(
             TASK,
@@ -98,11 +119,11 @@ def run(org_id, brand_id, campaign_id, entity_id, copy_hash):
         try:
             entity = bindings.entity(conn, org_id, brand_id, campaign_id, entity_id)
         except ValueError:
-            return
+            return background.Empty(NOTHING_TO_JUDGE, NOTHING_TO_JUDGE_TEXT)
         if _copy_hash(entity) != copy_hash:
             # The ad's copy changed since this job was queued -- a stale request. A fresh GET
             # under the new copy hash enqueues its own job; this one is simply skipped, not paid.
-            return
+            return background.Empty(NOTHING_TO_JUDGE, NOTHING_TO_JUDGE_TEXT)
         brand_row = bi_repo.get_brand(conn, brand_id)
         system = PROMPT.read_text(encoding="utf-8")
         provider = providers.select_provider(PROVIDER, task_type=TASK_TYPE)
@@ -110,7 +131,7 @@ def run(org_id, brand_id, campaign_id, entity_id, copy_hash):
         content = policy.encode(
             {"copy": changes.copy_fields(entity), "brand_name": (brand_row or {}).get("name") or ""}
         )
-        gateway.run_task(
+        task = gateway.run_task(
             conn,
             provider,
             brand_id=brand_id,
@@ -132,3 +153,7 @@ def run(org_id, brand_id, campaign_id, entity_id, copy_hash):
                 max_retries=0,
             ),
         )
+    if task.get("status") != "succeeded":
+        # The row keeps the call's own error (GET serves it); the job fails with its kind.
+        return background.Failed(task.get("error_code") or "provider", task.get("error"))
+    return None

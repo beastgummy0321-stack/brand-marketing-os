@@ -1,5 +1,6 @@
 """Durable, bounded local monitoring. All platform operations are existing read interfaces."""
 
+import logging
 from datetime import UTC, date, datetime, timedelta
 
 from app import background
@@ -12,6 +13,11 @@ TASK = "background.ads_runtime_campaign"
 INTERVAL_SECONDS = 900
 SYNC_SECONDS = 21600
 ALERT_CATEGORY = "ads_runtime_attention"
+#: F50 Contract J: the code a tick that swallowed a failure (after writing its health row) ends
+#: its job with, so the bell counts it.
+RUNTIME_ERROR = "runtime_error"
+
+logger = logging.getLogger(__name__)
 
 
 def _time(value):
@@ -323,6 +329,9 @@ def _health(conn, org, brand, campaign, now):
 
 
 def run_campaign(org_id, brand_id, campaign_id):
+    """One monitoring tick. A step that fails is rolled back, logged and written into the health
+    row as `partial` (the screen keeps showing it); the job then ends `Failed("runtime_error")`
+    (F50 Contract J) instead of a quiet success."""
     with db.connection() as conn:
         db.set_tenant_scope(conn, org_id)
         lock = "ads-runtime:" + campaign_id
@@ -344,17 +353,19 @@ def run_campaign(org_id, brand_id, campaign_id):
                 conn.commit()
                 return
             failures = []
-            for function in (_sync_sources, _readback):
+            for step, function in (("sync", _sync_sources), ("readback", _readback)):
                 try:
-                    args = (now,) if function is _sync_sources else ()
+                    args = (now,) if step == "sync" else ()
                     function(conn, org_id, brand_id, campaign_id, *args)
                 except Exception:
                     conn.rollback()
+                    logger.exception("runtime %s failed for campaign %s", step, campaign_id)
                     failures.append("部分同步或核對未完成；下次重試仍保留原有物件與紀錄。")
             try:
                 health, budget = _health(conn, org_id, brand_id, campaign_id, now)
             except Exception:
                 conn.rollback()
+                logger.exception("runtime health failed for campaign %s", campaign_id)
                 health, budget = [], None
                 failures.append("本次健康與月額資料未完整取得；餘額仍待確認，稍後重試。")
             for message in failures:
@@ -363,6 +374,9 @@ def run_campaign(org_id, brand_id, campaign_id):
             _save(conn, org_id, brand_id, campaign_id, {
                 "last_checked_at": now, "health": health, "budget": budget,
             })
+            if failures:
+                return background.Failed(RUNTIME_ERROR, "；".join(dict.fromkeys(failures)))
+            return None
         finally:
             conn.rollback()
             conn.execute("SELECT pg_advisory_unlock(hashtextextended(%s,0))", (lock,))
@@ -390,7 +404,11 @@ def _sync_brand_accounts(conn, now):
             try:
                 accounts = reader.accounts(conn, org, brand_id)
             except Exception:
+                # No account id to record a backoff on: the failure is logged, and the other
+                # brands and channels still run.
                 conn.rollback()
+                logger.exception("reading the bound %s accounts of brand %s failed",
+                                 channel["key"], brand_id)
                 continue
             for account in accounts:
                 job = conn.execute(
@@ -405,8 +423,17 @@ def _sync_brand_accounts(conn, now):
                     external_sync.request_sync(conn, org, brand_id, channel["key"],
                                                account["account_id"])
                     count += 1
-                except Exception:
-                    conn.rollback()  # disconnected/unreadable: the campaign path records backoff
+                except Exception as exc:
+                    # F50 Contract J: an unreadable account is recorded on its own job (Contract
+                    # O names the reason, so the month budget's 「餘額不確定」 has one, and the
+                    # stamped attempt backs the next tick off).
+                    conn.rollback()
+                    logger.warning("requesting the %s account %s of brand %s failed: %s",
+                                   channel["key"], account["account_id"], brand_id, exc)
+                    external_sync.record_request_failure(
+                        conn, org, brand_id, channel["key"], account["account_id"],
+                        exc.code if isinstance(exc, SourceReadError) else None,
+                    )
     return count
 
 
