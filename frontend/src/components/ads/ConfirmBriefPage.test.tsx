@@ -7,7 +7,7 @@ vi.mock("@/lib/figures", async (actual) => ({ ...await actual<typeof import("@/l
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { CampaignDetail } from "@/lib/adsApi";
 import type { CampaignFieldSources } from "@/lib/adsCampaignTypes";
@@ -579,3 +579,8 @@ it("the generate action explains why it is unavailable before the campaign loads
   expect(button.hasAttribute("disabled")).toBe(true);
   expect(document.getElementById(button.getAttribute("aria-describedby")!)?.textContent).toBe("活動資料讀取完成後才能產生策略");
 });
+
+
+// The tooltip measures its trigger in a browser; jsdom does not implement that observer.
+vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
+afterAll(() => vi.unstubAllGlobals());
