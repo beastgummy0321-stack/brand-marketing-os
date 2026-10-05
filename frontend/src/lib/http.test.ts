@@ -12,9 +12,16 @@ vi.mock("@/lib/auth", () => ({
 import { getAccessToken, getOrgId, setOrgId, signOut } from "@/lib/auth";
 import {
   _setRedirectForTest,
+  ApiNetworkError,
   ApiResponseError,
   apiFetch,
   errorMessageFrom,
+  isRejected,
+  leaveForLogin,
+  readJson,
+  sessionExit,
+  signedOutByUser,
+  signOutByUser,
   takePendingPath,
   takeSessionExpired,
   throwIfFailed,
@@ -129,6 +136,8 @@ describe("apiFetch", () => {
     mockGetAccessToken.mockResolvedValue(null);
     mockGetOrgId.mockReturnValue(null);
     mockSignOut.mockResolvedValue(undefined);
+    await signOutByUser(); // earlier cases sent tokens: after 登出 this tab is like one opened signed out
+    takePendingPath();
     const fetchMock = vi.fn(async () => new Response("{}", { status: 401 }));
     vi.stubGlobal("fetch", fetchMock);
     _setRedirectForTest(vi.fn());
@@ -139,6 +148,8 @@ describe("apiFetch", () => {
 
     expect(takePendingPath()).toBe("/accept-invite?token=abc123");
     expect(takePendingPath()).toBeNull(); // 撈第二次應該是空的——只消費一次
+    // F51 Contract H: no token was sent, so nothing expired (a cold invite link must not say 「登入已過期」).
+    expect(takeSessionExpired()).toEqual({ expired: false, actionLost: false });
   });
 
   /** F47-I02: `signOut()` broadcasts the auth change and `RequireSession` can navigate to `/login`
@@ -157,9 +168,79 @@ describe("apiFetch", () => {
     void apiFetch("/api/x");
     await new Promise((resolve) => setTimeout(resolve, 0));
 
+    expect(takeSessionExpired()).toEqual({ expired: true, actionLost: false });
+    // F51 (drill 11 F14): the login page mounts twice after a 401 (router, then the full reload), so
+    // reading keeps the marks; the next sign-in (LoginRoute takes the path) ends them.
+    expect(takeSessionExpired()).toEqual({ expired: true, actionLost: false });
     expect(takePendingPath()).toBe("/brands/b1/ads?tab=assets");
-    expect(takeSessionExpired()).toBe(true);
-    expect(takeSessionExpired()).toBe(false); // read once
+    expect(takeSessionExpired()).toEqual({ expired: false, actionLost: false });
+  });
+
+  /** F51 Contract H (user ruling 2026-10-04): a write that met an expired session is never replayed;
+   * the login page says it was not sent. */
+  it("401 on a write with a token marks the pressed action as lost and never resends it", async () => {
+    mockGetAccessToken.mockResolvedValue("stale-token");
+    mockGetOrgId.mockReturnValue(null);
+    mockSignOut.mockResolvedValue(undefined);
+    const fetchMock = vi.fn(async () => new Response("{}", { status: 401 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const redirect = vi.fn();
+    _setRedirectForTest(redirect);
+    window.history.pushState({}, "", "/app/brands/b1/settings");
+
+    void apiFetch("/api/x", { method: "POST", body: "{}" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(redirect).toHaveBeenCalledWith("/app/login");
+    expect(takeSessionExpired()).toEqual({ expired: true, actionLost: true });
+    expect(takePendingPath()).toBe("/brands/b1/settings");
+  });
+
+  /** Drill 11 F14: the stored session vanished while the user worked (cleared storage); the next request
+   * carries no token, yet this tab had one — that is an expiry, and the pressed write was not sent. */
+  it("401 without a token in a tab that sent one before is an expiry too", async () => {
+    mockGetOrgId.mockReturnValue(null);
+    mockSignOut.mockResolvedValue(undefined);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 200 })));
+    mockGetAccessToken.mockResolvedValue("tok");
+    await apiFetch("/api/x");
+    mockGetAccessToken.mockResolvedValue(null);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 401 })));
+    _setRedirectForTest(vi.fn());
+    window.history.pushState({}, "", "/app/inbox");
+
+    void apiFetch("/api/interrupts/i1/resolve", { method: "POST" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(takeSessionExpired()).toEqual({ expired: true, actionLost: true });
+    expect(takePendingPath()).toBe("/inbox");
+  });
+
+  it("a failed connection is one sentence: a read cannot reach the server, a write's result is unknown", async () => {
+    mockGetAccessToken.mockResolvedValue("tok");
+    mockGetOrgId.mockReturnValue(null);
+    vi.stubGlobal("fetch", vi.fn(async () => { throw new TypeError("Failed to fetch"); }));
+
+    const read = await apiFetch("/api/x").catch((err: unknown) => err);
+    expect(read).toBeInstanceOf(ApiNetworkError);
+    expect((read as Error).message).toBe("連不上伺服器，請檢查網路後再試一次。");
+    const head = await apiFetch("/api/x", { method: "head" }).catch((err: unknown) => err);
+    expect((head as Error).message).toBe("連不上伺服器，請檢查網路後再試一次。");
+    for (const method of ["POST", "PUT", "PATCH", "DELETE"]) {
+      const write = await apiFetch("/api/x", { method }).catch((err: unknown) => err);
+      expect(write).toBeInstanceOf(ApiNetworkError);
+      expect((write as Error).message).toBe("沒收到伺服器回應，這次的結果還不確定。請重新整理看結果，再決定要不要重按。");
+    }
+  });
+
+  it("an aborted request is rethrown untouched", async () => {
+    mockGetAccessToken.mockResolvedValue("tok");
+    mockGetOrgId.mockReturnValue(null);
+    const abort = new DOMException("The operation was aborted.", "AbortError");
+    vi.stubGlobal("fetch", vi.fn(async () => { throw abort; }));
+
+    await expect(apiFetch("/api/x")).rejects.toBe(abort);
   });
 
   /** 記住的路徑只代表「剛剛點開邀請連結」那個當下的意圖。同一個分頁隔了很久之後為了
@@ -269,5 +350,105 @@ describe("throwIfFailed (F47-I02, Contract B)", () => {
   it("non-JSON or unknown body falls back to the caller's sentence", async () => {
     expect((await messageOf(new Response("<html>502</html>", { status: 502 }))).message).toBe(FALLBACK);
     expect((await messageOf(json({ ok: false }, 500))).message).toBe(FALLBACK);
+  });
+});
+
+describe("ApiResponseError, codes and readJson (F51 Contract H)", () => {
+  const json = (body: unknown, status: number) =>
+    new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+
+  async function caught(promise: Promise<unknown>): Promise<ApiResponseError> {
+    try {
+      await promise;
+    } catch (err) {
+      return err as ApiResponseError;
+    }
+    throw new Error("expected a rejection");
+  }
+
+  it("the three-argument constructor stays valid; the fourth carries code and details", () => {
+    const old = new ApiResponseError("x", 400, { a: "b" });
+    expect([old.code, old.details, old.rejected, old.fieldErrors]).toEqual([null, null, true, { a: "b" }]);
+    const err = new ApiResponseError("y", 409, {}, { code: "campaign_busy", details: { reason: "sync" } });
+    expect([err.code, err.details, err.rejected, err.status]).toEqual(["campaign_busy", { reason: "sync" }, true, 409]);
+    expect(new ApiResponseError("z", 502).rejected).toBe(false);
+  });
+
+  it("reads code and details from the object envelope", async () => {
+    const body = { error: { code: "coverage_missing", message: "有 2 天還沒讀到。", details: { days: 2 } } };
+    const err = await caught(throwIfFailed(json(body, 409), "f"));
+    expect([err.message, err.code, err.details]).toEqual(["有 2 天還沒讀到。", "coverage_missing", { days: 2 }]);
+  });
+
+  it("reads code, details and message from the top-level shape (F50's planner 502)", async () => {
+    const body = { code: "planner_failed", message: "方案沒有產生成功，請再試一次。", details: { step: 2 } };
+    const err = await caught(throwIfFailed(json(body, 502), "f"));
+    expect([err.message, err.code, err.details, err.rejected]).toEqual([body.message, "planner_failed", { step: 2 }, false]);
+  });
+
+  it("a string envelope has no code", async () => {
+    const err = await caught(throwIfFailed(json({ error: "請填寫品牌名稱。" }, 400), "f"));
+    expect([err.message, err.code]).toEqual(["請填寫品牌名稱。", null]);
+  });
+
+  it("isRejected is a 4xx response error, optionally of one code", () => {
+    const busy = new ApiResponseError("x", 409, {}, { code: "campaign_busy" });
+    expect(isRejected(busy)).toBe(true);
+    expect(isRejected(busy, "campaign_busy")).toBe(true);
+    expect(isRejected(busy, "target_conflict")).toBe(false);
+    expect(isRejected(new ApiResponseError("x", 500))).toBe(false);
+    expect(isRejected(new Error("x"))).toBe(false);
+  });
+
+  it("readJson parses an OK body, and a 502 HTML page falls back to the caller's sentence", async () => {
+    await expect(readJson<{ a: number }>(json({ a: 1 }, 200), "f")).resolves.toEqual({ a: 1 });
+    const err = await caught(readJson(new Response("<html>502 Bad Gateway</html>", { status: 502 }), "讀取失敗（狀態碼 502）"));
+    expect(err).toBeInstanceOf(ApiResponseError);
+    expect([err.message, err.status]).toEqual(["讀取失敗（狀態碼 502）", 502]);
+  });
+
+  it("readJson on a 2xx whose body is not JSON is bad_body, not a SyntaxError", async () => {
+    const err = await caught(readJson(new Response("<html>proxy</html>", { status: 200 }), "讀取失敗"));
+    expect(err).toBeInstanceOf(ApiResponseError);
+    expect([err.message, err.status, err.code]).toEqual(["讀取失敗", 200, "bad_body"]);
+  });
+});
+
+describe("the way to the login page (F51 Contract H)", () => {
+  it("sessionExit: had a session and lost it without 登出 → expired; never had one → no_session; else nothing", () => {
+    expect(sessionExit(true, false, false)).toBe("expired");
+    expect(sessionExit(true, false, true)).toBeNull();
+    expect(sessionExit(false, false, false)).toBe("no_session");
+    expect(sessionExit(false, false, true)).toBe("no_session");
+    expect(sessionExit(true, true, false)).toBeNull();
+    expect(sessionExit(false, true, false)).toBeNull();
+  });
+
+  it("leaveForLogin: no_session remembers the path only; expired marks; a later call keeps the lost-action mark", () => {
+    window.history.pushState({}, "", "/app/brands/b1");
+    leaveForLogin("no_session");
+    expect(takeSessionExpired()).toEqual({ expired: false, actionLost: false });
+    expect(takePendingPath()).toBe("/brands/b1");
+
+    leaveForLogin("expired", { write: true });
+    leaveForLogin("expired"); // the sign-out broadcast that follows the 401
+    expect(takeSessionExpired()).toEqual({ expired: true, actionLost: true });
+    takePendingPath();
+  });
+
+  it("signOutByUser forgets the path and the marks and is told apart from the broadcast", async () => {
+    mockSignOut.mockResolvedValue(undefined);
+    window.history.pushState({}, "", "/app/brands/b1");
+    takePendingPath(); // a sign-in ends any earlier 登出
+    leaveForLogin("expired", { write: true });
+    expect(signedOutByUser()).toBe(false);
+
+    await signOutByUser();
+
+    expect(mockSignOut).toHaveBeenCalledTimes(1);
+    expect(signedOutByUser()).toBe(true);
+    expect(takeSessionExpired()).toEqual({ expired: false, actionLost: false });
+    expect(takePendingPath()).toBeNull();
+    expect(signedOutByUser()).toBe(false); // the next sign-in (LoginRoute takes the path) resets it
   });
 });

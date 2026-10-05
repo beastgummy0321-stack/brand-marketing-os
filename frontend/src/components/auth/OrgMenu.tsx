@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { CopyIconButton } from "@/components/layout/CopyIconButton";
 import { SidePanel } from "@/components/layout/SidePanel";
-import { setOrgId, signOut } from "@/lib/auth";
-import { apiFetch, clearPendingPath, throwIfFailed } from "@/lib/http";
+import { setOrgId } from "@/lib/auth";
+import { apiFetch, readJson, signOutByUser } from "@/lib/http";
+import { fetchIdentity } from "@/lib/identityApi";
 import { useFormSubmit } from "@/lib/useFormSubmit";
 
 interface OrgOut {
@@ -41,7 +42,7 @@ type Panel = null | "rename" | "invite";
  * 掛載都打一次」，不是整個 session 只打一次；這跟 `ActiveJobsBell` 現有的做法一致
  * （沒有全站狀態快取層），本票不額外造一個 context／全域快取只為了這裡。 */
 export function OrgMenu({ identity, onIdentityChanged }: { identity?: MeResponse; onIdentityChanged?: () => void } = {}) {
-  const [me, setMe] = useState<MeResponse | "loading" | "error">("loading");
+  const [me, setMe] = useState<MeResponse | "loading" | { error: string }>("loading");
   const [panel, setPanel] = useState<Panel>(null);
   const [companyName, setCompanyName] = useState("");
   const [inviteEmail, setInviteEmail] = useState("");
@@ -50,22 +51,16 @@ export function OrgMenu({ identity, onIdentityChanged }: { identity?: MeResponse
   useEffect(() => {
     if (identity) { setMe(identity); return; }
     let cancelled = false;
-    apiFetch("/api/identity/me")
-      .then(async (res) => {
-        if (cancelled) return;
-        if (!res.ok) {
-          setMe("error");
-          return;
-        }
-        const body = (await res.json()) as MeResponse;
-        setMe(body);
-        // 票 03-3 §4：後端已經決定好落在哪個組織（沒帶 X-Org-Id 時用預設組織），把它記
-        // 回 localStorage——不然單一組織的使用者永遠不會寫過 orgId，之後每次請求都要
-        // 靠後端重新猜一次預設組織，多繞一手也少了「明確帶著自己組織打請求」這件事。
-        setOrgId(body.org.id);
+    // 票 03-3 §4：後端已經決定好落在哪個組織（沒帶 X-Org-Id 時用預設組織），`fetchIdentity` 把它記
+    // 回 localStorage——不然單一組織的使用者永遠不會寫過 orgId，之後每次請求都要
+    // 靠後端重新猜一次預設組織，多繞一手也少了「明確帶著自己組織打請求」這件事。
+    // F51 Contract H: a failed read says why (the translator's sentence) instead of rendering nothing.
+    fetchIdentity()
+      .then((body) => {
+        if (!cancelled) setMe(body);
       })
-      .catch(() => {
-        if (!cancelled) setMe("error");
+      .catch((err: unknown) => {
+        if (!cancelled) setMe({ error: err instanceof Error && err.message ? err.message : "無法讀取工作區，請重新載入。" });
       });
     return () => {
       cancelled = true;
@@ -78,9 +73,8 @@ export function OrgMenu({ identity, onIdentityChanged }: { identity?: MeResponse
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: companyName.trim() }),
     });
-    await throwIfFailed(res, `改名失敗（狀態碼 ${res.status}）`);
-    const org = (await res.json()) as OrgOut;
-    setMe((prev) => (prev === "loading" || prev === "error" ? prev : { ...prev, org, orgs: prev.orgs.map((o) => (o.id === org.id ? org : o)) }));
+    const org = await readJson<OrgOut>(res, `改名失敗（狀態碼 ${res.status}）`);
+    setMe((prev) => (prev === "loading" || "error" in prev ? prev : { ...prev, org, orgs: prev.orgs.map((o) => (o.id === org.id ? org : o)) }));
     onIdentityChanged?.();
     setPanel("invite");
   });
@@ -91,12 +85,12 @@ export function OrgMenu({ identity, onIdentityChanged }: { identity?: MeResponse
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email: inviteEmail.trim(), role: "member" }),
     });
-    await throwIfFailed(res, `邀請失敗（狀態碼 ${res.status}）`);
-    setInviteResult((await res.json()) as CreateInviteResponse);
+    setInviteResult(await readJson<CreateInviteResponse>(res, `邀請失敗（狀態碼 ${res.status}）`));
     setInviteEmail("");
   });
 
-  if (me === "loading" || me === "error") return null;
+  if (me === "loading") return null;
+  if ("error" in me) return <p role="alert" className="text-xs text-danger">{me.error}</p>;
 
   function switchOrg(orgId: string) {
     setOrgId(orgId);
@@ -146,10 +140,7 @@ export function OrgMenu({ identity, onIdentityChanged }: { identity?: MeResponse
 
       <button
         type="button"
-        onClick={() => {
-          clearPendingPath();
-          void signOut();
-        }}
+        onClick={() => void signOutByUser()}
         className="text-xs text-muted-foreground hover:underline"
       >
         登出

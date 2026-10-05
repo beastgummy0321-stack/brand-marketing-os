@@ -2,12 +2,30 @@
  *
  * `apiFetch` 跟全域 `fetch` 同簽章，呼叫端原本怎麼用 `fetch(path, init)` 就怎麼用
  * `apiFetch(path, init)`，差別只多做三件事：帶 `Authorization`、帶 `X-Org-Id`、401 時
- * 導去登入頁。失敗回應怎麼變成一句話由檔尾的 `throwIfFailed`（F47-I02）負責——全站只有
- * 這一個出口把非 OK 回應轉成 `Error`。
+ * 導去登入頁。
  *
  * 刻意不 monkey-patch 全域 `fetch`：`lib/auth.ts` 用的 supabase-js 用戶端函式庫也用同一個
  * 全域 `fetch` 跟 Supabase Auth 伺服器講話，那些請求不該被硬塞 `X-Org-Id`，401 也不該
  * 觸發這裡的導頁邏輯（那是 supabase-js 自己的登入流程，不是「登入過期」）。
+ *
+ * F51 Contract H — the one translator and the one way to the login page. This file is the only code
+ * that reads a `Response`'s `ok`／status／body for an API call, catches fetch's rejection, or turns an
+ * envelope into a sentence (`lib/feedbackGuards.test.ts` rule `envelope` fails any other file):
+ *
+ * | Case | What the user sees |
+ * |---|---|
+ * | fetch rejects with `AbortError` | nothing: rethrown untouched (callers already drop aborted reads) |
+ * | fetch rejects otherwise, GET／HEAD | `ApiNetworkError` 「連不上伺服器，請檢查網路後再試一次。」 |
+ * | fetch rejects otherwise, any write | `ApiNetworkError` 「沒收到伺服器回應，這次的結果還不確定。…」 |
+ * | 401, the request carried a token — or this tab sent one earlier and its user did not press 登出 (the stored session vanished) | session expired: `leaveForLogin("expired", {write})` remembers the path (10 min TTL), marks expired and, for a write, `actionLost`; sign out; go to `/login`. A write is never replayed: the login page says it was not sent. |
+ * | 401, no token (cold invite link, page opened signed out) | `leaveForLogin("no_session")`: remember the path only, no expired line |
+ * | session gone while signed in (supabase sign-out broadcast after a failed refresh), user did not press 登出 | `App.tsx` `RequireSession`: `sessionExit(…)` → `leaveForLogin("expired")` (no `actionLost`) |
+ * | user pressed 登出 (`OrgMenu`) | `signOutByUser()`: forget the path and the marks |
+ * | 403 `forbidden_org` | silent retry without the org header |
+ * | other non-OK | `ApiResponseError {message, status, code, details, fieldErrors, rejected}`; message = the server's sentence, else the caller's fallback (a 「…（狀態碼 N）」 text only there) |
+ * | 2xx whose body is not JSON (`readJson`) | `ApiResponseError(fallback, status, {}, {code: "bad_body"})` |
+ *
+ * Components branch on `err.code`／`err.status`／`err.rejected` (`isRejected`), never on message text.
  */
 import { getAccessToken, getOrgId, setOrgId, signOut } from "@/lib/auth";
 
@@ -25,9 +43,19 @@ export function _setRedirectForTest(fn: (path: string) => void): void {
 }
 
 const PENDING_PATH_KEY = "pendingPath";
+const SESSION_EXPIRED_KEY = "sessionExpired";
+const ACTION_LOST_KEY = "sessionActionLost";
 /** 記住的路徑放多久算數。邀請連結是「點開、幾分鐘內登入」的即時意圖；同一個分頁隔了
  * 更久之後為了別的事登入，是另一件事，不該被丟回那張沒收完的邀請頁。 */
 const PENDING_PATH_TTL_MS = 10 * 60 * 1000;
+
+/** True from 登出 until the next session (`takePendingPath`): `RequireSession` passes it to `sessionExit`
+ * so the sign-out broadcast of a pressed 登出 is not read as an expiry. Module state, per tab. */
+let userSignedOut = false;
+
+/** True once this tab sent a token, until 登出: a later 401 without one means the stored session vanished
+ * while the user was working (an expiry), not a page opened signed out. */
+let tabHadToken = false;
 
 /** 票 03-3 §3：沒登入的受邀者點開 `/app/accept-invite?token=…`，該頁一掛載就打
  * `apiFetch` 拿 401（沒 token），整頁換成 `/app/login` 之前先把當下路徑（react-router
@@ -42,8 +70,12 @@ function rememberPendingPath(): void {
 
 /** `App.tsx` 的 `LoginRoute` 登入成功後呼叫一次：撈回並清掉上面記住的路徑；沒有、過期、
  * 或存的東西讀不懂（這版之前存的是純字串，跨這次部署的舊分頁就是那種）都回 `null`，
- * 呼叫端自己決定要不要用預設值 `/`。 */
+ * 呼叫端自己決定要不要用預設值 `/`。A new session also ends a 登出 (`signOutByUser`): a later
+ * sign-out broadcast in this tab is an expiry again — and ends the expired marks the login page read. */
 export function takePendingPath(): string | null {
+  userSignedOut = false;
+  sessionStorage.removeItem(SESSION_EXPIRED_KEY);
+  sessionStorage.removeItem(ACTION_LOST_KEY);
   const raw = sessionStorage.getItem(PENDING_PATH_KEY);
   sessionStorage.removeItem(PENDING_PATH_KEY);
   if (!raw) return null;
@@ -56,41 +88,107 @@ export function takePendingPath(): string | null {
   }
 }
 
-/** 使用者自己按登出時呼叫（`OrgMenu`）：把記住的路徑丟掉。刻意不塞進 `lib/auth.ts` 的
- * `signOut()`——`apiFetch` 的 401 分支會先記路徑再 `signOut()`，藏在裡面會把剛記的路徑
- * 當場清掉。 */
-export function clearPendingPath(): void {
-  sessionStorage.removeItem(PENDING_PATH_KEY);
+/** Whether this tab's user pressed 登出 since the last sign-in (the `byUser` of `sessionExit`). */
+export function signedOutByUser(): boolean {
+  return userSignedOut;
 }
 
-const SESSION_EXPIRED_KEY = "sessionExpired";
+/** Record why the user is leaving for the login page; the caller then goes there (`apiFetch`: sign out
+ * and reload at `/app/login`; `RequireSession`: `<Navigate to="/login">`). Both reasons remember the
+ * current path (the login page sends the user back after sign-in); `"expired"` also marks the session
+ * expired, and `{write: true}` marks that the pressed write was not sent. A mark is only ever set here,
+ * never cleared (the broadcast that follows a 401 calls this again without `write`). */
+export function leaveForLogin(reason: "expired" | "no_session", { write = false }: { write?: boolean } = {}): void {
+  rememberPendingPath();
+  if (reason !== "expired") return;
+  sessionStorage.setItem(SESSION_EXPIRED_KEY, "1");
+  if (write) sessionStorage.setItem(ACTION_LOST_KEY, "1");
+}
 
-/** F47-I02: the login page reads this once on mount. `true` only when `apiFetch` just sent the user
- * here because the server answered 401 (the session ran out), so the page can say
- * 「登入已過期，請重新登入」 instead of a bare form. Read-and-clear, like `takePendingPath`. */
-export function takeSessionExpired(): boolean {
-  const expired = sessionStorage.getItem(SESSION_EXPIRED_KEY) === "1";
+/** 使用者自己按登出（`OrgMenu`）：把記住的路徑與「過期」標記都丟掉，再登出。刻意不塞進
+ * `lib/auth.ts` 的 `signOut()`——`apiFetch` 的 401 分支會先記路徑再 `signOut()`，藏在裡面
+ * 會把剛記的路徑當場清掉。 */
+export async function signOutByUser(): Promise<void> {
+  userSignedOut = true;
+  tabHadToken = false;
+  sessionStorage.removeItem(PENDING_PATH_KEY);
   sessionStorage.removeItem(SESSION_EXPIRED_KEY);
-  return expired;
+  sessionStorage.removeItem(ACTION_LOST_KEY);
+  await signOut();
+}
+
+/** Why a protected page is left for the login page (pure). A tab that had a session and lost it without
+ * 登出 expired; a tab that never had one has no session; a 登出 or a live session needs nothing. */
+export function sessionExit(hadSession: boolean, hasSession: boolean, byUser: boolean): "expired" | "no_session" | null {
+  if (hasSession) return null;
+  if (!hadSession) return "no_session";
+  return byUser ? null : "expired";
+}
+
+/** F47-I02: the login page reads this on mount. `expired` only when the user was sent here because the
+ * session ran out (a 401 with a token, or the sign-out broadcast without 登出), so the page can say
+ * 「登入已過期，請重新登入」; `actionLost` when the request that found out was a write, which was not sent.
+ * The marks stay until the next sign-in (`takePendingPath`) or 登出 (`signOutByUser`): after a 401 the
+ * login page mounts twice — the router's `<Navigate>` on the sign-out broadcast, then `apiFetch`'s full
+ * reload — and a read that cleared them left the second, the one the user sees, bare (drill 11 F14). */
+export function takeSessionExpired(): { expired: boolean; actionLost: boolean } {
+  const expired = sessionStorage.getItem(SESSION_EXPIRED_KEY) === "1";
+  const actionLost = expired && sessionStorage.getItem(ACTION_LOST_KEY) === "1";
+  return { expired, actionLost };
+}
+
+const NETWORK_READ = "連不上伺服器，請檢查網路後再試一次。";
+const NETWORK_WRITE = "沒收到伺服器回應，這次的結果還不確定。請重新整理看結果，再決定要不要重按。";
+
+/** fetch rejected (no answer at all). A read says the server cannot be reached; a write says its
+ * result is unknown, because the request may have arrived before the connection broke. */
+export class ApiNetworkError extends Error {
+  readonly write: boolean;
+  constructor(write: boolean) {
+    super(write ? NETWORK_WRITE : NETWORK_READ);
+    this.name = "ApiNetworkError";
+    this.write = write;
+  }
+}
+
+function isAbort(err: unknown): boolean {
+  return !!err && typeof err === "object" && (err as { name?: unknown }).name === "AbortError";
+}
+
+function methodOf(input: RequestInfo | URL, init?: RequestInit): string {
+  const method = init?.method ?? (typeof Request !== "undefined" && input instanceof Request ? input.method : "GET");
+  return method.toUpperCase();
+}
+
+async function send(input: RequestInfo | URL, init: RequestInit, write: boolean): Promise<Response> {
+  try {
+    return await fetch(input, init);
+  } catch (err) {
+    if (isAbort(err)) throw err;
+    throw new ApiNetworkError(write);
+  }
 }
 
 export async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const token = await getAccessToken();
+  if (token) tabHadToken = true;
   const orgId = getOrgId();
+  const method = methodOf(input, init);
+  const write = method !== "GET" && method !== "HEAD";
 
   const headers = new Headers(init?.headers);
   if (token) headers.set("Authorization", `Bearer ${token}`);
   if (orgId) headers.set("X-Org-Id", orgId);
 
-  const res = await fetch(input, { ...init, headers });
+  const res = await send(input, { ...init, headers }, write);
 
   if (res.status === 401) {
-    // F47-I02: remember the page and the "expired" mark BEFORE signing out. `signOut()` fires
-    // supabase-js's auth-state broadcast, and `RequireSession` (App.tsx) can re-render into
-    // `<Navigate to="/login">` before this await returns — after that `window.location` already
-    // reads `/login` and the page the user was on would be lost.
-    rememberPendingPath();
-    sessionStorage.setItem(SESSION_EXPIRED_KEY, "1");
+    // F47-I02: remember the page and the marks BEFORE signing out. `signOut()` fires supabase-js's
+    // auth-state broadcast, and `RequireSession` (App.tsx) can re-render into `<Navigate to="/login">`
+    // before this await returns — after that `window.location` already reads `/login` and the page
+    // the user was on would be lost. Without a token in a tab that never had one nothing expired: the
+    // page was opened signed out (a cold invite link).
+    leaveForLogin(token || tabHadToken ? "expired" : "no_session", { write });
     await signOut();
     redirectToLogin("/app/login");
     // 導頁已經觸發：不把 401 這個 Response 交還給呼叫端，呼叫端多半是
@@ -120,7 +218,7 @@ export async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Pr
       setOrgId(null);
       const retryHeaders = new Headers(init?.headers);
       if (token) retryHeaders.set("Authorization", `Bearer ${token}`);
-      return fetch(input, { ...init, headers: retryHeaders });
+      return send(input, { ...init, headers: retryHeaders }, write);
     }
   }
 
@@ -131,6 +229,7 @@ export async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Pr
  *  - `{"error": "請填寫品牌名稱。"}`——`app/main.py` 的 `_error()` 與各路由的手寫回應
  *  - `{"error": {"code": …, "message": "請先登入", "details": …}}`——`web.ApiError` 的
  *    exception handler（`app/main.py:506`）
+ * plus FastAPI's `{detail}` and a top-level `{code, message}` (F50's planner 502 shape).
  *
  * 2026-08-29 修：五個 api 檔各自只認得其中一種。認字串的那幾支（intake／library／
  * products）碰到物件外殼時，`new Error(物件)` 會變成畫面上的 **`[object Object]`**——
@@ -138,7 +237,8 @@ export async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Pr
  * 一句沒有意義的話，不知道自己該重新登入。認物件的那幾支（meta／schedule）反過來會把
  * 字串外殼吃掉、只顯示 fallback。
  *
- * 兩種外殼誰對不在這裡處理——畫面的職責是把後端真的回了什麼講給人聽。 */
+ * 兩種外殼誰對不在這裡處理——畫面的職責是把後端真的回了什麼講給人聽。Stays exported only for
+ * the clients F51-I02／I06／I07／I08 still move onto `readJson` (allowlisted in `lib/guards/`). */
 export function errorMessageFrom(body: unknown, fallback: string): string {
   if (!body || typeof body !== "object") return fallback;
   const err = (body as { error?: unknown }).error;
@@ -149,6 +249,8 @@ export function errorMessageFrom(body: unknown, fallback: string): string {
   }
   const detail = (body as { detail?: unknown }).detail;
   if (typeof detail === "string" && detail) return detail;
+  const message = (body as { message?: unknown }).message;
+  if (typeof message === "string" && message) return message;
   return fallback;
 }
 
@@ -161,19 +263,37 @@ export async function errorMessageFromResponse(res: Response, fallback: string):
   }
 }
 
-/** F47-I02 (feature F47 Contract B): the error every shell API client throws for a non-OK response.
+/** F47-I02 (feature F47 Contract B; F51 Contract H): the one error class for a non-OK response.
  * `message` is the server's own sentence when it sent one; `fieldErrors` carries the per-field
  * messages of the rule-card body (`{"error": "…", "field_errors": {key: "…"}}`) for callers that
- * want to show each message next to its field. */
+ * want to show each message next to its field; `code`／`details` are the envelope's
+ * (`error.code`／`error.details`, else the top-level `code`／`details`), `null` when it sent none;
+ * `rejected` = a 4xx (the server refused this request; a 5xx is a failure to answer it). */
 export class ApiResponseError extends Error {
   readonly status: number;
   readonly fieldErrors: Record<string, string>;
-  constructor(message: string, status: number, fieldErrors: Record<string, string> = {}) {
+  readonly code: string | null;
+  readonly details: unknown;
+  readonly rejected: boolean;
+  constructor(
+    message: string,
+    status: number,
+    fieldErrors: Record<string, string> = {},
+    { code = null, details = null }: { code?: string | null; details?: unknown } = {},
+  ) {
     super(message);
     this.name = "ApiResponseError";
     this.status = status;
     this.fieldErrors = fieldErrors;
+    this.code = code;
+    this.details = details;
+    this.rejected = status >= 400 && status < 500;
   }
+}
+
+/** True for a refusal (4xx `ApiResponseError`), and with `code` only for that code. */
+export function isRejected(err: unknown, code?: string): boolean {
+  return err instanceof ApiResponseError && err.rejected && (code === undefined || err.code === code);
 }
 
 function fieldErrorsFrom(body: unknown, key: "field_errors" | "errors"): Record<string, string> {
@@ -187,12 +307,22 @@ function fieldErrorsFrom(body: unknown, key: "field_errors" | "errors"): Record<
   return out;
 }
 
+function codeAndDetails(body: unknown): { code: string | null; details: unknown } {
+  if (!body || typeof body !== "object") return { code: null, details: null };
+  const top = body as { error?: unknown; code?: unknown; details?: unknown };
+  const nested = top.error && typeof top.error === "object" ? (top.error as { code?: unknown; details?: unknown }) : null;
+  const code = typeof nested?.code === "string" ? nested.code : typeof top.code === "string" ? top.code : null;
+  const details = nested?.details ?? top.details ?? null;
+  return { code, details };
+}
+
 /** F47-I02 (Contract B): the one way a shell API client turns a failed response into an `Error`.
  * Does nothing when `res.ok`; otherwise throws an `ApiResponseError` whose message is, in order:
  * every `errors` field message joined (library writes), the envelope's sentence (`errorMessageFrom`:
- * `{error: "…"}`, `{error: {message}}`, `{detail}`), the first `field_errors` message, or `fallback` (also used for a non-JSON body such as a 502
- * HTML page). A 「…（狀態碼 N）」 text belongs only in `fallback` — `lib/feedbackGuards.test.ts`
- * fails a `lib/*.ts` file that throws one any other way. */
+ * `{error: "…"}`, `{error: {message}}`, `{detail}`, top-level `{message}`), the first `field_errors`
+ * message, or `fallback` (also used for a non-JSON body such as a 502 HTML page). A 「…（狀態碼 N）」
+ * text belongs only in `fallback` — `lib/feedbackGuards.test.ts` fails a `lib/*.ts` file that throws
+ * one any other way. */
 export async function throwIfFailed(res: Response, fallback: string): Promise<void> {
   if (res.ok) return;
   let body: unknown = null;
@@ -201,13 +331,25 @@ export async function throwIfFailed(res: Response, fallback: string): Promise<vo
   } catch {
     body = null;
   }
+  const extra = codeAndDetails(body);
   // Two per-field shapes: the rule-card `field_errors` (its first message stands in when the body has
   // no sentence of its own) and the library writes' `errors` (always shown whole: every field's
   // message joined with 「；」, as `libraryApi.postJson` always did).
   const ruleFields = fieldErrorsFrom(body, "field_errors");
   const libraryFields = fieldErrorsFrom(body, "errors");
   const libraryMessages = Object.values(libraryFields);
-  if (libraryMessages.length) throw new ApiResponseError(libraryMessages.join("；"), res.status, libraryFields);
+  if (libraryMessages.length) throw new ApiResponseError(libraryMessages.join("；"), res.status, libraryFields, extra);
   const message = errorMessageFrom(body, Object.values(ruleFields)[0] ?? fallback);
-  throw new ApiResponseError(message, res.status, ruleFields);
+  throw new ApiResponseError(message, res.status, ruleFields, extra);
+}
+
+/** `throwIfFailed`, then the body as JSON. A 2xx whose body is not JSON (a proxy's HTML page) throws
+ * `ApiResponseError(fallback, status, {}, {code: "bad_body"})` instead of a bare `SyntaxError`. */
+export async function readJson<T>(res: Response, fallback: string): Promise<T> {
+  await throwIfFailed(res, fallback);
+  try {
+    return (await res.json()) as T;
+  } catch {
+    throw new ApiResponseError(fallback, res.status, {}, { code: "bad_body" });
+  }
 }

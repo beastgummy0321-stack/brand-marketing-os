@@ -21,6 +21,7 @@ vi.mock("@/lib/auth", async () => {
 });
 
 import { authErrorMessage, signInWithPassword } from "@/lib/auth";
+import { leaveForLogin, takePendingPath } from "@/lib/http";
 import { LoginPage } from "./LoginPage";
 
 const mockSignIn = vi.mocked(signInWithPassword);
@@ -63,12 +64,36 @@ describe("LoginPage", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
-  it("says the session expired after a 401 redirect, once", () => {
-    sessionStorage.setItem("sessionExpired", "1");
+  /** Drill 11 F14: after a 401 the page mounts twice (the router's `<Navigate>` on the sign-out broadcast,
+   * then `apiFetch`'s full reload); the second mount, the one the user sees, must still say it. The next
+   * sign-in (`LoginRoute` → `takePendingPath`) ends the line. */
+  it("says the session expired after a 401 redirect on every mount until the next sign-in", () => {
+    leaveForLogin("expired");
     const { unmount } = render(<MemoryRouter><LoginPage /></MemoryRouter>);
-    expect(screen.getByText("登入已過期，請重新登入")).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toBe("登入已過期，請重新登入");
     unmount();
+    const second = render(<MemoryRouter><LoginPage /></MemoryRouter>);
+    expect(screen.getByRole("status").textContent).toBe("登入已過期，請重新登入");
+    second.unmount();
+    takePendingPath();
     render(<MemoryRouter><LoginPage /></MemoryRouter>);
-    expect(screen.queryByText("登入已過期，請重新登入")).toBeNull();
+    expect(screen.queryByText(/登入已過期/)).toBeNull();
+  });
+
+  /** F51 Contract H (user ruling 2026-10-04): the write that met the expired session was not sent and
+   * is never replayed — the same line says so. */
+  it("says the pressed action was not sent when the expiry was found by a write", () => {
+    leaveForLogin("expired", { write: true });
+    render(<MemoryRouter><LoginPage /></MemoryRouter>);
+    expect(screen.getByRole("status").textContent).toBe(
+      "登入已過期，請重新登入。剛才按的那一下沒有送出，沒有資料被改；回到原頁後請再按一次。",
+    );
+  });
+
+  it("a page opened signed out (cold invite link) shows no expired line", () => {
+    leaveForLogin("no_session", { write: true });
+    render(<MemoryRouter><LoginPage /></MemoryRouter>);
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByText(/登入已過期/)).toBeNull();
   });
 });

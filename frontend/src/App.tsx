@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   Link,
   Navigate,
@@ -37,7 +37,7 @@ import {
 } from "@/components/layout/WorkspaceContext";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { useSession } from "@/lib/auth";
-import { takePendingPath } from "@/lib/http";
+import { leaveForLogin, sessionExit, signedOutByUser, takePendingPath } from "@/lib/http";
 
 /** 新殼唯一進入點。路徑式路由（票 05-spa-routing，裝 react-router-dom，basename="/app"
  * 見 main.tsx）：`/` 是跨品牌總覽（票 02），`/brands/:brandId` 是單品牌駕駛艙（票 03）。
@@ -167,15 +167,23 @@ function App() {
 /** 登入守門（票 03-2）：包住除了 `/login`／`/accept-invite` 以外的每一條路由（layout
  * route＋`<Outlet/>`，react-router v6 起的標準寫法，不用另外巢一層 `<Routes>`）。session
  * 從 `src/lib/auth.ts` 的 `useSession()` 讀，不直接戳 `localStorage`——session 有沒有
- * 過期、要不要刷新是 supabase-js 的事。 */
+ * 過期、要不要刷新是 supabase-js 的事。
+ *
+ * F51 Contract H: a session that disappears while this tab had one, without 登出, expired (supabase
+ * signs out after a failed refresh); the login page says so and sends the user back afterwards. A tab
+ * that never had a session remembers the page only. `sessionExit` decides, `leaveForLogin` records. */
 function RequireSession() {
   const { loading, session } = useSession();
+  const hadSession = useRef(false);
   if (loading) {
     return <EmptyState title="讀取中…" description="正在確認登入狀態。" />;
   }
   if (!session) {
+    const exit = sessionExit(hadSession.current, false, signedOutByUser());
+    if (exit) leaveForLogin(exit);
     return <Navigate to="/login" replace />;
   }
+  hadSession.current = true;
   return <AuthenticatedWorkspace key={session.user.id} />;
 }
 

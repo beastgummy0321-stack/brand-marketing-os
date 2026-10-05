@@ -2,7 +2,7 @@
  * 對應 app/core/interrupts.py（待辦／已結清單）。
  * 信封格式沿用既有慣例 {data, generated_at}，見 lib/api.ts `Envelope<T>`。 */
 import type { AlertSeverity } from "./api";
-import { apiFetch, throwIfFailed } from "./http";
+import { apiFetch, readJson } from "./http";
 
 export type InboxSeverity = AlertSeverity;
 
@@ -33,7 +33,6 @@ interface Envelope<T> {
 
 export async function fetchInbox(): Promise<InboxData> {
   const res = await apiFetch("/api/inbox");
-  await throwIfFailed(res, `收件匣讀取失敗（狀態碼 ${res.status}）`);
-  const body: Envelope<InboxData> = await res.json();
+  const body = await readJson<Envelope<InboxData>>(res, `收件匣讀取失敗（狀態碼 ${res.status}）`);
   return body.data;
 }
