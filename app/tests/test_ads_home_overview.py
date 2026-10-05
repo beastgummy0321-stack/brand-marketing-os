@@ -8,9 +8,9 @@ currencies), the previous month's same elapsed days, and one failing read nullin
 Clock: every test pins "today" to 2026-09-23 through `app.core.settings.today_for_org` (the one
 seam `month_summary._month_window` and `month_budget.view` read) and `db.now_utc` to noon of that
 day (`_pinned`; the bound account `act_1`'s last complete day reads the instant, F50 Contract K),
-except the timezone test, which pins the wall clock only so the org-timezone rule itself runs. `triage.classify` is replaced by
-a stub that returns the grades a test chooses -- which is the point: the home must show whatever
-triage graded, not re-grade from its own numbers.
+except the timezone test, which pins the wall clock only so the org-timezone rule itself runs.
+`triage.classify` is replaced by a stub that returns the grades a test chooses -- which is the
+point: the home must show whatever triage graded, not re-grade from its own numbers.
 """
 
 import contextlib
