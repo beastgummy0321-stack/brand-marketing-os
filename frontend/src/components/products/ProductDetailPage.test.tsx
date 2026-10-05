@@ -44,12 +44,10 @@ const DETAIL: ProductDetailBundle = {
     { key: "claims", title: "適用宣稱", count: 0, pending: 0 },
   ],
   latest_source_url: null,
-  economics_pending: false,
   facts: [{
     id: "f1", fact_type: "core_info", fact_type_label: "核心資訊", label: "核心資訊", value: "咖啡因軟糖",
     status: "confirmed", confirmed_by: "owner@example.com", confirmed_at: "2026-10-01T08:00:00Z", source_reference: null,
   }],
-  economics: null,
   rules: [],
   claims: [],
 };
@@ -163,12 +161,8 @@ describe("ProductDetailPage 經濟數字 (F50-I15, Contract R; drill-11 R6 A3)",
   it("lists the served sell-ways with the products-page line and links to onboarding step 4; no root-product editor", async () => {
     vi.mocked(fetchProductDetail).mockResolvedValue({
       ...DETAIL,
-      // A root product's old money row is not printed: the money is the sell-ways'.
-      economics: {
-        selling_price: 5000, fixed_cost: null, unit_variable_cost: 1000, shipping_cost: 0, currency: "TWD",
-        effective_from: null, status: "pending", confirmed_by: null, close_rate: 20, assumptions: [],
-      },
-      economics_pending: true,
+      // F50-I18: the served card counts the sell-ways (the root row has no money, so it used to read 0).
+      cards: DETAIL.cards.map((card) => (card.key === "economics-view" ? { ...card, count: 2 } : card)),
       sell_ways: [
         { id: "sw_one", name: "單盒", shape: "base", price: 399, break_even: 249, offer_labels: [] },
         { id: "sw_three", name: "三盒組", shape: "composed", price: 999, break_even: 668.5, offer_labels: ["組合價 省 198"] },
@@ -182,6 +176,7 @@ describe("ProductDetailPage 經濟數字 (F50-I15, Contract R; drill-11 R6 A3)",
       return found;
     });
     expect(rows.map((r) => r.textContent)).toEqual(["單盒399・打平 249", "三盒組組合價 省 198999・打平 669"]);
+    expect(screen.getByRole("button", { name: /^產品經濟數字\s*2$/ })).toBeTruthy();
     expect(screen.getByRole("link", { name: "到建檔第 4 步改 →" }).getAttribute("href")).toBe("/brands/b1/products/p1/onboarding?step=4");
     expect(screen.queryByText("成交率")).toBeNull();
     expect(screen.queryByRole("button", { name: /填寫產品經濟數字|更新數字|確認無誤/ })).toBeNull();
