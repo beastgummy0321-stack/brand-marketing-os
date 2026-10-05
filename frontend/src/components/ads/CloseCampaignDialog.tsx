@@ -5,6 +5,7 @@ import { Button } from "@/components/layout/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from "@/components/layout/ui/dialog";
 import { closeCampaign, CoverageMissingError, type CampaignDetail } from "@/lib/adsApi";
 import { getCoordinateLearnings, type CoordinateLearnings } from "@/lib/adsLearningsApi";
+import { dayList } from "@/lib/orgClock";
 import { Chip } from "./patterns";
 import { LearningsTable } from "./learnings/LearningsTable";
 
@@ -33,11 +34,7 @@ export function DayChips({ days }: { days: string[] }) {
  * trimmed off before saying 「平台已讀到」; gaps in the middle stay listed by the warning line. */
 export function coveredRange(start: string, end: string, missing: string[]): { first: string; last: string } | null {
   const gone = new Set(missing);
-  const days: string[] = [];
-  for (let t = Date.parse(`${start}T00:00:00Z`); t <= Date.parse(`${end}T00:00:00Z`) && days.length <= 400; t += 86_400_000) {
-    days.push(new Date(t).toISOString().slice(0, 10));
-  }
-  const read = days.filter((day) => !gone.has(day));
+  const read = dayList(start, end, 401).filter((day) => !gone.has(day));
   return read.length ? { first: read[0], last: read[read.length - 1] } : null;
 }
 

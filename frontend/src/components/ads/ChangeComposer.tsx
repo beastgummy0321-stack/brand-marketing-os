@@ -6,7 +6,7 @@ import { Input } from "@/components/layout/ui/input";
 import { Textarea } from "@/components/layout/ui/textarea";
 import type { NativeEntity } from "@/lib/adsExternalApi";
 import type { ChangeDraft, ChangeInput, ChangeKind, ChangeSet } from "@/lib/adsChangeApi";
-import { formatSyncTime } from "@/lib/format";
+import { formatInstant, useOrgClock } from "@/lib/orgClock";
 
 export const kindLabel = { copy: "修改文案，保留圖片", budget: "調整每日預算", pause: "暫停投放" };
 export function targetLabel(target: Pick<NativeEntity, "native_kind" | "name" | "native_id">) {
@@ -27,6 +27,7 @@ export function ChangeComposer({ targets, month, pending, initial, initialDraft,
   targets: NativeEntity[]; month: string; pending: ChangeDraft | null; initial?: ChangeSet; initialDraft?: Omit<ChangeDraft, "operation_id">; busy: boolean;
   onSave: (value: Omit<ChangeDraft, "operation_id">) => void; onClose: () => void;
 }) {
+  const { timezone } = useOrgClock();
   const [title, setTitle] = useState(pending?.title ?? initialDraft?.title ?? (initial ? `${initial.title}（修訂）` : "本次廣告調整"));
   const [items, setItems] = useState<ChangeInput[]>(pending?.items ?? initialDraft?.items ?? initial?.items.filter(item => item.verification_state !== "confirmed" && item.kind !== "new_ad" && item.kind !== "launch").map(({ kind, target_id, after, reason }) => ({ kind: kind as ChangeKind, target_id, after, reason })) ?? [blank(targets)]);
   const [validation, setValidation] = useState("");
@@ -59,7 +60,7 @@ export function ChangeComposer({ targets, month, pending, initial, initialDraft,
           </div>
           {target && <p className="text-xs text-muted-foreground">{target.platform} · 帳戶 {target.source_account} · 平台識別 {target.native_id}</p>}
           {item.kind === "copy" && <div className="grid gap-3 xl:grid-cols-2">
-            <div className="rounded-md bg-muted p-3 text-sm"><p className="mb-2 font-medium">最近讀取的文案</p><p className="mb-2 text-xs text-muted-foreground">{target?.last_success_at ? `讀取時間：${formatSyncTime(target.last_success_at)}` : "尚未取得讀取時間"}</p><p className="whitespace-pre-wrap break-words">{previous.title || "標題未取得"}</p><p className="mt-2 whitespace-pre-wrap break-words text-muted-foreground">{previous.body || "內文未取得"}</p><p className="mt-3 text-xs">修改原廣告，圖片保持不變；不建立另一則廣告。</p></div>
+            <div className="rounded-md bg-muted p-3 text-sm"><p className="mb-2 font-medium">最近讀取的文案</p><p className="mb-2 text-xs text-muted-foreground">{target?.last_success_at ? `讀取時間：${formatInstant(target.last_success_at, timezone, "md_hm")}` : "尚未取得讀取時間"}</p><p className="whitespace-pre-wrap break-words">{previous.title || "標題未取得"}</p><p className="mt-2 whitespace-pre-wrap break-words text-muted-foreground">{previous.body || "內文未取得"}</p><p className="mt-3 text-xs">修改原廣告，圖片保持不變；不建立另一則廣告。</p></div>
             <div className="space-y-3"><label className="block text-sm">新標題<Input aria-label={`變更 ${index + 1} 新標題`} value={item.after.title ?? ""} disabled={locked || Boolean(materialId)} onChange={e => update(index, { after: { ...item.after, title: e.target.value } })} /></label><label className="block text-sm">新內文<Textarea aria-label={`變更 ${index + 1} 新內文`} rows={4} value={item.after.body ?? ""} disabled={locked || Boolean(materialId)} onChange={e => update(index, { after: { ...item.after, body: e.target.value } })} /></label></div>
           </div>}
           {item.kind === "budget" && <div className="space-y-2"><p className="text-sm text-muted-foreground">目前每日預算：{target?.budget_type === "daily" && target.budget_amount !== null ? `${target.currency ?? ""} ${target.budget_amount.toLocaleString()}` : "尚未取得可核對金額"}。變更作用在上述對象，不代表單則廣告有獨立預算。</p><label className="block text-sm">調整後每日預算<Input aria-label={`變更 ${index + 1} 每日預算`} type="number" min="0.01" step="0.01" disabled={locked} value={item.after.daily_amount ?? ""} onChange={e => update(index, { after: { daily_amount: e.target.value === "" ? undefined : Number(e.target.value) } })} /></label></div>}

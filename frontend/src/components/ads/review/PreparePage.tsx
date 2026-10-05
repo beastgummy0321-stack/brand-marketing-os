@@ -10,6 +10,7 @@ import { Skeleton } from "@/components/layout/Skeleton";
 import { decideReview, getReview, type ReviewRound } from "@/lib/adsReviewApi";
 import { getQueue } from "@/lib/adsTriageApi";
 import { useApiRead } from "@/lib/useApiRead";
+import { useOrgClock } from "@/lib/orgClock";
 import { proposePausePath } from "../flow/changeFlow";
 import { ActionBar, DecisionSheet, FlowHeader, OptionCard, ReadFailed, Segmented } from "../patterns";
 import { findReviewTriageItem, reviewMaterialPath, reviewPosition, reviewRoundPath } from "./reviewFlow";
@@ -73,6 +74,7 @@ export function PreparePage({ brandId, campaignId, reviewId }: {
   brandId: string; campaignId: string; reviewId: string;
 }) {
   const navigate = useNavigate();
+  const clock = useOrgClock();
   const homeHref = `/brands/${brandId}/ads`;
 
   const [review, setReview] = useState<ReviewRound | null>(null);
@@ -146,19 +148,10 @@ export function PreparePage({ brandId, campaignId, reviewId }: {
     setSaveError(null);
   }
 
-  function revisitAt(): Date | null {
-    if (selected !== "observe") return null;
-    if (quickPick === "custom") {
-      if (!customDate) return null;
-      const d = new Date(customDate);
-      return Number.isNaN(d.getTime()) ? null : d;
-    }
-    const d = new Date();
-    d.setDate(d.getDate() + (quickPick === "3" ? 3 : 7));
-    return d;
-  }
-  const revisit = revisitAt();
-  const revisitValid = selected !== "observe" || (revisit !== null && revisit.getTime() > Date.now());
+  // F50 Contract K: a deferral is an org calendar date — quick picks count from the org's today, a custom
+  // `<input type="date">` string is valid when after it (string compare); the server stores that day's 00:00.
+  const revisit = quickPick === "custom" ? customDate : clock.shift(quickPick === "3" ? 3 : 7);
+  const revisitValid = selected !== "observe" || revisit > clock.today;
 
   async function handleSave() {
     if (!review || !selected || busy) return;
@@ -170,7 +163,7 @@ export function PreparePage({ brandId, campaignId, reviewId }: {
     try {
       if (selected === "observe") {
         await decideReview(brandId, campaignId, review.id, {
-          decision: "deferred", reason: trimmed, revisit_at: revisit!.toISOString(),
+          decision: "deferred", reason: trimmed, revisit_on: revisit,
         });
         navigate(reviewRoundPath(brandId, campaignId, review.id));
         return;
@@ -291,7 +284,7 @@ export function PreparePage({ brandId, campaignId, reviewId }: {
                   onChange={setQuickPick}
                 />
                 {quickPick === "custom" && (
-                  <Input type="date" aria-label="重看日期" value={customDate} onChange={(e) => setCustomDate(e.target.value)} disabled={busy} />
+                  <Input type="date" aria-label="重看日期" min={clock.shift(1)} value={customDate} onChange={(e) => setCustomDate(e.target.value)} disabled={busy} />
                 )}
               </div>
             </label>

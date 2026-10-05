@@ -8,6 +8,8 @@ import type { CampaignDetail } from "@/lib/adsApi";
 import type { CampaignWorkspace } from "@/lib/adsWorkspaceApi";
 import type { ApiRead } from "@/lib/useApiRead";
 import { WorkspaceHead, periodText } from "./WorkspaceHead";
+// F50 Contract K: the org clock reads the workspace org zone; dates assert Asia/Taipei output, never the runner's.
+vi.mock("@/components/layout/WorkspaceContext", () => ({ useWorkspace: () => ({ scope: "user:org", identity: { user: { id: "u", email: "a@example.com" }, org: { id: "o", name: "測試", kind: "personal", role: "owner", timezone: "Asia/Taipei", today: "2026-10-01" }, orgs: [] } }) }));
 
 /** F49 Contract L: the served lifecycle, as `app/ads/lifecycle.py` labels it. */
 const LIFE = {
@@ -119,7 +121,7 @@ describe("WorkspaceHead (F30-I07, v10 wsHead)", () => {
 
   it("F49 Contract L (drill-11 E5): a stale read prints its time beside 在投, unknown ads apart; never a read stays honest", () => {
     renderHead(detail(), ready(ws({ active_ads: 0, running: { count: 0, unknown: 2, read_at: "2026-10-04T04:28:00Z", stale: true } })));
-    expect(chips()[1]).toMatch(/^購買・在投 0 則（10\/04 \d\d:28 讀取）・2 則狀態不明$/);
+    expect(chips()[1]).toMatch(/^購買・在投 0 則（10\/04 12:28 讀取）・2 則狀態不明$/);
     cleanup();
     renderHead(detail(), ready(ws({ active_ads: 0, running: { count: 0, unknown: 0, read_at: null, stale: true } })));
     expect(chips()[1]).toBe("購買・在投 0 則（還沒讀到平台）");

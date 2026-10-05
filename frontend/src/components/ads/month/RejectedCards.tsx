@@ -3,7 +3,8 @@ import { Link } from "react-router-dom";
 import { Button } from "@/components/layout/ui/button";
 import { dismissSuggestion, type MonthRejectedCard } from "@/lib/adsMonthApi";
 import { CampaignChip, GradeTermChip, gradeWord, useAdsRules, type ObjectiveKey } from "../patterns";
-import { cleanupHref, mmdd } from "./monthCsv";
+import { formatInstant, useOrgClock } from "@/lib/orgClock";
+import { cleanupHref } from "./monthCsv";
 
 /** F29-I15: a cleanup the user rejected comes back only when one of its ads now grades worse than when the user
  * said no (Feature F29 Contract B/C `rejected.worse`, prototype v10 `rejectedSplit()` + worse cards). The rest only
@@ -16,6 +17,7 @@ export function RejectedCard({ brandId, month, card, objective, onDismissed }: {
 }) {
   const many = card.ads.length > 1;
   const rules = useAdsRules();
+  const { timezone } = useOrgClock();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const skip = () => {
@@ -46,7 +48,7 @@ export function RejectedCard({ brandId, month, card, objective, onDismissed }: {
         </div>
       ))}
       <div className="mt-0.5 mb-3.5 text-xs text-muted-foreground">
-        {mmdd(card.at)} 拒絕{card.reason ? `・原因：${card.reason}` : ""}
+        {formatInstant(card.at, timezone, "mmdd")} 拒絕{card.reason ? `・原因：${card.reason}` : ""}
       </div>
       {error && <p role="alert" className="mb-2 text-xs text-danger">{error}</p>}
       <div className="flex flex-wrap gap-2">

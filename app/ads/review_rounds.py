@@ -286,21 +286,20 @@ def _resolve_ready_notice(conn, org, brand, review_id):
             interrupts.resolve(conn, row["id"], actor="system", org_id=org)
 
 
-def decide(conn, org, brand, campaign, review_id, decision, reason, revisit_at=None):
+def decide(conn, org, brand, campaign, review_id, decision, reason, revisit=None):
+    """Records the user's decision on one round. F50 Contract K: a deferral's `revisit` is the
+    instant `change_control_data.deferral_start` made from the user's `revisit_on` (00:00 of an
+    org calendar day after today) -- the only path; no instant text is parsed here."""
     if decision not in {"completed", "deferred", "unjudgeable"}:
         raise ValueError("請選擇完成本回、延後或無法判讀。")
     if not isinstance(reason, str) or not reason.strip() or len(reason) > 2000:
         raise ValueError("請留下本回處理原因，最多兩千字。")
-    revisit = None
-    if revisit_at:
-        try:
-            revisit = datetime.fromisoformat(revisit_at)
-            if revisit.tzinfo is None or revisit <= db.now_utc():
-                raise ValueError
-        except (ValueError, TypeError):
-            raise ValueError("請選未來的重看時間，並包含時區。") from None
+    if revisit is not None and (
+        not isinstance(revisit, datetime) or revisit.tzinfo is None or revisit <= db.now_utc()
+    ):
+        raise ValueError(changes.DEFERRAL_DAY_REFUSAL)
     if decision == "deferred" and revisit is None:
-        raise ValueError("延後檢討請留下重看時間。")
+        raise ValueError("延後檢討請留下重看日期。")
     get(conn, org, brand, campaign, review_id)
     if _superseded(conn, org, brand, campaign, review_id):
         raise ValueError("本回已重新請 AI 看一次，請改在新一回決定。")

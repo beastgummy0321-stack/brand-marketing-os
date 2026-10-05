@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Button } from "@/components/layout/ui/button";
 import { selectScenario, setBudgetCap, type BudgetScenarioRow, type CampaignDetail, type ResplitRow, type SelectScenarioResult } from "@/lib/adsApi";
+import { daysBetween } from "@/lib/orgClock";
 import { Chip, ConfirmSheet, Disclosure, ScenarioBars, WarnButton, formatAmount, type ScenarioRow } from "../patterns";
 
 /** F28-I09: the strategy tab's 「這一期的總預算」 card (prototype v9 `budgetBlock()`): the API's budget scenarios as bars
@@ -31,8 +32,8 @@ const WHOLE = /^[1-9]\d*$/;
 
 function periodDays(start: string | null, end: string | null): number | null {
   if (!start || !end) return null;
-  const days = Math.round((new Date(end).getTime() - new Date(start).getTime()) / 86_400_000) + 1;
-  return days > 0 ? days : null;
+  const days = daysBetween(start, end);
+  return days !== null && days > 0 ? days : null;
 }
 
 /** The row the campaign has saved: same key AND the same money. A cap row whose total moved with a new budget cap is

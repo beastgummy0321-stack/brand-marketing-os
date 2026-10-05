@@ -31,7 +31,7 @@ def create(conn, org, brand, campaign, payload, actor, decision=None):
     """The public create path (`POST …/change-sets`): `source` may only be "cleanup" -- an `ab`
     set is created only through `create_ab` (F29-I04 Contract F).
 
-    F47-I07 (drill-10 Q3): `decision` (`{decision, reason, revisit_at?}`) records the user's
+    F47-I07 (drill-10 Q3): `decision` (`{decision, reason, revisit?}`) records the user's
     拒絕／暫緩 on the new set in the same transaction -- one decision is one write. A refused
     decision rolls the new set back, so no draft is left behind to show up as 「等你核准」."""
     if decision is None:
@@ -39,7 +39,7 @@ def create(conn, org, brand, campaign, payload, actor, decision=None):
     if not isinstance(decision, dict):
         raise ValueError("請選擇拒絕或暫緩，並填寫原因。")
     choice, reason, revisit = _decision_input(
-        decision.get("decision"), decision.get("reason"), decision.get("revisit_at"),
+        decision.get("decision"), decision.get("reason"), decision.get("revisit"),
     )
     try:
         created = _create(conn, org, brand, campaign, payload, actor, commit=False)
@@ -427,22 +427,22 @@ def _resolve_queue_row(conn, org, brand, set_id):
     triage.resolve_change_set(conn, org, brand, set_id)
 
 
-def _decision_input(decision, reason, revisit_at):
-    """The checked 拒絕／暫緩 input -- refused before anything is written."""
+def _decision_input(decision, reason, revisit):
+    """The checked 拒絕／暫緩 input -- refused before anything is written.
+
+    F50 Contract K: a deferral's `revisit` is the instant `data.deferral_start` made from the
+    user's `revisit_on` (00:00 of an org calendar day after today) -- the only path; no instant
+    text is parsed here."""
     if (
         decision not in {"rejected", "deferred"}
         or not isinstance(reason, str)
         or not reason.strip()
     ):
         raise ValueError("請選擇拒絕或暫緩，並填寫原因。")
-    revisit = None
-    if decision == "deferred":
-        try:
-            revisit = datetime.fromisoformat(str(revisit_at).replace("Z", "+00:00"))
-            if revisit.tzinfo is None or revisit <= db.now_utc():
-                raise ValueError
-        except ValueError:
-            raise ValueError("暫緩請選擇未來的重看時間。") from None
+    if decision != "deferred":
+        return decision, reason, None
+    if not isinstance(revisit, datetime) or revisit.tzinfo is None or revisit <= db.now_utc():
+        raise ValueError(data.DEFERRAL_DAY_REFUSAL)
     return decision, reason, revisit
 
 
@@ -476,8 +476,8 @@ def _apply_decision(conn, org, brand, campaign, set_id, decision, reason, revisi
     )
 
 
-def decide(conn, org, brand, campaign, set_id, decision, reason, revisit_at, actor):
-    decision, reason, revisit = _decision_input(decision, reason, revisit_at)
+def decide(conn, org, brand, campaign, set_id, decision, reason, revisit, actor):
+    decision, reason, revisit = _decision_input(decision, reason, revisit)
     try:
         _apply_decision(conn, org, brand, campaign, set_id, decision, reason, revisit, actor)
         conn.commit()

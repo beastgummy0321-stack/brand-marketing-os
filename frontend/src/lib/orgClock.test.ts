@@ -6,7 +6,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderHook } from "@testing-library/react";
 import {
   DEFAULT_ORG_TIMEZONE,
+  addDays,
+  dayList,
+  daysBetween,
+  formatDay,
+  formatInstant,
+  orgDateOf,
   orgDateShift,
+  shiftMonth,
   orgToday,
   resolveOrgTimezone,
   useOrgClock,
@@ -88,5 +95,48 @@ describe("useOrgClock", () => {
     const { result } = renderHook(() => useOrgClock());
     expect(result.current.timezone).toBe(DEFAULT_ORG_TIMEZONE);
     expect(result.current.today).toBe("2026-03-01");
+  });
+});
+
+describe("F50-I12 pure day helpers and instant printing (Contract K)", () => {
+  it("prints an instant on the org clock whatever the runner's zone", () => {
+    // 2026-10-31T17:00Z is already 11/01 01:00 in Taipei and still 10/31 in Pago Pago.
+    const iso = "2026-10-31T17:00:00Z";
+    expect(formatInstant(iso, "Asia/Taipei", "md")).toBe("11/1");
+    expect(formatInstant(iso, "Asia/Taipei", "mmdd")).toBe("11/01");
+    expect(formatInstant(iso, "Asia/Taipei", "md_hm")).toBe("11/01 01:00");
+    expect(formatInstant(iso, "Asia/Taipei", "hm")).toBe("01:00");
+    expect(formatInstant(iso, "Asia/Taipei", "ymd")).toBe("2026/11/01");
+    expect(formatInstant(iso, "Pacific/Pago_Pago", "md_hm")).toBe("10/31 06:00");
+    expect(orgDateOf(iso, "Asia/Taipei")).toBe("2026-11-01");
+    expect(orgDateOf(iso, "Pacific/Pago_Pago")).toBe("2026-10-31");
+  });
+
+  it("reads Python's own text form, midnight as 00 and unreadable as empty", () => {
+    expect(formatInstant("2026-10-01 15:10:33.055275+00:00", "Asia/Taipei", "md_hm")).toBe("10/01 23:10");
+    expect(formatInstant("2026-11-07T16:00:00+00:00", "Asia/Taipei", "md_hm")).toBe("11/08 00:00");
+    expect(formatInstant(null, "Asia/Taipei", "md")).toBe("");
+    expect(formatInstant("not a time", "Asia/Taipei", "md")).toBe("");
+    expect(formatInstant("2026-10-01", "Asia/Taipei", "md")).toBe("");
+    expect(orgDateOf("2026-10-01", "Asia/Taipei")).toBe("2026-10-01");
+    expect(orgDateOf("garbage", "Asia/Taipei")).toBeNull();
+  });
+
+  it("does day arithmetic on calendar strings only", () => {
+    expect(formatDay("2026-10-03", "md")).toBe("10/3");
+    expect(formatDay("2026-10-03", "mmdd")).toBe("10/03");
+    expect(formatDay("2026-10-03", "ymd")).toBe("2026/10/03");
+    expect(formatDay("10/03", "md")).toBe("");
+    expect(addDays("2026-10-31", 8)).toBe("2026-11-08");
+    expect(addDays("2026-03-01", -1)).toBe("2026-02-28");
+    expect(daysBetween("2026-10-01", "2026-10-07")).toBe(7);
+    expect(daysBetween("2026-10-01", "2026-10-01")).toBe(1);
+    expect(daysBetween("2026-10-01", "x")).toBeNull();
+    expect(dayList("2026-09-29", "2026-10-02")).toEqual(["2026-09-29", "2026-09-30", "2026-10-01", "2026-10-02"]);
+    expect(dayList("2026-10-02", "2026-10-01")).toEqual([]);
+    expect(dayList("2026-01-01", "2026-12-31", 3)).toHaveLength(3);
+    expect(shiftMonth("2026-01", -1)).toBe("2025-12");
+    expect(shiftMonth("2026-12", 1)).toBe("2027-01");
+    expect(shiftMonth("2026-10", 0)).toBe("2026-10");
   });
 });

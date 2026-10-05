@@ -9,6 +9,8 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { AdsActionLine, CampaignDetail, CampaignJudgment, DeliveryGroupRow } from "@/lib/adsApi";
 import { OverviewTab } from "./OverviewTab";
+// F50 Contract K: the org clock reads the workspace org zone; dates assert Asia/Taipei output, never the runner's.
+vi.mock("@/components/layout/WorkspaceContext", () => ({ useWorkspace: () => ({ scope: "user:org", identity: { user: { id: "u", email: "a@example.com" }, org: { id: "o", name: "測試", kind: "personal", role: "owner", timezone: "Asia/Taipei", today: "2026-10-01" }, orgs: [] } }) }));
 
 function group(overrides: Partial<DeliveryGroupRow> = {}): DeliveryGroupRow {
   return {

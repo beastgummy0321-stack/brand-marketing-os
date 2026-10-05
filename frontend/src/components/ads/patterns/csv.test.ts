@@ -1,9 +1,18 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { downloadCsv, perSaleAmount, toCsv } from "./csv";
-import { yuan } from "../settle/settleCsv";
+import { stampText, yuan } from "../settle/settleCsv";
+import { mmdd } from "../month/monthCsv";
 
 describe("csv（F29-I09 Contract K）", () => {
   afterEach(() => vi.restoreAllMocks());
+
+  it("F50-I12: the CSV builders print instants on the org clock and days as they are, whatever the runner's zone", () => {
+    // 2026-10-31T17:00Z is 11/01 01:00 in Taipei and 10/31 06:00 in Pago Pago.
+    expect(stampText("2026-10-31T17:00:00Z", "Asia/Taipei")).toBe("11/01 01:00");
+    expect(stampText("2026-10-31T17:00:00Z", "Pacific/Pago_Pago")).toBe("10/31 06:00");
+    expect(stampText("not a time", "Asia/Taipei")).toBe("");
+    expect(mmdd("2026-09-05")).toBe("09/05");
+  });
 
   it("CRLF 分行；逗號、雙引號、換行要加引號；null 是空格，不是 0", () => {
     const text = toCsv([

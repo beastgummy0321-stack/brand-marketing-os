@@ -5,6 +5,7 @@ import type { CloseoutQueueRow, GradeMove, QueueCleanupAd, QueueItem, QueuePaylo
 import { Chip, Disclosure, GradeTermChip, MoneyTag, ResultHero, Term, ThumbTiles, formatAmount, gradeWord, useAdsRules, type AdsRules } from "../patterns";
 import { trendNote } from "../detail/GradeGroups";
 import { cn } from "@/lib/utils";
+import { formatInstant, useOrgClock } from "@/lib/orgClock";
 import { wholeYuan } from "./MonthMoney";
 import { perSaleAmount } from "../patterns/csv";
 import { shortName } from "./NextDates";
@@ -36,16 +37,9 @@ export function homeBoard(brandId: string, queue: QueuePayload): { open: HomeDec
 
 const keyOf = (d: HomeDecision) => (d.kind === "item" ? d.item.id : `${d.kind}-${d.row.id}`);
 
-/** 「09/22 22:40」 in the browser's time zone (prototype `SYNC_AT`). */
-export function stamp(iso: string): string {
-  const d = new Date(iso);
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${p(d.getMonth() + 1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
-}
-
-function hm(iso: string): string {
-  const d = new Date(iso);
-  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+/** 「09/22 22:40」 on the org clock (prototype `SYNC_AT`; F50 Contract K). */
+export function stamp(iso: string, timezone: string): string {
+  return formatInstant(iso, timezone, "md_hm");
 }
 
 /** 「從划算變偏貴」 from the backend's own `grade_move` in the served words (F48 Contract R-API); no move (or the rules
@@ -66,6 +60,7 @@ type Props = {
 };
 
 export function TodayDecisions({ brandId, state, syncing, recovering, sync, onRetry }: Props) {
+  const { timezone } = useOrgClock();
   const board = state.status === "ready" ? homeBoard(brandId, state.queue) : null;
   const open = board?.open ?? [];
   const done = board?.done ?? [];
@@ -90,15 +85,15 @@ export function TodayDecisions({ brandId, state, syncing, recovering, sync, onRe
         <ResultHero
           tone="bad"
           title="今天的判斷讀取失敗"
-          note={`${sync?.last_success_at ? `上次成功 ${stamp(sync.last_success_at)}・` : ""}已保存的決定都還在`}
+          note={`${sync?.last_success_at ? `上次成功 ${stamp(sync.last_success_at, timezone)}・` : ""}已保存的決定都還在`}
         />
         <Button variant="outline" className="absolute top-1/2 right-5 -translate-y-1/2" onClick={onRetry}>重新讀取</Button>
       </div>
     );
   } else if (!open.length) {
     const note = [
-      sync?.last_success_at ? `${stamp(sync.last_success_at)} 同步後判讀完成` : null,
-      sync?.next_at ? `下次同步 ${hm(sync.next_at)}` : null,
+      sync?.last_success_at ? `${stamp(sync.last_success_at, timezone)} 同步後判讀完成` : null,
+      sync?.next_at ? `下次同步 ${formatInstant(sync.next_at, timezone, "hm")}` : null,
     ].filter(Boolean).join("・");
     body = (
       <>
@@ -159,12 +154,13 @@ function doneLabel(d: HomeDecision, rules: AdsRules | null): string {
 
 function HandledFold({ brandId, done, recovering }: { brandId: string; done: HomeDecision[]; recovering: boolean }) {
   const rules = useAdsRules();
+  const { timezone } = useOrgClock();
   if (!done.length) return null;
   return (
     <Disclosure label={`今天處理過 ${done.length} 件`}>
       {done.map((d) => {
         const action = d.kind === "settle" ? settleAction(brandId, d.row)
-          : d.kind === "closeout" ? closeoutAction(d.row) : homeAction(brandId, d.item);
+          : d.kind === "closeout" ? closeoutAction(d.row) : homeAction(brandId, d.item, timezone);
         // drill-10 Q2: the chip opens the decision (a deferred one shows 「M/D 再看」 and leads back to its change set).
         return (
           <div key={keyOf(d)} className="flex flex-wrap items-center gap-3 border-t border-border py-2 first:border-t-0">

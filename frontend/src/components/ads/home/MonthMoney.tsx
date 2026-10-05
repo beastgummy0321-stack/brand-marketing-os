@@ -24,10 +24,11 @@ export function wholeYuan(value: number): string {
   return `${perSaleAmount(value) ?? "—"} 元`;
 }
 
-/** `YYYY-MM` → month number; falls back to the local month when absent. */
-export function monthNumber(month: string | null | undefined): number {
-  const m = month ? Number(month.split("-")[1]) : NaN;
-  return Number.isFinite(m) ? m : new Date().getMonth() + 1;
+/** `YYYY-MM` → month number; before the overview answers, the month of the org's `today` (`useOrgClock`, F50 Contract
+ * K) when the caller passes it. */
+export function monthNumber(month: string | null | undefined, today?: string): number {
+  const source = month || today;
+  return source ? Number(source.slice(5, 7)) : NaN;
 }
 
 const EARN_MISSING: Record<HomeEarnMissing, string> = {

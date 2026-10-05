@@ -2,6 +2,7 @@
  * month CSV (prototype v10 `csvMonth()`), built in the browser from the numbers the screen already shows (Feature
  * F29 decisions: no endpoint). Unknown numbers stay empty cells / 「未知」, never 0. */
 import type { PeriodGradeRow } from "@/lib/adsMonthApi";
+import { formatDay } from "@/lib/orgClock";
 import { downloadCsv, formatAmount, type CsvCell } from "../patterns";
 
 /** 「1,234 元」, or 「未知」 for an unknown amount. */
@@ -10,23 +11,15 @@ export function money(value: number | null | undefined): string {
   return text === null ? "未知" : `${text} 元`;
 }
 
-/** `YYYY-MM` shifted by whole months. */
-export function shiftMonth(month: string, delta: number): string {
-  const [y, m] = month.split("-").map(Number);
-  const d = new Date(y, m - 1 + delta, 1);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-}
-
 /** `YYYY-MM` → its month number (9 for 2026-09). */
 export const monthNum = (month: string) => Number(month.split("-")[1]);
 
 const pad = (n: number) => String(n).padStart(2, "0");
 
-/** 「09/05」 from an ISO date or timestamp, in the browser's time zone for a timestamp. */
-export function mmdd(iso: string): string {
-  if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) return `${iso.slice(5, 7)}/${iso.slice(8, 10)}`;
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? "" : `${pad(d.getMonth() + 1)}/${pad(d.getDate())}`;
+/** 「09/05」 from a calendar day `YYYY-MM-DD`. An instant prints through `formatInstant(…, timezone, "mmdd")` on the org
+ * clock (F50 Contract K), never here. */
+export function mmdd(day: string): string {
+  return formatDay(day, "mmdd");
 }
 
 /** 「兩」 for 2 in running text (「這兩天不計」); digits above nine. */

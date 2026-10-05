@@ -1,4 +1,5 @@
 import type { HomeOverview } from "@/lib/adsHomeApi";
+import { formatInstant } from "@/lib/orgClock";
 import type {
   CloseoutQueueRow, QueueItem, QueuePauseProposal, QueuePayload, QueueProposal, QueueReviewProposal, SettleQueueRow,
 } from "@/lib/adsTriageApi";
@@ -33,12 +34,18 @@ const reviewPath = (brandId: string, campaignId: string, entityId: string) =>
 const reviewRoundPath = (brandId: string, campaignId: string, reviewId: string, step?: "prepare") =>
   `/brands/${brandId}/ads/campaigns/${campaignId}/reviews/${reviewId}${step ? `/${step}` : ""}`;
 
-// `revisit_at` 是「always a timezone-carrying ISO instant」（feature Decisions）——瀏覽器本地
-// 時區印「M/D」，不補零、不印年份（跟這頁其餘日期格式一致地簡短）。F47-I07（drill-10 Q2）：
-// 「M/D 再看」，暫緩的列與確認頁都用這一顆。
-export function formatRevisitLabel(revisitAt: string): string {
-  const d = new Date(revisitAt);
-  return `${d.getMonth() + 1}/${d.getDate()} 再看`;
+// F47-I07 (drill-10 Q2) 「M/D 再看」, the deferred rows and the confirm page share this one. F50-I12 (Contract K):
+// `revisit_at` is the stored instant of 00:00 of the chosen org calendar day, so it prints on the org clock
+// (`timezone`), never the viewer's — 「7 天後」 picked on 10/31 in Taipei reads 「11/8 再看」 everywhere.
+export function formatRevisitLabel(revisitAt: string, timezone: string): string {
+  const day = formatInstant(revisitAt, timezone, "md");
+  return day ? `${day} 再看` : "已暫緩";
+}
+
+/** A deferred row's label: the revisit day on the org clock when the caller passes the org `timezone`; a caller that
+ * never shows a deferred label (only the href／done) may omit it and gets 「已暫緩」, never a browser-zone date. */
+function deferredLabel(revisitAt: string | null, timezone: string | undefined): string {
+  return revisitAt && timezone ? formatRevisitLabel(revisitAt, timezone) : "已暫緩";
 }
 
 /** F23-I01: `proposal.status === "completed"` with a copy change set already exists — the row's
@@ -49,7 +56,7 @@ export function formatRevisitLabel(revisitAt: string): string {
  * `change_set_status`/`verification_state` together with `change_set_id` (`_row_review_proposal`)
  * — the `?? "draft"`/`?? "pending"` fallbacks here are defensive, never expected to trigger. */
 function reviewChangeSetAction(
-  brandId: string, campaignId: string, entityId: string, proposal: QueueReviewProposal,
+  brandId: string, campaignId: string, entityId: string, proposal: QueueReviewProposal, timezone?: string,
 ): ProposalAction {
   const pauseShaped: QueuePauseProposal = {
     kind: "pause",
@@ -62,12 +69,12 @@ function reviewChangeSetAction(
     revisit_at: proposal.revisit_at,
     multi: proposal.multi,
   };
-  return proposalAction(brandId, campaignId, entityId, pauseShaped);
+  return proposalAction(brandId, campaignId, entityId, pauseShaped, "pause", timezone);
 }
 
 /** F23-I01: the `worse` row branch, per feature Decisions "Queue row state for `worse` rows". */
 function reviewProposalAction(
-  brandId: string, campaignId: string, entityId: string, proposal: QueueReviewProposal,
+  brandId: string, campaignId: string, entityId: string, proposal: QueueReviewProposal, timezone?: string,
 ): ProposalAction {
   switch (proposal.status) {
     case "queued":
@@ -90,7 +97,7 @@ function reviewProposalAction(
       };
     case "completed":
       if (proposal.change_set_id !== null) {
-        return reviewChangeSetAction(brandId, campaignId, entityId, proposal);
+        return reviewChangeSetAction(brandId, campaignId, entityId, proposal, timezone);
       }
       return {
         label: "選方向",
@@ -99,7 +106,7 @@ function reviewProposalAction(
       };
     case "deferred":
       return {
-        label: proposal.revisit_at ? formatRevisitLabel(proposal.revisit_at) : "已暫緩",
+        label: deferredLabel(proposal.revisit_at, timezone),
         href: reviewRoundPath(brandId, campaignId, proposal.review_id),
         done: true,
       };
@@ -123,6 +130,8 @@ export function proposalAction(
   // generic switch below as `"pause"` does (`change_set_id`/`status`/`verification_state` are the
   // same shape, "budget branch = the pause branch on a budget set"), so only this branch differs.
   kind: "pause" | "review" | "budget" = "pause",
+  // F50-I12: the org timezone a deferred row's 「M/D 再看」 prints in (see `deferredLabel`).
+  timezone?: string,
 ): ProposalAction {
   if (proposal === null) {
     if (kind === "review") return { label: "看證據", href: reviewPath(brandId, campaignId, entityId), done: false };
@@ -130,7 +139,7 @@ export function proposalAction(
     return { label: "去處理", href: proposePath(brandId, campaignId, entityId), done: false };
   }
   if (proposal.kind === "review") {
-    return reviewProposalAction(brandId, campaignId, entityId, proposal);
+    return reviewProposalAction(brandId, campaignId, entityId, proposal, timezone);
   }
   // F28: every change set, a multi-item cleanup set included, opens its own step page. The flow
   // pages (confirm / handoff / verify) render cleanup sets since F28-I11/I14; the old fallback to
@@ -145,7 +154,7 @@ export function proposalAction(
       return { label: "已拒絕", href: stepHref("confirm"), done: true };
     case "deferred":
       return {
-        label: proposal.revisit_at ? formatRevisitLabel(proposal.revisit_at) : "已暫緩",
+        label: deferredLabel(proposal.revisit_at, timezone),
         href: stepHref("confirm"),
         done: true,
       };
@@ -171,10 +180,10 @@ export function proposalAction(
  * own generic switch (`kind` only matters for the null-proposal branch, irrelevant once `proposal`
  * itself carries one — a cleanup set's `multi` is always `true`, Contract F). */
 export function cleanupAction(
-  brandId: string, campaignId: string, proposal: QueueProposal | null, actionUrl: string | null,
+  brandId: string, campaignId: string, proposal: QueueProposal | null, actionUrl: string | null, timezone?: string,
 ): ProposalAction | null {
   if (proposal === null) return actionUrl ? { label: "看提議", href: actionUrl, done: false } : null;
-  return proposalAction(brandId, campaignId, campaignId, proposal);
+  return proposalAction(brandId, campaignId, campaignId, proposal, "pause", timezone);
 }
 
 /** F47-I07 (Contract D): whether a queue row still waits on the user is the backend's own
@@ -278,7 +287,7 @@ const monthDay = (iso: string) => `${iso.slice(5, 7)}/${iso.slice(8, 10)}`;
 
 export function bandState(home: HomeOverview): BandState {
   const month = Number(home.month.split("-")[1]);
-  const label = `${Number.isFinite(month) ? month : new Date().getMonth() + 1} 月`;
+  const label = Number.isFinite(month) ? `${month} 月` : "本月";
   const gapped = (home.campaigns ?? []).filter((c) => c.missing_days.length > 0);
   if (home.quality === null && home.spent === null && gapped.length > 0) {
     const days = [...new Set(gapped.flatMap((c) => c.missing_days))].sort();

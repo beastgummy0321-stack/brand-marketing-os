@@ -15,6 +15,7 @@ import {
   STATE_TONE, useShownThumbnail, VIDEO_NEEDED, WaitingSlot, type Checked,
 } from "./SlotTiles";
 import { isDraftCampaign } from "./WorkspaceHead";
+import { formatInstant, useOrgClock } from "@/lib/orgClock";
 
 /** v10 (F30-I11) the workspace's 素材 tab body (prototype `tabAssets()` / `slotsOf()`), from `GET …/slots`
  * (Contract F):
@@ -72,18 +73,16 @@ const HEAD = "mb-3.5 flex flex-wrap items-center justify-between gap-3";
 const H2 = "text-[15px] font-semibold";
 const ROW = "grid grid-cols-[40px_minmax(0,1fr)_auto_auto] items-center gap-3.5 py-[11px]";
 
-/** A timezone-carrying instant as `MM/DD`, printed in the browser's zone like the other workspace dates. */
-function monthDay(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "—";
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${pad(d.getMonth() + 1)}/${pad(d.getDate())}`;
+/** An ISO instant as `MM/DD` on the org clock (F50 Contract K); unreadable → 「—」. */
+function monthDay(iso: string, timezone: string): string {
+  return formatInstant(iso, timezone, "mmdd") || "—";
 }
 
 function RequestRow({ request, busy, error, onCancel }: {
   request: ReplaceRequest; busy: boolean; error: string | null; onCancel: () => void;
 }) {
   const thumb = useShownThumbnail(request.replaces.thumbnail_url);
+  const { timezone } = useOrgClock();
   const name = request.replaces.name;
   return (
     <div className="border-t border-border first:border-t-0" data-testid="replace-request">
@@ -95,7 +94,7 @@ function RequestRow({ request, busy, error, onCancel }: {
             ? <div className="font-medium [overflow-wrap:anywhere]">{name}</div>
             : <div className="text-muted-foreground">名稱讀不到（這則廣告可能已從平台刪除）</div>}
         </div>
-        <Chip tone="accent">{request.state_label}・{monthDay(request.created_at)}</Chip>
+        <Chip tone="accent">{request.state_label}・{monthDay(request.created_at, timezone)}</Chip>
         <Button variant="ghost" size="sm" disabled={busy} onClick={onCancel}>{busy ? "取消中…" : "取消需求"}</Button>
       </div>
       {error && <p role="alert" className="pb-2.5 pl-[54px] text-xs text-danger">沒有取消：{error}</p>}

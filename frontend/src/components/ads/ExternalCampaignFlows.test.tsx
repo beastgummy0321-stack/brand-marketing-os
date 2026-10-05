@@ -6,6 +6,8 @@ import { patchCampaign } from "@/lib/adsApi";
 import { existingCampaigns, externalView, importExisting, refreshExisting, syncCampaign, syncJob, syncOutcome, type ExistingPage, type ExternalView, type NativeEntity, type SyncOutcome } from "@/lib/adsExternalApi";
 import { ExistingCampaignDialog } from "./ExistingCampaignDialog";
 import { ExternalCampaignPanel } from "./ExternalCampaignPanel";
+// F50 Contract K: the org clock reads the workspace org zone; dates assert Asia/Taipei output, never the runner's.
+vi.mock("@/components/layout/WorkspaceContext", () => ({ useWorkspace: () => ({ scope: "user:org", identity: { user: { id: "u", email: "a@example.com" }, org: { id: "o", name: "測試", kind: "personal", role: "owner", timezone: "Asia/Taipei", today: "2026-10-01" }, orgs: [] } }) }));
 
 vi.mock("@/lib/adsExternalApi", () => ({ existingCampaigns: vi.fn(), externalView: vi.fn(), importExisting: vi.fn(), refreshExisting: vi.fn(), syncCampaign: vi.fn(), syncJob: vi.fn(), syncOutcome: vi.fn() }));
 vi.mock("@/lib/adsApi", () => ({ patchCampaign: vi.fn() }));
@@ -64,8 +66,7 @@ describe("既有活動來源與原始資料", () => {
     expect(screen.getByText("投放中 · 10/03 – 10/09")).not.toBeNull();
     expect(screen.getByText("有問題 · 開始日未知 – 結束日未知")).not.toBeNull();
     expect(screen.queryByText(/ACTIVE|WITH_ISSUES|2026-10-01T/)).toBeNull();
-    const d = new Date("2026-10-01T15:10:33.055275+00:00"); const pad = (n: number) => String(n).padStart(2, "0");
-    expect(await screen.findByText(new RegExp(`正在讀取平台資料 · 最近成功：${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`))).not.toBeNull();
+    expect(await screen.findByText(/正在讀取平台資料 · 最近成功：10\/01 23:10/)).not.toBeNull();
     expect(screen.getByText("已在工作區")).not.toBeNull();
     expect(screen.getAllByRole("button", { name: "納入並開啟" })).toHaveLength(1);
     fireEvent.click(screen.getByRole("button", { name: "打開" }));

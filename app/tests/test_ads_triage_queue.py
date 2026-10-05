@@ -1753,7 +1753,7 @@ class InboxFollowsTheQueueTest(_RealCampaignQueue):
         created = self._cleanup_set()
         change_control.decide(self.conn, self.org, self.brand, self.campaign, created["id"],
                               "deferred", "下週再看",
-                              (db.now_utc() + timedelta(days=3)).isoformat(), "test")
+                              db.now_utc() + timedelta(days=3), "test")
         self.assertEqual(self._open("cleanup"), [])
         # Resolved because it is done, not because it stopped qualifying: the candidate is still
         # raised, and its resolved key is never raised again within the same window.

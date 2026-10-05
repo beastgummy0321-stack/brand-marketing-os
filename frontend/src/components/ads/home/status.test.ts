@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { CloseoutQueueRow, QueueCleanupProposal, QueueItem, QueuePayload, QueueReviewProposal, SettleQueueRow, TriageItem } from "@/lib/adsTriageApi";
+import type { CloseoutQueueRow, QueueCleanupProposal, QueueItem, QueuePauseProposal, QueuePayload, QueueReviewProposal, SettleQueueRow, TriageItem } from "@/lib/adsTriageApi";
 import type { HomeCampaign, HomeOverview } from "@/lib/adsHomeApi";
-import { bandState, cleanupAction, decisionBoard, decisionPosition, isQueueItemDone, proposalAction, settleAction, settlePosition } from "./status";
+import { bandState, cleanupAction, formatRevisitLabel, decisionBoard, decisionPosition, isQueueItemDone, proposalAction, settleAction, settlePosition } from "./status";
 import { nextOpenQueueItem } from "../flow/changeFlow";
 
 // F29-I11 (Contract E): the brand-level settle row opens the settle page through its own action_url.
@@ -258,5 +258,23 @@ describe("bandState", () => {
 
   it("normal: any graded amount draws the band", () => {
     expect(bandState(homeOverview({ spent: 10081, quality: { buckets: [{ grade: "on_target", amount: 3120, count: 1, ads: [] }, { grade: "ungraded", amount: 6961, count: 3, ads: [] }] } }))).toEqual({ kind: "band" });
+  });
+});
+
+describe("F50-I12: a deferral prints its org calendar day (Contract K)", () => {
+  // Stored `revisit_at` = 00:00 of the chosen org day: 2026-11-08 in Taipei is 2026-11-07T16:00Z.
+  const deferred: QueuePauseProposal = {
+    kind: "pause", change_set_id: "s1", campaign_id: "cmp_1", status: "deferred", verification_state: "pending",
+    reason: "想再觀察幾天", revisit_at: "2026-11-07T16:00:00+00:00", multi: false,
+  };
+
+  it("formatRevisitLabel reads the org zone, not the runner's (UTC would say 11/7)", () => {
+    expect(formatRevisitLabel("2026-11-07T16:00:00+00:00", "Asia/Taipei")).toBe("11/8 再看");
+    expect(formatRevisitLabel("garbage", "Asia/Taipei")).toBe("已暫緩");
+  });
+
+  it("proposalAction prints 「M/D 再看」 only with the org timezone; without it the row says 已暫緩, never a browser date", () => {
+    expect(proposalAction("brd_1", "cmp_1", "ad_1", deferred, "pause", "Asia/Taipei").label).toBe("11/8 再看");
+    expect(proposalAction("brd_1", "cmp_1", "ad_1", deferred).label).toBe("已暫緩");
   });
 });

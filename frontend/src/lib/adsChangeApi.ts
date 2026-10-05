@@ -78,8 +78,10 @@ export interface AbChangeBlock {
 // cleanup proposal so `propose/cleanup/:campaignId` matches it back (`triage._matching_cleanup_set`).
 // `declined_ids` (F29-I01 Contract B): only with `source: "cleanup"` -- the proposed ads the user
 // unticked; each is remembered at approval and proposed again only once its grade gets worse.
-/** 拒絕／暫緩 one change set (`POST …/decision`, or `decide` on create). `revisit_at` only with `deferred`. */
-export interface ChangeDecision { decision: "rejected" | "deferred"; reason: string; revisit_at?: string }
+/** 拒絕／暫緩 one change set (`POST …/decision`, or `decide` on create). `revisit_on` only with `deferred`: an org
+ * calendar date `YYYY-MM-DD` after the org's today (F50 Contract K; the server stores that day's 00:00 in the org zone
+ * as `revisit_at`). */
+export interface ChangeDecision { decision: "rejected" | "deferred"; reason: string; revisit_on?: string }
 // `decide` (F47-I07, drill-10 Q3): the user's 拒絕／暫緩 on the set this create makes, written in the same
 // transaction -- a refused decision leaves no draft behind. Never part of the set's hashes.
 export interface ChangeDraft { operation_id: string; title: string; month: string; items: ChangeInput[]; supersedes_id?: string; review_id?: string; recommendation_id?: string; material_task_id?: string; material_revision?: number; source?: "cleanup"; declined_ids?: string[]; decide?: ChangeDecision }

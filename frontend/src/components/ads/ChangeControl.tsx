@@ -10,7 +10,7 @@ import { ChangeRequestRejected, actOnChangeItem, approveChangeSet, createChangeS
 import { ChangeComposer } from "./ChangeComposer";
 import { ChangeSetView } from "./ChangeSetView";
 import { currentBudgetMonth, MonthlyBudgetPanel } from "./MonthlyBudgetPanel";
-import { useOrgClock } from "@/lib/orgClock";
+import { formatInstant, useOrgClock } from "@/lib/orgClock";
 import { Disclosure } from "./patterns/Disclosure";
 import type { TimelineRow } from "@/lib/adsWorkspaceApi";
 import { isAbSet } from "./flow/changeFlow";
@@ -183,7 +183,7 @@ function Control({ brandId, campaignId }: { brandId: string; campaignId: string 
       onReconsider={() => void reconsider()} />}
     {data && !composing && !selected && !handoffWork && <EmptyState title={data.targets.length ? "先整理這次需要調整的內容" : "還沒有可核對的廣告對象"} description={data.targets.length ? "可只修改文案、調整預算或暫停指定對象。保存清單後再一次核准。" : noTargetsReason} {...(data.targets.length ? { actionLabel: "建立變更清單", onAction: () => { setComposing(true); revealComposer(); } } : {})} />}
     {!composing && <div id="manual-handoff"><ManualHandoffPanel brandId={brandId} campaignId={campaignId} mode="items" refreshKey={budgetRefresh} onHandoffWork={setHandoffWork} onDestinationsNote={setDestinationsNote} /></div>}
-    {data && data.change_sets.length > 1 && <Disclosure label={`其他清單與歷史紀錄（${data.change_sets.length - 1}）`}><div className="space-y-2">{data.change_sets.filter(set => set.id !== selectedId).map(set => <button key={set.id} className="flex w-full items-center justify-between rounded-md border border-border p-3 text-left text-sm hover:bg-muted" disabled={busy || Boolean(pending)} onClick={() => { select(set.id); setComposing(false); }}><span>{set.title}</span><span className="text-xs text-muted-foreground">{new Date(set.created_at).toLocaleDateString("zh-TW")}</span></button>)}</div></Disclosure>}
+    {data && data.change_sets.length > 1 && <Disclosure label={`其他清單與歷史紀錄（${data.change_sets.length - 1}）`}><div className="space-y-2">{data.change_sets.filter(set => set.id !== selectedId).map(set => <button key={set.id} className="flex w-full items-center justify-between rounded-md border border-border p-3 text-left text-sm hover:bg-muted" disabled={busy || Boolean(pending)} onClick={() => { select(set.id); setComposing(false); }}><span>{set.title}</span><span className="text-xs text-muted-foreground">{formatInstant(set.created_at, timezone, "ymd")}</span></button>)}</div></Disclosure>}
     </div></Disclosure>
   </div>;
 }

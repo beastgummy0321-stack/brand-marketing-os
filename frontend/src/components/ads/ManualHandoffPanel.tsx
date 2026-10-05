@@ -6,10 +6,9 @@ import { Textarea } from "@/components/layout/ui/textarea";
 import { useWorkspace } from "@/components/layout/WorkspaceContext";
 import { existingCampaigns, externalView, type NativeEntity, type SourceAccount } from "@/lib/adsExternalApi";
 import { checkHandoff, createNewAdHandoff, getHandoff, HandoffRequestRejected, reconsiderHandoff, refreshHandoffSources, reportHandoff, type HandoffIdentity, type HandoffItem, type HandoffWorkspace, type NewAdHandoffRequest } from "@/lib/adsHandoffApi";
-import { formatSyncTime } from "@/lib/format";
 import { useSyncOutcome } from "@/lib/useSyncOutcome";
 import { currentBudgetMonth } from "./MonthlyBudgetPanel";
-import { useOrgClock } from "@/lib/orgClock";
+import { formatInstant, useOrgClock } from "@/lib/orgClock";
 import { Disclosure } from "./patterns/Disclosure";
 import { LaunchStalePanel, type LaunchOutcome } from "./LaunchStalePanel";
 import { SettingsReadback } from "./publish/SettingsReadback";
@@ -205,6 +204,7 @@ function HandoffRow({ item, parent, nodes, source, busy, onReport, onCheck, onRe
   item: HandoffItem; parent?: HandoffItem; nodes: NativeEntity[]; source?: SourceAccount; busy: boolean;
   onReport: () => void; onCheck: (value: HandoffIdentity) => void; onReconsider: (reason: string) => void;
 }) {
+  const { timezone } = useOrgClock();
   const [identity, setIdentity] = useState<HandoffIdentity>({ platform: item.platform ?? parent?.platform ?? source?.platform ?? "", source_account: item.source_account ?? parent?.source_account ?? source?.account_id ?? "", native_kind: item.native_kind ?? "", native_id: item.native_id ?? "", user_verified: false });
   const [selected, setSelected] = useState("");
   const [reconsiderReason, setReconsiderReason] = useState("");
@@ -216,7 +216,7 @@ function HandoffRow({ item, parent, nodes, source, busy, onReport, onCheck, onRe
   // successful read replaces the evidence, so the sentence goes with it.
   const attemptedAt = (item.evidence_json as { attempted_at?: string }).attempted_at;
   const failedRead = !item.entity_exists && attemptedAt && item.evidence_json.message
-    ? readFailedText(attemptedAt, item.evidence_json.message) : null;
+    ? readFailedText(attemptedAt, item.evidence_json.message, timezone) : null;
   const missingIdentity = ([["platform", "平台代碼"], ["source_account", "來源帳戶"], ["native_kind", "物件層級"], ["native_id", "平台物件識別"]] as const)
     .filter(([key]) => !identity[key].trim()).map(([, label]) => label);
   const checkBlocked = item.status === "stale" ? "核准後內容變了，先處理上方的變更再核對"
@@ -231,7 +231,7 @@ function HandoffRow({ item, parent, nodes, source, busy, onReport, onCheck, onRe
         <Evidence label="設定相符" value={item.setting_matches === true ? "相符" : item.setting_matches === false ? "有差異" : "未知"} />
         <Evidence label="圖片／影片等價" value={materials[item.material_evidence] ?? "未知"} />
       </div>
-      <p className="text-xs text-muted-foreground">使用者回報：{item.reported_at ? formatSyncTime(item.reported_at) : "尚未回報"} · 最近讀回：{item.observed_at ? formatSyncTime(item.observed_at) : "尚未讀回"} · 實際投遞與生效時間：尚未確認</p>
+      <p className="text-xs text-muted-foreground">使用者回報：{item.reported_at ? formatInstant(item.reported_at, timezone, "md_hm") : "尚未回報"} · 最近讀回：{item.observed_at ? formatInstant(item.observed_at, timezone, "md_hm") : "尚未讀回"} · 實際投遞與生效時間：尚未確認</p>
       {item.evidence_json.message && !failedRead && <p className="text-sm text-muted-foreground">{item.evidence_json.message}</p>}
       {item.evidence_json.unknown_fields?.length ? <Disclosure label={`${item.evidence_json.unknown_fields.length} 項設定尚待確認，查看原因`}><p className="text-sm text-warning">目前讀取介面無法核對以下設定：{item.evidence_json.unknown_fields.map(field => fieldLabel(field)).join("、")}。可保留本次交接，補齊平台資料後重新核對；不需要重建廣告。</p></Disclosure> : null}
       {item.evidence_json.deviated_fields?.length ? <p className="text-sm text-destructive">差異：{item.evidence_json.deviated_fields.map(field => fieldLabel(field)).join("、")}</p> : null}
@@ -246,7 +246,7 @@ function HandoffRow({ item, parent, nodes, source, busy, onReport, onCheck, onRe
       </Disclosure>
       {item.planned_kind === "ad" && <label className="flex items-start gap-2 text-sm"><input type="checkbox" checked={identity.user_verified} disabled={busy} onChange={e => setIdentity(old => ({ ...old, user_verified: e.target.checked }))} />我已人工比較這則廣告的圖片／影片與核准素材（只記人工核對）</label>}
       {missingParent && <p className="text-sm text-warning">請先核對上層物件，再選擇這一項。</p>}
-      <div className="flex flex-wrap items-center gap-2"><Button variant="outline" disabled={busy || Boolean(item.reported_at)} disabledReason={item.reported_at ? `${formatSyncTime(item.reported_at)} 已回報；接著讀回核對這一項` : undefined} onClick={onReport}>{item.reported_at ? "已回報人工操作" : "我已到平台操作"}</Button><Button disabled={busy || !ready || missingParent || item.status === "stale"} disabledReason={busy ? undefined : checkBlocked} onClick={() => onCheck({ ...identity, platform: identity.platform.trim(), source_account: identity.source_account.trim(), native_kind: identity.native_kind.trim(), native_id: identity.native_id.trim() })}>{item.status === "unknown" ? "重新讀回核對" : "讀回並核對此物件"}</Button>
+      <div className="flex flex-wrap items-center gap-2"><Button variant="outline" disabled={busy || Boolean(item.reported_at)} disabledReason={item.reported_at ? `${formatInstant(item.reported_at, timezone, "md_hm")} 已回報；接著讀回核對這一項` : undefined} onClick={onReport}>{item.reported_at ? "已回報人工操作" : "我已到平台操作"}</Button><Button disabled={busy || !ready || missingParent || item.status === "stale"} disabledReason={busy ? undefined : checkBlocked} onClick={() => onCheck({ ...identity, platform: identity.platform.trim(), source_account: identity.source_account.trim(), native_kind: identity.native_kind.trim(), native_id: identity.native_id.trim() })}>{item.status === "unknown" ? "重新讀回核對" : "讀回並核對此物件"}</Button>
         {failedRead && <p data-slot="readback-error" className="text-sm text-warning">{failedRead}</p>}</div>
       {item.entity_id && item.native_kind === "ad" && item.status !== "stale" && <Disclosure label="已停用的廣告：重新檢視方案">
         <p className="mb-3 text-sm text-muted-foreground">若你已在平台停用這則廣告，可讀回確認後重審新方案。仍啟用、無法讀回或只有設定差異時，都不會開放重建。</p>

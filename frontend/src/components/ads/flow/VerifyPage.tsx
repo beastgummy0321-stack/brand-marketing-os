@@ -19,6 +19,7 @@ import { reviewRoundPath } from "../review/reviewFlow";
 import { AbLearnedCard, useAbContext } from "./AbEvidence";
 import { cleanupSteps } from "./CleanupProposal";
 import { CleanupVerifyRows, readbackMessage } from "./CleanupVerifyRows";
+import { formatDay, formatInstant, useOrgClock } from "@/lib/orgClock";
 import { NextOrHome } from "./confirmParts";
 import {
   abSteps,
@@ -46,13 +47,11 @@ function statusWord(item: ChangeItem, side: "after" | "observed"): string {
 }
 /** `evidence_json.message` only exists on some read-backs (`app/ads/change_control_verify.py`). */
 const messageOf = readbackMessage;
-/** 「讀回於」＝`evidence_json.observed_at`，瀏覽器本地時間；沒有就是「尚未讀到」
+/** 「讀回於」＝`evidence_json.observed_at` on the org clock (F50 Contract K)；沒有就是「尚未讀到」
  * （feature Decisions「Verify」）。 */
-function observedAtText(item: ChangeItem): string {
+function observedAtText(item: ChangeItem, timezone: string): string {
   const value = item.evidence_json.observed_at;
-  if (typeof value !== "string") return "尚未讀到";
-  const d = new Date(value);
-  return Number.isNaN(d.getTime()) ? "尚未讀到" : d.toLocaleString("zh-TW");
+  return (typeof value === "string" && formatInstant(value, timezone, "md_hm")) || "尚未讀到";
 }
 
 const CONFIRMED_TITLE: Record<Kind, (item: ChangeItem) => string> = {
@@ -80,12 +79,10 @@ function confirmedRailNote(item: ChangeItem, kind: Kind): string {
   return `狀態：${statusWord(item, "after")}`;
 }
 
-/** `M/D`，瀏覽器本地時區——跟 `observedAtText` 同一份「讀不到就說讀不到」慣例，`date` 是
- * `timeline.next_review_at`（一個 `YYYY-MM-DD` 或 `null`）。 */
+/** `M/D` of `timeline.next_review_at`（一個 `YYYY-MM-DD` 或 `null`，calendar day, no zone）——跟 `observedAtText`
+ * 同一份「讀不到就說讀不到」慣例。 */
 function formatReviewDate(date: string | null): string | null {
-  if (!date) return null;
-  const d = new Date(`${date}T00:00:00`);
-  return Number.isNaN(d.getTime()) ? null : `${d.getMonth() + 1}/${d.getDate()}`;
+  return formatDay(date, "md") || null;
 }
 
 /** Contract H（correction 1）／D：confirmed 狀態下 `設定相符` 之外的格子，v7 原型 `verify()`
@@ -206,6 +203,7 @@ export function VerifyPage({ brandId, campaignId, setId }: {
   brandId: string; campaignId: string; setId: string;
 }) {
   const navigate = useNavigate();
+  const { timezone } = useOrgClock();
   const homeHref = `/brands/${brandId}/ads`;
   const crumb = [{ label: "投放中心", href: homeHref }, { label: "核對結果" }];
 
@@ -431,7 +429,7 @@ export function VerifyPage({ brandId, campaignId, setId }: {
   let bar: ReactNode;
 
   if (state === "confirmed") {
-    hero = <ResultHero tone="ok" title={CONFIRMED_TITLE[kind](item)} note={`讀回於 ${observedAtText(item)}`} />;
+    hero = <ResultHero tone="ok" title={CONFIRMED_TITLE[kind](item)} note={`讀回於 ${observedAtText(item, timezone)}`} />;
     const timeline = timelineRailCells(item, kind);
     const cells: RailCell[] = [
       ...(item.evidence_json.setting_matches === true
@@ -453,7 +451,7 @@ export function VerifyPage({ brandId, campaignId, setId }: {
       </ActionBar>
     );
   } else if (state === "deviated") {
-    hero = <ResultHero tone="warn" title={DEVIATED_TITLE[kind]} note={messageOf(item) ?? `讀回於 ${observedAtText(item)}`} />;
+    hero = <ResultHero tone="warn" title={DEVIATED_TITLE[kind]} note={messageOf(item) ?? `讀回於 ${observedAtText(item, timezone)}`} />;
     // F27-I15: `DeviatedCompare`'s before/after table only makes sense for a plain settings diff
     // (copy/pause/budget) — a `new_ad` item's evidence is the handoff aggregate, no `observed`/
     // `expected` settings pair to line up (`messageOf(item)` in the hero note is the only signal

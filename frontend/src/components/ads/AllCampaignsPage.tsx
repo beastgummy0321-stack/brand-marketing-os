@@ -10,6 +10,7 @@ import { Input } from "@/components/layout/ui/input";
 import { Badge } from "@/components/layout/ui/badge";
 import { KpiStrip, campaignWord } from "./patterns";
 import { formatCurrency } from "@/lib/format";
+import { formatDay, orgDateOf, useOrgClock } from "@/lib/orgClock";
 import { listCampaigns, type CampaignCard, type LifecycleState } from "@/lib/adsApi";
 
 type LoadState =
@@ -49,12 +50,9 @@ const JUDGMENT_ICON: Record<CampaignCard["judgment"]["tone"], typeof TrendingUp>
   neutral: Clock,
 };
 
-function formatDate(iso: string): string {
-  const d = new Date(iso);
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const dd = String(d.getDate()).padStart(2, "0");
-  return `${yyyy}/${mm}/${dd}`;
+/** `YYYY/MM/DD` of a day or an instant, on the org's calendar (F50 Contract K). */
+function formatDate(iso: string, timezone: string): string {
+  return formatDay(orgDateOf(iso, timezone), "ymd");
 }
 
 /** 所有 Campaign 清單（F04-I10），照 `docs/design/ads/02-campaign-list.png`。首頁（I09）只放
@@ -67,6 +65,7 @@ export function AllCampaignsPage({ brandId }: { brandId: string }) {
   const [filter, setFilter] = useState<FilterKey>("all");
   const [search, setSearch] = useState("");
   const navigate = useNavigate();
+  const { timezone } = useOrgClock();
 
   function load() {
     setState({ status: "loading" });
@@ -227,7 +226,7 @@ export function AllCampaignsPage({ brandId }: { brandId: string }) {
                         </div>
                       </td>
                       <td className="whitespace-nowrap px-3 py-2">
-                        <p>{formatDate(c.created_at)}</p>
+                        <p>{formatDate(c.created_at, timezone)}</p>
                       </td>
                       <td className="px-3 py-2">
                         <Button

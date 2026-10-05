@@ -11,6 +11,8 @@ import type { CommerceEvidence, ReviewPeriod, ReviewRound } from "@/lib/adsRevie
 import * as triageApi from "@/lib/adsTriageApi";
 import type { QueueItem, QueuePayload, TriageItem } from "@/lib/adsTriageApi";
 import { ReviewEvidencePage } from "./ReviewEvidencePage";
+// F50 Contract K: the org clock reads the workspace org zone; dates assert Asia/Taipei output, never the runner's.
+vi.mock("@/components/layout/WorkspaceContext", () => ({ useWorkspace: () => ({ scope: "user:org", identity: { user: { id: "u", email: "a@example.com" }, org: { id: "o", name: "測試", kind: "personal", role: "owner", timezone: "Asia/Taipei", today: "2026-10-01" }, orgs: [] } }) }));
 
 vi.mock("@/lib/adsReviewApi", async (importOriginal) => ({
   ...(await importOriginal<typeof reviewApi>()),
@@ -279,7 +281,7 @@ describe("ReviewEvidencePage（F23-I02）先不決定 sheet", () => {
     await waitFor(() => expect(reviewApi.decideReview).toHaveBeenCalled());
     const call = vi.mocked(reviewApi.decideReview).mock.calls[0][3];
     expect(call.decision).toBe("deferred");
-    expect(call.revisit_at?.startsWith("2099-01-01")).toBe(true);
+    expect(call.revisit_on).toBe("2099-01-01");
   });
 
   it("無法判定不需要重看時間", async () => {

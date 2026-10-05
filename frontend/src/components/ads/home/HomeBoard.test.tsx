@@ -13,6 +13,8 @@ import { MonthMoney } from "./MonthMoney";
 import { NextDates } from "./NextDates";
 import { QualityBand } from "./QualityBand";
 import { TodayDecisions } from "./TodayDecisions";
+// F50 Contract K: the org clock reads the workspace org zone; dates assert Asia/Taipei output, never the runner's.
+vi.mock("@/components/layout/WorkspaceContext", () => ({ useWorkspace: () => ({ scope: "user:org", identity: { user: { id: "u", email: "a@example.com" }, org: { id: "o", name: "測試", kind: "personal", role: "owner", timezone: "Asia/Taipei", today: "2026-10-01" }, orgs: [] } }) }));
 
 /** An element's text without the glossary sentences its `Term`s carry. */
 function plain(el: Element): string {
@@ -458,7 +460,7 @@ describe("TodayDecisions", () => {
   it("a deferred cleanup sits in 今天處理過 with 「M/D 再看」 linking to its change set; the count ignores it", () => {
     const deferred = row("c1", "cleanup", {
       action_url: "/brands/b/ads/campaigns/cmp_daily/propose/cleanup/cmp_daily", done: true,
-      proposal: { kind: "cleanup", change_set_id: "acs_9", campaign_id: "cmp_daily", status: "deferred", verification_state: "pending", reason: "想再觀察幾天", revisit_at: "2026-11-05T12:00:00Z", multi: true },
+      proposal: { kind: "cleanup", change_set_id: "acs_9", campaign_id: "cmp_daily", status: "deferred", verification_state: "pending", reason: "想再觀察幾天", revisit_at: "2026-11-04T16:00:00+00:00", multi: true }, // 11/5 00:00 in Taipei (F50 Contract K)
       cleanup: { campaign_id: "cmp_daily", campaign_name: "日常商品推廣・轉換", can_support: 6, active_ads: 8, short: 0, daily_saving: null, scale_owner_id: null, keep: [],
         ads: [{ entity_id: "a8", name: "提問式貼文", thumbnail_url: null, spend_7d: null, grade: "wasted", cost_per_result: null, spend: 2470, result_count: 0, daily_spend: null, rejected_before: null }] },
     });

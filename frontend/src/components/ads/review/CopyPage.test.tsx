@@ -14,7 +14,6 @@ import * as triageApi from "@/lib/adsTriageApi";
 import type { QueueItem, QueuePayload, TriageItem } from "@/lib/adsTriageApi";
 import * as changeApi from "@/lib/adsChangeApi";
 import type { ChangeItem, ChangeSet } from "@/lib/adsChangeApi";
-import { formatSyncTime } from "@/lib/format";
 import { CopyPage } from "./CopyPage";
 
 vi.mock("@/components/layout/WorkspaceContext", () => ({ useWorkspace: () => ({ scope: "u:o", identity: { user: { id: "u", email: "a@example.com" }, org: { id: "o", name: "測試", kind: "personal", role: "owner", timezone: "Asia/Taipei", today: "2026-09-28" }, orgs: [] } }) }));
@@ -196,7 +195,7 @@ describe("CopyPage（F23-I04）承接與差異標記", () => {
     expect((screen.getByLabelText("新內文") as HTMLTextAreaElement).value).toBe(
       "帶著晨光出發\n好咖啡・好心情，每一段旅程都值得。\n現在官網兩入組 NT$1,580 免運，再送原廠杯刷。\n👉 前往官網看更多顏色",
     );
-    expect(screen.getByText(`讀取於 ${formatSyncTime("2026-09-19T14:40:00Z")}`)).toBeTruthy();
+    expect(screen.getByText("讀取於 09/19 22:40")).toBeTruthy();
     expect(screen.queryByText("沒有可承接的建議，這份清單不會連回這輪檢討。")).toBeNull();
   });
 

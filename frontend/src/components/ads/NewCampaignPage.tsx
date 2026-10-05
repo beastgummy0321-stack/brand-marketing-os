@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { addDays, daysBetween } from "@/lib/orgClock";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { Skeleton } from "@/components/layout/Skeleton";
@@ -58,12 +59,10 @@ async function readPreviousPeriod(brandId: string) {
   const cards = await listCampaigns(brandId);
   const latest = cards.filter((c) => c.status !== "draft").sort((a, b) => b.created_at.localeCompare(a.created_at))[0];
   if (!latest?.start_date || !latest.end_date) return null;
-  const s = Date.parse(`${latest.start_date}T00:00:00Z`);
-  const e = Date.parse(`${latest.end_date}T00:00:00Z`);
-  if (!Number.isFinite(s) || !Number.isFinite(e) || e < s) return null;
-  const day = 86_400_000;
-  const iso = (t: number) => new Date(t).toISOString().slice(0, 10);
-  return { start: iso(e + day), end: iso(e + day + (e - s)), prevStart: latest.start_date, prevEnd: latest.end_date };
+  const length = daysBetween(latest.start_date, latest.end_date);
+  if (length === null || length <= 0) return null;
+  const end = latest.end_date;
+  return { start: addDays(end, 1), end: addDays(end, length), prevStart: latest.start_date, prevEnd: latest.end_date };
 }
 
 /** F46-I08 (Contract D, `app/ads/brief.py`): the cap a create stores when none is sent — the same sell-way's previous
@@ -192,8 +191,8 @@ function CampaignWizard({ brandId, draftKey }: { brandId: string; draftKey: stri
   useEffect(() => {
     if (phase !== "understanding") return;
     setWaited(0);
-    const started = Date.now();
-    const timer = setInterval(() => setWaited(Math.round((Date.now() - started) / 1000)), 1000);
+    const started = Date.now(); // ELAPSED_OK: the 「已等 N 秒」 counter measures elapsed seconds, not a date
+    const timer = setInterval(() => setWaited(Math.round((Date.now() - started) / 1000)), 1000); // ELAPSED_OK: same counter
     return () => clearInterval(timer);
   }, [phase]);
 

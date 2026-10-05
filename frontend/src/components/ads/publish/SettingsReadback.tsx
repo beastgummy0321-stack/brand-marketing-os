@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Button } from "@/components/layout/ui/button";
-import { formatSyncTime } from "@/lib/format";
+import { formatInstant, useOrgClock } from "@/lib/orgClock";
 import type { HandoffWorkspace } from "@/lib/adsHandoffApi";
 import { confirmLaunchSetting, type SettingsReadback as Readback, type SettingsReadbackKey } from "@/lib/adsLaunchSettingsApi";
 import { ReadbackRow, ReadbackSummary, ResultHero } from "../patterns";
@@ -38,13 +38,14 @@ export function SettingsReadback({ brandId, campaignId, readback, platform = "�
   /** The platform stage of the host page; without it there is no 回平台改. */
   onBackToPlatform?: () => void;
 }) {
+  const { timezone } = useOrgClock();
   const [busy, setBusy] = useState<SettingsReadbackKey | null>(null);
   const [error, setError] = useState("");
   const { fields } = readback;
   const differ = fields.filter((f) => f.state === "differ").length;
   const unread = fields.filter((f) => f.state === "unreadable").length;
   const matched = fields.length - differ - unread;
-  const readAt = readback.read_at ? `讀回於 ${formatSyncTime(readback.read_at)}` : "還沒讀回時間";
+  const readAt = readback.read_at ? `讀回於 ${formatInstant(readback.read_at, timezone, "md_hm")}` : "還沒讀回時間";
 
   async function confirm(key: SettingsReadbackKey) {
     if (busy) return;

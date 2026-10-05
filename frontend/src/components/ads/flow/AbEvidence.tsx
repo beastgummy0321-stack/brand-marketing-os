@@ -4,6 +4,7 @@ import { getTriage, type CampaignObjectiveFamily } from "@/lib/adsTriageApi";
 import { useApiRead } from "@/lib/useApiRead";
 import { Chip, KindMark, LearnLine, MoneyTag, Term, Thumb, useAdsRules } from "../patterns";
 import { perSaleAmount } from "../patterns/csv";
+import { daysBetween } from "@/lib/orgClock";
 
 /** F29-I14: the A/B "pause the loser" decision (Contract F, `source: "ab"` change sets; prototype v10 `confirmBody()`
  * for kind `ab`, `stepChk()`'s learning line, hashes `d/ab/ok|plat|chk`). The set itself freezes what is approved
@@ -64,8 +65,7 @@ export function abApproveLabel(ab: AbChangeBlock, pair: AbPair | null): string {
 
 function days(window: AbChangeBlock["window"]): number | null {
   if (!window) return null;
-  const ms = Date.parse(`${window.end}T00:00:00Z`) - Date.parse(`${window.start}T00:00:00Z`);
-  return Number.isFinite(ms) ? Math.round(ms / 86_400_000) + 1 : null;
+  return daysBetween(window.start, window.end);
 }
 
 function Letter({ k }: { k: "A" | "B" }) {

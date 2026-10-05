@@ -4,7 +4,7 @@ import { Skeleton } from "@/components/layout/Skeleton";
 import { Button } from "@/components/layout/ui/button";
 import type { CampaignDetail, CampaignLabels } from "@/lib/adsApi";
 import { getQueue, getTriage, type CampaignDataStatus, type CloseoutQueueRow, type QueueItem, type QueuePayload } from "@/lib/adsTriageApi";
-import { formatSyncTime } from "@/lib/format";
+import { dayList, formatInstant, useOrgClock } from "@/lib/orgClock";
 import { getCampaignStructure, type CampaignStructure, type CampaignWorkspace, type WorkspaceTotals } from "@/lib/adsWorkspaceApi";
 import { useApiRead } from "@/lib/useApiRead";
 import {
@@ -60,7 +60,6 @@ export function rulerAds(structure: CampaignStructure): RulerAd[] {
 const yuan = (v: number | null) => (formatAmount(v) === null ? "未知" : `${formatAmount(v)} 元`);
 const perSale = (v: number | null) => (perSaleAmount(v) === null ? "未知" : `${perSaleAmount(v)} 元`);
 const md = (iso: string) => `${iso.slice(5, 7)}/${iso.slice(8, 10)}`;
-const hm = (iso: string) => { const d = new Date(iso); return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`; };
 
 type Go = (target: StepTarget) => void;
 
@@ -154,12 +153,7 @@ function DraftOverview({ brandId, campaign: c, workspace: ws, draft, canPublish,
 export function dayRange(days: string[], totals: WorkspaceTotals | null): string[] {
   const all = [...days, ...(totals ? [totals.start, totals.end] : [])].sort();
   if (!all.length) return [];
-  const out: string[] = [];
-  const end = Date.parse(`${all.at(-1)}T00:00:00Z`);
-  for (let t = Date.parse(`${all[0]}T00:00:00Z`); t <= end && out.length < 62; t += 86_400_000) {
-    out.push(new Date(t).toISOString().slice(0, 10));
-  }
-  return out;
+  return dayList(all[0], all[all.length - 1], 62);
 }
 
 const WHICH = ["這天", "這兩天", "這三天"];
@@ -289,6 +283,7 @@ export function openDecisions(queue: QueuePayload, campaignId: string): OpenDeci
 function LiveOverview({ brandId, campaign: c, workspace: ws, fold }: {
   brandId: string; campaign: CampaignDetail; workspace: CampaignWorkspace; fold: ReactNode;
 }) {
+  const { timezone } = useOrgClock();
   const structure = useApiRead((signal) => getCampaignStructure(brandId, c.id, signal), [brandId, c.id]);
   const queue = useApiRead((signal) => getQueue(brandId, signal), [brandId]);
   const open = queue.status === "ready" ? openDecisions(queue.data, c.id) : [];
@@ -324,8 +319,8 @@ function LiveOverview({ brandId, campaign: c, workspace: ws, fold }: {
             <div className="min-w-0 flex-1">
               <b className="text-[17px]">{waiting ? "已上架，等平台開始投放" : "這個活動沒有要決定的事"}</b>
               <div className="text-sm text-muted-foreground">{waiting
-                ? `平台開始花錢後，下次同步${ws.next_sync_at ? `（${hm(ws.next_sync_at)}）` : ""}會出現第一筆數字。`
-                : ws.next_sync_at ? `下次同步 ${hm(ws.next_sync_at)} 後重新判讀` : "下次同步後重新判讀"}</div>
+                ? `平台開始花錢後，下次同步${ws.next_sync_at ? `（${formatInstant(ws.next_sync_at, timezone, "hm")}）` : ""}會出現第一筆數字。`
+                : ws.next_sync_at ? `下次同步 ${formatInstant(ws.next_sync_at, timezone, "hm")} 後重新判讀` : "下次同步後重新判讀"}</div>
             </div>
           </section>
         )}
@@ -365,8 +360,9 @@ function markOf(item: QueueItem, rules: ReturnType<typeof useAdsRules>): { kind:
  * runs at the last read (`closeout.running`). The step itself is the bar's 結案這一期 →. */
 function CloseoutDecision({ row, campaign: c }: { row: CloseoutQueueRow; campaign: CampaignDetail }) {
   const { end_date: end, running } = row.closeout;
+  const { timezone } = useOrgClock();
   const still = running.read_at === null ? "平台上的廣告還沒讀過"
-    : running.count > 0 ? `平台上還在投 ${running.count} 則（${formatSyncTime(running.read_at)} 讀取）`
+    : running.count > 0 ? `平台上還在投 ${running.count} 則（${formatInstant(running.read_at, timezone, "md_hm")} 讀取）`
     : "平台上已沒有在投的廣告";
   return (
     <div className="grid grid-cols-[48px_minmax(0,1fr)_minmax(180px,240px)] items-center gap-4" data-testid="closeout-decision">

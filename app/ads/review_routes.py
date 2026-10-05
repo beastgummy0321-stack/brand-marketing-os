@@ -33,7 +33,6 @@ class DecisionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     decision: str
     reason: str = Field(min_length=1, max_length=2000)
-    revisit_at: str | None = None
     revisit_on: str | None = None
 
 
@@ -108,6 +107,6 @@ def decide(
             review_id,
             body.decision,
             body.reason,
-            revisit_instant(request, body.revisit_on, body.revisit_at),
+            revisit_instant(request, body.revisit_on),
         )
     }

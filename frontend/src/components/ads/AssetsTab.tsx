@@ -10,7 +10,7 @@ import { RefreshCw } from "lucide-react";
 import { Button } from "@/components/layout/ui/button";
 import { Badge } from "@/components/layout/ui/badge";
 import { EmptyState } from "@/components/layout/EmptyState";
-import { formatSyncTime } from "@/lib/format";
+import { formatInstant, useOrgClock } from "@/lib/orgClock";
 import {
   Dialog,
   DialogContent,
@@ -55,6 +55,7 @@ function LegacyAssetsTab({
   onCampaignChange: (campaign: CampaignDetail) => void;
   onChangeTab: (target: StepTarget) => void;
 }) {
+  const { timezone } = useOrgClock();
   const imported = c.origin === "imported";
   const [state, setState] = useState<
     | { status: "loading" }
@@ -169,7 +170,7 @@ function LegacyAssetsTab({
                           </p>
                         )}
                       </td>
-                      <td className="px-3 py-2 text-muted-foreground">{native ? (native.last_success_at ? formatSyncTime(native.last_success_at) : "尚未成功讀回") : (row?.at ? formatSyncTime(row.at) : "－")}</td>
+                      <td className="px-3 py-2 text-muted-foreground">{native ? (native.last_success_at ? formatInstant(native.last_success_at, timezone, "md_hm") : "尚未成功讀回") : (row?.at ? formatInstant(row.at, timezone, "md_hm") : "－")}</td>
                       <td className="px-3 py-2 text-right">
                         <div className="flex items-center justify-end gap-2">
                           {native && <details className="max-w-lg text-left"><summary className="cursor-pointer text-primary">查看素材</summary><NativeCreativeView creative={native.creative} /></details>}

@@ -12,6 +12,8 @@ import type { AdRow, AssetReadinessRow, CampaignDetail, DeliveryGroupRow } from 
 import { getAssets, getCampaign, setAssetReady } from "@/lib/adsApi";
 import { getSlots } from "@/lib/adsSlotsApi";
 import { AssetsTab } from "./AssetsTab";
+// F50 Contract K: the org clock reads the workspace org zone; dates assert Asia/Taipei output, never the runner's.
+vi.mock("@/components/layout/WorkspaceContext", () => ({ useWorkspace: () => ({ scope: "user:org", identity: { user: { id: "u", email: "a@example.com" }, org: { id: "o", name: "測試", kind: "personal", role: "owner", timezone: "Asia/Taipei", today: "2026-10-01" }, orgs: [] } }) }));
 
 /** The real request panel renders behind a marker line (the deep-link cases find the marker; the F35 case reads its cards). */
 vi.mock("./MaterialTasksPanel", async () => {
