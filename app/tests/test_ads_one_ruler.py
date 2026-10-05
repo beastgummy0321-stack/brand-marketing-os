@@ -23,10 +23,10 @@ F48-I07 (Contract M): `round(`／`math.floor(`／`math.ceil(` appear in `app/ads
 (the one money calculator) unless the `(file, function)` is listed with why it is not a money
 figure's rounding; any other call fails, naming file, function and line.
 
-F49-I01 (Contract L, one lifecycle): a platform status word (ACTIVE, PAUSED, …) written in code
-outside `app/ads/adapters/` (allowlist: the change-set pause payload, W19); a `native_status`
-comparison outside `lifecycle.py`／`adapters/`; and campaign-selection SQL on `ads_campaign`
-(`status != 'closed'`, `status IN (…)`) outside `lifecycle.py` each fail, naming file and line.
+F49-I01 (Contract L, one lifecycle): a `native_status` comparison outside `lifecycle.py`／
+`adapters/` and campaign-selection SQL on `ads_campaign` (`status != 'closed'`, `status IN (…)`)
+outside `lifecycle.py` each fail, naming file and line. (Its platform status word rule moved to
+`test_ads_no_platform_literal.py`, the one gate for backend platform literals -- F51 Contract P.)
 
 F49-I02 (Contract O, one sync outcome): an SQL write of `ads_external_sync_job` (its
 `status`／`error`) outside `external_sync.py`, and a read of a sync task's `errors`／`error_code`
@@ -464,19 +464,8 @@ class OneMoneyCalculatorTest(unittest.TestCase):
 # -- F49 Contract L: one lifecycle ---------------------------------------------------------------
 
 # A platform's own status vocabulary belongs to its adapter (`adapters/meta_read.py`
-# `STATUS_TABLE`); everything else reads `lifecycle.delivery`.
-NATIVE_STATUS_WORDS = frozenset({
-    "ACTIVE", "PAUSED", "ARCHIVED", "DELETED", "ADSET_PAUSED", "CAMPAIGN_PAUSED", "DISAPPROVED",
-    "WITH_ISSUES", "IN_PROCESS", "PENDING_REVIEW", "PREAPPROVED", "PENDING_BILLING_INFO",
-})
-_SQL_STATUS_WORD = re.compile(r"'(" + "|".join(sorted(NATIVE_STATUS_WORDS)) + r")'")
-# (file relative to app/ads, text on the hit line, why) -- never widen to hide a status rule.
-NATIVE_WORD_ALLOWED = [
-    ("ab_pairs.py", '{"status": "PAUSED"}',
-     "W19 (feature D): the change-set pause payload is written in the platform's own word"),
-    ("change_control_data.py", '{"status": "PAUSED"}',
-     "W19 (feature D): the change-set pause payload, validated as written"),
-]
+# `STATUS_TABLE`); its words written in shared code are counted by the platform-literal gate
+# (`test_ads_no_platform_literal.py`, F51 Contract P).
 # The only owners of a `native_status` comparison and of the campaign-selection SQL.
 LIFECYCLE_FILE = "lifecycle.py"
 _NATIVE_COMPARE_SQL = re.compile(r"\bnative_status\s*(=|<>|!=|\bIN\b|\bNOT\s+IN\b)", re.I)
@@ -504,14 +493,6 @@ def _code_strings(tree):
     for node in ast.walk(tree):
         if isinstance(node, ast.Constant) and isinstance(node.value, str) and node not in skip:
             yield node.lineno, node.value
-
-
-def _native_words(tree):
-    """Yield the line of every native-status word written in code: a string that is the word, or
-    a SQL string quoting it (`native_status='ACTIVE'`)."""
-    for line, value in _code_strings(tree):
-        if value in NATIVE_STATUS_WORDS or _SQL_STATUS_WORD.search(value):
-            yield line
 
 
 def _is_native_key(node) -> bool:
@@ -565,9 +546,9 @@ def _campaign_selections(tree):
 
 
 class OneLifecycleTest(unittest.TestCase):
-    """F49 Contract L: the platform status vocabulary lives in the adapters, `native_status` is
-    compared only in `lifecycle.py`／`adapters/`, and "which campaigns" SQL only in
-    `lifecycle.py`."""
+    """F49 Contract L: `native_status` is compared only in `lifecycle.py`／`adapters/`, and
+    "which campaigns" SQL only in `lifecycle.py` (the status vocabulary itself is counted by
+    `test_ads_no_platform_literal.py`)."""
 
     def _scan(self, scan, *, skip):
         hits = []
@@ -584,22 +565,6 @@ class OneLifecycleTest(unittest.TestCase):
     @staticmethod
     def _in_adapters(relative):
         return relative.startswith("adapters/")
-
-    def test_no_native_status_word_outside_the_adapters(self):
-        hits = self._scan(_native_words, skip=self._in_adapters)
-        offenders, seen = [], set()
-        for relative, line, text in hits:
-            allowed = [(f, t) for f, t, _why in NATIVE_WORD_ALLOWED if f == relative and t in text]
-            if allowed:
-                seen.update(allowed)
-                continue
-            offenders.append(f"app/ads/{relative}:{line}: {text.strip()}")
-        self.assertEqual(
-            offenders, [],
-            "a platform status word outside adapters/ -- read lifecycle.delivery (F49 L)",
-        )
-        # An allow entry whose line is gone must go too (the list only ever shrinks).
-        self.assertEqual({(f, t) for f, t, _why in NATIVE_WORD_ALLOWED}, seen)
 
     def test_native_status_is_compared_only_in_the_lifecycle(self):
         hits = self._scan(
@@ -643,7 +608,6 @@ class OneLifecycleTest(unittest.TestCase):
             "         \"ON c.id=s.campaign_id WHERE s.status IN ('draft','deferred')\")\n"
             "    return {'status': 'PAUSED'}\n"
         )
-        self.assertEqual(sorted(set(_native_words(tree))), [3, 13, 18])
         self.assertEqual(sorted(set(_native_comparisons(tree))), [3, 5, 7, 13])
         self.assertEqual(sorted(_campaign_selections(tree)), [14, 15])
 
