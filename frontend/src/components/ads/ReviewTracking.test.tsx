@@ -4,6 +4,8 @@ import { MemoryRouter } from "react-router-dom";
 import { beforeEach, expect, it, vi } from "vitest";
 import * as api from "@/lib/adsRuntimeApi";
 import { ReviewTracking } from "./ReviewTracking";
+// F50 Contract K: the org clock reads the workspace org zone; dates assert Asia/Taipei output, never the runner's.
+vi.mock("@/components/layout/WorkspaceContext", () => ({ useWorkspace: () => ({ scope: "user:org", identity: { user: { id: "u", email: "a@example.com" }, org: { id: "o", name: "測試", kind: "personal", role: "owner", timezone: "Asia/Taipei", today: "2026-10-01" }, orgs: [] } }) }));
 
 vi.mock("@/lib/adsRuntimeApi", () => ({ getRuntime: vi.fn(), saveMonitor: vi.fn() }));
 vi.mock("@/lib/auth", () => ({ getOrgId: () => "org" }));

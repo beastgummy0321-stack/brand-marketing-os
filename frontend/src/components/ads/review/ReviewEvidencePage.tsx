@@ -13,6 +13,7 @@ import {
 } from "@/lib/adsReviewApi";
 import { getQueue, type GradeMove } from "@/lib/adsTriageApi";
 import { useApiRead } from "@/lib/useApiRead";
+import { useOrgClock } from "@/lib/orgClock";
 import { proposalAction } from "../home/status";
 import {
   ActionBar, Chip, DecisionSheet, Disclosure, EvidenceRow, FlowHeader, GradeChip, Ladder, MoneyTag, ReadFailed, Segmented,
@@ -69,6 +70,7 @@ export function ReviewEvidencePage({ brandId, campaignId, entityId, reviewId }: 
 }) {
   const navigate = useNavigate();
   const rules = useAdsRules();
+  const clock = useOrgClock();
   const homeHref = `/brands/${brandId}/ads`;
 
   const [review, setReview] = useState<ReviewRound | null>(null);
@@ -187,19 +189,10 @@ export function ReviewEvidencePage({ brandId, campaignId, entityId, reviewId }: 
   }
   function closeSheet() { setSheetKind(null); }
 
-  function revisitAt(): Date | null {
-    if (sheetKind !== "deferred") return null;
-    if (quickPick === "custom") {
-      if (!customDate) return null;
-      const d = new Date(customDate);
-      return Number.isNaN(d.getTime()) ? null : d;
-    }
-    const d = new Date();
-    d.setDate(d.getDate() + (quickPick === "3" ? 3 : 7));
-    return d;
-  }
-  const revisit = revisitAt();
-  const revisitValid = sheetKind !== "deferred" || (revisit !== null && revisit.getTime() > Date.now());
+  // F50 Contract K: a deferral is an org calendar date — quick picks count from the org's today, a custom
+  // `<input type="date">` string is valid when after it (string compare); the server stores that day's 00:00.
+  const revisit = quickPick === "custom" ? customDate : clock.shift(quickPick === "3" ? 3 : 7);
+  const revisitValid = sheetKind !== "deferred" || revisit > clock.today;
 
   async function handleSaveDecision() {
     if (!review || !sheetKind || busy) return;
@@ -212,7 +205,7 @@ export function ReviewEvidencePage({ brandId, campaignId, entityId, reviewId }: 
       const updated = await decideReview(brandId, campaignId, review.id, {
         decision: sheetKind,
         reason: trimmed,
-        ...(sheetKind === "deferred" ? { revisit_at: revisit!.toISOString() } : {}),
+        ...(sheetKind === "deferred" ? { revisit_on: revisit } : {}),
       });
       setReview(updated);
       closeSheet();
@@ -317,7 +310,7 @@ export function ReviewEvidencePage({ brandId, campaignId, entityId, reviewId }: 
   const matchedProposal = triageItem?.proposal ?? null;
   const continueAction = completed
     ? (matchedProposal && matchedProposal.kind === "review" && matchedProposal.review_id === review.id
-      ? proposalAction(brandId, campaignId, review.entity_id, matchedProposal, "review")
+      ? proposalAction(brandId, campaignId, review.entity_id, matchedProposal, "review", clock.timezone)
       : { label: "選擇處理方向", href: reviewRoundPath(brandId, campaignId, review.id, "prepare"), done: false })
     : null;
 
@@ -334,7 +327,7 @@ export function ReviewEvidencePage({ brandId, campaignId, entityId, reviewId }: 
   const isSales = isSalesResultKind(triageItem?.triage.target.result_kind ?? null);
 
   const closedChip = review.decision === "deferred"
-    ? `${review.revisit_at ? formatRevisitLabel(review.revisit_at) : "已暫緩"}・${review.reason ?? ""}`
+    ? `${review.revisit_at ? formatRevisitLabel(review.revisit_at, clock.timezone) : "已暫緩"}・${review.reason ?? ""}`
     : review.decision === "unjudgeable"
       ? `無法判定・${review.reason ?? ""}`
       : null;
@@ -507,7 +500,7 @@ export function ReviewEvidencePage({ brandId, campaignId, entityId, reviewId }: 
               ) : (
                 history.map((h, i) => (
                   <TodoRow key={h.change_set_id} no={i + 1} done>
-                    <b className="font-medium">{formatEntryDate(h.approved_at)} {HISTORY_KIND_LABEL[h.kind]}</b>
+                    <b className="font-medium">{formatEntryDate(h.approved_at, clock.timezone)} {HISTORY_KIND_LABEL[h.kind]}</b>
                     <div className="mt-0.5 text-xs text-muted-foreground">
                       之後・每次{resultLabel}成本 {formatCostLabel(h.cost_before)} → {formatCostLabel(h.cost_after)}
                     </div>
@@ -597,7 +590,7 @@ export function ReviewEvidencePage({ brandId, campaignId, entityId, reviewId }: 
                   onChange={setQuickPick}
                 />
                 {quickPick === "custom" && (
-                  <Input type="date" aria-label="重看日期" value={customDate} onChange={(e) => setCustomDate(e.target.value)} disabled={busy} />
+                  <Input type="date" aria-label="重看日期" min={clock.shift(1)} value={customDate} onChange={(e) => setCustomDate(e.target.value)} disabled={busy} />
                 )}
               </div>
             </label>

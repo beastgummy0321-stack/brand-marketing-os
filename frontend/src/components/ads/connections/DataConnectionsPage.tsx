@@ -5,7 +5,7 @@ import { PageHeader } from "@/components/layout/PageHeader";
 import { Skeleton } from "@/components/layout/Skeleton";
 import { Button } from "@/components/layout/ui/button";
 import { getOrgId } from "@/lib/auth";
-import { formatSyncTime } from "@/lib/format";
+import { formatInstant, useOrgClock } from "@/lib/orgClock";
 import { getConnections, type AdsConnections, type ConnectionReread, type ConnectionSource } from "@/lib/adsConnectionsApi";
 import { refreshExisting } from "@/lib/adsExternalApi";
 import { useSyncOutcome } from "@/lib/useSyncOutcome";
@@ -135,9 +135,9 @@ export function sourceChip(source: ConnectionSource): { tone: ChipTone; label: s
 }
 
 /** The server note as is; an account that reads fine also says when it was last read (prototype 「最近讀取 …」). */
-export function sourceNote(source: ConnectionSource): string {
+export function sourceNote(source: ConnectionSource, timezone: string): string {
   if (source.kind === "ad_account" && source.state === "ok" && source.last_success_at) {
-    return `${source.note}・最近讀取 ${formatSyncTime(source.last_success_at)}`;
+    return `${source.note}・最近讀取 ${formatInstant(source.last_success_at, timezone, "md_hm")}`;
   }
   return source.note;
 }
@@ -161,6 +161,7 @@ function Sources({ brandId, sources, reads, onStarted, onReread }: {
   brandId: string; sources: ConnectionSource[]; reads: Record<string, RowRead>;
   onStarted: (key: string, jobId: string) => void; onReread: () => void;
 }) {
+  const { timezone } = useOrgClock();
   return (
     <section aria-label="資料來源" className="surface px-[22px] py-5">
       <SourceList>
@@ -183,7 +184,7 @@ function Sources({ brandId, sources, reads, onStarted, onReread }: {
             : reread ?? link ?? undefined;
           return (
             <SourceRow key={source.key} icon={sourceIcon(source)} name={source.name} tone={chip.tone} status={chip.label}
-              note={sourceNote(source)} action={action} dimmed={unsupported} />
+              note={sourceNote(source, timezone)} action={action} dimmed={unsupported} />
           );
         })}
       </SourceList>

@@ -9,9 +9,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AdsConnections, CalendarDayState, ConnectionSource } from "@/lib/adsConnectionsApi";
 import { getConnections } from "@/lib/adsConnectionsApi";
-import { formatSyncTime } from "@/lib/format";
 import { refreshExisting, syncJob } from "@/lib/adsExternalApi";
 import { DataConnectionsPage, sourceChip, sourceNote } from "./DataConnectionsPage";
+// F50 Contract K: the org clock reads the workspace org zone; dates assert Asia/Taipei output, never the runner's.
+vi.mock("@/components/layout/WorkspaceContext", () => ({ useWorkspace: () => ({ scope: "user:org", identity: { user: { id: "u", email: "a@example.com" }, org: { id: "o", name: "測試", kind: "personal", role: "owner", timezone: "Asia/Taipei", today: "2026-10-01" }, orgs: [] } }) }));
 
 vi.mock("@/lib/adsConnectionsApi", async () => {
   const actual = await vi.importActual<typeof import("@/lib/adsConnectionsApi")>("@/lib/adsConnectionsApi");
@@ -102,10 +103,11 @@ describe("sourceChip / sourceNote (state → chip words; the server note shown a
   });
 
   it("an ok account adds its last read time; every other row prints the server note unchanged", () => {
-    expect(sourceNote(ok)).toBe(`每天的資料都有讀到・最近讀取 ${formatSyncTime("2026-09-23T00:40:00Z")}`);
-    expect(sourceNote(expired)).toBe("授權已失效，重新授權後才能讀資料；09/17、09/18 讀不到・中秋限定活動先不判斷");
-    expect(sourceNote({ ...ok, last_success_at: null })).toBe("每天的資料都有讀到");
-    expect(sourceNote(orders)).toBe("最新到 09/12，缺 09/13 之後");
+    // Org clock (Asia/Taipei), not the runner's zone (F50 Contract K).
+    expect(sourceNote(ok, "Asia/Taipei")).toBe("每天的資料都有讀到・最近讀取 09/23 08:40");
+    expect(sourceNote(expired, "Asia/Taipei")).toBe("授權已失效，重新授權後才能讀資料；09/17、09/18 讀不到・中秋限定活動先不判斷");
+    expect(sourceNote({ ...ok, last_success_at: null }, "Asia/Taipei")).toBe("每天的資料都有讀到");
+    expect(sourceNote(orders, "Asia/Taipei")).toBe("最新到 09/12，缺 09/13 之後");
   });
 });
 

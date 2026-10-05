@@ -2,7 +2,7 @@ import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { PageTabs } from "@/components/layout/PageTabs";
 import { Skeleton } from "@/components/layout/Skeleton";
 import type { CampaignDetail } from "@/lib/adsApi";
-import { formatSyncTime } from "@/lib/format";
+import { formatInstant, useOrgClock } from "@/lib/orgClock";
 import type { CampaignWorkspace } from "@/lib/adsWorkspaceApi";
 import type { ApiRead } from "@/lib/useApiRead";
 import { Chip, ReadFailed, StageRail, Term, formatAmount, type StageStation } from "../patterns";
@@ -71,11 +71,11 @@ export function isDraftCampaign(c: CampaignDetail, ws: CampaignWorkspace | null)
 
 /** 「在投 N 則」 from the served `running`, with 「（MM/DD HH:MM 讀取）」 when the count rests on a stale read and the
  * unknown ads apart; null before the workspace answers. */
-export function runningText(ws: CampaignWorkspace | null): string | null {
+export function runningText(ws: CampaignWorkspace | null, timezone: string): string | null {
   if (!ws) return null;
   const r = ws.running;
   if (!r) return `在投 ${ws.active_ads} 則`;
-  const when = r.stale ? (r.read_at ? `（${formatSyncTime(r.read_at)} 讀取）` : "（還沒讀到平台）") : "";
+  const when = r.stale ? (r.read_at ? `（${formatInstant(r.read_at, timezone, "md_hm")} 讀取）` : "（還沒讀到平台）") : "";
   return `在投 ${r.count} 則${when}${r.unknown > 0 ? `・${r.unknown} 則狀態不明` : ""}`;
 }
 
@@ -88,13 +88,14 @@ export function WorkspaceHead({ brandId, campaign: c, workspace, tab, onTab, sho
   /** The publish page replaces the tabs (and their bodies) while it is open. */
   showTabs?: boolean;
 }) {
+  const { timezone } = useOrgClock();
   const ws = workspace.status === "ready" ? workspace.data : null;
   const tabLabel = WORKSPACE_TABS.find((t) => t.value === tab)?.label ?? "總覽";
   const home = `/brands/${brandId}/ads`;
   const draft = c ? isDraftCampaign(c, ws) : false;
   const life = c?.lifecycle ?? ws?.lifecycle ?? null;
   const closed = life?.state === "closed";
-  const running = runningText(ws);
+  const running = runningText(ws, timezone);
   const stillOpen = ws ? (ws.running?.count ?? ws.active_ads) : 0;
   const pending = ws?.pending_count ?? null;
   const items = WORKSPACE_TABS.map((t) => (t.value === "overview" && pending !== null && pending > 0 ? { ...t, count: pending } : t));

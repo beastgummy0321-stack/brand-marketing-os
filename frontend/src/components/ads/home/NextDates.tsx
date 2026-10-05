@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { Button } from "@/components/layout/ui/button";
 import type { HomeOverview, HomeTimelineItem } from "@/lib/adsHomeApi";
+import { useOrgClock } from "@/lib/orgClock";
 import { NextUpStrip, type NextUpItem } from "../patterns";
 
 /** Board D 「接下來」 strip (prototype v9 `homeNext()`): today and what today needs, this month's review, then
@@ -43,9 +44,9 @@ function itemBody(item: HomeTimelineItem, monthNo: number): ReactNode {
 }
 
 export function NextDates({ home, note, onJump }: { home: HomeOverview | null; note: TodayNote; onJump: () => void }) {
-  const today = new Date();
-  const todayIso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
-  const timeline = home?.timeline ?? [{ date: todayIso, kind: "today" as const, campaign_id: null, name: null, ready: null }];
+  // Before the overview answers, 「今天」 is the org's today (F50 Contract K), never the laptop's.
+  const { today } = useOrgClock();
+  const timeline = home?.timeline ?? [{ date: today, kind: "today" as const, campaign_id: null, name: null, ready: null }];
   const items: NextUpItem[] = timeline.slice(0, 4).map((item, i) => {
     const [, m] = item.date.split("-");
     const monthNo = Number(m);

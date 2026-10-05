@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import { Link } from "react-router-dom";
 import { Skeleton } from "@/components/layout/Skeleton";
 import { Button } from "@/components/layout/ui/button";
-import { formatSyncTime } from "@/lib/format";
+import { formatInstant, useOrgClock } from "@/lib/orgClock";
 import { getCampaignTimeline, type TimelineRow, type TimelineState } from "@/lib/adsWorkspaceApi";
 import { useApiRead } from "@/lib/useApiRead";
 import { ChangeTimeline, ReadFailed, type ChangeRow } from "../patterns";
@@ -10,8 +10,8 @@ import { changeStepPath, type FlowStepName } from "../flow/changeFlow";
 
 /** v10 (F30-I09) the workspace changes tab (prototype `tabChanges()`): one card 「變更紀錄」 with every change set of the
  * campaign from `GET …/timeline` (Contract E), newest first, on the kit `ChangeTimeline` — the state chip, 「原因：…」 on a
- * rejected set, x／N 已核對 with `ProgressSegments`. Times print browser-local `MM/DD HH:mm` (`formatSyncTime`, the same
- * clock as 最近同步). A set with work left opens its existing step page (`changes/:id/confirm|handoff|verify`); a rejected
+ * rejected set, x／N 已核對 with `ProgressSegments`. Times print `MM/DD HH:mm` on the org clock (`formatInstant`, F50
+ * Contract K — the same clock as 最近同步). A set with work left opens its existing step page (`changes/:id/confirm|handoff|verify`); a rejected
  * set has nothing to open. Sets those pages do not render (launches, multi-item sets — the caller decides through
  * `inFold`) open in the caller's advanced fold instead. A failed read is `ReadFailed` with 重試, never an empty list. */
 
@@ -31,6 +31,7 @@ export function ChangesTab({ brandId, campaignId, refreshKey = 0, inFold, onOpen
   inFold?: (row: TimelineRow) => boolean;
   onOpenInFold?: (row: TimelineRow) => void;
 }) {
+  const { timezone } = useOrgClock();
   const read = useApiRead((signal) => getCampaignTimeline(brandId, campaignId, signal), [brandId, campaignId]);
   const { reload } = read;
   useEffect(() => { if (refreshKey) reload(); }, [refreshKey, reload]);
@@ -59,7 +60,7 @@ export function ChangesTab({ brandId, campaignId, refreshKey = 0, inFold, onOpen
   } else {
     const rows: ChangeRow[] = read.data.rows.map((row) => ({
       key: row.change_set_id,
-      at: formatSyncTime(row.at),
+      at: formatInstant(row.at, timezone, "md_hm"),
       title: row.title,
       state: row.state,
       reason: row.state === "rejected" ? row.reason : null,

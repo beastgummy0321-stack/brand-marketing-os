@@ -7,6 +7,7 @@ import { getHomeOverview, type HomeOverview } from "@/lib/adsHomeApi";
 import { refreshQueue } from "@/lib/adsTriageApi";
 import { getRecovery, type AdsRecovery } from "@/lib/adsStatusApi";
 import { getOrgId } from "@/lib/auth";
+import { formatInstant, useOrgClock } from "@/lib/orgClock";
 import { ExistingCampaignDialog } from "./ExistingCampaignDialog";
 import { BUDGET_EDIT_PARAM } from "./MonthlyBudgetPanel";
 import { Chip, RecoverSteps } from "./patterns";
@@ -31,14 +32,10 @@ export function budgetReturn(brandId: string, value: string | null): string | nu
   return value.startsWith(prefix) && !value.includes("//") ? value : null;
 }
 
-/** 瀏覽器本地時區的 HH:MM——`gap.start`／`gap.end` 一律是帶時區的 ISO instant。 */
-function formatHM(iso: string): string {
-  const d = new Date(iso);
-  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-}
-
 /** F27-I17 recovery banner on a > 2 h worker gap: only while `recovering`; steps come from the backend as-is. */
 function RecoveryBanner({ recovery }: { recovery: AdsRecovery }) {
+  // `gap.start`／`gap.end` are ISO instants: HH:MM on the org clock (F50 Contract K).
+  const { timezone } = useOrgClock();
   if (!recovery.recovering || !recovery.gap) return null;
   const hours = Math.floor(recovery.gap.minutes / 60);
   const minutes = recovery.gap.minutes % 60;
@@ -48,7 +45,7 @@ function RecoveryBanner({ recovery }: { recovery: AdsRecovery }) {
         <div>
           <p className="text-base font-semibold">系統暫停了 {hours} 小時 {minutes} 分，正在補資料</p>
           <p className="mt-0.5 text-[13px] text-muted-foreground">
-            {formatHM(recovery.gap.start)} – {formatHM(recovery.gap.end)} 沒有檢查・下面的數字補完後會更新
+            {formatInstant(recovery.gap.start, timezone, "hm")} – {formatInstant(recovery.gap.end, timezone, "hm")} 沒有檢查・下面的數字補完後會更新
           </p>
         </div>
         <Chip tone="warn">這段時間平台可能照常花費</Chip>
@@ -65,6 +62,7 @@ function RecoveryBanner({ recovery }: { recovery: AdsRecovery }) {
  * read); one failing never blanks the other (design-system §1.7 item 9), and a failed queue never reads as 「沒有要
  * 決定的事」. A home reload keeps the last good overview on screen until the new one lands. */
 function AdsHome({ brandId }: { brandId: string }) {
+  const clock = useOrgClock();
   const homeRead = useApiRead((signal) => getHomeOverview(brandId, undefined, signal), [brandId]);
   const homeState: HomeState = homeRead.data !== null ? { status: "ready", home: homeRead.data }
     : homeRead.status === "error" ? { status: "error" } : { status: "loading" };
@@ -117,7 +115,7 @@ function AdsHome({ brandId }: { brandId: string }) {
     retryHome();
     setSearchParams((params) => { params.delete(BUDGET_EDIT_PARAM); params.delete(BUDGET_RETURN_PARAM); return params; }, { replace: true });
   }, [retryHome, setSearchParams]);
-  const monthNo = monthNumber(home?.month);
+  const monthNo = monthNumber(home?.month, clock.today);
   const recovering = recoveryState.status === "ready" && recoveryState.recovery.recovering;
 
   // Zero campaigns and nothing spent this month: the prototype draws no first-run board, so the page shows one honest

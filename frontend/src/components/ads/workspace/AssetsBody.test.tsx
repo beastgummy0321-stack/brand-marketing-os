@@ -16,6 +16,8 @@ import { chooseSlotCopy, editSlotCopy, fetchSlotThumbnail, getSlotCopyOptions, g
 import { AssetApiError, createUploadBatch, putUpload, type Placement } from "@/lib/adsUserAssetsApi";
 import { fetchActiveJobs, type ActiveJobsSnapshot } from "@/lib/jobsApi";
 import { AssetsBody } from "./AssetsBody";
+// F50 Contract K: the org clock reads the workspace org zone; dates assert Asia/Taipei output, never the runner's.
+vi.mock("@/components/layout/WorkspaceContext", () => ({ useWorkspace: () => ({ scope: "user:org", identity: { user: { id: "u", email: "a@example.com" }, org: { id: "o", name: "測試", kind: "personal", role: "owner", timezone: "Asia/Taipei", today: "2026-10-01" }, orgs: [] } }) }));
 
 vi.mock("@/lib/adsSlotsApi", async (original) => ({
   ...await original<typeof import("@/lib/adsSlotsApi")>(),

@@ -5,6 +5,7 @@ import type { HomeCampaign, HomeCap, HomeHandoff, HomeOverview } from "@/lib/ads
 import type { CampaignDataState } from "@/lib/adsTriageApi";
 import { Chip, MoneyMeter, MoneyTag, formatAmount } from "../patterns";
 import { cn } from "@/lib/utils";
+import { formatInstant, useOrgClock } from "@/lib/orgClock";
 import { wholeYuan } from "./MonthMoney";
 import { monthDay } from "./NextDates";
 
@@ -58,10 +59,9 @@ function HandoffChip({ brandId, campaignId, handoff }: { brandId: string; campai
   );
 }
 
-/** 「10/3 14:20」 in the browser's time zone (a structure read's time). */
-function readTime(iso: string): string {
-  const d = new Date(iso);
-  return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+/** 「10/3 14:20」 on the org clock (a structure read's time; F50 Contract K). */
+function readTime(iso: string, timezone: string): string {
+  return `${formatInstant(iso, timezone, "md")} ${formatInstant(iso, timezone, "hm")}`;
 }
 
 /** The campaign's served lifecycle word as a chip (nothing while a read predates it). */
@@ -72,11 +72,11 @@ function LifecycleChip({ c }: { c: HomeCampaign }) {
 
 /** 「在投 N 則」 from the served `running` (drill-11 E5: a count read before the user's last report says when it was
  * read; ads whose platform status is unknown are said apart, never folded into 0). */
-function runningText(c: HomeCampaign): string {
+function runningText(c: HomeCampaign, timezone: string): string {
   const running = c.running ?? { count: c.active_ads, unknown: 0, read_at: null, stale: false };
   const parts = [`在投 ${running.count} 則`];
   if (running.unknown > 0) parts.push(`另有 ${running.unknown} 則狀態不明`);
-  if (running.stale) parts.push(running.read_at ? `上次讀取 ${readTime(running.read_at)}` : "還沒讀到平台上的廣告");
+  if (running.stale) parts.push(running.read_at ? `上次讀取 ${readTime(running.read_at, timezone)}` : "還沒讀到平台上的廣告");
   return parts.join("・");
 }
 
@@ -133,6 +133,7 @@ function NameLink({ brandId, c }: { brandId: string; c: HomeCampaign }) {
 }
 
 function LiveRow({ brandId, c, spent }: { brandId: string; c: HomeCampaign; spent: number | null }) {
+  const { timezone } = useOrgClock();
   const status = c.data_status;
   const reconnect = RECONNECT.has(status.state);
   const tl = capLabel(c.cap);
@@ -153,7 +154,7 @@ function LiveRow({ brandId, c, spent }: { brandId: string; c: HomeCampaign; spen
           running > 0 && <div className="numeric text-sm text-muted-foreground">平台上還開著 {running} 則</div>
         ) : (
           <div className="numeric text-sm text-muted-foreground">
-            {runningText(c)}・每日 {c.daily_budget === null ? "未知" : formatAmount(c.daily_budget)}
+            {runningText(c, timezone)}・每日 {c.daily_budget === null ? "未知" : formatAmount(c.daily_budget)}
           </div>
         )}
       </div>

@@ -3,8 +3,9 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as api from "@/lib/adsWorkspaceApi";
-import { formatSyncTime } from "@/lib/format";
 import { ChangesTab } from "./ChangesTab";
+// F50 Contract K: the org clock reads the workspace org zone; dates assert Asia/Taipei output, never the runner's.
+vi.mock("@/components/layout/WorkspaceContext", () => ({ useWorkspace: () => ({ scope: "user:org", identity: { user: { id: "u", email: "a@example.com" }, org: { id: "o", name: "測試", kind: "personal", role: "owner", timezone: "Asia/Taipei", today: "2026-10-01" }, orgs: [] } }) }));
 
 vi.mock("@/lib/adsWorkspaceApi", async (importOriginal) => ({
   ...await importOriginal<typeof api>(), getCampaignTimeline: vi.fn(),
@@ -59,7 +60,7 @@ describe("ChangesTab 變更紀錄", () => {
 
     const verified = within(item("改文案：晨光隨行杯・日常出發"));
     expect(verified.getByText("✓ 已核對")).toBeTruthy();
-    expect(verified.getByText(formatSyncTime("2026-09-21T08:30:00Z"))).toBeTruthy();
+    expect(verified.getByText("09/21 16:30")).toBeTruthy();
     expect(verified.getByRole("link", { name: /打開/ }).getAttribute("href")).toBe(`${base}/cs_verified/verify`);
 
     const rejected = within(item("清理：關 1 則（再行銷・兩入組）"));

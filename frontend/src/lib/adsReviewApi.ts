@@ -77,7 +77,7 @@ export async function getReview(brand: string, campaign: string, id: string, sig
 export async function createReview(brand: string, campaign: string, value: { entity_id: string; start: string; end: string; previous_id?: string }, signal?: AbortSignal) {
   return (await request<{ review: ReviewRound }>(route(brand, campaign), signal, value)).review;
 }
-export async function decideReview(brand: string, campaign: string, id: string, value: { decision: "completed" | "deferred" | "unjudgeable"; reason: string; revisit_at?: string }, signal?: AbortSignal) {
+export async function decideReview(brand: string, campaign: string, id: string, value: { decision: "completed" | "deferred" | "unjudgeable"; reason: string; revisit_on?: string }, signal?: AbortSignal) {
   return (await request<{ review: ReviewRound }>(`${route(brand, campaign)}/${encodeURIComponent(id)}/decision`, signal, value)).review;
 }
 // Contract A: re-run an undecided failed or AI-rejected round on the same evidence; a repeated

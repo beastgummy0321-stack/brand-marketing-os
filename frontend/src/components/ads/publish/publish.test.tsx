@@ -22,7 +22,7 @@ vi.mock("@/lib/adsLaunchSettingsApi", () => ({
 vi.mock("@/lib/adsLaunchApi", () => ({
   confirmAllLaunchFields: vi.fn(), confirmLaunchItemField: vi.fn(), fetchLaunchView: vi.fn(), readbackLaunch: vi.fn(),
 }));
-vi.mock("@/components/layout/WorkspaceContext", () => ({ useWorkspace: () => ({ scope: "test-scope" }) }));
+vi.mock("@/components/layout/WorkspaceContext", () => ({ useWorkspace: () => ({ scope: "test-scope", identity: { user: { id: "u", email: "a@example.com" }, org: { id: "o", name: "測試", kind: "personal", role: "owner", timezone: "Asia/Taipei", today: "2026-10-01" }, orgs: [] } }) }));
 
 const REC: LaunchSettingsValues = {
   optimization_event: "purchase", bid_strategy: "lowest_cost", placement: { mode: "auto", positions: [] },

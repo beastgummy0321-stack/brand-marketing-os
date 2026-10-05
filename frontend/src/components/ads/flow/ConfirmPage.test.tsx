@@ -408,7 +408,8 @@ describe("ConfirmPage（F22-I02）拒絕／暫緩 sheet", () => {
 
     await user.clear(dateInput);
     await user.type(dateInput, "2099-01-01");
-    const deferred = changeSet({ status: "deferred", reason: "想再觀察幾天", revisit_at: "2099-01-01T12:00:00Z" });
+    // Stored as 00:00 of the chosen day in the org zone (F50 Contract K).
+    const deferred = changeSet({ status: "deferred", reason: "想再觀察幾天", revisit_at: "2098-12-31T16:00:00+00:00" });
     vi.mocked(changeApi.createChangeSet).mockResolvedValue(deferred);
     // The page then moves to the set's own confirm URL, which reads the set back.
     vi.mocked(changeApi.getChangeControl).mockResolvedValue({ targets: [], change_sets: [deferred] });
@@ -417,10 +418,41 @@ describe("ConfirmPage（F22-I02）拒絕／暫緩 sheet", () => {
     await waitFor(() => expect(changeApi.createChangeSet).toHaveBeenCalledTimes(1));
     const decide = vi.mocked(changeApi.createChangeSet).mock.calls[0][2].decide;
     expect(decide?.decision).toBe("deferred");
-    expect(decide?.revisit_at?.startsWith("2099-01-01")).toBe(true);
+    expect(decide?.revisit_on).toBe("2099-01-01");
     expect(changeApi.decideChangeSet).not.toHaveBeenCalled();
     // drill-10 C3-D: the closed page names the revisit date.
     expect(await screen.findByText("已暫緩・想再觀察幾天・1/1 再看")).toBeTruthy();
+  });
+
+  it("F50-I12：「7 天後」從組織的今天起算（10/31 17:00Z 在台北已是 11/1）→ 送 revisit_on 2026-11-08、印「11/8 再看」，不看執行環境時區；選今天本身先擋下", async () => {
+    const runnerTz = process.env.TZ;
+    process.env.TZ = "America/Los_Angeles"; // the laptop is still on 10/31: a browser-clock pick would send 11/7
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-31T17:00:00Z"));
+    try {
+      const user = userEvent.setup();
+      await openSheet(user);
+      await user.click(screen.getByRole("button", { name: "自訂" }));
+      const dateInput = screen.getByLabelText("重看日期");
+      expect(dateInput.getAttribute("min")).toBe("2026-11-02");
+      await user.clear(dateInput);
+      await user.type(dateInput, "2026-11-01");
+      await user.click(screen.getByRole("button", { name: "保存" }));
+      expect(await screen.findByText("請選一個之後的時間。")).toBeTruthy();
+      expect(changeApi.createChangeSet).not.toHaveBeenCalled();
+
+      await user.click(screen.getByRole("button", { name: "7 天後" }));
+      const deferred = changeSet({ status: "deferred", reason: "想再觀察幾天", revisit_at: "2026-11-07T16:00:00+00:00" });
+      vi.mocked(changeApi.createChangeSet).mockResolvedValue(deferred);
+      vi.mocked(changeApi.getChangeControl).mockResolvedValue({ targets: [], change_sets: [deferred] });
+      await user.click(screen.getByRole("button", { name: "保存" }));
+      await waitFor(() => expect(changeApi.createChangeSet).toHaveBeenCalledTimes(1));
+      expect(vi.mocked(changeApi.createChangeSet).mock.calls[0][2].decide?.revisit_on).toBe("2026-11-08");
+      expect(await screen.findByText("已暫緩・想再觀察幾天・11/8 再看")).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+      process.env.TZ = runnerTz;
+    }
   });
 
   it("暫緩被拒（例如時間已過）：顯示原因，不留下草稿、也不另外送決定", async () => {

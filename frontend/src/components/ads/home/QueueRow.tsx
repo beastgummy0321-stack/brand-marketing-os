@@ -1,5 +1,6 @@
 import { Link } from "react-router-dom";
 import { Button } from "@/components/layout/ui/button";
+import { useOrgClock } from "@/lib/orgClock";
 import type { CloseoutQueueRow, QueueItem, QueueKind } from "@/lib/adsTriageApi";
 import { cleanupAction, proposalAction, settleAction, type HomeDecision } from "./status";
 import { Chip, KindMark } from "../patterns";
@@ -11,15 +12,15 @@ import { monthDay, shortName } from "./NextDates";
  * done is the row's own `done` (F47 Contract D), never re-derived here. */
 export interface HomeAction { label: string; href: string | null; done: boolean }
 
-export function homeAction(brandId: string, item: QueueItem): HomeAction {
+export function homeAction(brandId: string, item: QueueItem, timezone?: string): HomeAction {
   const campaignId = item.triage.campaign_id;
   if (item.kind_key === "cleanup") {
-    const action = cleanupAction(brandId, item.cleanup?.campaign_id ?? campaignId, item.proposal, item.action_url);
+    const action = cleanupAction(brandId, item.cleanup?.campaign_id ?? campaignId, item.proposal, item.action_url, timezone);
     if (!action) return { label: "決定要不要關", href: null, done: item.done };
     return item.proposal === null ? { ...action, label: "決定要不要關", done: item.done } : { ...action, done: item.done };
   }
   if (item.kind_key === "worse") {
-    const action = proposalAction(brandId, campaignId, item.triage.entity_id, item.proposal, "review");
+    const action = proposalAction(brandId, campaignId, item.triage.entity_id, item.proposal, "review", timezone);
     return item.proposal === null ? { ...action, label: "查原因", done: item.done } : { ...action, done: item.done };
   }
   return { label: "準備新素材", href: item.action_url, done: item.done };
@@ -59,7 +60,8 @@ function markOf(kind: QueueKind): { kind: "cut" | "worse" | "fresh"; label: stri
  * The cleanup mark is `KindMark cut` 「✂ 清理」. */
 export function QueueRow({ brandId, item, recovering }: { brandId: string; item: QueueItem; recovering: boolean }) {
   const mark = markOf(item.kind_key);
-  const action = homeAction(brandId, item);
+  const { timezone } = useOrgClock();
+  const action = homeAction(brandId, item, timezone);
   const campaignName = item.cleanup?.campaign_name ?? item.refresh?.campaign_name ?? item.triage.campaign_name;
   return (
     <div className="flex flex-wrap items-center gap-3 border-t border-border py-2.5 first:border-t-0">

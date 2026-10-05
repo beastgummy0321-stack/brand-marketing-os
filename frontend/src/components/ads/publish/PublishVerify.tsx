@@ -6,6 +6,7 @@ import { confirmLaunchSetting, type SettingsReadbackKey } from "@/lib/adsLaunchS
 import { ActionBar, Chip, DiffRow, ReadbackRow, ReadbackSummary, ResultHero, TodoRow, UnreadChip, type ChipTone } from "../patterns";
 import { ItemTitle, PublishHead, campaignPath, fieldText, publishPath, readFailedText, readbackReason, timeText, type LaunchPlatform } from "./PublishFlow";
 import { UnreadAllBar } from "./SettingsReadback";
+import { useOrgClock } from "@/lib/orgClock";
 
 /** F30-I13 step 3 (prototype v10 `pubVerify()`, hash `pub/fall/verify`): one result hero over the items and the launch
  * settings (all the same／N differ／V of N checked, with the read time), each item's state with the approved value
@@ -35,6 +36,7 @@ export function PublishVerify({ brandId, campaignId, name, view, platform, onVie
   platform: LaunchPlatform;
   onView: (view: LaunchView) => void;
 }) {
+  const { timezone } = useOrgClock();
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -79,7 +81,7 @@ export function PublishVerify({ brandId, campaignId, name, view, platform, onVie
   // Items the platform still has to answer for: built or read without an answer, beyond those only waiting on an eye.
   const awaiting = n - ok - dev - todo - blockedItems;
   const all = n > 0 && ok === n && nDiff === 0 && nNa === 0;
-  const readAt = timeText(view.read_at);
+  const readAt = timeText(view.read_at, timezone);
   const at = readAt ? `讀回於 ${readAt}` : "還沒有讀回時間";
   const reasons = [
     ...fields.filter((f) => f.state === "unreadable").map((f) => f.reason),
@@ -163,7 +165,7 @@ export function PublishVerify({ brandId, campaignId, name, view, platform, onVie
               ))}
               {reason && (
                 // F47-I06 (R5): a stored reason says when it was read; 重新讀回 below replaces it with the new read.
-                <p data-slot="readback-error" className="mt-1 text-xs text-warning">{readFailedText(item.reason_at, reason)}</p>
+                <p data-slot="readback-error" className="mt-1 text-xs text-warning">{readFailedText(item.reason_at, reason, timezone)}</p>
               )}
             </TodoRow>
           );

@@ -4,7 +4,7 @@
  * home queue (覆盤「停掉這則」, 讀回頁「暫停舊廣告」, the 成效 tab) landed on 「找不到」. Kept out of `ConfirmPage.tsx`
  * so that page stays under the 800-line cap. */
 import { getPauseView, type PauseView, type TriageWindow } from "@/lib/adsTriageApi";
-import { resolveOrgTimezone } from "@/lib/orgClock";
+import { formatInstant } from "@/lib/orgClock";
 import { useApiRead, type ApiRead } from "@/lib/useApiRead";
 import { reviewRoundPath } from "../review/reviewFlow";
 import { changeStepPath, type PauseFrom } from "./changeFlow";
@@ -38,21 +38,10 @@ export function pauseBack(brandId: string, campaignId: string, from: string | nu
   return home;
 }
 
-/** An ISO instant as MM/DD in the organisation's timezone; `null` stays `null` (the caller omits the date). */
-export function monthDay(iso: string | null, timezone: string): string | null {
-  if (!iso) return null;
-  const at = new Date(iso);
-  if (Number.isNaN(at.getTime())) return null;
-  const parts = new Intl.DateTimeFormat("en-US", { timeZone: resolveOrgTimezone(timezone), month: "2-digit", day: "2-digit" })
-    .formatToParts(at);
-  const read = (type: Intl.DateTimeFormatPartTypes) => parts.find((p) => p.type === type)?.value ?? "";
-  return `${read("month")}/${read("day")}`;
-}
-
 /** The evidence card's closed chip: 「已暫停・〈MM/DD〉在平台上關掉」 (date left out when unknown). */
 export function closedNote(view: PauseView, timezone: string): string {
-  const day = monthDay(view.closed_at, timezone);
-  return `已暫停・${day ?? ""}在平台上關掉`;
+  // MM/DD on the org clock (`lib/orgClock`, F50 Contract K); unknown → the date is left out.
+  return `已暫停・${formatInstant(view.closed_at, timezone, "mmdd")}在平台上關掉`;
 }
 
 /** The ad's own window (calendar dates, no timezone): 「09/26～10/02・7 天」. */

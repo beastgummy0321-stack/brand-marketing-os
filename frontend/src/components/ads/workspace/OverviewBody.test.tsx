@@ -10,6 +10,8 @@ import { getQueue, getTriage, type CloseoutQueueRow, type QueueItem, type QueueP
 import { getCampaignStructure, type CampaignStructure, type CampaignWorkspace, type StructureAd } from "@/lib/adsWorkspaceApi";
 import { RULES_FIXTURE, seedAdsRules } from "../patterns/rulesFixture";
 import { OverviewBody, dayRange } from "./OverviewBody";
+// F50 Contract K: the org clock reads the workspace org zone; dates assert Asia/Taipei output, never the runner's.
+vi.mock("@/components/layout/WorkspaceContext", () => ({ useWorkspace: () => ({ scope: "user:org", identity: { user: { id: "u", email: "a@example.com" }, org: { id: "o", name: "測試", kind: "personal", role: "owner", timezone: "Asia/Taipei", today: "2026-10-01" }, orgs: [] } }) }));
 
 vi.mock("@/lib/adsWorkspaceApi", async () => {
   const actual = await vi.importActual<typeof import("@/lib/adsWorkspaceApi")>("@/lib/adsWorkspaceApi");

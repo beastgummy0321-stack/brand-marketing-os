@@ -10,10 +10,10 @@ import { useApiRead } from "@/lib/useApiRead";
 import { cn } from "@/lib/utils";
 import { ActionBar, CampaignChip, Chip, ReadFailed, formatAmount, type ObjectiveKey } from "../patterns";
 import { currentBudgetMonth } from "../MonthlyBudgetPanel";
-import { useOrgClock } from "@/lib/orgClock";
+import { orgDateOf, shiftMonth, useOrgClock } from "@/lib/orgClock";
 import { GradeBuckets, GradeSplit, MissingNote } from "./MonthGrades";
 import { MonthFootnote, RejectedCard } from "./RejectedCards";
-import { downloadMonthCsv, monthNum, shiftMonth, weekBars, type WeekBar } from "./monthCsv";
+import { downloadMonthCsv, monthNum, weekBars, type WeekBar } from "./monthCsv";
 
 /** 每月回顧 (F29-I15, prototype v10 `month()`, hashes `#/month` and `#/month/8`): campaigns keep running; this page
  * only settles the books for one calendar month, graded by the one cap ruler (Feature F29 Contract C). Two reads,
@@ -85,7 +85,9 @@ function WeeklySpend({ home }: { home: HomeOverview }) {
 
 function ClosedCard({ summary }: { summary: MonthSummary }) {
   const known = summary.closed_this_month !== null;
-  const since = summary.closed_tracking_since.slice(0, 10).split("-").map(Number).join("/");
+  // The tracking start is an instant: its day on the org's calendar (F50 Contract K), not the UTC date.
+  const { timezone } = useOrgClock();
+  const since = (orgDateOf(summary.closed_tracking_since, timezone) ?? "").split("-").map(Number).join("/");
   return (
     <section aria-label="這個月關掉的" className="flex flex-wrap items-center gap-3.5 rounded-xl border border-border bg-muted px-[22px] py-5">
       <span aria-hidden="true" className="grid size-10 place-items-center rounded-[10px] bg-card">✂</span>

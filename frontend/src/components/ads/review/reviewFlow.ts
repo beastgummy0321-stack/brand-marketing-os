@@ -5,6 +5,7 @@
  * `flow/changeFlow.ts` for the light flow. */
 import type { QueueItem, QueuePayload, TriageHistoryEntry } from "@/lib/adsTriageApi";
 import type { CommerceEvidence, Recommendation, ReviewPeriod, ReviewResultView } from "@/lib/adsReviewApi";
+import { formatInstant } from "@/lib/orgClock";
 import { decisionPosition } from "../home/status";
 import { perSaleAmount } from "../patterns/csv";
 
@@ -113,11 +114,10 @@ export const HISTORY_KIND_LABEL: Record<TriageHistoryEntry["kind"], string> = {
   copy: "改過文案", new_ad: "換過素材", budget: "調過預算", pause: "暫停過廣告",
 };
 
-/** `M/D` for a history entry's `approved_at` (a timezone-carrying ISO instant, browser-local —
- * same convention as `formatRevisitLabel`). */
-export function formatEntryDate(iso: string): string {
-  const d = new Date(iso);
-  return `${d.getMonth() + 1}/${d.getDate()}`;
+/** `M/D` for a history entry's `approved_at` (an ISO instant) on the org clock — same convention as
+ * `formatRevisitLabel` (F50 Contract K). */
+export function formatEntryDate(iso: string, timezone: string): string {
+  return formatInstant(iso, timezone, "md");
 }
 
 /** `cost_before`/`cost_after` printed value — `null` (fewer than 7 known days, contract A) reads

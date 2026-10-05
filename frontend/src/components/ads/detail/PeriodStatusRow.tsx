@@ -4,8 +4,7 @@ import { RefreshCw } from "lucide-react";
 import { Button } from "@/components/layout/ui/button";
 import { getPerformance, type CampaignDetail, type PeriodGrade } from "@/lib/adsApi";
 import type { SyncOutcome } from "@/lib/adsExternalApi";
-import { formatSyncTime } from "@/lib/format";
-import { useOrgClock } from "@/lib/orgClock";
+import { daysBetween, formatInstant, useOrgClock } from "@/lib/orgClock";
 import { useApiRead } from "@/lib/useApiRead";
 import { getCoordinateLearnings } from "@/lib/adsLearningsApi";
 import { CloseCampaignDialog, LearningExits, coveredRange, shortDay } from "../CloseCampaignDialog";
@@ -32,7 +31,7 @@ export function periodDays(start: string | null, end: string | null, today: stri
   if (!start) return null;
   const last = end && end < today ? end : today;
   if (last < start) return 0;
-  return Math.round((Date.parse(`${last}T00:00:00Z`) - Date.parse(`${start}T00:00:00Z`)) / 86_400_000) + 1;
+  return daysBetween(start, last);
 }
 
 /** The warning chip's day list (prototype 「10/01、10/02 沒讀到，不算 0」); a long gap prints as a range. */
@@ -80,7 +79,7 @@ export function PeriodStatusRow({ brandId, campaign: c, lastSuccessAt = null, on
   /** F49 Contract O: the outcome of the workspace's last platform read, null before one finished. */
   syncNote?: SyncNote | null;
 }) {
-  const { today } = useOrgClock();
+  const { today, timezone } = useOrgClock();
   const imported = c.origin === "imported";
   const closed = c.lifecycle?.state === "closed";
   const canClose = c.lifecycle?.can_close === true;
@@ -195,7 +194,7 @@ export function PeriodStatusRow({ brandId, campaign: c, lastSuccessAt = null, on
         )}
         <span className="text-[12.5px] text-muted-foreground">
           {missingDays.length > 0 && covered && `平台已讀到 ${shortDay(covered.first)}～${shortDay(covered.last)}・`}
-          {latest ? `最新 ${formatSyncTime(latest)}` : "還沒有讀取紀錄"}
+          {latest ? `最新 ${formatInstant(latest, timezone, "md_hm")}` : "還沒有讀取紀錄"}
         </span>
       </div>
       <p className="mt-2 text-[11.5px] text-muted-foreground">整期＝活動期間的合計；每月回顧只算當月天數，同一則廣告兩邊數字會不同。</p>

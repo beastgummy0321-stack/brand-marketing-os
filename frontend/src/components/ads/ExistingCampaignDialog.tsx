@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/layout/ui/button";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/layout/ui/dialog";
 import { existingCampaigns, importExisting, refreshExisting, type ExistingPage } from "@/lib/adsExternalApi";
-import { formatSyncTime } from "@/lib/format";
+import { formatInstant, useOrgClock } from "@/lib/orgClock";
 import { useSyncOutcome } from "@/lib/useSyncOutcome";
 import { Chip } from "./patterns";
 
@@ -37,9 +37,10 @@ function ListReadLine({ brandId, jobId, fallbackSuccess, onFinished }: {
 
 function ReadLine({ text, state, lastSuccessAt, error }: { text: string; state: string | null; lastSuccessAt: string | null; error?: string | null }) {
   const warn = state === "failed" || state === "partial";
+  const { timezone } = useOrgClock();
   return <>
     {text && <p role="status" data-slot="list-read" data-state={state ?? undefined} className={`text-sm ${warn ? "text-warning" : "text-muted-foreground"}`}>
-      {text} · 最近成功：{lastSuccessAt ? formatSyncTime(lastSuccessAt) : "尚未成功讀回"}
+      {text} · 最近成功：{lastSuccessAt ? formatInstant(lastSuccessAt, timezone, "md_hm") : "尚未成功讀回"}
     </p>}
     {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
   </>;

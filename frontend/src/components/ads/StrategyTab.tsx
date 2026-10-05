@@ -8,7 +8,7 @@ import { EmptyState } from "@/components/layout/EmptyState";
 import { SidePanel } from "@/components/layout/SidePanel";
 import { useWorkspace } from "@/components/layout/WorkspaceContext";
 import type { CoordinateLearnings } from "@/lib/adsLearningsApi";
-import { resolveOrgTimezone } from "@/lib/orgClock";
+import { formatDay, orgDateOf, resolveOrgTimezone } from "@/lib/orgClock";
 import {
   adoptStrategy,
   generateStrategy,
@@ -110,14 +110,7 @@ const hasUsedLearnings = (ranked: CoordinateLearnings | undefined, rows: Strateg
 /** `MM/DD` of a basis date: a plain `YYYY-MM-DD` as is, a timestamp on the organisation's calendar; never the raw
  * ISO string. Unreadable → null. */
 function basisDay(value: string | null | undefined, timezone: string): string | null {
-  if (!value) return null;
-  const plain = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
-  if (plain) return `${plain[2]}/${plain[3]}`;
-  const at = new Date(value.replace(" ", "T").replace(/(\.\d{3})\d+/, "$1"));
-  if (Number.isNaN(at.getTime())) return null;
-  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: timezone, month: "2-digit", day: "2-digit" }).formatToParts(at);
-  const part = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
-  return `${part("month")}/${part("day")}`;
+  return formatDay(orgDateOf(value, timezone), "mmdd") || null;
 }
 
 const MEDIA_LABEL ={ photo: "只排照片（單圖、輪播）", photo_video: "照片和影片" } as const;

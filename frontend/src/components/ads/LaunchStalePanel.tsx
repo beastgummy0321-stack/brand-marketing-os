@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { Button } from "@/components/layout/ui/button";
 import { assignPlannedMaterial, getPlannedMaterials, HandoffRequestRejected, reapproveLaunch, revertLaunch, type HandoffItem, type HandoffWorkspace, type LaunchDiffRow, type LaunchStale, type PlannedMaterialWorkspace } from "@/lib/adsHandoffApi";
-import { formatSyncTime } from "@/lib/format";
+import { formatInstant, useOrgClock } from "@/lib/orgClock";
 import { ActionBar, CampaignChip, Chip, ConfirmSheet, DiffRow, FlowHeader, formatAmount, ProgressSegments, ResultHero, TodoRow, WarnButton, type SegmentState } from "./patterns";
 
 /** Feature F28 "Stale launch" (prototype v9 `pubStale()` + `act.revertOpen`): the approved launch no longer
@@ -22,7 +22,8 @@ type Props = {
 const KIND: Record<string, string> = { campaign: "活動", group: "投放組", adset: "投放組", ad: "廣告" };
 const STEPS = [{ label: "確認上架清單" }, { label: "到平台完成" }, { label: "讀回核對" }];
 
-const when = (iso: string | null) => (iso && !Number.isNaN(new Date(iso).getTime()) ? formatSyncTime(iso) : null);
+/** An instant as 「MM/DD HH:MM」 on the org clock; missing or unreadable → null. */
+const when = (iso: string | null, timezone: string) => formatInstant(iso, timezone, "md_hm") || null;
 /** A diffed value as the DiffRow prints it: null/empty stays unknown (未設定), never 0 or an empty box. */
 function valueOf(value: unknown): string | number | null {
   if (value === null || value === undefined || value === "") return null;
@@ -36,6 +37,7 @@ const printed = (value: unknown) => { const v = valueOf(value); return v === nul
 const reason = (error: unknown) => (error instanceof Error ? error.message : "結果尚未確認。").replace(/[。.]?$/, "。");
 
 export function LaunchStalePanel({ brandId, campaignId, stale, items, onDecided, onReload }: Props) {
+  const { timezone } = useOrgClock();
   const [busy, setBusy] = useState<"" | "reapprove" | "revert" | "assign">("");
   const [sheet, setSheet] = useState(false);
   const [materials, setMaterials] = useState<PlannedMaterialWorkspace | null>(null);
@@ -103,7 +105,7 @@ export function LaunchStalePanel({ brandId, campaignId, stale, items, onDecided,
   const states = launchItems.map(stateOf);
   const count = (state: SegmentState) => states.filter(s => s === state).length;
   const campaign = launchItems.find(item => item.planned_kind === "campaign");
-  const approved = when(stale.approved_at), edited = when(stale.changed_at);
+  const approved = when(stale.approved_at, timezone), edited = when(stale.changed_at, timezone);
   const assetsHref = `/brands/${encodeURIComponent(brandId)}/ads/campaigns/${encodeURIComponent(campaignId)}?tab=assets`;
 
   return (

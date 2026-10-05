@@ -8,7 +8,6 @@ import { Textarea } from "@/components/layout/ui/textarea";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { Skeleton } from "@/components/layout/Skeleton";
-import { formatSyncTime } from "@/lib/format";
 import { getReview, type ReviewRound } from "@/lib/adsReviewApi";
 import { getQueue } from "@/lib/adsTriageApi";
 import { useApiRead } from "@/lib/useApiRead";
@@ -17,7 +16,7 @@ import {
 } from "@/lib/adsChangeApi";
 import { changeStepPath, truncate } from "../flow/changeFlow";
 import { currentBudgetMonth } from "../MonthlyBudgetPanel";
-import { useOrgClock } from "@/lib/orgClock";
+import { formatInstant, useOrgClock } from "@/lib/orgClock";
 import { ActionBar, Chip, CopyBlock, DecisionSheet, FlowHeader, ReadFailed } from "../patterns";
 import { findReviewTriageItem, reviewPosition, reviewRoundPath } from "./reviewFlow";
 
@@ -374,7 +373,7 @@ export function CopyPage({ brandId, campaignId, reviewId }: {
         <div className="rounded-xl border border-border bg-card p-5">
           <div className="mb-2.5 flex items-center justify-between">
             <h2 className="font-semibold">目前</h2>
-            <Chip>讀取於 {formatSyncTime(review.created_at)}</Chip>
+            <Chip>讀取於 {formatInstant(review.created_at, timezone, "md_hm")}</Chip>
           </div>
           {isVariants ? (
             <div className="flex flex-col gap-4">

@@ -4,7 +4,7 @@ import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { Skeleton } from "@/components/layout/Skeleton";
 import { Button } from "@/components/layout/ui/button";
-import { formatSyncTime } from "@/lib/format";
+import { formatInstant, useOrgClock } from "@/lib/orgClock";
 import { cn } from "@/lib/utils";
 import { listCampaigns, type CampaignLifecycle, type CampaignSyncState } from "@/lib/adsApi";
 import { getTriage, type CampaignDataStatus, type TriageDayState, type TriageItem } from "@/lib/adsTriageApi";
@@ -195,6 +195,7 @@ type State =
  * 格子畫後端讀過的日子（Contract V），重新讀取照 `useSyncOutcome` 說結果（Contract O），依活動一生給出口
  * （Contract L：草稿去準備、已結束去結案）。 */
 export function WaitPage({ brandId, campaignId }: { brandId: string; campaignId: string }) {
+  const { timezone } = useOrgClock();
   const [state, setState] = useState<State>({ status: "loading" });
   const [reloadKey, setReloadKey] = useState(0);
   const [posting, setPosting] = useState(false);
@@ -305,7 +306,7 @@ export function WaitPage({ brandId, campaignId }: { brandId: string; campaignId:
   const ended = lifecycle?.state === "ended" && lifecycle.can_close;
   // A draft is on no platform: no fact rows, no tiles, nothing to re-read (drill-11 B7).
   const rows = draft ? [] : buildRows(brandId, campaignHref, sync, coverage, missingDays, items, ordersMissing, rules);
-  const hint = sync.state !== "never" && sync.last_success_at ? `最近同步 ${formatSyncTime(sync.last_success_at)}` : "尚未同步";
+  const hint = sync.state !== "never" && sync.last_success_at ? `最近同步 ${formatInstant(sync.last_success_at, timezone, "md_hm")}` : "尚未同步";
   const hero = waitHero(lifecycle, sync, dataStatus, rows, items, days);
   const recheckFailed = recheckResult !== null && (recheckResult.state === "failed" || recheckResult.state === "partial");
 

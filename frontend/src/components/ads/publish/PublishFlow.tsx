@@ -2,7 +2,7 @@ import { createContext, useContext, type ReactNode } from "react";
 import type { CampaignDetail } from "@/lib/adsApi";
 import type { LaunchField, LaunchItem, LaunchItemKind, LaunchItemState, LaunchStep, LaunchView } from "@/lib/adsLaunchApi";
 import type { Channel } from "@/lib/adsLaunchApi";
-import { formatSyncTime } from "@/lib/format";
+import { formatInstant, useOrgClock } from "@/lib/orgClock";
 import { CampaignChip, Chip, FlowHeader, Legend, ProgressSegments, formatAmount, type FlowStep, type SegmentState } from "../patterns";
 
 /** F30-I13 shared pieces of the three-step publish page (prototype v10 `pubHead()`, `pubProg()`): the URL steps and
@@ -58,7 +58,8 @@ export function summaryFields(fields: LaunchField[]): LaunchField[] {
   return [...rest.slice(0, at), period, ...rest.slice(at)];
 }
 
-export const timeText = (iso: string | null) => (iso && !Number.isNaN(new Date(iso).getTime()) ? formatSyncTime(iso) : null);
+/** An instant as 「MM/DD HH:MM」 on the org clock (F50 Contract K); missing or unreadable → null. */
+export const timeText = (iso: string | null, timezone: string) => formatInstant(iso, timezone, "md_hm") || null;
 
 /** The platform the batch goes to: one channel key across the campaign's groups, its label from the channel list.
  * `href` is the platform's own ads manager, opened in a new tab only (the page never writes to a platform); a channel
@@ -88,8 +89,9 @@ export const PublishCampaignContext = createContext<CampaignDetail | null>(null)
 
 /** F47-I06: a stored failed read as one sentence with its time — 「MM/DD HH:MM 讀回時讀不到：原因」; the bare reason
  * when no time was stored. The publish verify step and the manual handoff panel both print it. */
-export function readFailedText(at: string | null | undefined, reason: string): string {
-  return at ? `${formatSyncTime(at)} 讀回時讀不到：${reason}` : reason;
+export function readFailedText(at: string | null | undefined, reason: string, timezone: string): string {
+  const when = formatInstant(at, timezone, "md_hm");
+  return when ? `${when} 讀回時讀不到：${reason}` : reason;
 }
 
 /** F49 Contract B: the reason an item prints on the platform and verify steps — the served `reason` of an item still
@@ -135,7 +137,8 @@ const SWATCH: Record<"ok" | "built" | "mismatch" | "todo", string> = { ok: "bg-s
 export function LaunchProgress({ view }: { view: LaunchView }) {
   const n = (states: LaunchItemState[]) => view.items.filter((i) => states.includes(i.state)).length;
   const ok = n(["verified"]), mismatch = n(["mismatch"]);
-  const approved = timeText(view.approved_at);
+  const { timezone } = useOrgClock();
+  const approved = timeText(view.approved_at, timezone);
   const label = `${ok}／${view.items.length} 已核對`;
   return (
     <section aria-label="核對進度" className="surface px-[22px] py-5">

@@ -1,6 +1,7 @@
 import { Target, Wallet, BarChart2, TrendingUp, AlertTriangle, Clock } from "lucide-react";
 import { Button } from "@/components/layout/ui/button";
-import { formatCurrency, formatSyncTime } from "@/lib/format";
+import { formatCurrency } from "@/lib/format";
+import { formatInstant, useOrgClock } from "@/lib/orgClock";
 import type { CampaignDetail, CampaignLabels } from "@/lib/adsApi";
 import { JudgmentBand, ActionTimeline, KpiStrip, type KpiCell, type TimelineItem } from "./patterns";
 import type { StepTarget } from "./nextStep";
@@ -32,6 +33,7 @@ export function OverviewTab({
   onChangeTab: (target: StepTarget) => void;
   platformSync?: PlatformSync;
 }) {
+  const { timezone } = useOrgClock();
   const labels = c.labels ?? DEFAULT_LABELS;
   const imported = c.origin === "imported";
   const runtime = c.context_json.runtime;
@@ -109,7 +111,7 @@ export function OverviewTab({
           <div className="flex flex-wrap items-center gap-3">
             <p className="min-w-0 flex-1 text-xs text-muted-foreground">
               {c.external_view?.connections.map(connection => `${connection.platform === "meta" ? "Meta" : connection.platform} · ${connection.source_account} · ${connection.state === "connected" ? "已連線" : "連線中斷，保留歷史"}`).join("；")}
-              {" · 最近成功："}{lastRead ? formatSyncTime(lastRead) : "尚未成功讀回"}
+              {" · 最近成功："}{lastRead ? formatInstant(lastRead, timezone, "md_hm") : "尚未成功讀回"}
               {" · 活動設定不代表已實際投遞"}
               {Object.entries(c.external_view?.sync ?? {}).filter(([, value]) => value.error || value.error_code).map(([section, value]) => <span className="text-warning" key={section}> · {section}：{value.error ?? value.error_code}</span>)}
             </p>
@@ -136,7 +138,7 @@ export function OverviewTab({
       <section className="surface p-5 flex flex-wrap items-center justify-between gap-4" aria-label="檢討與持續追蹤">
         <div className="space-y-2"><h2 className="flex items-center gap-2 font-semibold"><Clock className="size-5 text-primary" />檢討與持續追蹤</h2>
           <p className="text-sm">查看單則廣告與商城證據，決定保留、觀察或準備新測試。</p>
-          <p className="text-xs text-muted-foreground">{checkedAt ? `背景最近檢查：${new Date(checkedAt).toLocaleString("zh-TW")}。` : "尚無背景檢查紀錄，請先確認平台廣告對應與檢討條件。"}平台變更仍由你核准後手動操作。</p>
+          <p className="text-xs text-muted-foreground">{checkedAt ? `背景最近檢查：${formatInstant(checkedAt, timezone, "md_hm")}。` : "尚無背景檢查紀錄，請先確認平台廣告對應與檢討條件。"}平台變更仍由你核准後手動操作。</p>
         </div>
         <Button onClick={() => onChangeTab("perf")}>前往廣告檢討 →</Button>
       </section>

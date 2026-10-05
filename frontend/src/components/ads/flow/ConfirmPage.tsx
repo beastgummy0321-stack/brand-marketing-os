@@ -22,7 +22,7 @@ import { getQueue, type QueueItem } from "@/lib/adsTriageApi";
 import { getAngles, type AnglesResponse } from "@/lib/adsAnglesApi";
 import { useApiRead } from "@/lib/useApiRead";
 import { currentBudgetMonth, monthlyBudgetHref } from "../MonthlyBudgetPanel";
-import { useOrgClock } from "@/lib/orgClock";
+import { formatInstant, useOrgClock } from "@/lib/orgClock";
 import { reviewRoundPath } from "../review/reviewFlow";
 import { ActionBar, CampaignChip, Chip, DecisionSheet, FlowHeader, GradeRules, MoneyRule, ReadFailed, Segmented } from "../patterns";
 import { AbEvidence, abApproveLabel, useAbContext } from "./AbEvidence";
@@ -32,7 +32,7 @@ import { AdoptLatestButton } from "./CleanupRebuild";
 import { createCleanupSet, declinedIdsOf, samePick, useCleanupPick, useCleanupRebuild } from "./cleanupDraft";
 import { NewAdEvidence } from "./NewAdEvidence";
 import { ANGLE_MAX, BudgetEvidence, CopyEvidence, NextOrHome, PauseEvidence, PauseGone, PauseLearnCard } from "./confirmParts";
-import { closedNote, monthDay, pauseBack, pauseReason, usePauseView, windowText } from "./usePauseView";
+import { closedNote, pauseBack, pauseReason, usePauseView, windowText } from "./usePauseView";
 import { formatRevisitLabel } from "../home/status";
 import {
   AHEAD_LABEL,
@@ -81,7 +81,8 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
   const navigate = useNavigate();
   const location = useLocation();
   const [searchParams] = useSearchParams();
-  const { timezone } = useOrgClock();
+  const clock = useOrgClock();
+  const { timezone } = clock;
   const homeHref = `/brands/${brandId}/ads`;
 
   // Contract K: the queue is its own read. On the propose routes it is the page's content; on a set's route it is
@@ -397,19 +398,10 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
     setSheetOpen(true);
   }
 
-  function revisitAt(): Date | null {
-    if (decisionKind !== "deferred") return null;
-    if (quickPick === "custom") {
-      if (!customDate) return null;
-      const d = new Date(customDate);
-      return Number.isNaN(d.getTime()) ? null : d;
-    }
-    const d = new Date();
-    d.setDate(d.getDate() + (quickPick === "3" ? 3 : 7));
-    return d;
-  }
-  const revisit = revisitAt();
-  const revisitValid = decisionKind !== "deferred" || (revisit !== null && revisit.getTime() > Date.now());
+  // F50 Contract K: a deferral is an org calendar date — quick picks count from the org's today, a custom
+  // `<input type="date">` string is valid when after it (string compare); the server stores that day's 00:00.
+  const revisit = quickPick === "custom" ? customDate : clock.shift(quickPick === "3" ? 3 : 7);
+  const revisitValid = decisionKind !== "deferred" || revisit > clock.today;
 
   async function handleSaveDecision() {
     if (busy) return;
@@ -423,7 +415,7 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
       const decision: ChangeDecision = {
         decision: decisionKind,
         reason: trimmedReason,
-        ...(decisionKind === "deferred" ? { revisit_at: revisit!.toISOString() } : {}),
+        ...(decisionKind === "deferred" ? { revisit_on: revisit } : {}),
       };
       // F47-I07 (drill-10 Q3): one decision is one write — with no set yet the draft is created together with the
       // decision, so a refused 暫緩 leaves nothing behind (never a draft that turns the home row into 「等你核准」).
@@ -479,7 +471,7 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
     return (
       <div className="flex flex-col gap-4">
         <Breadcrumb items={crumb} />
-        <PauseGone name={pauseView.name} lastRead={monthDay(pauseView.last_read_at, timezone)} homeHref={homeHref} />
+        <PauseGone name={pauseView.name} lastRead={formatInstant(pauseView.last_read_at, timezone, "mmdd") || null} homeHref={homeHref} />
       </div>
     );
   }
@@ -585,7 +577,7 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
     ? (changeSet.status === "superseded" ? "已由新清單取代"
       : changeSet.status === "rejected" ? `已拒絕・${changeSet.reason ?? ""}`
       // drill-10 C3-D: a deferred set names its revisit date, the same 「M/D 再看」 the home row shows.
-      : `已暫緩・${changeSet.reason ?? ""}${changeSet.revisit_at ? `・${formatRevisitLabel(changeSet.revisit_at)}` : ""}`)
+      : `已暫緩・${changeSet.reason ?? ""}${changeSet.revisit_at ? `・${formatRevisitLabel(changeSet.revisit_at, timezone)}` : ""}`)
     : "";
   // 「下一件」（F25-I03, F49 Contract Q）：跟 VerifyPage／HandoffPage 共用同一顆判斷（`nextOpenQueueItem`，served
   // `position` 最小、不是這一列的開放決定）。A closed set's bar always has a forward exit: 下一件, else ← 回投放中心
@@ -742,7 +734,7 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
                   onChange={setQuickPick}
                 />
                 {quickPick === "custom" && (
-                  <Input type="date" aria-label="重看日期" value={customDate} onChange={(e) => setCustomDate(e.target.value)} disabled={busy} />
+                  <Input type="date" aria-label="重看日期" min={clock.shift(1)} value={customDate} onChange={(e) => setCustomDate(e.target.value)} disabled={busy} />
                 )}
               </div>
             </label>

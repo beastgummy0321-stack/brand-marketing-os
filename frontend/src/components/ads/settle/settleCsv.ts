@@ -4,6 +4,7 @@
 import type { SettleCampaign, SettleFate, SettleRow, SettleView } from "@/lib/adsSettleApi";
 import { downloadCsv, formatAmount, type AdsRules, type CsvCell } from "../patterns";
 import { perSaleAmount } from "../patterns/csv";
+import { formatInstant } from "@/lib/orgClock";
 
 /** The origin tag of a campaign read from the platform instead of built here (prototype `FROM_META`). */
 export const FROM_META = "從 Meta 帶進來";
@@ -43,12 +44,9 @@ export function rangeText(start: string, end: string): string {
   return `${md(start)}–${md(end)}`;
 }
 
-/** 「09/23 10:20」 in the browser's time zone. */
-export function stampText(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${p(d.getMonth() + 1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+/** 「09/23 10:20」 on the org clock (`timezone`, F50 Contract K); unreadable → "". */
+export function stampText(iso: string, timezone: string): string {
+  return formatInstant(iso, timezone, "md_hm");
 }
 
 /** The campaign of a row: its own entry in `campaigns`, or a stand-in from the row when the campaign is gone. */

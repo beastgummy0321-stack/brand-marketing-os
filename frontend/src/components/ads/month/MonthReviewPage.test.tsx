@@ -17,7 +17,8 @@ import { currentBudgetMonth } from "../MonthlyBudgetPanel";
 import { MonthReviewPage } from "./MonthReviewPage";
 import { seedAdsRules, watchTenths } from "../patterns/rules";
 import { RULES_FIXTURE } from "../patterns/rulesFixture";
-import { monthCsvName, monthCsvRows, shiftMonth, weekBars } from "./monthCsv";
+import { monthCsvName, monthCsvRows, weekBars } from "./monthCsv";
+import { shiftMonth } from "@/lib/orgClock";
 
 // F37-I05 (ruling 4c): the page reads the budget month from the org clock (`useWorkspace().identity.org`);
 // the timezone is mutable so one case can move the org to UTC+14 without re-mocking the module.

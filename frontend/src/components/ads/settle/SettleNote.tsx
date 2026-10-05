@@ -4,6 +4,7 @@ import { Button } from "@/components/layout/ui/button";
 import type { SettleRow, SettleView } from "@/lib/adsSettleApi";
 import { ActionBar, FlowTo, LearnLine, MoneyRule, MoneyTag, OriginTag, ResultHero, formatAmount } from "../patterns";
 import { perSaleAmount } from "../patterns/csv";
+import { useOrgClock } from "@/lib/orgClock";
 import { angleOf, learnRows, type AnglePicks } from "./SettleAngles";
 import { FROM_META, campaignOf, isImported, money, rangeText, stampText, yuan } from "./settleCsv";
 
@@ -63,6 +64,7 @@ export function SettleNote({ view, header, picks, busy, error, onWrite, homeHref
   view: SettleView; header: ReactNode; picks: AnglePicks; busy: boolean; error: string | null; onWrite: () => void;
   homeHref: string; angleHref: string; newHref: string; next: { href: string } | null;
 }) {
+  const { timezone } = useOrgClock();
   if (view.status === "written" && view.written) {
     const written = view.written;
     const rows = learnRows(view).filter((row) => row.written_angle).map((row) => ({ row, angle: row.written_angle as string }));
@@ -73,7 +75,7 @@ export function SettleNote({ view, header, picks, busy, error, onWrite, homeHref
           {header}
           <ResultHero
             tone="ok" title={`寫好了 ${written.count} 條：有效 ${written.effective}、無效 ${written.ineffective}`}
-            note={`寫於 ${stampText(written.at)}・上一期 ${rangeText(view.start, view.end)}`}
+            note={`寫於 ${stampText(written.at, timezone)}・上一期 ${rangeText(view.start, view.end)}`}
           />
           <FlowTo
             from={{ label: "品牌筆記本", value: `多了 ${written.count} 條`, note: `原本 ${before} 條` }}
