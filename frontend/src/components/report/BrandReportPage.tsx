@@ -1,3 +1,5 @@
+import { formatUsd } from "@/lib/format";
+import { Button } from "@/components/layout/ui/button";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
@@ -21,7 +23,7 @@ function errorMessage(err: unknown): string {
 }
 
 function costLabel(cost: number | null): string | null {
-  return cost === null ? null : `這份報告花了 NT$${cost.toFixed(2)}`;
+  return cost === null ? null : `這份報告花了 ${formatUsd(cost)}`;
 }
 
 export function BrandReportPage({ brandId }: { brandId: string }) {
@@ -30,7 +32,7 @@ export function BrandReportPage({ brandId }: { brandId: string }) {
   const [state, setState] = useState<PageState>({ status: "loading" });
   const [params, setParams] = useSearchParams();
   const requestedChapter = Number(params.get("chapter") ?? "1") - 1;
-  const sectionCount = state.status === "ready" ? state.data.report?.sections.length ?? 0 : 0;
+  const sectionCount = state.status === "ready" ? state.data.report?.sections.length ?? 0 : 0; // ZERO_OK: no report has no selectable chapters
   const chapter = Number.isInteger(requestedChapter) && requestedChapter >= 0 && requestedChapter < sectionCount ? requestedChapter : 0;
   function setChapter(index: number) { setParams(previous => {const next = new URLSearchParams(previous);next.set("chapter",String(index+1));return next;}); }
 
@@ -95,14 +97,14 @@ export function BrandReportPage({ brandId }: { brandId: string }) {
             {isRunning && <p className="mt-1 text-sm text-muted-foreground">正在整理五章，完成後會自動更新。</p>}
           </div>
           <div className="report-print-hidden flex gap-2">
-            <button
+            <Button
               type="button"
               onClick={startGeneration}
-              disabled={disabled}
+              busy={disabled}
               className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
             >
               {disabled ? "生成中…" : "重新生成報告"}
-            </button>
+            </Button>
             <button
               type="button"
               onClick={() => window.print()}
@@ -120,14 +122,14 @@ export function BrandReportPage({ brandId }: { brandId: string }) {
         {actionError && (
           <div role="alert" className="report-print-hidden flex flex-wrap items-center justify-between gap-3 rounded-md border border-danger/30 bg-danger/10 px-4 py-3 text-sm text-danger">
             <span>{actionError}</span>
-            <button
+            <Button
               type="button"
               onClick={startGeneration}
-              disabled={disabled}
+              busy={disabled}
               className="shrink-0 rounded-md border border-danger/40 bg-card px-3 py-1.5 text-xs font-medium text-danger hover:bg-danger/10 disabled:cursor-not-allowed disabled:opacity-60"
             >
               稍後再試
-            </button>
+            </Button>
           </div>
         )}
         {failure && <p className="rounded-md border border-danger/30 bg-danger/10 px-4 py-3 text-sm text-danger">{failure}</p>}
@@ -136,7 +138,7 @@ export function BrandReportPage({ brandId }: { brandId: string }) {
             title="這個品牌還沒有顧問分析報告"
             description="報告會把已確認的品牌事實整理成一份給人讀的分析，包含定位、市場觀察、可用宣稱與節奏方向。"
             actionLabel={disabled ? "生成中…" : "生成報告"}
-            actionDisabled={disabled}
+            actionBusy={disabled}
             onAction={startGeneration}
           />
         )}

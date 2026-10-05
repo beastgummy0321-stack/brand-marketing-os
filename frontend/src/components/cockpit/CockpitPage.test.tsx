@@ -1,3 +1,4 @@
+vi.mock("@/lib/figures", async (actual) => ({ ...await actual<typeof import("@/lib/figures")>(), useFigureBases: () => ({roas_platform: {label: "平台回報", formula: "平台回報的購買金額 ÷ 花費", unit: "ratio"}}) }));
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -35,14 +36,14 @@ const hoursAgo = (h: number) => new Date(Date.now() - h * 3_600_000).toISOString
 function spend(overrides: Partial<MetaSpendSummary> = {}): MetaSpendSummary {
   const total = {
     campaign_id: "total", campaign_name: "總計", spend: 1200, impressions: 3000, clicks: 90,
-    roas: 2.2,
+    roas_platform: 2.2, currency: "TWD",
   };
   return {
     last_pull_at: null,
     data_pulled_at: hoursAgo(3),
     attribution_label: "點擊後 7 天＋瀏覽後 1 天",
     campaigns: [{ ...total, campaign_id: "c-1", campaign_name: "活動一" }],
-    total,
+    totals: [total],
     ...overrides,
   };
 }
@@ -103,7 +104,7 @@ describe("CockpitPage 資料時間與歸因", () => {
   it("有數字但帳號還沒完成拉取時，寫資料讀取時間，不寫尚未成功拉取", async () => {
     view(spend());
     expect(await screen.findByText("資料讀取於 3 小時前")).toBeTruthy();
-    expect(screen.getByText("1,200")).toBeTruthy();
+    expect(screen.getByText("1,200 TWD")).toBeTruthy();
     expect(screen.queryByText("尚未成功拉取")).toBeNull();
   });
 
@@ -179,12 +180,25 @@ describe("CockpitPage 你的商品（F43-I14）", () => {
     expect(await within(block()).findByRole("alert")).toBeTruthy();
     expect(within(block()).getByText("商品讀取失敗：讀取商品失敗。")).toBeTruthy();
     expect(within(block()).getByRole("link", { name: "＋建新商品" })).toBeTruthy();
-    expect(screen.getByText("1,200")).toBeTruthy();
+    expect(screen.getByText("1,200 TWD")).toBeTruthy();
     expect(screen.getByText("活動表")).toBeTruthy();
 
     vi.mocked(fetchProductsPage).mockResolvedValue(productsPage());
     await userEvent.click(within(block()).getByRole("button", { name: "重新載入" }));
     expect(await within(block()).findByText("單盒 399・三盒組 999")).toBeTruthy();
     expect(within(block()).queryByRole("alert")).toBeNull();
+  });
+});
+
+
+describe("Cockpit currency totals", () => {
+  it("prints each currency on its own line", async () => {
+    view(spend({ totals: [
+      { currency: "TWD", spend: 1200, impressions: 3000, clicks: 90, roas_platform: 2.2 },
+      { currency: "USD", spend: 40, impressions: 1000, clicks: 20, roas_platform: 1.5 },
+    ] }));
+    expect(await screen.findByText("1,200 TWD")).toBeTruthy();
+    expect(screen.getByText("40 USD")).toBeTruthy();
+    expect(screen.queryByText(/1,240/)).toBeNull();
   });
 });

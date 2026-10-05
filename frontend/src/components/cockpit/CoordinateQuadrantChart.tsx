@@ -49,7 +49,7 @@ function buildOption(
     Math.ceil(
       Math.max(
         1.4,
-        (breakeven ?? 0) * 1.15,
+        (breakeven ?? 0) * 1.15, // ZERO_OK: chart axis minimum, never a displayed unknown value
         ...points.map((p) => p.high * 1.15),
       ) * 2,
     ) / 2;

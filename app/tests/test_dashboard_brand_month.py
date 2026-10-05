@@ -67,12 +67,14 @@ class BrandMonthMoneyTest(unittest.TestCase):
             org_id=self.org_id,
         )["id"]
 
-    def _bind_account_with_spend(self, brand_id: str, spend: float) -> None:
+    def _bind_account_with_spend(self, brand_id: str, spend: float, currency: str = "TWD") -> None:
+        account_id = f"acct-{uuid4().hex[:8]}"
         meta_repo.upsert_accounts(main.conn, self.org_id, [
-            {"account_id": f"acct-{uuid4().hex[:8]}", "name": "測試帳號", "currency": "TWD"},
+            {"account_id": account_id, "name": "測試帳號", "currency": currency},
         ])
         main.conn.commit()
-        account = meta_repo.list_accounts(main.conn, self.org_id)[-1]
+        account = next(a for a in meta_repo.list_accounts(main.conn, self.org_id)
+                       if a["account_id"] == account_id)
         meta_repo.bind(main.conn, self.org_id, brand_id, account["id"])
         meta_repo.upsert_entity_spend(
             main.conn, self.org_id, account["id"],
@@ -107,13 +109,28 @@ class BrandMonthMoneyTest(unittest.TestCase):
         self.assertIn("generated_at", body)
         data = body["data"]
 
-        self.assertAlmostEqual(data["spend"], 2000.0, places=2)
+        self.assertEqual(data["spend_by_currency"], [{"currency": "TWD", "spend": 2000.0}])
         self.assertAlmostEqual(data["revenue"], 1000.0, places=2)
         # 只有 SKU-A 有登記成本：(100*5 - 30*5) = 350；SKU-B 的 200 元營收不算進毛利。
         self.assertAlmostEqual(data["margin"], 350.0, places=2)
         self.assertEqual(data["margin_unknown_sku_count"], 1)
-        self.assertAlmostEqual(data["roas"], 0.5, places=2)
+        self.assertAlmostEqual(data["roas_all_channels"], 0.5, places=2)
         self.assertTrue(data["has_orders"])
+
+    def test_mixed_currencies_keep_separate_spend_and_unknown_roas(self):
+        brand_id = self._brand("Mixed currency")
+        orders_repo.save_orders(main.conn, brand_id, [{
+            "order_number": "MIX-1", "order_date": "2026-08-02", "total_amount": 1000,
+            "refunded_amount": 0, "items": [],
+        }], source="test", actor=ACTOR)
+        self._bind_account_with_spend(brand_id, 2000, "TWD")
+        self._bind_account_with_spend(brand_id, 30, "USD")
+        data = self.client.get(f"/api/dashboard/brands/{brand_id}/month").json()["data"]
+        self.assertEqual(data["spend_by_currency"], [
+            {"currency": "TWD", "spend": 2000.0}, {"currency": "USD", "spend": 30.0},
+        ])
+        self.assertIsNone(data["roas_all_channels"])
+        self.assertEqual(data["roas_unknown"], "mixed_currency")
 
     def test_no_orders_is_empty_state_not_zero(self):
         """完全沒有訂單：營收／毛利／ROAS 都是 None（累積中），不是假的 0。"""
@@ -124,7 +141,7 @@ class BrandMonthMoneyTest(unittest.TestCase):
         self.assertIsNone(data["revenue"])
         self.assertIsNone(data["margin"])
         self.assertEqual(data["margin_unknown_sku_count"], 0)
-        self.assertIsNone(data["roas"])
+        self.assertIsNone(data["roas_all_channels"])
 
     def test_margin_none_when_no_sku_cost_registered_at_all(self):
         """有訂單、有 SKU，但一個成本都沒登記：毛利誠實回 None，不是假裝算出 0。"""
@@ -152,9 +169,9 @@ class BrandMonthMoneyTest(unittest.TestCase):
             source="test", actor=ACTOR)
         resp = self.client.get(f"/api/dashboard/brands/{brand_id}/month")
         data = resp.json()["data"]
-        self.assertAlmostEqual(data["spend"], 0.0, places=2)
+        self.assertEqual(data["spend_by_currency"], [])
         self.assertAlmostEqual(data["revenue"], 800.0, places=2)
-        self.assertIsNone(data["roas"])
+        self.assertIsNone(data["roas_all_channels"])
 
     def test_other_org_cannot_read_this_brand_month(self):
         brand_id = self._brand("租戶隔離品牌")

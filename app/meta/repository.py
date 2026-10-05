@@ -992,3 +992,40 @@ def read_external_pixels(conn, org_id, brand_id, account_id):
         if not cursor:
             return pixels
     raise ExternalReadError("像素清單超過一次可讀的範圍，這次沒有全部讀到。", "invalid_source_page")
+
+
+def spend_by_currency(
+    conn: _AnyConn, org_id: str, ad_account_ids: list, month_start: date, month_end: date,
+    *, level: str,
+) -> dict:
+    """Aggregate only within the currency captured from the account on each daily row."""
+    if level not in LEVELS:
+        raise ValueError("Unknown spend level")
+    if not ad_account_ids:
+        return {"entities": [], "totals": []}
+    aggregate = (
+        "SUM(spend) AS spend, SUM(impressions) AS impressions, SUM(clicks) AS clicks,"
+        " CASE WHEN bool_and(roas IS NOT NULL)"
+        " THEN SUM(spend * roas) / NULLIF(SUM(spend), 0) ELSE NULL END AS roas_platform"
+    )
+    args = (org_id, ad_account_ids, level, month_start, month_end)
+    entities = conn.execute(
+        "SELECT currency, entity_id,"
+        " (array_agg(entity_name ORDER BY spend_date DESC))[1] AS entity_name,"
+        + aggregate + " FROM meta_entity_spend mes" + _SPEND_WHERE
+        + " GROUP BY currency, entity_id ORDER BY currency, entity_id", args,
+    ).fetchall()
+    totals = conn.execute(
+        "SELECT currency," + aggregate + " FROM meta_entity_spend mes" + _SPEND_WHERE
+        + " GROUP BY currency ORDER BY currency", args,
+    ).fetchall()
+
+    def row(value):
+        result = dict(value)
+        result["spend"] = float(value["spend"])
+        result["impressions"] = int(value["impressions"])
+        result["clicks"] = int(value["clicks"])
+        result["roas_platform"] = _float_or_none(value["roas_platform"])
+        return result
+
+    return {"entities": [row(e) for e in entities], "totals": [row(t) for t in totals]}

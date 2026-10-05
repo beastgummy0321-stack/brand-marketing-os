@@ -77,3 +77,11 @@ describe("BrandReportPage 生成日期 (F50-I14, Contract K)", () => {
     expect(await screen.findByText(/生成日期 2026\/10\/04・/)).toBeTruthy();
   });
 });
+
+
+it("prints AI cost in USD", async () => {
+  vi.mocked(fetchBrandReport).mockResolvedValue(READY);
+  renderPage();
+  expect(await screen.findByText(/3.20 美元/)).toBeTruthy();
+  expect(screen.queryByText(/NT\$3.20/)).toBeNull();
+});

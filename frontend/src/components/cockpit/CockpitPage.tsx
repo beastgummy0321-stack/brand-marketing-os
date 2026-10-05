@@ -1,3 +1,5 @@
+import { formatMoney } from "@/lib/format";
+import { Figure } from "@/components/layout/Figure";
 import { lazy, Suspense, useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useSearchParams } from "react-router-dom";
@@ -27,7 +29,7 @@ import {
   type WidgetId,
 } from "@/lib/dashboardLayout";
 import { fetchMetaSpend } from "@/lib/metaApi";
-import { formatMetaRoas, formatUpdatedAt } from "@/lib/format";
+import { formatUpdatedAt } from "@/lib/format";
 import { useOrgClock } from "@/lib/orgClock";
 import { LayoutEditor, metricLabels, widgetLabels } from "./LayoutEditor";
 import { ProductsBlock } from "./ProductsBlock";
@@ -137,7 +139,11 @@ export function CockpitPage({ brandId }: { brandId: string }) {
         actionLabel="品牌總覽"
       />
     );
-  const total = meta.data?.total;
+  const totals = meta.data?.totals;
+  const total = totals ? {
+    impressions: totals.reduce((sum, row) => sum + row.impressions, 0),
+    clicks: totals.reduce((sum, row) => sum + row.clicks, 0),
+  } : undefined;
   // F31-I03: 「尚未成功拉取」 only when nothing was ever read; rows read by another account's
   // pull or a backfill still say when they were read. F50-I14: past 24 hours the stamp is the org clock's
   // `MM/DD HH:mm` (`formatUpdatedAt`), not a growing hour count.
@@ -152,14 +158,14 @@ export function CockpitPage({ brandId }: { brandId: string }) {
       : "讀取中…";
   const values = total
     ? {
-        spend: number(total.spend),
+        spend: totals?.length ? totals.map((row) => <span className="block" key={row.currency}>{formatMoney(row.spend, row.currency)}</span>) : "不明",
         impressions: number(total.impressions),
         clicks: number(total.clicks),
         ctr:
           total.impressions > 0
             ? `${((total.clicks / total.impressions) * 100).toFixed(2)}%`
             : "—",
-        roas: formatMetaRoas(total.roas),
+        roas: totals?.length ? totals.map((row) => <span className="block" key={row.currency}>{totals.length > 1 && `${row.currency} `}<Figure basis="roas_platform" value={row.roas_platform} /></span>) : "不明",
       }
     : null;
   return (
@@ -222,7 +228,7 @@ export function CockpitPage({ brandId }: { brandId: string }) {
           <Button
             variant="ghost"
             size="sm"
-            disabled={layout.views.length >= 8}
+            disabledReason={layout.views.length >= 8 ? "最多保留 8 個檢視，請先刪除一個檢視" : null}
             onClick={() => {
               setSection("dashboard");
               addView();
@@ -249,7 +255,7 @@ export function CockpitPage({ brandId }: { brandId: string }) {
             variant="ghost"
             size="icon-sm"
             aria-label="重新整理廣告數據"
-            disabled={meta.isFetching}
+            busy={meta.isFetching}
             onClick={() => void meta.refetch()}
           >
             <RefreshCw className={meta.isFetching ? "animate-spin" : ""} />

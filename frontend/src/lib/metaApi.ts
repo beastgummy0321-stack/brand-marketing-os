@@ -3,7 +3,7 @@
  * 不是 /api/settings 那種 {data, generated_at} 信封——照抄
  * frontend/src/components/auth/AcceptInvitePage.tsx 已經在用的解析方式，不要自己
  * 另外發明一套錯誤格式。 */
-import { apiFetch, errorMessageFrom } from "./http";
+import { apiFetch, readJson } from "./http";
 
 export interface MetaAccount {
   id: string;
@@ -19,30 +19,18 @@ export interface MetaAccountsData {
   accounts: MetaAccount[];
 }
 
-interface ErrorEnvelope {
-  error: { code: string; message: string };
-}
-
-async function readOrThrow<T>(res: Response, fallback: string): Promise<T> {
-  if (!res.ok) {
-    const body = (await res.json().catch(() => null)) as ErrorEnvelope | null;
-    throw new Error(errorMessageFrom(body, fallback));
-  }
-  return res.json() as Promise<T>;
-}
-
 export async function connectMetaToken(token: string): Promise<MetaAccountsData> {
   const res = await apiFetch("/api/meta/token", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ token }),
   });
-  return readOrThrow<MetaAccountsData>(res, `連接失敗（狀態碼 ${res.status}）`);
+  return readJson<MetaAccountsData>(res, `連接失敗（狀態碼 ${res.status}）`);
 }
 
 export async function fetchMetaAccounts(): Promise<MetaAccountsData> {
   const res = await apiFetch("/api/meta/accounts");
-  return readOrThrow<MetaAccountsData>(res, `讀取失敗（狀態碼 ${res.status}）`);
+  return readJson<MetaAccountsData>(res, `讀取失敗（狀態碼 ${res.status}）`);
 }
 
 export async function bindMetaAccount(brandId: string, adAccountId: string): Promise<void> {
@@ -50,7 +38,7 @@ export async function bindMetaAccount(brandId: string, adAccountId: string): Pro
     `/api/meta/brands/${encodeURIComponent(brandId)}/accounts/${encodeURIComponent(adAccountId)}`,
     { method: "POST" },
   );
-  await readOrThrow(res, `綁定失敗（狀態碼 ${res.status}）`);
+  await readJson(res, `綁定失敗（狀態碼 ${res.status}）`);
 }
 
 export async function unbindMetaAccount(brandId: string, adAccountId: string): Promise<void> {
@@ -58,7 +46,7 @@ export async function unbindMetaAccount(brandId: string, adAccountId: string): P
     `/api/meta/brands/${encodeURIComponent(brandId)}/accounts/${encodeURIComponent(adAccountId)}`,
     { method: "DELETE" },
   );
-  await readOrThrow(res, `取消綁定失敗（狀態碼 ${res.status}）`);
+  await readJson(res, `取消綁定失敗（狀態碼 ${res.status}）`);
 }
 
 /** 票 05：品牌頁的本月 Meta 花費／成效。roas 為 null＝未追蹤（不是 0），對應
@@ -69,7 +57,8 @@ export interface MetaCampaignSpend {
   spend: number;
   impressions: number;
   clicks: number;
-  roas: number | null;
+  roas_platform: number | null;
+  currency: string;
 }
 
 export interface MetaSpendSummary {
@@ -79,12 +68,12 @@ export interface MetaSpendSummary {
   /** F31-I03: the rows' attribution window in words (e.g. 點擊後 7 天＋瀏覽後 1 天). */
   attribution_label: string | null;
   campaigns: MetaCampaignSpend[];
-  total: MetaCampaignSpend;
+  totals: Omit<MetaCampaignSpend, "campaign_id" | "campaign_name">[];
 }
 
 export async function fetchMetaSpend(brandId: string): Promise<MetaSpendSummary> {
   const res = await apiFetch(`/api/meta/brands/${encodeURIComponent(brandId)}/spend`);
-  return readOrThrow<MetaSpendSummary>(res, `讀取失敗（狀態碼 ${res.status}）`);
+  return readJson<MetaSpendSummary>(res, `讀取失敗（狀態碼 ${res.status}）`);
 }
 
 /** 票 past-ads/02：37 個月補拉（ADR 0067 §1.8），一個組織一個背景工作。這裡只出 client——
@@ -114,10 +103,10 @@ export async function startMetaBackfill(brandId: string): Promise<MetaBackfillSt
   const res = await apiFetch(`/api/meta/brands/${encodeURIComponent(brandId)}/backfill`, {
     method: "POST",
   });
-  return readOrThrow<MetaBackfillStartResult>(res, `啟動失敗（狀態碼 ${res.status}）`);
+  return readJson<MetaBackfillStartResult>(res, `啟動失敗（狀態碼 ${res.status}）`);
 }
 
 export async function fetchMetaBackfillStatus(brandId: string): Promise<MetaBackfillStatus> {
   const res = await apiFetch(`/api/meta/brands/${encodeURIComponent(brandId)}/backfill`);
-  return readOrThrow<MetaBackfillStatus>(res, `讀取失敗（狀態碼 ${res.status}）`);
+  return readJson<MetaBackfillStatus>(res, `讀取失敗（狀態碼 ${res.status}）`);
 }

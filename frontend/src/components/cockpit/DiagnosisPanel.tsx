@@ -1,3 +1,4 @@
+import { Button } from "@/components/layout/ui/button";
 import { useEffect, useState } from "react";
 import {
   adoptSuggestion,
@@ -123,14 +124,14 @@ export type DiagnosisPanelState = ReturnType<typeof useDiagnosisPanel>;
 /** 標題列右側那顆按鈕——跟既有「素材座標成效」`<h2>` 放同一個 flex row。 */
 export function DiagnosisRunButton({ panel }: { panel: DiagnosisPanelState }) {
   return (
-    <button
+    <Button
       type="button"
       onClick={panel.onRun}
-      disabled={panel.busy}
+      busy={panel.busy}
       className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
     >
       {panel.busy ? "判讀中…" : "跑一次判讀"}
-    </button>
+    </Button>
   );
 }
 
@@ -244,14 +245,15 @@ function SuggestionCard({
           兩個判讀器都這麼說
         </span>
       )}
-      <button
+      <Button
         type="button"
         onClick={onAdopt}
-        disabled={adopted || adopting || roundBusy}
+        busy={adopting || roundBusy}
+        disabledReason={adopted ? "這項建議已採用" : null}
         className="mt-1 w-fit rounded-md bg-primary px-3 py-1 text-xs font-medium text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
       >
         {adopted ? "已採用" : adopting ? "採用中…" : "採用"}
-      </button>
+      </Button>
     </div>
   );
 }
