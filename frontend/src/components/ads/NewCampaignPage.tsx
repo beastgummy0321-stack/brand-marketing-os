@@ -1,3 +1,5 @@
+import { newCampaignPath } from "@/lib/adsRoutes";
+import { formatMoney } from "@/lib/format";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { addDays, daysBetween } from "@/lib/orgClock";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
@@ -234,7 +236,7 @@ function CampaignWizard({ brandId, draftKey }: { brandId: string; draftKey: stri
       : capShown > breakEven ? `比${beText} 高 ${fmt(capShown - breakEven)}` : `比${beText} 低 ${fmt(breakEven - capShown)}`;
   const prevPeriod = prev ? prev.campaign_name.split("・")[1] ?? prev.campaign_name : "";
   const budgetHint = budgetOk
-    ? (budgetTag === "copied" && prev?.spend != null ? `上一期 ${prevPeriod} 花了 NT$${fmt(prev.spend)}` : "")
+    ? (budgetTag === "copied" && prev?.spend != null ? `上一期 ${prevPeriod} 花了 ${formatMoney(prev.spend, "TWD")}` : "")
     : way && !prev ? "第一次推，要自己填" : "";
 
   const hint = !way || !goal ? "選好要推什麼和想要的結果"
@@ -242,7 +244,8 @@ function CampaignWizard({ brandId, draftKey }: { brandId: string; draftKey: stri
     : capCleared ? "填每筆上限"
     : oneDate ? "開始和結束要一起填"
     : backwards ? "結束要在開始之後" : "";
-  const blocked = !!hint || busy || uploadBusy || restoring || (!!createdId && !created);
+  const pendingRead = restoring || (!!createdId && !created);
+  const blocked = !!hint || busy || uploadBusy || pendingRead;
 
   // The budget starts from the same sell-way's previous campaign while the form holds none (a restored draft keeps
   // its own value); another sell-way swaps a prefilled budget for its own previous one.
@@ -284,7 +287,7 @@ function CampaignWizard({ brandId, draftKey }: { brandId: string; draftKey: stri
 
   function finish(campaignId: string) {
     clearDraft(draftKey);
-    navigate(`/brands/${brandId}/ads/new/${campaignId}`);
+    navigate(`${newCampaignPath(brandId)}/${encodeURIComponent(campaignId)}`);
   }
 
   /** A created campaign's `PATCH` (and the cap through the target writer): only what differs from the campaign. */
@@ -368,17 +371,17 @@ function CampaignWizard({ brandId, draftKey }: { brandId: string; draftKey: stri
   // an attach retry.
   return (
     <Shell homeHref={homeHref} bar={picking ? (
-      <ActionBar back={{ label: "投放中心", to: homeHref }} hint={hint || undefined}>
-        <Button disabled={blocked} onClick={() => void submit()}>
+      <ActionBar back={{ label: "投放中心", to: homeHref }}>
+        <Button busy={busy || uploadBusy} disabledReason={hint || (pendingRead ? "正在讀取已建立的活動，請稍候" : undefined)} onClick={() => void submit()}>
           {created && error && uploads.some((u) => !attached.has(u.id)) ? "重試加入未完成素材並繼續" : "下一步：系統理解"} →
         </Button>
       </ActionBar>
     ) : (
       <ActionBar
-        back={<Button variant="ghost" disabled={phase === "understanding"} onClick={() => setPhase("pick")}>← 上一步</Button>}
+        back={<Button variant="ghost" busy={phase === "understanding"} onClick={() => setPhase("pick")}>← 上一步</Button>}
         hint={phase === "failed" ? "讀取失敗，按上方重試" : undefined}
       >
-        <Button disabled>產生策略 →</Button>
+        <Button disabledReason={phase === "failed" ? "先重試並完成系統理解" : "系統理解完成後才能產生策略"}>產生策略 →</Button>
       </ActionBar>
     )}>
       {!picking && <UnderstandingView brandId={brandId} failed={phase === "failed" ? failure : null} waitedSeconds={waited} onRetry={() => void submit(lastRequest)} />}
@@ -496,8 +499,8 @@ function CampaignWizard({ brandId, draftKey }: { brandId: string; draftKey: stri
           {!created && !createdId && (
             <div className="flex flex-wrap gap-2">
               {goalText.trim()
-                ? <Button variant="outline" disabled={locked || uploadBusy || oneDate || backwards} onClick={() => void submit({ kind: "sentence", text: goalText })}>產生建議</Button>
-                : <Button variant="outline" disabled={locked || uploadBusy || oneDate || backwards} onClick={() => void submit({ kind: "sentence", text: BRAND_SUGGESTION_REQUEST })}>請 AI 依品牌資料建議</Button>}
+                ? <Button variant="outline" busy={busy || uploadBusy} disabledReason={locked ? "目前活動資料尚未就緒" : oneDate ? "開始和結束日期要一起填" : backwards ? "結束日不能早於開始日" : undefined} onClick={() => void submit({ kind: "sentence", text: goalText })}>產生建議</Button>
+                : <Button variant="outline" busy={busy || uploadBusy} disabledReason={locked ? "目前活動資料尚未就緒" : oneDate ? "開始和結束日期要一起填" : backwards ? "結束日不能早於開始日" : undefined} onClick={() => void submit({ kind: "sentence", text: BRAND_SUGGESTION_REQUEST })}>請 AI 依品牌資料建議</Button>}
             </div>
           )}
           <UserAssetsLibrary brandId={brandId} readOnly={busy} onSelection={setUploads} onBusy={setUploadBusy} />

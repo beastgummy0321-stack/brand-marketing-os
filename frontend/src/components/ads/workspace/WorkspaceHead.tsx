@@ -1,3 +1,4 @@
+import { campaignPath } from "@/lib/adsRoutes";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { PageTabs } from "@/components/layout/PageTabs";
 import { Skeleton } from "@/components/layout/Skeleton";
@@ -29,13 +30,12 @@ export const WORKSPACE_TABS: { value: WorkspaceTab; label: string }[] = [
 
 /** Prototype `STAGES`: each station opens the tab (or page) where that stage is worked on. */
 export function stageStations(brandId: string, campaignId: string): StageStation[] {
-  const ws = `/brands/${brandId}/ads/campaigns/${campaignId}`;
   return [
-    { key: "plan", label: "計畫", to: `${ws}?tab=strategy` },
-    { key: "assets", label: "素材", to: `${ws}?tab=assets` },
-    { key: "launch", label: "上架", to: `${ws}?tab=changes` },
-    { key: "read", label: "判讀", to: `${ws}?tab=perf` },
-    { key: "decide", label: "決策", to: `${ws}?tab=overview` },
+    { key: "plan", label: "計畫", to: campaignPath(brandId, campaignId, {tab: "strategy"}) },
+    { key: "assets", label: "素材", to: campaignPath(brandId, campaignId, {tab: "assets"}) },
+    { key: "launch", label: "上架", to: campaignPath(brandId, campaignId, {tab: "changes"}) },
+    { key: "read", label: "判讀", to: campaignPath(brandId, campaignId, {tab: "perf"}) },
+    { key: "decide", label: "決策", to: campaignPath(brandId, campaignId, {tab: "overview"}) },
     { key: "review", label: "回顧", to: `/brands/${brandId}/ads/month` },
   ];
 }

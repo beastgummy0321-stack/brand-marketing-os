@@ -1,3 +1,5 @@
+import { CapBlock } from "./strategy/CapBlock";
+vi.mock("@/lib/figures", async (actual) => ({ ...await actual<typeof import("@/lib/figures")>(), useFigureBases: () => ({roas_at_cap: {label: "花到上限時", formula: "售價 ÷ 每筆上限", unit: "ratio"}, roas_all_spend: {label: "保守", formula: "營收 ÷ 全部花費", unit: "ratio"}, roas_tracked_spend: {label: "樂觀", formula: "營收 ÷ 有追到營收的那部分花費", unit: "ratio"}}) }));
 /** ConfirmBriefPage (F30-I05): wizard v10 step 2 「系統這樣理解」 — six fields, guessed ones marked, in-place edits
  * that PATCH one field, independent read failures, and 產生策略 as the only model call.
  * F36-I04: the optional seventh chip 「每賣一筆最多花」 — empty by default with break-even as hint only, saved through
@@ -5,7 +7,7 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { CampaignDetail } from "@/lib/adsApi";
 import type { CampaignFieldSources } from "@/lib/adsCampaignTypes";
@@ -114,7 +116,7 @@ describe("ConfirmBriefPage (F30-I05)", () => {
     for (const label of ["商品", "結果", "期間", "預算上限", "平台", "受眾", "每賣一筆最多花"]) expect(screen.getByText(label)).toBeTruthy();
     expect(within(field("objective")).getByText("購買")).toBeTruthy();
     expect(within(field("dates")).getByText("10/01 – 10/31")).toBeTruthy();
-    expect(within(field("budget")).getByText("NT$30,000")).toBeTruthy();
+    expect(within(field("budget")).getByText("30,000 TWD")).toBeTruthy();
     expect(await within(field("platform")).findByText("Meta")).toBeTruthy();
     expect(within(field("audience")).getByText("25–40 歲上班族")).toBeTruthy();
     expect(screen.queryByText("主打")).toBeNull();
@@ -156,7 +158,7 @@ describe("ConfirmBriefPage (F30-I05)", () => {
     }));
     renderPage();
     await screen.findByText(LONG);
-    expect(within(field("cap")).getByText("NT$450")).toBeTruthy();
+    expect(within(field("cap")).getByText("450 TWD")).toBeTruthy();
     expect(within(field("cap")).getByText("猜的，請確認")).toBeTruthy();
     expect(field("cap").className).toContain("border-dashed");
     expect(screen.getByText("有 1 項是猜的")).toBeTruthy();
@@ -295,7 +297,7 @@ describe("ConfirmBriefPage (F30-I05)", () => {
     await user.type(input, "45000");
     await user.click(within(field("budget")).getByRole("button", { name: "完成" }));
     expect(patchCampaign).toHaveBeenCalledWith("brd_1", "cmp_1", { constraints_json: { platform: "meta", budget: 45000 } });
-    expect(await within(field("budget")).findByText("NT$45,000")).toBeTruthy();
+    expect(await within(field("budget")).findByText("45,000 TWD")).toBeTruthy();
   });
 
   it("a failed channel list shows ReadFailed with 重試; the platform is not editable, the rest still is", async () => {
@@ -347,7 +349,7 @@ describe("ConfirmBriefPage cap chip 「每賣一筆最多花」 (F36-I04)", () =
     vi.mocked(getCampaign).mockResolvedValue(campaign({ cap: capView({ value: 450, basis: "own", own_value: 450 }), context_json: capSources("copied") }));
     const first = renderPage();
     await screen.findByText(LONG);
-    expect(within(field("cap")).getByText("NT$450")).toBeTruthy();
+    expect(within(field("cap")).getByText("450 TWD")).toBeTruthy();
     expect(field("cap").querySelector("[data-slot=source-tag]")?.textContent).toBe("沿用上一期");
     expect(within(field("cap")).queryByText("猜的，請確認")).toBeNull();
     expect(screen.queryByText(/上限沒填會先用打平/)).toBeNull();
@@ -361,7 +363,7 @@ describe("ConfirmBriefPage cap chip 「每賣一筆最多花」 (F36-I04)", () =
     vi.mocked(getCampaign).mockResolvedValue(campaign({ cap: capView({ value: 600, basis: "own", own_value: 600 }), context_json: capSources("user") }));
     renderPage();
     await screen.findByText(LONG);
-    expect(within(field("cap")).getByText("NT$600")).toBeTruthy();
+    expect(within(field("cap")).getByText("600 TWD")).toBeTruthy();
     expect(field("cap").querySelector("[data-slot=source-tag]")).toBeNull();
   });
 
@@ -371,7 +373,7 @@ describe("ConfirmBriefPage cap chip 「每賣一筆最多花」 (F36-I04)", () =
     await screen.findByText(LONG);
     const chip = field("cap");
     expect(within(chip).getByText("還沒填（選填）")).toBeTruthy();
-    expect(within(chip).getByText("先不填就用打平 NT$559：售價 999 扣成本、運費後的一筆利潤")).toBeTruthy();
+    expect(within(chip).getByText("先不填就用打平 559 TWD：售價 999 扣成本、運費後的一筆利潤")).toBeTruthy();
     expect(within(chip).queryByText("猜的，請確認")).toBeNull();
     expect(chip.className).toContain("border-dashed");
     expect(chip.className).not.toContain("border-grade-watch");
@@ -392,11 +394,11 @@ describe("ConfirmBriefPage cap chip 「每賣一筆最多花」 (F36-I04)", () =
     expect(chip.className).toContain("md:col-span-2");
     expect(within(chip).getByText("填一個整數金額；留空＝先用打平 559")).toBeTruthy();
     await user.type(within(chip).getByLabelText("每賣一筆最多花"), "600");
-    expect(within(chip).getByText("比打平 559 高 41・ROAS 參考 1.7")).toBeTruthy();
+    expect(within(chip).getByText(textIs("比打平 559 高 41・ROAS 1.67x 花到上限時"))).toBeTruthy();
     await user.click(within(chip).getByRole("button", { name: "完成" }));
     expect(putTarget).toHaveBeenCalledWith("brd_1", "cmp_1", { basis: "own", value: 600, expected_revision: 3 });
-    expect(await within(field("cap")).findByText("NT$600")).toBeTruthy();
-    expect(within(field("cap")).getByText("比打平 559 高 41・ROAS 參考 1.7")).toBeTruthy();
+    expect(await within(field("cap")).findByText("600 TWD")).toBeTruthy();
+    expect(within(field("cap")).getByText(textIs("比打平 559 高 41・ROAS 1.67x 花到上限時"))).toBeTruthy();
     expect(getCampaign).toHaveBeenCalledTimes(2);
     expect(screen.getByText("有 1 項是猜的")).toBeTruthy();
     expect(screen.queryByText(/上限沒填會先用打平/)).toBeNull();
@@ -413,12 +415,12 @@ describe("ConfirmBriefPage cap chip 「每賣一筆最多花」 (F36-I04)", () =
     await user.click(screen.getByRole("button", { name: "改每賣一筆最多花" }));
     const input = within(field("cap")).getByLabelText("每賣一筆最多花") as HTMLInputElement;
     await user.type(input, "500");
-    expect(within(field("cap")).getByText("比打平 559 低 59・ROAS 參考 2.0")).toBeTruthy();
+    expect(within(field("cap")).getByText(textIs("比打平 559 低 59・ROAS 2.00x 花到上限時"))).toBeTruthy();
     await user.click(within(field("cap")).getByRole("button", { name: "用打平 559" }));
     expect(input.value).toBe("559");
     await user.type(input, "{Enter}");
     expect(putTarget).toHaveBeenCalledWith("brd_1", "cmp_1", { basis: "own", value: 559, expected_revision: 3 });
-    expect(await within(field("cap")).findByText("NT$559")).toBeTruthy();
+    expect(await within(field("cap")).findByText("559 TWD")).toBeTruthy();
   });
 
   it("an invalid amount disables 完成 with the message; Escape cancels without saving; an empty 完成 keeps the old value", async () => {
@@ -436,7 +438,7 @@ describe("ConfirmBriefPage cap chip 「每賣一筆最多花」 (F36-I04)", () =
     await user.clear(input);
     await user.click(within(field("cap")).getByRole("button", { name: "完成" }));
     expect(putTarget).not.toHaveBeenCalled();
-    expect(within(field("cap")).getByText("NT$600")).toBeTruthy();
+    expect(within(field("cap")).getByText("600 TWD")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "改每賣一筆最多花" }));
     await user.type(within(field("cap")).getByLabelText("每賣一筆最多花"), "{Escape}");
     expect(putTarget).not.toHaveBeenCalled();
@@ -458,7 +460,7 @@ describe("ConfirmBriefPage cap chip 「每賣一筆最多花」 (F36-I04)", () =
     expect(within(field("cap")).queryByRole("button", { name: /用打平/ })).toBeNull();
     expect(within(field("cap")).getByText("填一個整數金額")).toBeTruthy();
     await user.type(within(field("cap")).getByLabelText("每賣一筆最多花"), "500");
-    expect(within(field("cap")).getByText("ROAS 參考 2.0")).toBeTruthy();
+    expect(within(field("cap")).getByText(textIs("ROAS 2.00x 花到上限時"))).toBeTruthy();
   });
 
   it("keeps the editor open with the error when the target save fails", async () => {
@@ -549,3 +551,36 @@ describe("ConfirmBriefPage landing URL (F40-I12)", () => {
     expect(within(field("landing_url")).getByText(URL)).toBeTruthy();
   });
 });
+
+function textIs(wanted: string) {
+  const plain = (el: Element) => {const copy = el.cloneNode(true) as Element; copy.querySelectorAll("button,[role=tooltip]").forEach(n => n.remove()); return (copy.textContent ?? "").replace(/\s+/g, "");};
+  return (_: string, el: Element | null) => !!el && plain(el) === wanted.replace(/\s+/g, "") && ![...el.children].some(c => plain(c) === wanted.replace(/\s+/g, ""));
+}
+
+
+it("cap ROAS uses identical rounding on the brief and strategy, with independent help and edit controls", async () => {
+  const c = campaign({cap: capView({value: 500, own_value: 500, basis: "own", price: 1002.5})});
+  vi.mocked(getCampaign).mockResolvedValue(c);
+  renderPage();
+  await screen.findByText("2.01x");
+  const help = within(field("cap")).getByRole("button", {name: /花到上限時怎麼算/});
+  expect(help.parentElement?.closest("button")).toBeNull();
+  await userEvent.click(help);
+  expect(within(field("cap")).queryByLabelText("每賣一筆最多花")).toBeNull();
+  render(<MemoryRouter><CapBlock brandId="brd_1" campaign={c} onCampaignChange={vi.fn()} /></MemoryRouter>);
+  expect(screen.getAllByText("2.01x")).toHaveLength(2);
+  expect(screen.getAllByText("花到上限時")).toHaveLength(2);
+});
+
+it("the generate action explains why it is unavailable before the campaign loads", () => {
+  vi.mocked(getCampaign).mockReturnValue(new Promise(() => {}));
+  renderPage();
+  const button = screen.getByRole("button", {name: "產生策略 →"});
+  expect(button.hasAttribute("disabled")).toBe(true);
+  expect(document.getElementById(button.getAttribute("aria-describedby")!)?.textContent).toBe("活動資料讀取完成後才能產生策略");
+});
+
+
+// The tooltip measures its trigger in a browser; jsdom does not implement that observer.
+vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
+afterAll(() => vi.unstubAllGlobals());

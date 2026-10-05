@@ -1,3 +1,4 @@
+import { formatMoney } from "@/lib/format";
 import { isRejected } from "@/lib/http";
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
@@ -263,7 +264,7 @@ export function StrategyTab({
     setAllocationError(null);
   }
 
-  const allocationSum = allocationPct ? Object.values(allocationPct).reduce((sum, v) => sum + (Number(v) || 0), 0) : 0;
+  const allocationSum = allocationPct ? Object.values(allocationPct).reduce((sum, v) => sum + (Number(v) || 0), 0) : 0; // ZERO_OK: blank local percentage inputs contribute zero to the draft sum, not a served result.
 
   async function handleAllocationApply() {
     if (!allocationPct) return;
@@ -322,7 +323,7 @@ export function StrategyTab({
             description={generateError ?? "讓行銷駕駛艙依商品與品牌資料規劃第一版策略。"}
             actionLabel={generating || waiting ? "產生中…" : "產生策略"}
             onAction={handleGenerate}
-            actionDisabled={generating || waiting}
+            actionBusy={generating} actionDisabledReason={waiting ? "背景工作還在處理，完成後才能再產生策略" : undefined}
           />
         )}
 
@@ -390,10 +391,10 @@ export function StrategyTab({
                   <p className="text-sm">合計 {allocationSum}%{allocationSum !== 100 && <span className="ml-2 text-muted-foreground">三個角色加起來要剛好 100%</span>}</p>
                   {allocationError && <p role="alert" className="text-sm text-danger">{allocationError}</p>}
                   <div className="flex gap-2">
-                    <Button size="sm" variant="outline" disabled={allocationSum !== 100 || allocationSaving} onClick={() => void handleAllocationApply()}>
+                    <Button size="sm" variant="outline" busy={allocationSaving} disabledReason={allocationSum !== 100 ? "先調整成完整的預算分配" : undefined} onClick={() => void handleAllocationApply()}>
                       {allocationSaving ? "套用中…" : "套用"}
                     </Button>
-                    <Button variant="ghost" size="sm" onClick={() => setAllocationPct(null)} disabled={allocationSaving}>取消</Button>
+                    <Button variant="ghost" size="sm" onClick={() => setAllocationPct(null)} busy={allocationSaving}>取消</Button>
                   </div>
                 </div>
               )}
@@ -457,7 +458,7 @@ export function StrategyTab({
               <label htmlFor="campaign-goal" className="text-sm font-medium">內部活動目標</label>
               <Textarea id="campaign-goal" value={goal} onChange={(event) => setGoal(event.target.value)} />
               <p className="text-xs text-muted-foreground">供工作區管理使用，不會更改平台投放目標。</p>
-              <Button className="w-fit" disabled={goalSaving || !goal.trim() || goal === c.goal_text} onClick={async () => {
+              <Button className="w-fit" busy={goalSaving} disabledReason={!goal.trim() ? "先填寫活動目標" : goal === c.goal_text ? "目標尚未修改" : undefined} onClick={async () => {
                 setGoalSaving(true); setGoalError(null);
                 try { onCampaignChange(await patchCampaign(brandId, c.id, { goal_text: goal.trim(), objective: goal.trim() })); }
                 catch (error) { setGoalError(errorText(error, "儲存目標失敗。")); }
@@ -477,10 +478,10 @@ export function StrategyTab({
 
       <ActionBar
         back={<Button variant="ghost" onClick={() => onChangeTab("overview")}>← 總覽</Button>}
-        hint={primaryError ?? hint}
+        hint={primaryError ?? (primary?.disabled ? undefined : hint)}
       >
         {primary && (
-          <Button disabled={primaryBusy || waiting || primary.disabled} onClick={primary.onClick}>
+          <Button busy={primaryBusy} disabledReason={waiting ? "背景工作還在處理，請稍候" : primary.disabled ? hint : undefined} onClick={primary.onClick}>
             {primaryBusy || waiting ? "處理中…" : primary.label}
           </Button>
         )}
@@ -536,7 +537,7 @@ export function StrategyTab({
                     return (
                       <li key={p.product_id} data-slot="basis-price" className="flex justify-between gap-3 border-t border-border py-[5px] first:border-t-0">
                         <span className="min-w-0 [overflow-wrap:anywhere]">
-                          {p.sell_way_name} {p.price !== null ? `NT$${formatAmount(p.price)}` : "價格尚未設定"}
+                          {p.sell_way_name} {p.price !== null ? formatMoney(p.price, "TWD") : "價格尚未設定"}
                           {p.stale && <span className="ml-1 text-warning">價格可能過期</span>}
                         </span>
                         <span className="whitespace-nowrap text-xs text-muted-foreground">{day ? `${day} 起` : "起始日不明"}</span>

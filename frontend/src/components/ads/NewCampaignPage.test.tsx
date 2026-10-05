@@ -108,9 +108,9 @@ describe("new-campaign step 1, slimmed (F43-I15, prototype f41-onboarding #/new)
     const order = Array.from(group.querySelectorAll("[data-slot=pick-section], [role=radio]"))
       .map((e) => (e.getAttribute("role") === "radio" ? e.getAttribute("data-value") : e.textContent));
     expect(order).toEqual(["綜合維他命軟糖", "sw_one", "sw_three", "益生菌軟糖", "sw_pro", "組合", "sw_duo"]);
-    expect(within(radio("sw_three")).getByText("三盒組 NT$999")).toBeTruthy();
+    expect(within(radio("sw_three")).getByText("三盒組 999 TWD")).toBeTruthy();
     expect(within(radio("sw_three")).getByText("打平 669（推算）・組合價＋免運")).toBeTruthy();
-    expect(within(radio("sw_one")).getByText("單盒 NT$399")).toBeTruthy();
+    expect(within(radio("sw_one")).getByText("單盒 399 TWD")).toBeTruthy();
     expect(within(radio("sw_one")).getByText("打平 249・沒有優惠")).toBeTruthy();
     expect(within(radio("sw_pro")).getByText("單盒 價格未填")).toBeTruthy();
     expect(within(radio("sw_pro")).getByText("缺成本・沒有優惠")).toBeTruthy();
@@ -280,7 +280,7 @@ describe("「期間、預算與平台」 starts from the previous campaign (F46-
       expect(tagOf(label)?.textContent, label).toBe("沿用上一期");
       expect(tagOf(label)?.getAttribute("title"), label).toBe(`上一期：${PREV_NAME}`);
     }
-    expect(screen.getByText("上一期 09/19～10/01 花了 NT$9,781")).toBeTruthy();
+    expect(screen.getByText("上一期 09/19～10/01 花了 9,781 TWD")).toBeTruthy();
     expect(screen.getByText(`標「沿用上一期」的照 ${PREV_NAME}`)).toBeTruthy();
     expect(learnStrip()?.textContent).toBe(`這期會用 2 期的學習・${PREV_NAME}、綜合維他命軟糖 · 三盒組・09/05～09/18留下 3換掉 3看學到什麼 →`);
     expect(within(learnStrip() as HTMLElement).getByRole("link", { name: "看學到什麼 →" }).getAttribute("href")).toBe("/brands/b1/library?tab=ads-learnings");
@@ -318,7 +318,7 @@ describe("「期間、預算與平台」 starts from the previous campaign (F46-
     expect(screen.getByText("比打平 669（推算） 低 69")).toBeTruthy();
     await user.selectOptions(screen.getByLabelText("平台"), "meta");
     for (const label of ["平台", "每筆上限", "這個活動最多花"]) expect(tagOf(label)?.textContent, label).toBe("你改的");
-    expect(screen.queryByText(/花了 NT\$/)).toBeNull();
+    expect(screen.queryByText(/花了 .* TWD/)).toBeNull();
     await user.selectOptions(screen.getByLabelText("平台"), "google_ads");
     expect(tagOf("平台")?.textContent).toBe("沿用上一期");
     await user.click(next());
@@ -361,7 +361,7 @@ describe("「期間、預算與平台」 starts from the previous campaign (F46-
     view();
     await user.click(await screen.findByRole("radio", { name: /三盒組/ }));
     expect(screen.getByText("等於打平 669（推算）")).toBeTruthy();
-    await user.click(screen.getByRole("radio", { name: /單盒 NT\$399/ }));
+    await user.click(screen.getByRole("radio", { name: /單盒 399 TWD/ }));
     expect(screen.getByText("等於打平 249")).toBeTruthy();
     expect(screen.queryByText(/推算）$/)).toBeNull();
     expect(within(radio("sw_one")).getByText("打平 249・沒有優惠")).toBeTruthy();

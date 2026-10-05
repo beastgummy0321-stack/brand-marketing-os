@@ -293,7 +293,7 @@ export function ExperimentPlan({ draftScope, brandId, campaignId, hasSavedCompar
                 我已逐一核對：A 與 B 使用實際選定素材，且受眾、平台、預算與期間相同；只有「{proposal.variable}」不同。
               </label>
               {dirty && <p className="text-xs text-warning">請先儲存或取消進階判讀設定，再確認比較計畫。</p>}
-              <Button disabled={!checked || busy || dirty} onClick={() => void confirm()}>
+              <Button busy={busy} disabledReason={dirty ? "先儲存或取消進階判讀設定" : !checked ? "先勾選已逐一核對比較條件" : undefined} onClick={() => void confirm()}>
                 {busy ? "確認中…" : "確認這份比較計畫"}
               </Button>
             </div>}
@@ -317,7 +317,7 @@ export function ExperimentPlan({ draftScope, brandId, campaignId, hasSavedCompar
             </div>
           </details>}
           {state?.simulation && <p className="text-sm font-medium">隔離模擬，非市場實證。</p>}
-          <Button variant="ghost" className="self-start" disabled={busy}
+          <Button variant="ghost" className="self-start" busy={busy}
             onClick={() => setReload((current) => current + 1)}>重新讀取比較提案</Button>
         </div>
       </Disclosure>
@@ -383,8 +383,8 @@ function SettingsEditor({ settings, draft, resetKeys, closed, busy, dirty, remot
       </div>
     </SettingRow>
     {dirty && !closed && <div className="flex flex-wrap gap-2">
-      <Button disabled={busy || remoteChanged} onClick={onSave}>{busy ? "儲存中…" : "儲存比較設定"}</Button>
-      <Button variant="outline" disabled={busy} onClick={onCancel}>取消設定變更</Button>
+      <Button busy={busy} disabledReason={remoteChanged ? "設定已由別處更新，請重新讀取後再儲存" : undefined} onClick={onSave}>{busy ? "儲存中…" : "儲存比較設定"}</Button>
+      <Button variant="outline" busy={busy} onClick={onCancel}>取消設定變更</Button>
     </div>}
       </div>
     </Disclosure>
@@ -405,6 +405,6 @@ function SettingRow({ label, source, canReset, disabled = false, onReset, childr
       <p className="text-xs text-muted-foreground">來源：{source}</p>
     </div>
     <div>{children}</div>
-    <Button type="button" variant="ghost" size="sm" disabled={disabled || !canReset} onClick={onReset}>恢復此項預設</Button>
+    <Button type="button" variant="ghost" size="sm" disabledReason={disabled ? "比較設定目前不能修改" : !canReset ? "這項已是預設值" : undefined} onClick={onReset}>恢復此項預設</Button>
   </div>;
 }

@@ -68,7 +68,7 @@ export function SimulationRecovery({ brandId, campaign: c, onChanged, onSaved }:
       {error && <p role="alert" className="text-sm text-danger">{error}</p>}
       {!data ? error ? <Button variant="outline" onClick={() => setReload(n => n + 1)}>重新讀取模擬入口</Button> : <p role="status">讀取模擬入口中…</p> : <>
         {data.reason && <p className="text-sm text-warning">{data.reason}</p>}
-        {!data.started ? <Button className="self-start" disabled={readOnly} onClick={() => setConfirmOpen(true)}>啟用隔離模擬回收</Button> : <>
+        {!data.started ? <Button className="self-start" busy={busy} disabledReason={data.reason || (data.closed ? "已結案，成效快照已凍結" : undefined)} onClick={() => setConfirmOpen(true)}>啟用隔離模擬回收</Button> : <>
           <p className="text-sm font-medium">隔離模擬已啟用；此品牌不可再使用真實平台配對。</p>
           <label className="text-sm">資料日期（該日增量，不是截至當日累計）<Input aria-label="模擬資料日期" type="date" min={c.start_date || undefined} max={[today, c.end_date || today].sort()[0]} value={day} disabled={busy} onChange={e => {
             if (e.target.value && (!dirty || window.confirm("這一天的變更尚未儲存，確定切換日期？"))) setDay(e.target.value);
@@ -84,8 +84,8 @@ export function SimulationRecovery({ brandId, campaign: c, onChanged, onSaved }:
               </div>;
             })}
           </fieldset>)}
-          {data.closed ? <p className="text-sm">已結案，成效快照與來源紀錄已凍結。</p> : <Button className="self-start" disabled={readOnly} onClick={() => void save()}>{busy ? "儲存中…" : "儲存這一天的模擬成效"}</Button>}
-          <Button variant="ghost" className="self-start" disabled={busy} onClick={() => {
+          {data.closed ? <p className="text-sm">已結案，成效快照與來源紀錄已凍結。</p> : <Button className="self-start" busy={busy} disabledReason={data.reason || (data.closed ? "已結案，成效快照已凍結" : undefined)} onClick={() => void save()}>{busy ? "儲存中…" : "儲存這一天的模擬成效"}</Button>}
+          <Button variant="ghost" className="self-start" busy={busy} onClick={() => {
             if (!dirty || window.confirm("尚有未儲存的變更，確定重新讀取這一天？")) setReload(n => n + 1);
           }}>重新讀取這一天</Button>
           <p role="status" className="text-xs text-muted-foreground">{dirty ? "有尚未儲存的變更" : data.revision ? `此日期已保存，第 ${data.revision} 版 · ${data.saved_at}` : "此日期尚無回收快照"}</p>
@@ -97,7 +97,7 @@ export function SimulationRecovery({ brandId, campaign: c, onChanged, onSaved }:
       <DialogTitle>確認此品牌只用於隔離演練</DialogTitle>
       <DialogDescription>此品牌之後不能進行真實平台配對或回收。活動「{c.name}」將綁定模擬 ID；不產生隨機成效，數字由你逐日輸入。模擬學習只留在此品牌，不能當正式營運資料。</DialogDescription>
       {error && <p className="text-sm text-danger">{error}</p>}
-      <DialogFooter><Button variant="outline" disabled={busy} onClick={() => setConfirmOpen(false)}>取消</Button><Button disabled={busy} onClick={() => void start()}>{busy ? "啟用中…" : "確認啟用隔離演練"}</Button></DialogFooter>
+      <DialogFooter><Button variant="outline" busy={busy} onClick={() => setConfirmOpen(false)}>取消</Button><Button busy={busy} onClick={() => void start()}>{busy ? "啟用中…" : "確認啟用隔離演練"}</Button></DialogFooter>
     </DialogContent></Dialog>
   </details>;
 }

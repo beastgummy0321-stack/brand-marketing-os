@@ -7,9 +7,9 @@ import { SourceTag, UnderstandingView, UnderstoodField, priceText, ranText, sell
 
 describe("wizard pieces (F30-I05)", () => {
   it("prints a price with the kit formatter, a foreign currency by code, and 價格未填 for unknown, zero or non-finite prices", () => {
-    expect(priceText(1580, "TWD")).toBe("NT$1,580");
-    expect(priceText(399.5, null)).toBe("NT$399.5");
-    expect(priceText(12.3456, "USD")).toBe("USD 12.35");
+    expect(priceText(1580, "TWD")).toBe("1,580 TWD");
+    expect(priceText(399.5, null)).toBe("400 TWD");
+    expect(priceText(12.3456, "USD")).toBe("12 USD");
     expect(priceText(null, "TWD")).toBe("價格未填");
     expect(priceText(Number.NaN, "TWD")).toBe("價格未填");
     expect(priceText(0, "TWD")).toBe("價格未填");
@@ -34,14 +34,14 @@ describe("wizard pieces (F30-I05)", () => {
 
   it("links step 1 back only once a campaign exists", () => {
     expect(wizardSteps("b").map((s) => s.to)).toEqual([undefined, undefined, undefined]);
-    expect(wizardSteps("b", "c 1")[0].to).toBe("/brands/b/ads/new?created=c%201");
+    expect(wizardSteps("b", "c 1")[0].to).toBe("/brands/b/ads/new?created=c+1");
   });
 
   it("a guessed field is dashed with 「猜的，請確認」 and opens its editor when pressed", async () => {
     const onEdit = vi.fn();
     const { rerender } = render(<UnderstoodField field="audience" label="受眾方向" value="上班族" guessed editing={false} onEdit={onEdit} editor={<input aria-label="編輯中" />} />);
     const button = screen.getByRole("button", { name: "改受眾方向" });
-    expect(button.className).toContain("border-dashed");
+    expect(button.closest("[data-field]")?.className).toContain("border-dashed");
     expect(screen.getByText("猜的，請確認")).toBeTruthy();
     await userEvent.click(button);
     expect(onEdit).toHaveBeenCalledTimes(1);

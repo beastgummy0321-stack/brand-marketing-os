@@ -1,3 +1,4 @@
+import { campaignPath } from "@/lib/adsRoutes";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { NativeCreativeView } from "./NativeCreativeView";
 import { Plus, Folder, FileText, Layers, Wallet, Calendar } from "lucide-react";
@@ -392,7 +393,7 @@ export function DeliveryTab({
         // F48 Contract C: what this period's daily budget carries, as served (`plan.served`).
         <p data-slot="plan-capacity" className="-mt-2 px-1 text-[13px] text-muted-foreground">
           每天 {formatAmount(c.capacity.daily)}，撐得起 {c.capacity.can_support} 則，另加一則探索（這期最多 {c.capacity.ceiling} 則
-          {(c.capacity.carried ?? 0) > 0 && `，其中 ${c.capacity.carried} 則沿用上一期`}）
+          {c.capacity.carried != null && c.capacity.carried > 0 && `，其中 ${c.capacity.carried} 則沿用上一期`}）
         </p>
       )}
 
@@ -442,7 +443,7 @@ export function DeliveryTab({
                 <h2>投放結構</h2>
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
-                    <Button variant="ghost" size="icon" aria-label="新增節點" disabled={imported} title={imported ? readonlyReason : undefined}>
+                    <Button variant="ghost" size="icon" aria-label="新增節點" disabledReason={imported ? readonlyReason : undefined}>
                       <Plus size={16} />
                     </Button>
                   </DropdownMenuTrigger>
@@ -452,7 +453,7 @@ export function DeliveryTab({
                       disabled={c.groups.length === 0}
                       onSelect={() => setAddAdOpen(true)}
                     >
-                      新增廣告
+                      新增廣告{c.groups.length === 0 && <span className="text-xs">（先新增一個廣告組）</span>}
                     </DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
@@ -503,7 +504,7 @@ export function DeliveryTab({
                   <p>最近成功：{selectedNative.last_success_at ?? "尚無成功紀錄"}</p>
                   <NativeCreativeView creative={selectedNative.creative} />
                   <p className="text-muted-foreground">{readonlyReason}</p>
-                  <Button disabled>儲存</Button>
+                  <Button disabledReason={readonlyReason}>儲存</Button>
                 </div>
               </div>
             ) : imported ? placeholder : (
@@ -517,12 +518,12 @@ export function DeliveryTab({
         </div>
       </Disclosure>
 
-      <ActionBar back={{ label: "總覽", to: `/brands/${brandId}/ads/campaigns/${c.id}` }}
+      <ActionBar back={{ label: "總覽", to: campaignPath(brandId, c.id) }}
         hint={barStep === "dispatch" ? "交棒後工作檯替每則廣告寫文案和圖片提示詞；圖仍由你上傳" : barStep === "make_assets" ? "工作檯做好的文案會出現在素材頁的格子裡" : undefined}>
         {barStep === "dispatch" && (
           <>
             {dispatchError && <p role="alert" className="text-sm text-danger">{dispatchError}</p>}
-            <Button onClick={() => { if (confirmDiscard()) void handleDispatch(); }} disabled={dispatching}>
+            <Button onClick={() => { if (confirmDiscard()) void handleDispatch(); }} busy={dispatching}>
               {dispatching ? "交棒中…" : "開始做素材 →"}
             </Button>
           </>
@@ -579,10 +580,10 @@ export function DeliveryTab({
           </DialogDescription>
           {deleteError && <p className="text-sm text-danger">{deleteError}</p>}
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setDeleteTarget(null)} disabled={deleting}>
+            <Button type="button" variant="outline" onClick={() => setDeleteTarget(null)} busy={deleting}>
               取消
             </Button>
-            <Button type="button" variant="destructive" onClick={() => void handleDelete()} disabled={deleting}>
+            <Button type="button" variant="destructive" onClick={() => void handleDelete()} busy={deleting}>
               {deleting ? "刪除中…" : "確認刪除"}
             </Button>
           </DialogFooter>

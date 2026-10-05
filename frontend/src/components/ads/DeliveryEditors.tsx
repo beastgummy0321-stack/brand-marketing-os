@@ -228,7 +228,7 @@ export function GroupPanel({
         </h2>
         <Button
           variant="ghost" size="sm" onClick={onDelete}
-          disabled={g.local_state === "bound" || isLastGroup}
+          disabledReason={g.local_state === "bound" ? "已綁定平台，不能在這裡刪除" : isLastGroup ? "至少要保留一個廣告組" : undefined}
           title={isLastGroup ? LAST_GROUP_REASON : undefined}
         >
           刪除
@@ -298,10 +298,10 @@ export function GroupPanel({
         {error && !error.dates && <p className="text-sm text-danger">{error.text}</p>}
         {(dirty || saving) && (
           <div className="flex flex-wrap gap-2">
-            <Button onClick={() => void handleSave()} disabled={saving}>
+            <Button onClick={() => void handleSave()} busy={saving}>
               {saving ? "儲存中…" : "儲存變更"}
             </Button>
-            {dirty && <Button type="button" variant="outline" onClick={() => { clearDeliveryDraft(draftKey); reset(g); }} disabled={saving}>取消變更</Button>}
+            {dirty && <Button type="button" variant="outline" onClick={() => { clearDeliveryDraft(draftKey); reset(g); }} busy={saving}>取消變更</Button>}
           </div>
         )}
       </div>
@@ -391,7 +391,7 @@ export function AdPanel({
         <h2 className="flex min-w-0 flex-wrap items-center gap-1.5">
           <FileText size={15} /> {a.name} <CarriedChip ad={a} />
         </h2>
-        <Button variant="ghost" size="sm" onClick={onDelete} disabled={a.local_state === "bound"}>
+        <Button variant="ghost" size="sm" onClick={onDelete} disabledReason={a.local_state === "bound" ? "已綁定平台，不能在這裡刪除" : undefined}>
           刪除
         </Button>
       </div>
@@ -434,10 +434,10 @@ export function AdPanel({
         {errors.other && <p className="text-sm text-danger">{errors.other}</p>}
         {(dirty || saving) && (
           <div className="flex flex-wrap gap-2">
-            <Button onClick={() => void handleSave()} disabled={saving}>
+            <Button onClick={() => void handleSave()} busy={saving}>
               {saving ? "儲存中…" : "儲存變更"}
             </Button>
-            {dirty && <Button type="button" variant="outline" onClick={() => { clearDeliveryDraft(draftKey); reset(a); }} disabled={saving}>取消變更</Button>}
+            {dirty && <Button type="button" variant="outline" onClick={() => { clearDeliveryDraft(draftKey); reset(a); }} busy={saving}>取消變更</Button>}
           </div>
         )}
       </div>
@@ -556,10 +556,10 @@ export function AddGroupDialog({
         </div>
         {error && <p className="text-sm text-danger">{error}</p>}
         <DialogFooter>
-          <Button type="button" variant="outline" onClick={onClose} disabled={saving}>
+          <Button type="button" variant="outline" onClick={onClose} busy={saving}>
             取消
           </Button>
-          <Button type="button" onClick={() => void handleCreate()} disabled={saving || !name.trim()}
+          <Button type="button" onClick={() => void handleCreate()} busy={saving}
             disabledReason={!saving && !name.trim() ? "名稱還沒填" : undefined}>
             {saving ? "新增中…" : "新增"}
           </Button>
@@ -603,7 +603,6 @@ export function AddAdDialog({
   const [saving, setSaving] = useState(false);
   const [errors, setErrors] = useState<AdErrors>(NO_AD_ERRORS);
 
-  const complete = name.trim() && Object.values(coords).every((v) => v.trim());
   // F47-I06 (V7): the greyed-out 新增 names what is still empty.
   const missing = [
     ...(name.trim() ? [] : ["名稱"]),
@@ -663,10 +662,10 @@ export function AddAdDialog({
         </div>
         {errors.other && <p className="text-sm text-danger">{errors.other}</p>}
         <DialogFooter>
-          <Button type="button" variant="outline" onClick={onClose} disabled={saving}>
+          <Button type="button" variant="outline" onClick={onClose} busy={saving}>
             取消
           </Button>
-          <Button type="button" onClick={() => void handleCreate()} disabled={saving || !complete}
+          <Button type="button" onClick={() => void handleCreate()} busy={saving}
             disabledReason={!saving && missing.length ? `還沒選：${missing.join("、")}` : undefined}>
             {saving ? "新增中…" : "新增"}
           </Button>

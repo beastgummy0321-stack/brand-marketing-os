@@ -1,3 +1,6 @@
+import { Figure } from "@/components/layout/Figure";
+import { formatMoney } from "@/lib/format";
+import { campaignPath } from "@/lib/adsRoutes";
 import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { Skeleton } from "@/components/layout/Skeleton";
@@ -74,7 +77,7 @@ export function OverviewBody({ brandId, campaign: c, workspace: ws, canPublish, 
   advanced: ReactNode;
 }) {
   const draft = ws.draft;
-  const gap = draft === null && (ws.missing_days?.length ?? 0) > 0 && c.lifecycle?.state !== "ended";
+  const gap = draft === null && ws.missing_days != null && ws.missing_days.length > 0 && c.lifecycle?.state !== "ended";
   const fold = <Disclosure label="進階：更多活動資訊">{advanced}</Disclosure>;
   if (draft) return <DraftOverview brandId={brandId} campaign={c} workspace={ws} draft={draft} canPublish={canPublish} onGo={onGo} fold={fold} />;
   if (gap) return <GapOverview brandId={brandId} campaign={c} workspace={ws} fold={fold} />;
@@ -98,7 +101,7 @@ function DraftOverview({ brandId, campaign: c, workspace: ws, draft, canPublish,
     { label: "上限", done: draft.cap_set, target: "strategy",
       detail: draft.cap_set && c.cap.value !== null ? `每賣一筆最多 ${formatAmount(c.cap.value)} 元${c.cap.basis === "break_even" ? "（暫用打平）" : ""}` : "還沒設定" },
     { label: "預算", done: draft.budget_set, target: "strategy",
-      detail: draft.budget_set ? (c.budget_planned !== null ? `NT$${formatAmount(c.budget_planned)}` : "已選") : "還沒選" },
+      detail: draft.budget_set ? (c.budget_planned !== null ? formatMoney(c.budget_planned, "TWD") : "已選") : "還沒選" },
     { label: "素材", done: slotsDone, target: "assets", detail: `${draft.slots_ready}／${draft.slots_total} 格` },
     { label: "上架", done: launchDone, target: publish,
       detail: draft.launch_total > 0 ? `${draft.launch_checked}／${draft.launch_total} 已核對` : "還沒開始" },
@@ -202,7 +205,7 @@ function GapOverview({ brandId, campaign: c, workspace: ws, fold }: {
                 {a.grade === "wasted" ? (
                   // 沒賣出 has no cost per sale: the row shows what it spent against the served 沒賣出 line (same meter as
                   // the next-decision 沒賣出 figure), never 「每筆 未知」.
-                  <Meter value={a.spend} max={Math.max((gate ?? 0) * 1.4, (a.spend ?? 0) * 1.1)} marker={gate} tone="danger"
+                  <Meter value={a.spend} max={Math.max(1, ...[gate === null ? null : gate * 1.4, a.spend === null ? null : a.spend * 1.1].filter((v): v is number => v !== null))} marker={gate} tone="danger"
                     left={`花了 ${yuan(a.spend)}，0 筆`}
                     right={gate !== null ? <span className="whitespace-nowrap">門檻 {formatAmount(gate)}</span> : null} />
                 ) : graded && T !== null ? (
@@ -296,7 +299,7 @@ function LiveOverview({ brandId, campaign: c, workspace: ws, fold }: {
     : decisionAction(brandId, first.item);
   const cap = capOf(c);
   const ads = structure.status === "ready" ? rulerAds(structure.data) : null;
-  const perfHref = `/brands/${brandId}/ads/campaigns/${c.id}?tab=perf`;
+  const perfHref = campaignPath(brandId, c.id, {tab: "perf"});
   const closed = c.lifecycle?.state === "closed";
   const waiting = ws.delivery === "waiting";
   const rulerTitle = closed ? "廣告對照上限" : ads ? `在投 ${ads.length} 則對照上限` : "在投廣告對照上限";
@@ -442,8 +445,6 @@ function KvNumbers({ campaign: c, workspace: ws }: { campaign: CampaignDetail; w
   const cost = t?.cost_per_result ?? null;
   const results = t?.results ?? null;
   const spend = t?.spend ?? null;
-  const roas = c.cap.price !== null && results !== null && spend !== null && spend > 0
-    ? Math.round(((c.cap.price * results) / spend) * 100) / 100 : null;
   const unknownCost = spend === null || results === null ? notSpent : results === 0 ? "還沒有成交" : notSpent;
   const cell = "min-w-0 border-l border-border px-5 first:border-l-0 first:pl-0";
   const label = "block text-xs text-muted-foreground";
@@ -471,7 +472,7 @@ function KvNumbers({ campaign: c, workspace: ws }: { campaign: CampaignDetail; w
           )}
           <span className={label}>
             {cap ? <>{who}{cap.basis === "break_even" ? "暫用" : "的"}<Term k={cap.basis === "break_even" ? "break_even" : "cap"} value={c.cap.break_even}>{cap.basis === "break_even" ? "打平線" : "上限"}</Term> {formatAmount(cap.value)}</> : "沒設上限"}
-            {roas !== null && `・ROAS 參考 ${formatAmount(roas)}`}
+            <span className="block">ROAS <Figure basis="roas_all_spend" value={t?.roas_all_spend ?? null} alt={{basis: "roas_tracked_spend", value: t?.roas_tracked_spend ?? null}} /></span>
           </span>
         </div>
         {closed ? (
