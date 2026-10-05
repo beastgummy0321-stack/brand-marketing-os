@@ -335,6 +335,25 @@ class CustomerVoiceBackgroundTest(unittest.TestCase):
         self.assertEqual(len(fake.calls), 0)
         self.assertEqual(repo.list_customer_voices(web.conn, self.bid), [])
 
+    def test_reload_right_after_submit_lists_the_queued_job_as_running(self):
+        """F50-I16: the worker has not picked the job up yet (no `llm_task` row), so the library
+        read finds it on the queue and serves it as running with the time it was queued."""
+        fake = _fake([{"task_layer": "functional", "quote": "測試引言",
+                        "insight": "測試重點", "signal": "unprompted"}])
+        with mock.patch.object(customer_voice, "PROVIDER", fake):
+            job_key = self.client.post(
+                f"/api/library/brands/{self.bid}/customer-voice",
+                json={"source_channel": "ptt", "raw_text": "剛送出的原文"},
+            ).json()["job_key"]
+            web.conn.commit()
+            jobs = self.client.get(f"/api/library/brands/{self.bid}").json()["data"]["customer_voice_jobs"]
+            self._run_worker()  # leave no queued job for a later test's worker (it would call the real provider)
+            after = self.client.get(f"/api/library/brands/{self.bid}").json()["data"]["customer_voice_jobs"]
+
+        self.assertEqual([(j["job_key"], j["status"], j["error"]) for j in jobs], [(job_key, "running", None)])
+        self.assertIsNotNone(jobs[0]["started_at"])
+        self.assertEqual([(j["job_key"], j["status"]) for j in after], [(job_key, "done")])
+
     def test_job_status_unknown_key_reports_unknown_not_error(self):
         """F50-I07（Contract J，intake #10）：沒有 job 也沒有 AI 呼叫的 job_key 回
         `unknown`，不是 404，也不再猜「還在跑」。剛送出、worker 還沒撿走的那一刻佇列裡已經
