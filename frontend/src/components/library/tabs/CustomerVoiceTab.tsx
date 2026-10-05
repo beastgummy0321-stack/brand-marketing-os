@@ -6,8 +6,8 @@ import {
   deleteCustomerVoice,
   fetchCustomerVoiceJob,
   TASK_LAYER_LABELS,
-  type CustomerVoiceJobStatus,
   type LibraryCustomerVoice,
+  type LibraryCustomerVoiceJob,
 } from "@/lib/libraryApi";
 import { usePagination } from "@/lib/usePagination";
 import { Badge } from "../shared/Badge";
@@ -16,38 +16,79 @@ import { CustomerVoiceGuidePanel } from "../panels/CustomerVoiceGuidePanel";
 import { CustomerVoicePanel } from "../panels/CustomerVoicePanel";
 import { PersonaSection } from "../PersonaSection";
 
+/** One extraction still running or failed. Only these two show; `done` is a stored voice and `unknown` shows nothing. */
 interface PlaceholderJob {
   jobKey: string;
-  sourceChannel: string;
-  status: CustomerVoiceJobStatus;
+  status: { status: "running" } | { status: "failed"; message: string };
+}
+
+const JOB_FAILED_FALLBACK = "這段原話沒有讀完，請再試一次。";
+
+/** The payload's jobs (F50-I07: newest per key, last 24 h, queued ones included) as placeholder rows. */
+function placeholdersFrom(jobs: LibraryCustomerVoiceJob[]): PlaceholderJob[] {
+  return jobs.flatMap((job): PlaceholderJob[] => {
+    if (job.status === "running") return [{ jobKey: job.job_key, status: { status: "running" } }];
+    if (job.status === "failed") {
+      return [{ jobKey: job.job_key, status: { status: "failed", message: job.error ?? JOB_FAILED_FALLBACK } }];
+    }
+    return [];
+  });
 }
 
 /** 顧客原話分頁（契約 S5.32–S5.42）：使用中／已封存兩段，貼入後背景抽取——送出即關側板，
- * 清單頂端出現「分析中」佔位卡，輪詢到完成／失敗前不鎖頁面（五鐵則③）。 */
+ * 清單頂端出現「分析中」佔位卡，輪詢到完成／失敗前不鎖頁面（五鐵則③）。
+ * F50-I16 (Contract J): the placeholder rows come from the library payload's `customer_voice_jobs`, so a reload keeps a
+ * running or failed extraction; a just-submitted job joins them until the next read. A poll answer `unknown` (no job,
+ * no AI call) removes the row instead of saying 「正在讀」 forever. */
 export function CustomerVoiceTab({
   brandId,
   voices,
+  jobs: servedJobs,
   onChanged,
 }: {
   brandId: string;
   voices: LibraryCustomerVoice[];
+  jobs: LibraryCustomerVoiceJob[];
   onChanged: () => void;
 }) {
   const [newPanelOpen, setNewPanelOpen] = useState(false);
   const [guideOpen, setGuideOpen] = useState(false);
-  const [jobs, setJobs] = useState<PlaceholderJob[]>([]);
+  const [jobs, setJobs] = useState<PlaceholderJob[]>(() => placeholdersFrom(servedJobs));
   const pollTimers = useRef<Record<string, ReturnType<typeof setInterval>>>({});
+
+  // A changed payload replaces the served rows; a row submitted here and not served yet stays. Keyed on the content:
+  // the parent passes a new array on every render.
+  const servedKey = JSON.stringify(servedJobs);
+  const firstServedKey = useRef(servedKey);
+  useEffect(() => {
+    if (servedKey === firstServedKey.current) return;
+    firstServedKey.current = servedKey;
+    const served: LibraryCustomerVoiceJob[] = JSON.parse(servedKey);
+    const servedKeys = new Set(served.map((job) => job.job_key));
+    setJobs((prev) => [...prev.filter((job) => !servedKeys.has(job.jobKey)), ...placeholdersFrom(served)]);
+  }, [servedKey]);
 
   useEffect(() => {
     const timers = pollTimers.current;
     return () => {
-      Object.values(timers).forEach(clearInterval);
+      for (const jobKey of Object.keys(timers)) {
+        clearInterval(timers[jobKey]);
+        delete timers[jobKey];
+      }
     };
   }, []);
 
+  const runningKeys = jobs.filter((job) => job.status.status === "running").map((job) => job.jobKey).join(",");
+  useEffect(() => {
+    for (const jobKey of runningKeys ? runningKeys.split(",") : []) {
+      if (!pollTimers.current[jobKey]) startPolling(jobKey);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- a key starts polling once; startPolling reads refs
+  }, [runningKeys]);
+
   function startPolling(jobKey: string) {
     pollTimers.current[jobKey] = setInterval(async () => {
-      let status: CustomerVoiceJobStatus;
+      let status;
       try {
         status = await fetchCustomerVoiceJob(brandId, jobKey);
       } catch {
@@ -56,18 +97,18 @@ export function CustomerVoiceTab({
       if (status.status === "running") return;
       clearInterval(pollTimers.current[jobKey]);
       delete pollTimers.current[jobKey];
-      if (status.status === "done") {
-        setJobs((prev) => prev.filter((j) => j.jobKey !== jobKey));
-        onChanged();
-      } else {
-        setJobs((prev) => prev.map((j) => (j.jobKey === jobKey ? { ...j, status } : j)));
+      if (status.status === "failed") {
+        const failed: PlaceholderJob = { jobKey, status: { status: "failed", message: status.message } };
+        setJobs((prev) => prev.map((j) => (j.jobKey === jobKey ? failed : j)));
+        return;
       }
+      setJobs((prev) => prev.filter((j) => j.jobKey !== jobKey));
+      if (status.status === "done") onChanged();
     }, 1000);
   }
 
-  function handleSubmitted(jobKey: string, sourceChannel: string) {
-    setJobs((prev) => [{ jobKey, sourceChannel, status: { status: "running" } }, ...prev]);
-    startPolling(jobKey);
+  function handleSubmitted(jobKey: string) {
+    setJobs((prev) => [{ jobKey, status: { status: "running" } }, ...prev]);
   }
 
   function retryJob(jobKey: string) {

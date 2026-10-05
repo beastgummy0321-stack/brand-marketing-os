@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/layout/ui/button";
-import type { MetaAccountsData } from "@/lib/metaApi";
+import type { MetaAccountsData, MetaBackfillStatus } from "@/lib/metaApi";
 import {
   bindMetaAccount,
   connectMetaToken,
@@ -9,13 +9,19 @@ import {
   startMetaBackfill,
 } from "@/lib/metaApi";
 import { cn } from "@/lib/utils";
+import { BackfillOutcomeLine } from "../HistoryPage";
 
 type LoadState =
   | { status: "loading" }
   | { status: "error"; message: string }
   | { status: "ready"; meta: MetaAccountsData };
 
-const BACKFILL_FAILED = "這次沒拉到，之後可以在設定頁重試。";
+const STATUS_READ_FAILED = "讀不到拉過去花費的進度，請稍後再試。";
+const START_FAILED = "沒能開始拉過去的花費，請再試一次。";
+
+function errorText(err: unknown, fallback: string): string {
+  return err instanceof Error ? err.message : fallback;
+}
 
 /** Meta's 接上／再接一個帳戶 panel under its row in brand onboarding #/b6 (F42-I11). The interaction is the one the old
  * tools step had: paste a token → pick one of the token's ad accounts, which assigns it to the brand at once (F46-I09;
@@ -24,7 +30,9 @@ const BACKFILL_FAILED = "這次沒拉到，之後可以在設定頁重試。";
  * existing bind semantics); an account already bound is shown as such. `onBound` lets the step re-read its
  * connector list so the row turns 「已接上」. F47 Contract G: a token Meta refused, could not be read with, or that
  * lists no account is not stored and the token input stays with the server's sentence; a stored token offers
- * 「換一把權杖」. */
+ * 「換一把權杖」. F50-I16 (Contract J): the backfill line reads the stored outcome (`GET …/backfill`), also when the panel
+ * opens on a brand already bound — running, done with the range, empty, or failed with 「再試一次」; a failed read says
+ * so; the poll stops on unmount. */
 export function MetaConnectPanel({ brandId, onBound }: { brandId: string; onBound: () => void }) {
   const [state, setState] = useState<LoadState>({ status: "loading" });
   const [tokenInput, setTokenInput] = useState("");
@@ -36,15 +44,37 @@ export function MetaConnectPanel({ brandId, onBound }: { brandId: string; onBoun
   const [assigningId, setAssigningId] = useState<string | null>(null);
   const [assignError, setAssignError] = useState<string | null>(null);
   const [backfilling, setBackfilling] = useState(false);
-  const [backfillNote, setBackfillNote] = useState<string | null>(null);
+  const [backfill, setBackfill] = useState<MetaBackfillStatus | null>(null);
+  /** A failed status read or start, shown instead of nothing. */
+  const [backfillError, setBackfillError] = useState<{ message: string; retry: "read" | "start" } | null>(null);
+  const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const alive = useRef(true);
+
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+      if (pollTimer.current) clearTimeout(pollTimer.current);
+      pollTimer.current = null;
+    };
+  }, []);
+
+  function boundHere(meta: MetaAccountsData): boolean {
+    return meta.accounts.some((acc) => acc.bound_brand_ids.includes(brandId));
+  }
 
   function load() {
     setState({ status: "loading" });
     fetchMetaAccounts()
-      .then((meta) => setState({ status: "ready", meta }))
-      .catch((err: unknown) => setState({ status: "error", message: err instanceof Error ? err.message : "讀取失敗，請稍後再試。" }));
+      .then((meta) => {
+        setState({ status: "ready", meta });
+        // A brand already bound may have a pull running or ended: show it after a reload too.
+        if (boundHere(meta)) readBackfill();
+      })
+      .catch((err: unknown) => setState({ status: "error", message: errorText(err, "讀取失敗，請稍後再試。") }));
   }
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- read once on open; reloads go through the 重新載入 button
   useEffect(load, []);
 
   async function handleConnectToken() {
@@ -67,15 +97,36 @@ export function MetaConnectPanel({ brandId, onBound }: { brandId: string; onBoun
     }
   }
 
-  function pollBackfill() {
+  function readBackfill() {
+    if (pollTimer.current) clearTimeout(pollTimer.current);
+    pollTimer.current = null;
     fetchMetaBackfillStatus(brandId)
       .then((status) => {
-        if (status.running) setTimeout(pollBackfill, 3000);
-        else setBackfilling(false);
+        if (!alive.current) return;
+        setBackfill(status);
+        setBackfillError(null);
+        setBackfilling(status.running);
+        if (status.running) pollTimer.current = setTimeout(readBackfill, 3000);
       })
-      .catch(() => {
+      .catch((err: unknown) => {
+        if (!alive.current) return;
         setBackfilling(false);
-        setBackfillNote(BACKFILL_FAILED);
+        setBackfillError({ message: errorText(err, STATUS_READ_FAILED), retry: "read" });
+      });
+  }
+
+  function startBackfill() {
+    setBackfilling(true);
+    setBackfill(null);
+    setBackfillError(null);
+    startMetaBackfill(brandId)
+      .then(() => {
+        if (alive.current) readBackfill();
+      })
+      .catch((err: unknown) => {
+        if (!alive.current) return;
+        setBackfilling(false);
+        setBackfillError({ message: errorText(err, START_FAILED), retry: "start" });
       });
   }
 
@@ -85,14 +136,10 @@ export function MetaConnectPanel({ brandId, onBound }: { brandId: string; onBoun
     setAssignError(null);
     try {
       await bindMetaAccount(brandId, accountId);
-      setBackfilling(true);
-      startMetaBackfill(brandId)
-        .then(() => pollBackfill())
-        .catch(() => {
-          setBackfilling(false);
-          setBackfillNote(BACKFILL_FAILED);
-        });
-      fetchMetaAccounts().then((meta) => setState({ status: "ready", meta })).catch(() => undefined);
+      startBackfill();
+      fetchMetaAccounts()
+        .then((meta) => setState({ status: "ready", meta }))
+        .catch((err: unknown) => setAssignError(errorText(err, "帳戶清單讀取失敗，請重新整理再看一次。")));
       onBound();
     } catch (err) {
       setAssignError(err instanceof Error ? err.message : "指定失敗，請稍後再試。");
@@ -184,7 +231,16 @@ export function MetaConnectPanel({ brandId, onBound }: { brandId: string; onBoun
           正在把過去的花費拉進來，大約幾分鐘，不影響你先往下走
         </div>
       )}
-      {!backfilling && backfillNote && <p className="text-[12.5px] text-muted-foreground">{backfillNote}</p>}
+      {!backfilling && <BackfillOutcomeLine backfill={backfill} retrying={false} onRetry={startBackfill} compact />}
+      {!backfilling && backfillError && (
+        <div className="flex flex-col items-start gap-1.5">
+          <p role="alert" className="text-[12.5px] text-danger">{backfillError.message}</p>
+          <Button type="button" variant="link" className="h-auto p-0 text-[12.5px]"
+            onClick={backfillError.retry === "start" ? startBackfill : readBackfill}>
+            {backfillError.retry === "start" ? "再試一次" : "重新載入"}
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

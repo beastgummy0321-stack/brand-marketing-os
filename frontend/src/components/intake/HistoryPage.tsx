@@ -6,8 +6,8 @@ import { EmptyState } from "@/components/layout/EmptyState";
 import { Skeleton } from "@/components/layout/Skeleton";
 import { COORDINATE_DIMENSIONS, type Coordinate } from "@/lib/coordinatesApi";
 import { formatMetaRoas, formatMoney, formatPercent } from "@/lib/format";
-import { formatInstant, useOrgClock } from "@/lib/orgClock";
-import { fetchMetaBackfillStatus, startMetaBackfill } from "@/lib/metaApi";
+import { formatDay, formatInstant, useOrgClock } from "@/lib/orgClock";
+import { fetchMetaBackfillStatus, startMetaBackfill, type MetaBackfillStatus } from "@/lib/metaApi";
 import {
   fetchHistory,
   refetchHistoryCreatives,
@@ -37,6 +37,12 @@ const VERDICT_LABELS: Record<HistoryVerdict, string> = {
   unclear: "看不出",
 };
 
+const STATUS_READ_FAILED = "讀不到補拉進度，請稍後再試。";
+
+function errorText(err: unknown, fallback: string): string {
+  return err instanceof Error ? err.message : fallback;
+}
+
 const VERDICT_CLASS: Record<HistoryVerdict, string> = {
   win: "bg-success/10 text-success",
   lose: "bg-danger/10 text-danger",
@@ -52,6 +58,10 @@ export function HistoryPage({ brandId }: { brandId: string }) {
   const [state, setState] = useState<LoadState>({ status: "loading" });
   const [running, setRunning] = useState(false);
   const [runningSince, setRunningSince] = useState<string | null>(null);
+  // F50-I16 (Contract J, R7 A12): the backfill's stored outcome from `GET …/backfill`, so the page says how the
+  // last pull ended — also after a reload. `statusError` is a failed status read, shown instead of nothing.
+  const [backfill, setBackfill] = useState<MetaBackfillStatus | null>(null);
+  const [statusError, setStatusError] = useState<string | null>(null);
   // 略過只影響這次造訪：不打任何 API，純前端隱藏，重新整理就會回來（票面矛盾檢查段）。
   const [skipped, setSkipped] = useState<Set<string>>(new Set());
 
@@ -66,11 +76,18 @@ export function HistoryPage({ brandId }: { brandId: string }) {
         } else {
           setRunning(false);
         }
+        if (!data.connected) return;
+        fetchMetaBackfillStatus(brandId)
+          .then((status) => {
+            setBackfill(status);
+            setStatusError(null);
+          })
+          .catch((err: unknown) => setStatusError(errorText(err, STATUS_READ_FAILED)));
       })
       .catch((err: unknown) =>
         setState({
           status: "error",
-          message: err instanceof Error ? err.message : "讀取失敗，請稍後再試。",
+          message: errorText(err, "讀取失敗，請稍後再試。"),
         }),
       );
   }, [brandId]);
@@ -79,22 +96,36 @@ export function HistoryPage({ brandId }: { brandId: string }) {
 
   // ADR 0067 §1.8：補拉是背景工作，跑起來的時候（不管是自己按的還是這一輪其他人已經
   // 啟動過）每 5 秒問一次進度，轉成 false 就重讀一次整包（卡片這時候才會出現）。
+  // F50-I16: the timer stops on unmount and a reply arriving after it is dropped.
   useEffect(() => {
     if (!running) return;
+    let stopped = false;
     const id = setInterval(() => {
-      fetchMetaBackfillStatus(brandId).then((status) => {
-        setRunningSince(status.earliest_spend_date);
-        if (!status.running) {
-          setRunning(false);
-          load();
-        }
-      });
+      fetchMetaBackfillStatus(brandId)
+        .then((status) => {
+          if (stopped) return;
+          setBackfill(status);
+          setStatusError(null);
+          setRunningSince(status.earliest_spend_date);
+          if (!status.running) {
+            setRunning(false);
+            load();
+          }
+        })
+        .catch((err: unknown) => {
+          if (!stopped) setStatusError(errorText(err, STATUS_READ_FAILED));
+        });
     }, 5000);
-    return () => clearInterval(id);
+    return () => {
+      stopped = true;
+      clearInterval(id);
+    };
   }, [running, brandId, load]);
 
   const startForm = useFormSubmit(async () => {
     const res = await startMetaBackfill(brandId);
+    setBackfill(null);
+    setStatusError(null);
     setRunning(res.running);
   });
 
@@ -140,19 +171,32 @@ export function HistoryPage({ brandId }: { brandId: string }) {
     );
   }
 
+  const outcome = running ? null : (backfill?.outcome ?? null);
+  const backfillLine = (
+    <BackfillLine
+      running={running}
+      runningSince={runningSince}
+      backfill={backfill}
+      statusError={statusError}
+      startError={startForm.error}
+      starting={startForm.saving}
+      onStart={() => void startForm.submit()}
+    />
+  );
+
   if (data.backfill && data.backfill.ad_rows === 0) {
+    const ended = outcome !== null && outcome.state !== "running";
     return (
       <div className="surface">
         <div className="surface-body flex flex-col items-start gap-3 pt-5">
-          {running ? (
-            <p className="text-sm text-foreground">
-              正在從 Meta 拉數字{runningSince ? `，目前拉到 ${runningSince}` : "…"}
-            </p>
+          {running || ended ? (
+            backfillLine
           ) : (
             <>
               <p className="text-sm text-muted-foreground">
                 還沒有任何一天的數字，先拉 37 個月的歷史資料。
               </p>
+              {statusError && <p className="text-sm text-danger">{statusError}</p>}
               {startForm.error && <p className="text-sm text-danger">{startForm.error}</p>}
               <Button type="button" disabled={startForm.saving} onClick={() => void startForm.submit()}>
                 {startForm.saving ? "啟動中…" : "開始拉 37 個月的數字"}
@@ -174,6 +218,7 @@ export function HistoryPage({ brandId }: { brandId: string }) {
       <p className="text-sm text-muted-foreground">
         這些是 Meta 現在還回得出的廣告，不一定是你投過的全部。
       </p>
+      {backfillLine}
       {hasNullCreative && (
         <div className="flex flex-col items-start gap-2">
           <Button
@@ -219,6 +264,92 @@ export function HistoryPage({ brandId }: { brandId: string }) {
       ))}
     </div>
   );
+}
+
+/** F50-I16: how the 37-month pull stands on the history page — the running line while it runs, else the ended
+ * outcome (`BackfillOutcomeLine`), plus a failed status read or start. */
+function BackfillLine({
+  running,
+  runningSince,
+  backfill,
+  statusError,
+  startError,
+  starting,
+  onStart,
+}: {
+  running: boolean;
+  runningSince: string | null;
+  backfill: MetaBackfillStatus | null;
+  statusError: string | null;
+  startError: string | null;
+  starting: boolean;
+  onStart: () => void;
+}) {
+  const line = running ? (
+    <p className="text-sm text-foreground">
+      正在從 Meta 拉數字{runningSince ? `，目前拉到 ${runningSince}` : "…"}
+    </p>
+  ) : (
+    <BackfillOutcomeLine backfill={backfill} retrying={starting} onRetry={onStart} />
+  );
+  if (!running && !backfill?.outcome && !statusError && !startError) return null;
+  return (
+    <div className="flex flex-col items-start gap-2">
+      {line}
+      {statusError && <p className="text-sm text-danger">{statusError}</p>}
+      {startError && <p className="text-sm text-danger">{startError}</p>}
+    </div>
+  );
+}
+
+/** F50-I16 (Contract J, R7 A12): how the last 37-month pull ended, from `GET …/backfill`'s stored `outcome` (F50-I10):
+ * done → 「拉完了」 with the stored date range and row count (done carries no sentence); empty → 「拉完了：這段期間沒有廣告
+ * 資料」 with the served range sentence; failed → the served reason and 「再試一次」 (starts the pull again). Nothing while
+ * it runs or when no pull ever ran. Shared by the history page and the onboarding Meta panel. */
+export function BackfillOutcomeLine({
+  backfill,
+  retrying,
+  onRetry,
+  compact = false,
+}: {
+  backfill: MetaBackfillStatus | null;
+  retrying: boolean;
+  onRetry: () => void;
+  compact?: boolean;
+}) {
+  const outcome = backfill?.outcome ?? null;
+  const text = compact ? "text-[12.5px]" : "text-sm";
+  if (!backfill || !outcome) return null;
+  if (outcome.state === "done") {
+    const range =
+      backfill.earliest_spend_date && backfill.latest_spend_date
+        ? `${formatDay(backfill.earliest_spend_date, "ymd")}～${formatDay(backfill.latest_spend_date, "ymd")}，`
+        : "";
+    return (
+      <p className={`${text} text-foreground`}>
+        拉完了：{range}共 {backfill.ad_rows} 筆廣告每日數字
+      </p>
+    );
+  }
+  if (outcome.state === "empty") {
+    return (
+      <div className="flex flex-col gap-1">
+        <p className={`${text} text-foreground`}>拉完了：這段期間沒有廣告資料</p>
+        {outcome.text && <p className="text-xs text-muted-foreground">{outcome.text}</p>}
+      </div>
+    );
+  }
+  if (outcome.state === "failed") {
+    return (
+      <div className="flex flex-col items-start gap-2">
+        <p role="alert" className={`${text} text-danger`}>{outcome.text ?? "這次沒拉到。"}</p>
+        <Button type="button" variant="outline" size={compact ? "sm" : "default"} disabled={retrying} onClick={onRetry}>
+          {retrying ? "啟動中…" : "再試一次"}
+        </Button>
+      </div>
+    );
+  }
+  return null;
 }
 
 function HistoryCardItem({
