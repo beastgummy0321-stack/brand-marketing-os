@@ -19,7 +19,7 @@ from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi_repo
 from app.core import approval as approval_mod
 from app.core import db as coredb
-from app.llm import providers
+from app.llm import gateway, providers
 
 ACTOR = "測試員"
 OFFERS_HEADER = planner_context.OFFERS_HEADER
@@ -98,6 +98,17 @@ class PlanTestBase(unittest.TestCase):
         return plan.adopt_strategy(
             web.conn, self.org_id, self.brand_id, campaign_id, actor=ACTOR,
         )
+
+    def _assert_refusal(self, exc: Exception, code: str) -> None:
+        """F50 Contract J: the refusal names its rule, keeps `delivery_plan_failed` as `str()`,
+        and is written on the judged task row."""
+        assert isinstance(exc, plan.PlannerRefused)
+        reason = plan.REFUSALS[code]
+        self.assertEqual((str(exc), exc.code, exc.reason), ("delivery_plan_failed", code, reason))
+        row = gateway.get_task(web.conn, exc.task_id)
+        assert row is not None
+        self.assertEqual((row["error_code"], row["error"]),
+                         ("program_refused", f"{code}: {reason}"))
 
 
 class GroupBudgetsSumExactlyTest(PlanTestBase):
@@ -521,7 +532,7 @@ class RankedLearningGateTest(PlanTestBase):
     def _assert_refused(self, reply: str) -> None:
         with self.assertRaises(ValueError) as ctx:
             self._adopt_reply(reply)
-        self.assertEqual(str(ctx.exception), "delivery_plan_failed")
+        self._assert_refusal(ctx.exception, "replace_rerun")
         reloaded = ads_repo.campaign_detail(
             web.conn, self.org_id, self.brand_id, self.campaign["id"])
         self.assertEqual(reloaded["status"], "draft")
@@ -698,7 +709,7 @@ class CustomerGroupBindingTest(PlanTestBase):
     def _assert_refused(self, reply: str) -> None:
         with self.assertRaises(ValueError) as ctx:
             self._adopt_reply(reply)
-        self.assertEqual(str(ctx.exception), "delivery_plan_failed")
+        self._assert_refusal(ctx.exception, "group_unbound")
         reloaded = ads_repo.campaign_detail(
             web.conn, self.org_id, self.brand_id, self.campaign["id"])
         self.assertEqual(reloaded["status"], "draft")  # nothing was written
@@ -873,7 +884,7 @@ class SceneRuleTest(PlanTestBase):
     def _assert_failed(self, reply: str) -> None:
         with self.assertRaises(ValueError) as ctx:
             self._adopt_reply(reply)
-        self.assertEqual(str(ctx.exception), "delivery_plan_failed")
+        self._assert_refusal(ctx.exception, "reply_invalid")
 
     def test_reply_without_a_scene_fails(self):
         self._assert_failed(_scene_reply({k: v for k, v in _SCENES.items() if k != "retarget"}))
@@ -1247,7 +1258,7 @@ class OffersInDeliveryPlanPromptTest(PlanTestBase):
         for reply in (_offer_reply({}), _offer_reply({"new": "free_shipping"})):
             with self.assertRaises(ValueError) as ctx:
                 self._adopt_reply(campaign, reply)
-            self.assertEqual(str(ctx.exception), "delivery_plan_failed")
+            self._assert_refusal(ctx.exception, "offer_unused")
         reloaded = ads_repo.campaign_detail(web.conn, self.org_id, self.brand_id, campaign["id"])
         self.assertEqual(reloaded["status"], "draft")  # nothing was written
         self.assertEqual(reloaded["groups"], [])
@@ -1406,16 +1417,19 @@ class CarriedKeepAdsTest(PlanTestBase):
         # Two carried + three planned = 5 > ceiling 4.
         with self.assertRaises(ValueError) as ctx:
             self._adopt_reply(_VALID_PLAN_REPLY)
-        self.assertEqual(str(ctx.exception), "delivery_plan_failed")
+        self._assert_refusal(ctx.exception, "menu_violation")
         reloaded = ads_repo.campaign_detail(web.conn, self.org_id, self.brand_id,
                                             self.campaign["id"])
         self.assertEqual((reloaded["status"], reloaded["groups"]), ("draft", []))
 
     def test_a_reply_leaving_out_an_uncovered_role_or_reusing_a_carried_name_is_refused(self):
-        for reply in (_two_role_reply(names=("再行銷-補位",), roles=("retarget",)),
-                      _two_role_reply(names=("留下-有素材", "探索-補位"))):
-            with self.subTest(reply=reply), self.assertRaises(ValueError):
+        for reply, code in (
+            (_two_role_reply(names=("再行銷-補位",), roles=("retarget",)), "menu_violation"),
+            (_two_role_reply(names=("留下-有素材", "探索-補位")), "reply_invalid"),
+        ):
+            with self.subTest(reply=reply), self.assertRaises(ValueError) as ctx:
                 self._adopt_reply(reply)
+            self._assert_refusal(ctx.exception, code)
 
     def test_a_carried_ready_ad_stays_out_of_the_pack(self):
         from app import workbench
@@ -1583,8 +1597,155 @@ class HandEditsObeyTheMenuTest(PlanTestBase):
         plan.PROVIDER = _fake(json.dumps(reply, ensure_ascii=False))
         with self.assertRaises(ValueError) as ctx:
             self._adopt(campaign["id"])
-        self.assertEqual(str(ctx.exception), "delivery_plan_failed")
+        self._assert_refusal(ctx.exception, "name_forbidden")
 
+
+# -- F50 Contract J (R7 B3): refusal codes, and the one automatic retry (user ruling 2026-10-04) --
+
+
+class _Replies:
+    """A provider answering `texts` in order (the last one repeats); `error` -> every call fails."""
+
+    name = "fake"
+
+    def __init__(self, *texts: str, error: Exception | None = None):
+        self.texts, self.error, self.calls = list(texts), error, []
+
+    def complete(self, *, model, system, messages, max_tokens, timeout_s=120.0, effort=None,
+                 tools=None, org_id=None):
+        self.calls.append({"messages": messages})
+        if self.error is not None:
+            raise self.error
+        return providers.ProviderResponse(
+            output_text=self.texts[min(len(self.calls), len(self.texts)) - 1], structured=None,
+            usage=providers.Usage(input_tokens=100, output_tokens=50), stop_reason="end_turn",
+        )
+
+    def prompt(self, n: int) -> str:
+        return self.calls[n]["messages"][0]["content"]
+
+
+def _forbidden_name_reply() -> str:
+    reply = json.loads(_VALID_PLAN_REPLY)
+    reply["groups"][0]["ads"][0]["name"] = "保證治癒・新客"
+    return json.dumps(reply, ensure_ascii=False)
+
+
+class PlanRefusalTest(PlanTestBase):
+    """Contract J: each refusal names its rule (on the exception, the task row and the 502); a
+    rule's refusal is asked once more with the refusal in the prompt, a second refusal is raised;
+    a provider failure is not retried and keeps the provider's own error."""
+
+    def setUp(self):
+        super().setUp()
+        bi_repo.create_claim(web.conn, self.brand_id, actor=ACTOR, claim_text="保證治癒",
+                             claim_type="forbidden")
+        self.campaign = self._create_adopted_campaign()
+        web.conn.commit()
+
+    def _rows(self) -> list:
+        return gateway.find_tasks_for_scope(
+            web.conn, org_id=self.org_id, brand_id=self.brand_id, task_type="ads_delivery_plan",
+            context_scope={"campaign_id": self.campaign["id"]},
+        )
+
+    def test_the_nine_rules_of_contract_j(self):
+        self.assertEqual(list(plan.REFUSALS), [
+            "llm_failed", "reply_unreadable", "reply_invalid", "menu_violation", "offer_unused",
+            "name_forbidden", "group_unbound", "carried_changed", "replace_rerun",
+        ])
+        self.assertEqual(plan.REFUSALS["offer_unused"], "這期有優惠，AI 排的廣告都沒用上")
+        self.assertEqual(plan.REFUSALS["replace_rerun"], "又排了上一期要換掉的組合")
+
+    def test_a_refused_reply_is_asked_once_more_with_the_refusal_and_the_retry_is_used(self):
+        provider = _Replies(_forbidden_name_reply(), _VALID_PLAN_REPLY)
+        plan.PROVIDER = provider
+        detail = self._adopt(self.campaign["id"])
+        self.assertEqual(detail["status"], "ready")
+        self.assertEqual(len(provider.calls), 2)
+        self.assertNotIn(plan.RETRY_HEADER, provider.prompt(0))
+        retry = provider.prompt(1)
+        self.assertIn(f"{plan.RETRY_HEADER}（這次請改掉下面的問題，其他規則照舊）\n"
+                      f"- name_forbidden：{plan.REFUSALS['name_forbidden']}", retry)
+        self.assertLess(retry.rindex(plan.RETRY_HEADER), retry.rindex("【座標詞彙"))
+        first, second = self._rows()
+        self.assertEqual((first["error_code"], first["error"]),
+                         ("program_refused", f"name_forbidden: {plan.REFUSALS['name_forbidden']}"))
+        self.assertEqual((second["status"], second["error_code"], second["error"]),
+                         ("succeeded", None, None))
+
+    def test_a_second_refusal_is_raised_with_its_code_and_no_third_call(self):
+        provider = _Replies(_forbidden_name_reply(), "這不是 JSON")
+        plan.PROVIDER = provider
+        with self.assertRaises(ValueError) as ctx:
+            self._adopt(self.campaign["id"])
+        self._assert_refusal(ctx.exception, "reply_unreadable")
+        self.assertEqual(len(provider.calls), 2)
+        self.assertEqual([row["error"].split(":")[0] for row in self._rows()],
+                         ["name_forbidden", "reply_unreadable"])
+        reloaded = ads_repo.campaign_detail(web.conn, self.org_id, self.brand_id,
+                                            self.campaign["id"])
+        self.assertEqual((reloaded["status"], reloaded["groups"]), ("draft", []))
+
+    def test_a_provider_failure_is_not_retried_and_keeps_its_own_error(self):
+        provider = _Replies(error=providers.ProviderTimeoutError("模型逾時（60 秒）"))
+        plan.PROVIDER = provider
+        with self.assertRaises(plan.PlannerRefused) as ctx:
+            self._adopt(self.campaign["id"])
+        self.assertEqual((ctx.exception.code, ctx.exception.reason),
+                         ("llm_failed", "AI 這次沒有回覆（等太久沒有回應）"))
+        self.assertEqual(len(provider.calls), 1)
+        (row,) = self._rows()
+        self.assertEqual((row["status"], row["error_code"], row["error"]),
+                         ("timeout", "timeout", "模型逾時（60 秒）"))
+
+    def test_a_reply_moving_a_carried_group_to_other_people_is_carried_changed(self):
+        listed = [{"id": "grp_1", "pain_keys": []}, {"id": "grp_2", "pain_keys": []}]
+        groups = [{"role": "new", "name": "新客組", "ads": [{
+            "name": "新客-廣告", "coordinates": _coordinates("x"), "scene": "下班後在捷運上滑手機",
+            "customer_group": 2,
+        }]}]
+        carried = [{"target": "new", "ad": {"customer_group_id": "grp_1", "offer_key": "none"}}]
+        with self.assertRaises(plan.PlannerRefused) as ctx:
+            plan._checked_groups(  # noqa: SLF001
+                groups, None, vocabulary_rows=[], ctx={"forbidden": []}, carried=carried,
+                listed_groups=listed, replace_pairs=set(),
+            )
+        self.assertEqual((str(ctx.exception), ctx.exception.code),
+                         ("delivery_plan_failed", "carried_changed"))
+
+    def test_the_route_answers_502_naming_the_rule(self):
+        from fastapi.testclient import TestClient
+
+        from app import main
+
+        plan.PROVIDER = _Replies(_forbidden_name_reply())
+        response = TestClient(main.app).post(
+            f"/api/ads/brands/{self.brand_id}/campaigns/{self.campaign['id']}/plan")
+        self.assertEqual(response.status_code, 502)
+        reason = plan.REFUSALS["name_forbidden"]
+        self.assertEqual(response.json()["error"], {
+            "code": "delivery_plan_failed", "message": f"{plan.PLAN_FAILED_MESSAGE}（{reason}）",
+            "details": {"refusal": "name_forbidden", "reason": reason},
+        })
+        self.assertEqual([row["error"] for row in self._rows()],
+                         [f"name_forbidden: {reason}"] * 2)
+
+    def test_every_rule_reaches_the_502_body(self):
+        from fastapi.testclient import TestClient
+
+        from app import main
+
+        client = TestClient(main.app)
+        for code, reason in plan.REFUSALS.items():
+            refusal = plan.PlannerRefused("delivery_plan_failed", code, reason, None)
+            with self.subTest(code=code), mock.patch.object(plan, "adopt_strategy",
+                                                            side_effect=refusal):
+                response = client.post(
+                    f"/api/ads/brands/{self.brand_id}/campaigns/{self.campaign['id']}/plan")
+                self.assertEqual(response.status_code, 502)
+                self.assertEqual(response.json()["error"]["details"],
+                                 {"refusal": code, "reason": reason})
 
 if __name__ == "__main__":
     unittest.main()
