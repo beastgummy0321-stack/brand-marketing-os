@@ -181,7 +181,7 @@ export function LibraryPage({ brandId }: { brandId: string }) {
           <ChannelsTab brandId={brandId} channels={data.channels} onChanged={load} />
         )}
         {activeTab === "customer-voice" && (
-          <CustomerVoiceTab brandId={brandId} voices={data.customer_voices} onChanged={load} />
+          <CustomerVoiceTab brandId={brandId} voices={data.customer_voices} jobs={data.customer_voice_jobs ?? []} onChanged={load} />
         )}
         {activeTab === "coordinates" && <CoordinatesTab brandId={brandId} />}
         {activeTab === LEARNINGS_TAB && (

@@ -19,7 +19,7 @@
 
 import os
 import re
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import UUID
 
@@ -30,6 +30,7 @@ import app.storage as storage
 from app.background import JOB_FAILED_MESSAGE
 from app.background import enqueue as background_enqueue
 from app.background import job_state as background_job_state
+from app.background import queue_snapshot as background_queue_snapshot
 from app.brand_intelligence import background_job
 from app.brand_intelligence import customer_voice as cv_mod
 from app.brand_intelligence import repository as repo
@@ -417,13 +418,18 @@ _CV_TASK_SQL = (
 )
 #: F50-I07 (other F10): how far back the library payload lists customer-voice jobs.
 CV_RECENT_JOBS_HOURS = 24
+_CV_TASK_NAME = "background.customer_voice_extraction"
+
+
+def _cv_lock(job_key: str) -> str:
+    return f"customer_voice_extraction:{job_key}"
 
 
 def _cv_status_from(conn, brand_id: str, job_key: str, row) -> dict:
     """One customer-voice job's status from its queue outcome and its newest `llm_task` row
     (F50-I07, Contract J): `background.job_state()` decides running／failed／unknown; a
     succeeded row still has to have produced a stored customer voice."""
-    state = background_job_state(f"customer_voice_extraction:{job_key}", row)
+    state = background_job_state(_cv_lock(job_key), row)
     if state["status"] in ("running", "unknown"):
         return {"status": state["status"]}
     if state["status"] in ("failed", "empty") or row is None or row["status"] != "succeeded":
@@ -445,10 +451,21 @@ def _cv_job_status(conn, brand_id: str, job_key: str) -> dict:
     return _cv_status_from(conn, brand_id, job_key, row)
 
 
+def _cv_queued_job_keys(brand_id: str) -> list[str]:
+    """The brand's customer-voice jobs still waiting or running on the queue (F50-I16): a job
+    the worker has not picked up yet has no `llm_task` row, so the queue is its only trace."""
+    snapshot = background_queue_snapshot(since=now_utc())
+    return [job["args"]["job_key"] for job in snapshot["jobs"]
+            if job["task_name"] == _CV_TASK_NAME and job["args"].get("brand_id") == brand_id
+            and job["args"].get("job_key")]
+
+
 def _cv_recent_jobs(conn, brand_id: str) -> list:
     """F50-I07 (other F10): the brand's customer-voice jobs of the last 24 h, newest per
     `job_key`, as `[{job_key, status, error, started_at}]` (newest first) — so a reload still
-    shows a job that is running or failed."""
+    shows a job that is running or failed. F50-I16: jobs still queued (no AI call yet, so no
+    `llm_task` row) are listed too, read through `background.job_state` (`started_at` = when it
+    was queued), so a reload right after 送出 still shows the job."""
     rows = conn.execute(
         "SELECT DISTINCT ON (context_scope_json->>'job_key') * FROM llm_task"
         " WHERE brand_id = %s AND task_type = 'customer_voice_extraction'"
@@ -457,11 +474,24 @@ def _cv_recent_jobs(conn, brand_id: str) -> list:
         (brand_id, now_utc() - timedelta(hours=CV_RECENT_JOBS_HOURS)),
     ).fetchall()
     jobs = []
-    for row in sorted(rows, key=lambda r: r["started_at"], reverse=True):
+    for row in rows:
         job_key = row["context_scope_json"]["job_key"]
         status = _cv_status_from(conn, brand_id, job_key, row)
         jobs.append({"job_key": job_key, "status": status["status"],
                      "error": status.get("message"), "started_at": row["started_at"]})
+    listed = {job["job_key"] for job in jobs}
+    for job_key in _cv_queued_job_keys(brand_id):
+        if job_key in listed:
+            continue
+        listed.add(job_key)
+        state = background_job_state(_cv_lock(job_key), None)
+        # Finished between the two reads: its stored row decides, like the status endpoint.
+        status = ({"status": "running"} if state["status"] == "running"
+                  else _cv_job_status(conn, brand_id, job_key))
+        jobs.append({"job_key": job_key, "status": status["status"],
+                     "error": status.get("message"), "started_at": state["started_at"]})
+    oldest = datetime.min.replace(tzinfo=UTC)
+    jobs.sort(key=lambda job: job["started_at"] or oldest, reverse=True)
     return jobs
 
 
@@ -497,8 +527,8 @@ async def customer_voice_submit(request: Request, brand_id: str):
 
     job_key = new_id("cvjob")
     background_enqueue(
-        "background.customer_voice_extraction", org_id=actor.org_id,
-        lock=f"customer_voice_extraction:{job_key}", brand_id=brand_id, job_key=job_key,
+        _CV_TASK_NAME, org_id=actor.org_id,
+        lock=_cv_lock(job_key), brand_id=brand_id, job_key=job_key,
         actor=str(actor.user_id), raw_text=raw_text, source_channel=source_channel,
         source_detail=source_detail,
     )

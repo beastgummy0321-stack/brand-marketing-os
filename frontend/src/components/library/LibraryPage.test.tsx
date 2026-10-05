@@ -16,7 +16,11 @@ vi.mock("./tabs/RulesTab", () => ({ RulesTab: () => <p>限制規則內容</p> })
 vi.mock("./tabs/ClaimsTab", () => ({ ClaimsTab: () => <p>宣稱內容</p> }));
 vi.mock("./tabs/AssetsTab", () => ({ AssetsTab: () => <p>官方素材內容</p> }));
 vi.mock("./tabs/ChannelsTab", () => ({ ChannelsTab: () => <p>自有渠道內容</p> }));
-vi.mock("./tabs/CustomerVoiceTab", () => ({ CustomerVoiceTab: () => <p>顧客原話內容</p> }));
+vi.mock("./tabs/CustomerVoiceTab", () => ({
+  CustomerVoiceTab: ({ jobs }: { jobs: { job_key: string; status: string }[] }) => (
+    <p>顧客原話內容{jobs.map((job) => `｜${job.job_key}:${job.status}`).join("")}</p>
+  ),
+}));
 vi.mock("./tabs/CoordinatesTab", () => ({ CoordinatesTab: () => <p>創意座標內容</p> }));
 
 import { fetchLibrary, type LibraryData } from "@/lib/libraryApi";
@@ -74,6 +78,23 @@ describe("LibraryPage 一般與進階內容", () => {
     const link = await screen.findByRole("link", { name: "品牌資料（建檔時填的）" });
     expect(link.getAttribute("href")).toBe("/brands/brand-1/intake");
     expect(screen.queryByRole("link", { name: "品牌調研" })).toBeNull();
+  });
+});
+
+describe("LibraryPage 顧客原話背景工作（F50-I16）", () => {
+  it("passes the payload's customer_voice_jobs to the tab, so a reload keeps a running extraction", async () => {
+    mockFetchLibrary.mockResolvedValue({
+      ...DATA,
+      customer_voice_jobs: [{ job_key: "cvjob_1", status: "running", error: null, started_at: "2026-10-05T02:00:00+00:00" }],
+    });
+    mockLearnings.mockResolvedValue(LEARNED);
+    render(<MemoryRouter initialEntries={["/brands/brand-1/library?tab=customer-voice"]}><LibraryPage brandId="brand-1" /></MemoryRouter>);
+    expect(await screen.findByText("顧客原話內容｜cvjob_1:running")).toBeTruthy();
+  });
+
+  it("an older payload without the field passes no jobs", async () => {
+    view("/brands/brand-1/library?tab=customer-voice");
+    expect(await screen.findByText("顧客原話內容")).toBeTruthy();
   });
 });
 
