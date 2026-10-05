@@ -262,7 +262,7 @@ describe("CampaignDetailPage (F28-I10, v10 tabPerf F29-I13)", () => {
     expect(within(wasted).getByRole("link", { name: "暫停" }).getAttribute("href")).toBe(`${WS}/propose/pause/a8?from=perf`);
     await openMenu("a1");
     await userEvent.click(within(okRow).getByRole("button", { name: "看紀錄" }));
-    expect(screen.getByTestId("where").textContent).toBe(`${WS}?tab=performance&ad=a1`);
+    expect(screen.getByTestId("where").textContent).toBe(`${WS}?tab=perf&ad=a1`);
   });
 
   it("no open cleanup: the bar has only ← 總覽", async () => {
@@ -783,7 +783,7 @@ describe("這期狀態列 (F40-I06, prototype #/perf)", () => {
     expect(cellText("花費")).toBe("花費 10,081 元 整期合計");
     expect(cellText("購買")).toBe("購買 19 筆 平台回報");
     expect(cellText("每賣一筆")).toBe("每賣一筆 531 元 偏貴 對上限 450");
-    expect(cellText("ROAS")).toBe("ROAS 1.88 營收 ÷ 花費");
+    expect(cellText("ROAS")).toBe("ROAS 保守 ? 1.88x ・ 樂觀 ? 1.88x");
     const grade = within(row()).getByText("偏貴").closest("[data-slot=chip]")!;
     expect(grade.getAttribute("data-grade")).toBe("watch");
     expect(within(row()).getByText("09/26 開始・10/02 結束・今天 10/03")).toBeTruthy();
@@ -987,3 +987,12 @@ describe("在投 N 則 counts platform ads only (F40-I06, prototype #/detail)", 
     expect(programLines(built, undefined)).toEqual({ unbuilt: [], unmatched: [] });
   });
 });
+
+vi.mock("@/lib/figures", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/lib/figures")>(),
+  useFigureBases: () => ({
+    roas_all_spend: {label: "保守", formula: "營收 ÷ 全部花費", unit: "ratio"},
+    roas_tracked_spend: {label: "樂觀", formula: "營收 ÷ 有追到營收的那部分花費", unit: "ratio"},
+    roas_platform: {label: "平台回報", formula: "平台回報營收 ÷ 花費", unit: "ratio"},
+  }),
+}));

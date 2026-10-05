@@ -210,7 +210,7 @@ export function WaitingSlot({ slot, workbenchHref, checking, checked, onConfirm,
     );
   } else if (next?.action === "confirm_copy" && slot.ad_id !== null) {
     actions = <>
-      <Button variant="outline" size="sm" className={GO} disabled={checking} onClick={onConfirm}>{checking ? "檢查中…" : next.text}</Button>
+      <Button variant="outline" size="sm" className={GO} busy={checking} onClick={onConfirm}>{checking ? "檢查中…" : next.text}</Button>
       <Button variant="link" size="xs" className="h-auto px-0" aria-label={`改文案：${slot.name}`} onClick={onEdit}>改文案</Button>
     </>;
   }
@@ -251,7 +251,7 @@ export function BlockedSlot({ slot, uploading, checking, checked, onPick, onPick
           ? <Button variant="link" size="xs" className="h-auto px-0" asChild><Link to={slot.workbench_href}>到工作檯換一版 →</Link></Button>
           : <Button variant="link" size="xs" className="h-auto px-0" aria-label={`換一版文案：${slot.name}`} onClick={onPickCopy}>換一版文案</Button>)}
         {blocked.fix === "file" && <UploadAction slot={slot} busy={uploading} onPick={onPick} label="換一張" className={GO} />}
-        <Button variant="link" size="xs" className="h-auto px-0" disabled={checking} aria-label={`${checking ? "檢查中…" : "再檢查一次"}：${slot.name}`} onClick={onRecheck}>
+        <Button variant="link" size="xs" className="h-auto px-0" busy={checking} aria-label={`${checking ? "檢查中…" : "再檢查一次"}：${slot.name}`} onClick={onRecheck}>
           {checking ? "檢查中…" : "再檢查一次"}
         </Button>
       </>}
@@ -277,7 +277,7 @@ function UploadAction({ slot, busy, onPick, label, variant = "outline", classNam
     <>
       <input ref={input} type="file" accept={video ? "video/*" : "image/*,video/*"} className="hidden" aria-label={`選擇「${slot.name}」的檔案`}
         onChange={(e) => { const file = e.target.files?.[0]; e.target.value = ""; if (file) onPick(file); }} />
-      <Button variant={variant} size={variant === "link" ? "xs" : "sm"} className={className} disabled={busy} aria-label={`${text}：${slot.name}`} onClick={() => input.current?.click()}>
+      <Button variant={variant} size={variant === "link" ? "xs" : "sm"} className={className} busy={busy} aria-label={`${text}：${slot.name}`} onClick={() => input.current?.click()}>
         {busy ? "上傳中…" : text}
       </Button>
     </>
@@ -398,7 +398,7 @@ export function CopyPicker({ brandId, campaignId, slot, onClose, onChosen, onRef
                 <div className="flex flex-col gap-2" role="list" aria-label="文案版本">
                   {read.data.options.map((o, i) => (
                     <Button key={`${o.set_id}:${o.version_id}`} variant="outline" role="listitem" autoFocus={i === 0}
-                      disabled={busy !== null} onClick={() => void choose(o)}
+                      busy={busy !== null} onClick={() => void choose(o)}
                       className="h-auto flex-col items-start gap-0.5 whitespace-normal px-3 py-2.5 text-left font-normal">
                       <span className="text-[11.5px] text-muted-foreground">{o.label}</span>
                       <span className="text-[13px] [overflow-wrap:anywhere]">
@@ -410,7 +410,7 @@ export function CopyPicker({ brandId, campaignId, slot, onClose, onChosen, onRef
               )}
         {error && <p role="alert" className="text-sm text-danger">沒有放進去：{error}</p>}
         <div className="flex justify-end">
-          <Button variant="ghost" disabled={busy !== null} onClick={onClose}>取消</Button>
+          <Button variant="ghost" busy={busy !== null} onClick={onClose}>取消</Button>
         </div>
       </DialogContent>
     </Dialog>
@@ -472,8 +472,8 @@ export function CopyEditor({ brandId, campaignId, slot, onClose, onSaved }: {
         <div className="flex flex-wrap items-center justify-between gap-2">
           <span className="text-[11.5px] text-muted-foreground">保存後馬上檢查</span>
           <div className="flex gap-2">
-            <Button variant="ghost" disabled={saving} onClick={onClose}>取消</Button>
-            <Button disabled={saving} onClick={() => void save()}>{saving ? "檢查中…" : "保存"}</Button>
+            <Button variant="ghost" busy={saving} onClick={onClose}>取消</Button>
+            <Button busy={saving} onClick={() => void save()}>{saving ? "檢查中…" : "保存"}</Button>
           </div>
         </div>
       </DialogContent>

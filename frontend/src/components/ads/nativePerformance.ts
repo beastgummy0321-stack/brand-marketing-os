@@ -1,3 +1,4 @@
+import { roasOf } from "@/lib/figures";
 import type { CampaignPerformance, OutcomeBucket } from "@/lib/adsApi";
 import type { ExternalView, NativeObservation } from "@/lib/adsExternalApi";
 
@@ -30,7 +31,7 @@ function aggregate(rows: NativeObservation[]): PerformanceBucket {
   }
   const spend = sum("spend"), impressions = sum("impressions"), clicks = sum("clicks"), purchases = sum("purchases"), revenue = sum("revenue");
   // F51 Contract F: imported rows are summed only when every row is known, so revenue ÷ spend is the all-spend basis.
-  return { spend, impressions, clicks, purchases, revenue, cpa: ratio(spend, purchases), ctr: ratio(clicks, impressions), roas_all_spend: ratio(revenue, spend), roas_tracked_spend: null };
+  return { spend, impressions, clicks, purchases, revenue, cpa: ratio(spend, purchases), ctr: ratio(clicks, impressions), roas_all_spend: roasOf(revenue, spend), roas_tracked_spend: null };
 }
 /** A selected native scope is the only aggregation boundary: never add parent and child observations. */
 export function nativePerformance(view?: ExternalView | null, scopeKey?: string): PerformanceView {

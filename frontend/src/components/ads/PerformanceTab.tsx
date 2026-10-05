@@ -1,4 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Figure } from "@/components/layout/Figure";
+import { formatFigure, useFigureBases, type FigureBases } from "@/lib/figures";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { RefreshCw } from "lucide-react";
 import type { EChartsOption } from "echarts";
@@ -10,7 +12,7 @@ import { cn } from "@/lib/utils";
 import { useEchart } from "@/lib/useEchart";
 import { useOrgClock } from "@/lib/orgClock";
 import { CHART_COLOR_AXIS_TEXT, CHART_COLOR_REVENUE, CHART_COLOR_SPEND } from "@/lib/chartColors";
-import { formatCount, formatCurrency, formatMetaRoas, formatPercent } from "@/lib/format";
+import { formatCount, formatCurrency, formatMoney, formatPercent } from "@/lib/format";
 import {
   getPerformance,
   type CampaignDetail,
@@ -47,12 +49,12 @@ function fmtPurchases(v: number | null): string {
   return v === null ? "未追蹤" : formatCount(v);
 }
 function fmtCpa(v: number | null): string {
-  return v === null ? "算不出來" : `NT$ ${perSaleAmount(v)}`;
+  return v === null ? "算不出來" : formatMoney(v, "TWD");
 }
-function fmtMetricValue(metric: VerdictMetric, v: number | null): string {
+function fmtMetricValue(metric: VerdictMetric, v: number | null): ReactNode {
   if (metric === "cpa") return fmtCpa(v);
   if (metric === "purchases") return fmtPurchases(v);
-  return formatMetaRoas(v);
+  return <Figure basis="roas_all_spend" value={v} />;
 }
 
 interface AdsVerdictJson {
@@ -65,28 +67,14 @@ interface AdsVerdictJson {
   close_reason?: string;
 }
 
-/** 跟 `app/ads/learning.py::_sentence` 同一套公式，純算術重現（不是再猜一次）——結案回應
- * 只帶 `verdict`／`verdict_json`，沒有把寫進學習帳本的那句話回傳給前端，這裡用同樣的輸入
- * 組出同一句，不必為了這一句話多開一個讀學習帳本的端點。 */
-function learningSentence(c: CampaignDetail): string | null {
-  if (!c.verdict) return null;
-  const vj = c.verdict_json as AdsVerdictJson;
-  const sample = vj.sample_bucket ?? "";
-  if (c.verdict === "看不出") {
-    return `「${c.name}」這次投放${vj.missing ?? ""}（樣本${sample}），每筆成本上限暫時看不出達成與否。`;
-  }
-  const num = (v: number | null | undefined) => (typeof v === "number" ? Math.round(v * 100) / 100 : v);
-  return `「${c.name}」每筆成本上限 ${num(vj.target) ?? "－"}，實際 ${num(vj.actual) ?? "－"}，結果${c.verdict}（樣本${sample}）。`;
-}
-
 const VERDICT_TONE: Record<string, "default" | "destructive" | "outline"> = {
   達成: "default",
   未達成: "destructive",
   看不出: "outline",
 };
 
-function buildTrendOption(daily: PerformanceView["daily"], native = false, currency: string | null = null): EChartsOption {
-  const roasLabel = native ? "ROAS" : "ROAS（保守）";
+function buildTrendOption(daily: PerformanceView["daily"], native = false, currency: string | null = null, bases?: FigureBases): EChartsOption {
+  const roasLabel = `ROAS${bases?.roas_all_spend ? `（${bases.roas_all_spend.label}）` : ""}`;
   return {
     grid: { left: 56, right: 56, top: 28, bottom: 40 },
     legend: { bottom: 0, textStyle: { color: CHART_COLOR_AXIS_TEXT, fontSize: 12 } },
@@ -107,7 +95,7 @@ function buildTrendOption(daily: PerformanceView["daily"], native = false, curre
         const lines = [`<b>${list[0]?.axisValue ?? ""}</b>`];
         for (const p of list) {
           lines.push(
-            `${p.seriesName}：${p.seriesName === "花費" ? (native ? nativeMoney(p.value, currency) : formatCurrency(p.value)) : formatMetaRoas(p.value)}`,
+            `${p.seriesName}：${p.seriesName === "花費" ? (native ? nativeMoney(p.value, currency) : formatCurrency(p.value)) : (p.value === null ? "不明" : formatFigure("ratio", p.value))}`,
           );
         }
         return lines.join("<br/>");
@@ -128,6 +116,12 @@ function buildTrendOption(daily: PerformanceView["daily"], native = false, curre
         data: daily.map((d) => d.roas_all_spend),
         itemStyle: { color: CHART_COLOR_REVENUE },
       },
+      ...(native ? [] : [{
+        name: `ROAS${bases?.roas_tracked_spend ? `（${bases.roas_tracked_spend.label}）` : ""}`,
+        type: "line" as const, yAxisIndex: 1, connectNulls: false,
+        data: daily.map(d => d.roas_tracked_spend),
+        itemStyle: {color: CHART_COLOR_REVENUE}, lineStyle: {type: "dashed" as const},
+      }]),
     ],
   };
 }
@@ -136,12 +130,13 @@ function nativeMoney(value: number | null, currency: string | null) {
   return value === null ? "未知" : `${value.toLocaleString("zh-TW", { maximumFractionDigits: 2 })} ${currency ?? "幣別未知"}`;
 }
 function TrendChart({ daily, native, currency }: { daily: PerformanceView["daily"]; native: boolean; currency: string | null }) {
-  const option = useMemo(() => buildTrendOption(daily, native, currency), [daily, native, currency]);
+  const bases = useFigureBases();
+  const option = useMemo(() => buildTrendOption(daily, native, currency, bases), [daily, native, currency, bases]);
   const ref = useEchart(option);
   return <div ref={ref} className="h-64 w-full" />;
 }
 
-function Kpi({ label, value, caption }: { label: string; value: string; caption: string }) {
+function Kpi({ label, value, caption }: { label: string; value: ReactNode; caption: ReactNode }) {
   return (
     <article className="surface p-4">
       <div className="mb-2 text-xs text-muted-foreground">{label}</div>
@@ -293,7 +288,7 @@ export function PerformanceTab({
                 </span>
               )}
             </span>
-            <Button disabled={imported} onClick={() => setCloseOpen(true)}>立即結案</Button>
+            <Button disabledReason={imported ? c.capabilities?.unavailable.close ?? "既有平台活動不使用內部結案" : undefined} onClick={() => setCloseOpen(true)}>立即結案</Button>
           </div>
         </div>
       )}
@@ -345,7 +340,6 @@ function PerformanceReady({
     ? value === null ? "未知" : `${perSaleAmount(value)} ${currency ?? "幣別未知"}`
     : fmtCpa(value);
   const percent = (value: number | null) => native && value === null ? "未知" : formatPercent(value);
-  const roas = (value: number | null) => native && value === null ? "未知" : formatMetaRoas(value);
   const source = simulated ? "模擬回收" : "平台回報";
   const latestDay = data.daily[data.daily.length - 1]?.day ?? null;
   // F37 Contract P: the internal campaign's platform-read coverage (the native view has its own caption).
@@ -379,7 +373,7 @@ function PerformanceReady({
       <div className="surface">
         <div className="surface-header">
           <h2>目前成果</h2>
-          <Button variant="outline" size="sm" onClick={onRefresh} disabled={refreshing || refreshDisabled}>
+          <Button variant="outline" size="sm" onClick={onRefresh} busy={refreshing} disabledReason={refreshDisabled ? "目前無法重新讀取平台" : undefined}>
             <RefreshCw size={14} className={refreshing ? "animate-spin" : "hidden"} />
             {refreshing ? "讀取中…" : "重新讀取平台"}
           </Button>
@@ -407,7 +401,7 @@ function PerformanceReady({
         <Kpi label="花費" value={money(t.spend)} caption={`累計花費・${source}`} />
         <Kpi label={labels.count} value={count(t.purchases)} caption={`累計${labels.conversion}・${source}`} />
         <Kpi label="CPA" value={cpa(t.cpa)} caption={`花費 ÷ ${labels.conversion}`} />
-        <Kpi label="ROAS" value={roas(t.roas_all_spend)} caption={native ? "同一資料範圍營收 ÷ 花費" : `保守值・樂觀 ${formatMetaRoas(t.roas_tracked_spend)}`} />
+        <Kpi label="ROAS" value={<Figure basis="roas_all_spend" value={t.roas_all_spend} />} caption={native ? null : <Figure basis="roas_tracked_spend" value={t.roas_tracked_spend} />} />
       </div>
 
       {adNotFound && <p className="text-sm text-muted-foreground">這則廣告沒有成效資料</p>}
@@ -432,7 +426,7 @@ function PerformanceReady({
             <TrendChart daily={data.daily} native={native} currency={currency} />
           )}
           <ul className="flex flex-col gap-1 text-xs text-muted-foreground">
-            {(data.coverage?.expected ?? 0) > 0 && (
+            {data.coverage != null && data.coverage.expected > 0 && (
               <li>
                 {data.coverage?.missing} 天沒讀到平台資料（期間共 {data.coverage?.expected} 天）
               </li>
@@ -454,7 +448,7 @@ function PerformanceReady({
             <tbody>{data.daily.length ? data.daily.map((day) => <tr key={day.day} className="border-t border-border">
               <td className="px-3 py-2">{day.day}</td><td className="px-3 py-2">{money(day.spend)}</td>
               <td className="px-3 py-2">{count(day.purchases)}</td><td className="px-3 py-2">{cpa(day.cpa)}</td>
-              <td className="px-3 py-2">{native ? roas(day.roas_all_spend) : `${formatMetaRoas(day.roas_all_spend)} ／ ${formatMetaRoas(day.roas_tracked_spend)}`}</td>
+              <td className="px-3 py-2">{<Figure basis="roas_all_spend" value={day.roas_all_spend} alt={native ? undefined : {basis: "roas_tracked_spend", value: day.roas_tracked_spend}} />}</td>
             </tr>) : <tr><td colSpan={5} className="px-3 py-6 text-center text-muted-foreground">還沒有每日資料。</td></tr>}</tbody>
           </table>
         </div>
@@ -492,7 +486,7 @@ function PerformanceReady({
                     <td className="px-3 py-2">{count(g.purchases)}</td>
                     <td className="px-3 py-2">{cpa(g.cpa)}</td>
                     <td className="px-3 py-2">
-                      {native ? roas(g.roas_all_spend) : `${formatMetaRoas(g.roas_all_spend)} ／ ${formatMetaRoas(g.roas_tracked_spend)}`}
+                      {<Figure basis="roas_all_spend" value={g.roas_all_spend} alt={native ? undefined : {basis: "roas_tracked_spend", value: g.roas_tracked_spend}} />}
                     </td>
                     <td className="px-3 py-2">{percent(g.ctr)}</td>
                     <td className="px-3 py-2">{percent(g.spend_share)}</td>
@@ -560,7 +554,7 @@ function VerdictCard({ brandId, campaign: c }: { brandId: string; campaign: Camp
   const vj = c.verdict_json as AdsVerdictJson;
   const metric: VerdictMetric = vj.metric ?? "cpa";
   const verdict = c.verdict ?? "看不出";
-  const sentence = learningSentence(c);
+  const sentence = c.learning_sentence;
   return (
     <div className="surface">
       <div className="surface-header">

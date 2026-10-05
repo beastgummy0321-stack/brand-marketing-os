@@ -78,7 +78,7 @@ export function ManualSettings({ draftScope, brandId, campaign, onSaved, onDirty
     setOpenGroups((current) => ({ ...current, [group.id]: true }));
     setFocusRequests((current) => ({
       ...current,
-      [group.id]: { key: field.key, token: (current[group.id]?.token ?? 0) + 1 },
+      [group.id]: { key: field.key, token: (current[group.id]?.token ?? 0) + 1 }, // ZERO_OK: Local focus request sequence starts at zero before the first request.
     }));
   }
 
@@ -297,10 +297,10 @@ function GroupSettings({ brandId, campaignId, fields, group, locked, onSaved, dr
         {dirty ? "有尚未儲存的變更" : "設定已儲存"}
       </p>}
       <div className="flex flex-wrap gap-2">
-        <Button className="w-fit" disabled={busy || locked || !dirty} onClick={() => void save()}>
+        <Button className="w-fit" busy={busy} disabledReason={locked ? "活動已結案，不能修改設定" : !dirty ? "設定沒有變更" : undefined} onClick={() => void save()}>
           {busy ? "儲存中…" : "儲存這組設定"}
         </Button>
-        {dirty && <Button type="button" variant="outline" disabled={busy} onClick={cancel}>取消變更</Button>}
+        {dirty && <Button type="button" variant="outline" busy={busy} onClick={cancel}>取消變更</Button>}
       </div>
     </div>
   );

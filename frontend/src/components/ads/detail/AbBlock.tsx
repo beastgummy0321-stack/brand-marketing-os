@@ -1,3 +1,4 @@
+import { campaignFlowPath } from "@/lib/adsRoutes";
 import { useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Button } from "@/components/layout/ui/button";
@@ -16,7 +17,7 @@ import { proposalAction } from "../home/status";
  * own state, never an empty block. */
 
 const changeHref = (brandId: string, campaignId: string, setId: string) =>
-  `/brands/${brandId}/ads/campaigns/${campaignId}/changes/${setId}/confirm`;
+  campaignFlowPath(brandId, campaignId, ["changes", setId, "confirm"]);
 
 function Decided({ brandId, campaignId, pair, loser }: { brandId: string; campaignId: string; pair: AbPairView; loser: "A" | "B" }) {
   const d = pair.decision!;
@@ -79,7 +80,7 @@ export function AbBlock({ brandId, campaignId, breakEven }: { brandId: string; c
       return <Decided brandId={brandId} campaignId={campaignId} pair={pair} loser={loser} />;
     }
     return (
-      <Button onClick={() => void pauseLoser(pair)} disabled={busy === pair.pair_id}>
+      <Button onClick={() => void pauseLoser(pair)} busy={busy === pair.pair_id}>
         {busy === pair.pair_id ? "建立中…" : `關掉輸家（${loser}）→`}
       </Button>
     );

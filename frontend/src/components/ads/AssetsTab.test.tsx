@@ -290,7 +290,7 @@ it("原生廣告在原素材表查看，不呼叫內部就緒 API 或建立假�
   await userEvent.click(screen.getByText("查看素材"));
   expect(screen.getByText("內文：平台原文案")).toBeTruthy();
   await userEvent.click(screen.getByRole("button", { name: "查看成效 →" }));
-  expect(onChangeTab).toHaveBeenCalledWith("performance");
+  expect(onChangeTab).toHaveBeenCalledWith("perf");
 });
 
 describe("AssetsTab 進階 fold（F30-I11）", () => {

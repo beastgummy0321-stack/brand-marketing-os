@@ -1,3 +1,4 @@
+import { Figure } from "@/components/layout/Figure";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useSearchParams } from "react-router-dom";
 import { RefreshCw } from "lucide-react";
@@ -49,7 +50,7 @@ export function latestReadAt(c: CampaignDetail, fallback: string | null): string
   return fallback;
 }
 
-function Cell({ label, value, sub, size = "text-[22px]" }: { label: string; value: string; sub: ReactNode; size?: string }) {
+function Cell({ label, value, sub, size = "text-[22px]" }: { label: string; value: ReactNode; sub: ReactNode; size?: string }) {
   return (
     <div className="min-w-0 border-l border-border px-[18px] py-0.5 first:border-l-0 first:pl-0 max-md:odd:border-l-0 max-md:odd:pl-0 max-md:px-3 max-md:py-1.5">
       <span className="block text-xs text-muted-foreground">{label}</span>
@@ -134,8 +135,6 @@ export function PeriodStatusRow({ brandId, campaign: c, lastSuccessAt = null, on
   const spend = totals ? `${formatAmount(totals.spend) ?? "—"} 元` : dash;
   const purchases = totals ? (totals.purchases === null ? "未追蹤" : `${formatAmount(totals.purchases)} 筆`) : dash;
   const cpa = totals ? (totals.cpa === null ? "算不出來" : `${perSaleAmount(totals.cpa)} 元`) : dash;
-  const roasValue = totals ? totals.roas_all_spend : null;
-  const roas = totals ? (roasValue === null ? "未追蹤" : roasValue.toFixed(2)) : dash;
 
   const closeCaption = imported
     ? (c.capabilities?.unavailable.close ?? "既有平台活動不使用內部結案。")
@@ -162,7 +161,7 @@ export function PeriodStatusRow({ brandId, campaign: c, lastSuccessAt = null, on
               {cap !== null ? `對上限 ${formatAmount(cap)}` : "沒設上限"}
             </>
           } />
-          <Cell label="ROAS" value={roas} sub="營收 ÷ 花費" />
+          <Cell label="ROAS" size="text-base" value={<Figure basis="roas_all_spend" value={totals?.roas_all_spend} alt={{basis: "roas_tracked_spend", value: totals?.roas_tracked_spend ?? null}} />} sub="" />
         </div>
         {closed ? (
           <div className="flex flex-wrap items-center justify-end gap-2" data-testid="period-closed-exits">
@@ -172,7 +171,7 @@ export function PeriodStatusRow({ brandId, campaign: c, lastSuccessAt = null, on
         ) : (
           <div className="flex flex-col items-end gap-2">
             <div className="flex items-center gap-2">
-              <Button type="button" variant="outline" onClick={() => onSync?.()} disabled={!onSync || syncing}>
+              <Button type="button" variant="outline" onClick={() => onSync?.()} busy={syncing} disabledReason={!onSync ? "目前無法重新讀取平台" : undefined}>
                 <RefreshCw size={14} className={syncing ? "animate-spin" : "hidden"} />
                 {syncing ? "讀取中…" : "重新讀取平台"}
               </Button>
