@@ -29,7 +29,7 @@ export function ClaimsTab({
           description="品牌層的宣稱仍然適用。"
           actionHref={`/brands/${brandId}/library?tab=claims`}
           actionLabel="到品牌智庫新增"
-          actionInternal
+
         />
       ) : (
         GROUPS.map(({ type, title }) => {

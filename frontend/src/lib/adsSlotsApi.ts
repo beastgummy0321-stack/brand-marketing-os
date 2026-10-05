@@ -56,7 +56,7 @@ export interface Slot {
   replace_task_id: string | null;
   /** `null` on an imported campaign and on a planned ad with neither a file nor a selected workbench copy. */
   copy: SlotCopy | null;
-  /** The ad's workbench set (an `/app/…` path, see `internalHref`); `null` when the ad has no set. */
+  /** The ad's workbench set (a router path); null when the ad has no set. */
   workbench_href: string | null;
   /** F40-I01: the planned ad's own `ads_ad.format_key` (`"video"` = the slot needs a video, a photo is refused);
    * `null` for an ad without one and for an imported campaign's platform ad. Optional only for older fixtures. */

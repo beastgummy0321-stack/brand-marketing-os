@@ -3,6 +3,11 @@
  * through `import.meta.glob("./guards/*.allow.ts")`; an entry whose file no longer hits fails as stale. F51-I12
  * deletes its entries as it cleans each file, and this module when it is empty. */
 export default [
+  { rule: "href", file: "components/ads/publish/PublishFlow.tsx" },
+  { rule: "href", file: "components/ads/ManualHandoffPanel.tsx" },
+  { rule: "href", file: "components/ads/LaunchStalePanel.tsx" },
+  { rule: "href", file: "components/ads/flow/usePauseView.ts" },
+  { rule: "href", file: "components/ads/flow/ConfirmPage.tsx" },
   // F51-I04 (Contract D／F scanners: disabled, zero, currency, money-ratio, roas-format).
   { rule: "disabled", file: "components/ads/ChangeComposer.tsx" },
   { rule: "disabled", file: "components/ads/ChangeControl.tsx" },

@@ -29,7 +29,7 @@ from app.brand_intelligence import repository as bi
 from app.core import settings
 from app.core.db import now_iso, now_utc
 from app.shared import web
-from app.shared.web import require_actor
+from app.shared.web import app_path, require_actor
 
 router = APIRouter()
 
@@ -62,7 +62,7 @@ _SCOPE_KEYS = ("campaign_id", "entity_id")
 
 
 def _action_url(conn, org_id: str, brand_id: str, kind: str, args: dict) -> str:
-    base = f"/app/brands/{brand_id}"
+    base = app_path(f"/brands/{brand_id}")
     campaign = args.get("campaign_id")
     if kind == "product_research":
         return f"{base}/products/{args.get('product_id', '')}"

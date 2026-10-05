@@ -43,7 +43,7 @@ from app.core.db import new_id, now_iso, now_utc
 from app.identity import repository as identity_repo
 from app.llm import gateway, providers
 from app.shared import web
-from app.shared.web import JSONResponse, NotFoundKind, clean, require_actor, require_brand
+from app.shared.web import JSONResponse, NotFoundKind, app_path, clean, require_actor, require_brand
 
 router = APIRouter()
 
@@ -406,7 +406,7 @@ def background_customer_voice_extraction(org_id: str, brand_id: str, job_key: st
             message = core_interrupts.notice("原話分析失敗，可以重試", channel_label)
         background_job.notify(
             conn, brand_id, category="customer_voice_extraction_done", dedupe_key=job_key,
-            message=message, action_url=f"/app/brands/{brand_id}/library",
+            message=message, action_url=app_path(f"/brands/{brand_id}/library"),
         )
         if error is not None:
             raise error  # Contract J：job 結局要是 failed，狀態端點才不會讀成還在跑

@@ -248,7 +248,7 @@ export function ReviewEvidencePage({ brandId, campaignId, entityId, reviewId }: 
           <Breadcrumb items={[{ label: "投放中心", href: homeHref }, { label: "看證據" }]} />
           <EmptyState
             title="沒有這回的檢討提議" description={loadError}
-            actionHref={homeHref} actionLabel="回投放中心" actionInternal
+            actionHref={homeHref} actionLabel="回投放中心"
           />
         </div>
       );
@@ -286,7 +286,7 @@ export function ReviewEvidencePage({ brandId, campaignId, entityId, reviewId }: 
         <Breadcrumb items={[{ label: "投放中心", href: homeHref }, { label: "看證據" }]} />
         <EmptyState
           title="找不到這回檢討" description="網址可能過期，或這回已經被另一回取代。"
-          actionHref={homeHref} actionLabel="回投放中心" actionInternal
+          actionHref={homeHref} actionLabel="回投放中心"
         />
       </div>
     );

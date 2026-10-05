@@ -1,3 +1,4 @@
+import { campaignPath } from "@/lib/adsRoutes";
 /** F23-I02: shared, presentation-free logic for the v7 six-step "review" flow (variant of the
  * three-step "light" flow, `docs/design/ads/prototype-v7-ads-center.html` `review()`/`sheet()`/
  * `prepare()`/`copy()`). Kept separate from `ReviewEvidencePage.tsx` so I03 (選方向) and I04
@@ -11,13 +12,11 @@ import { perSaleAmount } from "../patterns/csv";
 
 export type ReviewStepName = "review" | "prepare" | "copy";
 
-const brandPath = (brandId: string) => `/brands/${brandId}`;
-const campaignPath = (brandId: string, campaignId: string) => `${brandPath(brandId)}/ads/campaigns/${campaignId}`;
 
 /** `review/:entityId` — entry for a `worse` row with no review round yet (feature Decisions
  * "Agent choice — routes"). */
 export function reviewEntryPath(brandId: string, campaignId: string, entityId: string): string {
-  return `${campaignPath(brandId, campaignId)}/review/${entityId}`;
+  return `${campaignPath(brandId, campaignId)}/review/${encodeURIComponent(entityId)}`;
 }
 
 /** `reviews/:reviewId[/step]` — the canonical route once a review round exists. Mirrors
@@ -26,7 +25,7 @@ export function reviewEntryPath(brandId: string, campaignId: string, entityId: s
 export function reviewRoundPath(
   brandId: string, campaignId: string, reviewId: string, step?: "prepare" | "copy",
 ): string {
-  return `${campaignPath(brandId, campaignId)}/reviews/${reviewId}${step ? `/${step}` : ""}`;
+  return `${campaignPath(brandId, campaignId)}/reviews/${encodeURIComponent(reviewId)}${step ? `/${step}` : ""}`;
 }
 
 /** `reviews/:reviewId/material?mode=…` — F27-I12 Prepare page's 換一張圖／用現成素材 destination

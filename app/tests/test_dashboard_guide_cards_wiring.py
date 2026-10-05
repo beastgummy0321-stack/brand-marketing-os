@@ -48,7 +48,7 @@ class OverviewNextStepWiringTest(unittest.TestCase):
         self.assertIsNotNone(card["next_step"])
         self.assertIn("1", card["next_step"]["title"])
         self.assertEqual(card["next_step"]["action_url"],
-                         f"/app/brands/{brand['id']}/library?tab=facts")
+                         f"/brands/{brand['id']}/library?tab=facts")
 
     def test_conversion_goal_missing_outranks_pending_facts(self):
         """票 C：conversion_goal 沒設定本身就是待辦，而且排在所有規則之前。"""
@@ -61,7 +61,7 @@ class OverviewNextStepWiringTest(unittest.TestCase):
 
         card = self._card(brand["id"])
         self.assertIn("廣告目標", card["next_step"]["title"])
-        self.assertEqual(card["next_step"]["action_url"], f"/app/brands/{brand['id']}/library")
+        self.assertEqual(card["next_step"]["action_url"], f"/brands/{brand['id']}/library")
 
     def test_intake_draft_in_progress_surfaces_as_next_step(self):
         """票 B3-intake：品牌有進行中的建檔精靈草稿，總覽卡要看得到「繼續建檔」的入口。"""
@@ -76,7 +76,7 @@ class OverviewNextStepWiringTest(unittest.TestCase):
         card = self._card(brand_id)
         # F42-I04: seven brand-onboarding steps; a description-only brand skips the scan (step 2).
         self.assertIn("建檔進行中（第 3 步，共 7 步）", card["next_step"]["title"])
-        self.assertEqual(card["next_step"]["action_url"], f"/app/brands/{brand_id}/intake")
+        self.assertEqual(card["next_step"]["action_url"], f"/brands/{brand_id}/intake")
 
 
 if __name__ == "__main__":

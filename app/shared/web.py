@@ -287,3 +287,16 @@ def parse_number(raw: str | None):
 
 def clean(raw: str | None) -> str:
     return (raw or "").strip()
+
+
+def app_path(path: str, **query) -> str:
+    """Build a router-relative path; only app_url adds the SPA mount prefix."""
+    if not path.startswith("/") or path.startswith("//") or path == "/app" or path.startswith("/app/"):
+        raise ValueError("Expected a router-relative path")
+    encoded = urlencode({key: value for key, value in query.items() if value is not None})
+    return path + (("&" if "?" in path else "?") + encoded if encoded else "")
+
+
+def app_url(path: str) -> str:
+    """Build a browser URL for redirects and links outside the SPA."""
+    return "/app" + app_path(path)

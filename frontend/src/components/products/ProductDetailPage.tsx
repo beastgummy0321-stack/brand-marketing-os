@@ -225,7 +225,7 @@ export function ProductDetailPage({ brandId, productId }: { brandId: string; pro
         description="這個產品可能已經被刪除，或連結不正確。"
         actionHref={`/brands/${brandId}/products`}
         actionLabel="回產品清單"
-        actionInternal
+
       />
     );
   } else if (state.status === "error") {

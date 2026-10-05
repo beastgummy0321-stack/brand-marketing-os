@@ -28,7 +28,7 @@ from app.core import interrupts as core_interrupts
 from app.core.db import connection as core_db_connection
 from app.core.db import new_id
 from app.shared import web
-from app.shared.web import JSONResponse, NotFoundKind, require_actor, require_brand
+from app.shared.web import JSONResponse, NotFoundKind, app_path, require_actor, require_brand
 
 router = APIRouter()
 _STALE_MESSAGE = "品牌資料在報告生成後又更新過，內容可能已經不準。"
@@ -99,7 +99,7 @@ def _notify(brand_id: str, outcome: str) -> None:
     background_job.notify(
         web.conn, brand_id, category="brand_report_done", dedupe_key=new_id("rptjob"),
         message=core_interrupts.notice(outcome, subject),
-        action_url=f"/app/brands/{brand_id}/report",
+        action_url=app_path(f"/brands/{brand_id}/report"),
     )
 
 

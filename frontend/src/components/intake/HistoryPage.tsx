@@ -166,7 +166,7 @@ export function HistoryPage({ brandId }: { brandId: string }) {
         description="這一輪只能從 Meta 帶進來；接上以後隨時可以回來。"
         actionHref="/settings"
         actionLabel="前往設定"
-        actionInternal
+
       />
     );
   }

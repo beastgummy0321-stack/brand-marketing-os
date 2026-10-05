@@ -3,6 +3,8 @@
  * through `import.meta.glob("./guards/*.allow.ts")`; an entry whose file no longer hits fails as stale. F51-I13
  * deletes its entries as it cleans each file, and this module when it is empty. */
 export default [
+  { rule: "href", file: "components/ads/wait/WaitPage.tsx" },
+  { rule: "href", file: "components/ads/review/CopyPage.tsx" },
   // F51-I04 (Contract D／F scanners: disabled, zero, currency, money-ratio, roas-format).
   { rule: "disabled", file: "components/ads/patterns/DecisionCard.tsx" },
   { rule: "disabled", file: "components/ads/patterns/LoopPieces.tsx" },

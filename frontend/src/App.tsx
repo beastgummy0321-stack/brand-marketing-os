@@ -274,7 +274,7 @@ function NotFoundRoute() {
       description="網址可能過期或打錯了。"
       actionHref="/"
       actionLabel="回品牌總覽"
-      actionInternal
+
     />
   );
 }
@@ -687,7 +687,7 @@ function Overview() {
         description="這裡會列出每個品牌的健康度卡片。用建檔精靈建立第一個品牌。"
         actionHref="/intake/new"
         actionLabel="新增品牌"
-        actionInternal
+
       />
     );
   } else {

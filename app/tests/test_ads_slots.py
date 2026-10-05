@@ -442,7 +442,7 @@ def test_selected_workbench_copy_shows_as_copy_only_and_never_counts_as_ready(en
     assert slot["thumbnail_url"] is None
     assert slot["copy"] == {"source": "workbench", "label": "工作檯第 1 版", **WORKBENCH_COPY}
     assert slot["workbench_href"] and slot["workbench_href"].startswith(
-        f"/app/brands/{env['brand']}/workbench/packs/"
+        f"/brands/{env['brand']}/workbench/packs/"
     )
     assert view["ready"] == 0
     # The other ads have a set (the pack is being worked) but nothing selected: in_progress.

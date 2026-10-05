@@ -43,7 +43,7 @@ describe("BrandCard one state per card", () => {
   });
 
   it("a guide-card step shows that step, whatever the health", () => {
-    renderCard(card({ health: "yellow", next_step: { title: "還沒設定廣告目標", action_url: "/app/brands/brd_1/library" } }));
+    renderCard(card({ health: "yellow", next_step: { title: "還沒設定廣告目標", action_url: "/brands/brd_1/library" } }));
     expect(screen.getByRole("link", { name: "還沒設定廣告目標 →" })).toBeTruthy();
     expect(screen.getByText("有警示待處理")).toBeTruthy();
     expect(screen.queryByText("一切正常")).toBeNull();

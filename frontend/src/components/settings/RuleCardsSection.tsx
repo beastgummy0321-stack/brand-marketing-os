@@ -91,7 +91,7 @@ export function RuleCardsSection() {
           title="還沒有任何品牌"
           description="要先建立品牌，才能設定它的廣告護欄門檻。"
           actionHref="/"
-          actionInternal
+
           actionLabel="先去建一個品牌"
         />
       )}

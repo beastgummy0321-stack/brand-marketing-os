@@ -161,7 +161,8 @@ def create_invite(request: Request, body: CreateInviteRequest):
                           expires_at=invite["expires_at"]),
         # SPA 只掛在 /app（app/main.py、vite.config.ts base），連結一定要帶這個前綴，
         # 不然點下去會打到 FastAPI 的通用 404 頁（票 03-3 §2）。
-        accept_url=f"/app/accept-invite?token={invite['token']}" if local else None,
+        accept_url=(web.app_url(web.app_path("/accept-invite", token=invite["token"]))
+                    if local else None),
     )
 
 

@@ -90,12 +90,12 @@ class DashboardJobsQueueTest(QueueJobsTestCase):
         self.assertTrue(all(set(j) == ITEM_KEYS for j in jobs), "job args never leak")
         running, angles = jobs
         self.assertEqual(running["kind"], "ads_sync")
-        self.assertEqual(running["action_url"], f"/app/brands/{brand_id}/ads/connections")
+        self.assertEqual(running["action_url"], f"/brands/{brand_id}/ads/connections")
         self.assertTrue(running["started_at"])
         self.assertIsInstance(running["waited_seconds"], int)
         self.assertEqual(running["scope"], {})
         self.assertEqual(angles["scope"], {"campaign_id": "cmp_1", "entity_id": "ent_1"})
-        self.assertEqual(angles["action_url"], f"/app/brands/{brand_id}/ads/campaigns/cmp_1/detail")
+        self.assertEqual(angles["action_url"], f"/brands/{brand_id}/ads/campaigns/cmp_1/detail")
         self.assertEqual(angles["started_at"], "")
         self.assertEqual(angles["brand_name"], "進行中工作測試品牌")
 
@@ -124,10 +124,10 @@ class DashboardJobsQueueTest(QueueJobsTestCase):
 
         self.assertEqual(
             {(j["kind"], j["action_url"]) for j in body["data"]},
-            {("scan", f"/app/brands/{brand_id}/intake"),
-             ("product_research", f"/app/brands/{brand_id}/products/prd_test"),
-             ("library_convert", f"/app/brands/{brand_id}/library?tab=customer-voice"),
-             ("schedule_plan", f"/app/brands/{brand_id}/ads")},
+            {("scan", f"/brands/{brand_id}/intake"),
+             ("product_research", f"/brands/{brand_id}/products/prd_test"),
+             ("library_convert", f"/brands/{brand_id}/library?tab=customer-voice"),
+             ("schedule_plan", f"/brands/{brand_id}/ads")},
         )
         self.assertEqual([j["position"] for j in body["data"]], [1, 2, 3, 4])
         self.assertNotIn("顧客原話不可外流", str(body))
@@ -143,7 +143,7 @@ class DashboardJobsQueueTest(QueueJobsTestCase):
         brief = workbench.briefs_for_source(main.conn, DEV_ORG_ID, brand_id,
                                            "schedule_node", {"p2": True})[0]
         jobs = self.client.get("/api/jobs/active").json()["data"]
-        self.assertIn(f"/app/brands/{brand_id}/workbench/packs/{pack_id}/sets/{brief['id']}",
+        self.assertIn(f"/brands/{brand_id}/workbench/packs/{pack_id}/sets/{brief['id']}",
                       [job["action_url"] for job in jobs])
         self.assertEqual({job["kind"] for job in jobs}, {"workbench_generate"})
 

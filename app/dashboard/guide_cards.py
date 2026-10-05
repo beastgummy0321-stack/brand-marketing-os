@@ -46,6 +46,7 @@ facts 欄位契約（由 app/dashboard/repository.py 組裝）：
 from collections.abc import Callable
 
 from app.intake.state import WIZARD_STEPS
+from app.shared.web import app_path
 
 MAX_CARDS = 3
 
@@ -62,7 +63,7 @@ def _rule_conversion_goal_missing(facts: dict) -> dict | None:
         "title": "還沒設定廣告目標——AI 現在會用電商預設值寫文案，可能不適合你",
         # T4 步驟 1 刪掉舊版 Jinja `/brands/{id}/edit`，品牌資料編輯面板現在只能從
         # 品牌智庫頁點「編輯品牌資料」開，沒有能直接開啟面板的網址，導去該頁即可。
-        "action_url": f"/app/brands/{facts['brand_id']}/library",
+        "action_url": app_path(f"/brands/{facts['brand_id']}/library"),
     }
 
 
@@ -95,7 +96,7 @@ def _rule_past_ads_pending(facts: dict) -> dict | None:
         return None
     return {
         "title": "你說這個品牌投放過廣告——把過去的廣告帶進來，方案才用得上",
-        "action_url": f"/app/brands/{facts['brand_id']}/intake/history",
+        "action_url": app_path(f"/brands/{facts['brand_id']}/intake/history"),
     }
 
 
@@ -107,7 +108,7 @@ def _rule_pending_facts(facts: dict) -> dict | None:
     return {
         "title": f"有 {n} 條事實待確認",
         # T4 步驟 1 刪掉舊版 Jinja `/hub/facts` 頁，改導去新殼品牌智庫頁的事實分頁。
-        "action_url": f"/app/brands/{facts['brand_id']}/library?tab=facts",
+        "action_url": app_path(f"/brands/{facts['brand_id']}/library?tab=facts"),
     }
 
 
@@ -140,16 +141,17 @@ def demo() -> None:
     # （這裡沒設 advertising_history，past_ads_pending 不觸發，所以還是第一張）。
     cards = build({"brand_id": "b", "conversion_goal": None, "pending_facts_count": 2})
     assert len(cards) == 2
-    assert cards[0]["action_url"] == "/app/brands/b/library"
-    assert cards[1]["action_url"] == "/app/brands/b/library?tab=facts"
+    assert cards[0]["action_url"] == app_path("/brands/b/library")
+    assert cards[1]["action_url"] == app_path("/brands/b/library?tab=facts")
     # 票 B3-intake：有進行中建檔草稿時出卡，登記在 conversion_goal_missing 之後；
     # 沒有草稿（None）不出卡。
     cards_with_draft = build({"brand_id": "b", "conversion_goal": "purchase",
                               "pending_facts_count": 0,
-                              "intake_draft": {"step": 2, "resume_path": "/app/brands/b/intake"}})
+                              "intake_draft": {"step": 2,
+                                               "resume_path": app_path("/brands/b/intake")}})
     assert cards_with_draft == [{
         "title": "建檔進行中（第 2 步，共 7 步）・繼續建檔",
-        "action_url": "/app/brands/b/intake",
+        "action_url": app_path("/brands/b/intake"),
     }]
     assert build({"brand_id": "b", "conversion_goal": "purchase", "pending_facts_count": 0,
                   "intake_draft": None}) == []
@@ -157,7 +159,7 @@ def demo() -> None:
     assert build({"brand_id": "b", "conversion_goal": "purchase", "pending_facts_count": 0,
                   "advertising_history": "has_history", "imported_ad_count": 0}) == [{
         "title": "你說這個品牌投放過廣告——把過去的廣告帶進來，方案才用得上",
-        "action_url": "/app/brands/b/intake/history",
+        "action_url": app_path("/brands/b/intake/history"),
     }]
     assert build({"brand_id": "b", "conversion_goal": "purchase", "pending_facts_count": 0,
                   "advertising_history": "has_history", "imported_ad_count": 3}) == []

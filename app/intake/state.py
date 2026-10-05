@@ -15,6 +15,7 @@ from app import storage
 from app.core import input_rules
 from app.core.db import new_id
 from app.intake import repository as ir
+from app.shared.web import app_path
 
 # F42-I04: the seven brand-onboarding steps (prototype `#/b1`–`#/b7`). A draft without URLs
 # and photos has nothing to scan and starts at step 3 (step 2 is skipped).
@@ -86,7 +87,7 @@ def _row_to_draft(conn, row: dict) -> dict:
 
 def _resume_path(draft: dict) -> str:
     b = draft["brand_id"]
-    return f"/app/brands/{b}/intake"
+    return app_path(f"/brands/{b}/intake")
 
 
 def save(draft: dict, conn=None) -> None:

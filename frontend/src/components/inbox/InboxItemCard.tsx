@@ -3,7 +3,6 @@ import { Link } from "react-router-dom";
 import { Badge } from "@/components/layout/ui/badge";
 import { Button } from "@/components/layout/ui/button";
 import type { InboxItem } from "@/lib/inboxApi";
-import { internalHref } from "@/lib/internalHref";
 import { formatInstant, useOrgClock } from "@/lib/orgClock";
 import { SEVERITY_DOT_CLASS, SEVERITY_LABEL } from "@/lib/severity";
 import { cn } from "@/lib/utils";
@@ -61,7 +60,7 @@ export function InboxItemDetail({ item, variant, resolving, busy, error, onResol
     </div>}
     {error && <p role="alert" className="text-sm text-danger">{error}</p>}
     <div className="flex flex-wrap items-center gap-3 border-t border-border pt-5">
-      {item.action_url && <Button variant="outline" asChild><Link to={internalHref(item.action_url)}>前往詳情<ArrowUpRight className="size-4" aria-hidden="true" /></Link></Button>}
+      {item.action_url && <Button variant="outline" asChild><Link to={item.action_url}>前往詳情<ArrowUpRight className="size-4" aria-hidden="true" /></Link></Button>}
       {variant === "open" && <Button type="button" onClick={() => onResolve(item.id)} disabled={busy}>{resolving ? "標記中…" : "標記已處理"}</Button>}
     </div>
   </section>;

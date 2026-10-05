@@ -51,6 +51,7 @@ from app.shared import web
 from app.shared.web import (
     JSONResponse,
     NotFoundKind,
+    app_path,
     clean,
     require_actor,
     require_brand,
@@ -248,7 +249,7 @@ def _research_state(conn, brand_id: str, product_id: str) -> dict:
 def _research_notify(conn, brand_id: str, product_id: str, message: str) -> None:
     background_job.notify(
         conn, brand_id, category="product_research_done", dedupe_key=new_id("prsjob"),
-        message=message, action_url=f"/app/brands/{brand_id}/products/{product_id}",
+        message=message, action_url=app_path(f"/brands/{brand_id}/products/{product_id}"),
     )
 
 

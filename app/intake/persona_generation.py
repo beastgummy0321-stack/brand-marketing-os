@@ -14,6 +14,7 @@ from app.core.db import connection as core_db_connection
 from app.core.db import new_id
 from app.llm import context_compiler, gateway, providers
 from app.shared import web
+from app.shared.web import app_path
 
 PROVIDER = providers.AnthropicProvider()
 _USUAL_RANGE = "30 到 60 秒"
@@ -167,7 +168,7 @@ def generation_state(brand_id: str) -> dict:
 def _notify(conn, brand_id: str, message: str) -> None:
     background_job.notify(
         conn, brand_id, category="personas_ready", dedupe_key=new_id("psnjob"),
-        message=message, action_url=f"/app/brands/{brand_id}/library?tab=customer-voice",
+        message=message, action_url=app_path(f"/brands/{brand_id}/library?tab=customer-voice"),
     )
 
 

@@ -1,3 +1,4 @@
+import { campaignFlowPath } from "@/lib/adsRoutes";
 import type { HomeOverview } from "@/lib/adsHomeApi";
 import { formatInstant } from "@/lib/orgClock";
 import type {
@@ -18,21 +19,21 @@ export interface ProposalAction {
 }
 
 const proposePath = (brandId: string, campaignId: string, entityId: string) =>
-  `/brands/${brandId}/ads/campaigns/${campaignId}/propose/pause/${entityId}`;
+  campaignFlowPath(brandId, campaignId, ["propose", "pause", entityId]);
 // F25-I02: the `scale_budget` row's own entry point when there is no budget proposal yet
 // (feature Decisions "Home rows") — `entityId` here is the budget owner's id (an adset, or the
 // campaign itself when the campaign holds the budget), never the triage ad's own `entity_id`.
 const proposeBudgetPath = (brandId: string, campaignId: string, ownerId: string) =>
-  `/brands/${brandId}/ads/campaigns/${campaignId}/propose/budget/${ownerId}`;
+  campaignFlowPath(brandId, campaignId, ["propose", "budget", ownerId]);
 const changePath = (
   brandId: string, campaignId: string, setId: string, step: "confirm" | "handoff" | "verify",
-) => `/brands/${brandId}/ads/campaigns/${campaignId}/changes/${setId}/${step}`;
+) => campaignFlowPath(brandId, campaignId, ["changes", setId, step]);
 // F23-I01: entry for a `worse` row with no review round yet, and the round's own detail/prepare
 // steps once one exists (feature Decisions "Queue row state for `worse` rows").
 const reviewPath = (brandId: string, campaignId: string, entityId: string) =>
-  `/brands/${brandId}/ads/campaigns/${campaignId}/review/${entityId}`;
+  campaignFlowPath(brandId, campaignId, ["review", entityId]);
 const reviewRoundPath = (brandId: string, campaignId: string, reviewId: string, step?: "prepare") =>
-  `/brands/${brandId}/ads/campaigns/${campaignId}/reviews/${reviewId}${step ? `/${step}` : ""}`;
+  campaignFlowPath(brandId, campaignId, ["reviews", reviewId, ...(step ? [step] : [])]);
 
 // F47-I07 (drill-10 Q2) 「M/D 再看」, the deferred rows and the confirm page share this one. F50-I12 (Contract K):
 // `revisit_at` is the stored instant of 00:00 of the chosen org calendar day, so it prints on the org clock

@@ -6,7 +6,6 @@ import { useWorkspace } from "@/components/layout/WorkspaceContext";
 import { Button } from "@/components/layout/ui/button";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { fetchInbox } from "@/lib/inboxApi";
-import { internalHref } from "@/lib/internalHref";
 import type { MetaSpendSummary } from "@/lib/metaApi";
 import { fetchCreativePerformance, fetchDiagnosis } from "@/lib/scheduleApi";
 import {
@@ -52,7 +51,7 @@ export function SpendDistribution({ data }: { data: MetaSpendSummary }) {
           <EmptyState
             title="尚無花費資料"
             description="連接 Meta 並完成每日資料拉取後，這裡會顯示花費最高的活動。"
-            actionInternal
+
             actionHref="/settings?tab=meta"
             actionLabel="連接 Meta"
           />
@@ -202,7 +201,7 @@ export function InboxWidget({ brandId }: { brandId: string }) {
             {items.slice(0, 4).map((item) => (
               <Link
                 key={item.id}
-                to={item.action_url ? internalHref(item.action_url) : "/inbox"}
+                to={item.action_url ? item.action_url : "/inbox"}
                 className="flex gap-3 py-4"
               >
                 <span

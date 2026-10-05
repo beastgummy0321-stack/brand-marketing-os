@@ -82,7 +82,7 @@ class IntakeWizardTest(unittest.TestCase):
             draft = state.get_draft(brand_id, conn=fresh)
         self.assertIsNotNone(draft)
         self.assertEqual(draft["step"], 2)
-        self.assertEqual(draft["resume_path"], f"/app/brands/{brand_id}/intake")
+        self.assertEqual(draft["resume_path"], f"/brands/{brand_id}/intake")
 
     def test_budget_limit_default_reads_setting(self):
         from app.core import settings as coresettings
