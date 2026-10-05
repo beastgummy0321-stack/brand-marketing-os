@@ -16,7 +16,6 @@ import {
   fetchProductEvidence,
   fetchProductOnboarding,
   fetchProductSellWays,
-  fetchProductsPage,
   fetchProductWho,
 } from "@/lib/intakeProductApi";
 import { cn } from "@/lib/utils";
@@ -28,7 +27,7 @@ interface Loaded {
   ready: boolean;
   /** The server's checklist, printed as served (F50 Contract R). */
   checklist: ReadinessCheck[];
-  /** The products page's served `missing` of this product (`product_readiness`, in order); [] when not listed. */
+  /** The server's `missing` (`product_readiness`, in order; F50-I18): the title names the first. */
   missing: ReadinessMissing[];
   who: ProductWho;
   evidence: ProductEvidence;
@@ -126,19 +125,18 @@ export function ProductDoneStep({ brandId, productId, nav, what, completed, onGo
   async function read() {
     setLoad({ status: "loading" });
     try {
-      const [status, who, evidence, sellWays, page] = await Promise.all([
+      const [status, who, evidence, sellWays] = await Promise.all([
         fetchProductOnboarding(brandId, productId),
         fetchProductWho(brandId, productId),
         fetchProductEvidence(brandId, productId),
         fetchProductSellWays(brandId, productId),
-        // Only the title's words (F50-I18): a failed read leaves the title 〈商品〉建到一半, never the page broken.
-        fetchProductsPage(brandId).catch(() => null),
       ]);
-      const missing = page?.products.find((p) => p.id === productId)?.missing ?? [];
       let verdict = status;
       const requiredMet = (status.checklist ?? []).every((item) => item.ok || !item.required);
       if (!status.completed && status.step >= 5 && requiredMet) verdict = await completeProductOnboarding(brandId, productId);
-      const data = { ready: verdict.ready === true, checklist: verdict.checklist ?? [], missing, who, evidence, sellWays };
+      const data = {
+        ready: verdict.ready === true, checklist: verdict.checklist ?? [], missing: verdict.missing ?? [], who, evidence, sellWays,
+      };
       if (alive.current) setLoad({ status: "ready", data });
     } catch (err) {
       if (alive.current) setLoad({ status: "error", message: errorText(err) });

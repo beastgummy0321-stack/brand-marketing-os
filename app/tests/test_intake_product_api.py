@@ -881,6 +881,11 @@ class CompleteBundleTenancyTest(_Base):
         self.assertEqual(resp.json()["error"], "至少要有一群顧客才能完成商品建檔。")
         status = self._get(bid, self._step(pid))
         self.assertFalse(status["ready"])
+        # F50-I18: the done page's title reads the served `missing` (product_readiness, in order).
+        self.assertEqual(status["missing"], [
+            {"key": "steps", "label": "建檔還沒走完"},
+            {"key": "groups", "label": "還沒有顧客群"},
+        ])
         self.assertEqual(status["checklist"], [
             {"key": "groups", "label": "誰會買", "ok": False, "required": True},
             {"key": "proof", "label": "證據與說法", "ok": False, "required": False},
@@ -889,6 +894,7 @@ class CompleteBundleTenancyTest(_Base):
         self._group(bid, pid)
         data = self.client.post(self._url(bid, self._step(pid, "/complete"))).json()["data"]
         self.assertEqual((data["step"], data["completed"], data["ready"]), (5, True, True))
+        self.assertEqual(data["missing"], [])
         self.assertTrue(all(c["ok"] for c in data["checklist"] if c["required"]))
         # re-entry edits in place: a step PUT does not reopen the product
         self._group(bid, pid, "運動族")
