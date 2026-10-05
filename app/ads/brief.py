@@ -563,12 +563,13 @@ def create_draft(conn, org_id: str, brand_id: str, *, goal_text: str, start_date
             fields = validated
 
     # 日期：呼叫端給了兩個就是「你說的」；兩個都沒給就看模型從句子解析出來的 `period`
-    # 算不算數（算得出來也是「你說的」——句子裡講了時間），解析不出來才落到「今天～+30 天」
-    # 那個備援（那一格才是「系統帶入」，ARCHITECTURE.md §6.1 第 11 條）。
+    # 算不算數——F50：模型讀出來的是 `"parsed"`（猜的，請確認），不是「你說的」；解析不出來
+    # 才落到「今天～+30 天」那個備援（那一格才是「系統帶入」，ARCHITECTURE.md §6.1 第 11 條）。
     if start is None:
         resolved_start, resolved_end = _resolve_period(fields["period"], today=today)
         if resolved_start is not None:
             start, end = resolved_start, resolved_end
+            dates_source = "parsed"
         else:
             start, end = today, today + timedelta(days=DEFAULT_PERIOD_DAYS)
             dates_source = "system"
@@ -612,7 +613,10 @@ def create_draft(conn, org_id: str, brand_id: str, *, goal_text: str, start_date
         # A sentence the program composed carries no cap the user stated: whatever the model
         # read as `cap` is dropped.
         target_cost = None if goal_composed else fields["cap"]
-    cap_source = "user" if target_cost is not None else "system"
+    if extras["cap"] is not None:
+        cap_source = "user"
+    else:  # F50: a cap the model read from the sentence is `parsed`, never the user's
+        cap_source = "parsed" if target_cost is not None else "system"
     # F46-I08 (Contract D): the same sell-way's previous campaign first, then the sell-way's
     # own cap, then its break-even -- each stored as the campaign's own cap, so the cap the
     # form showed is the cap saved. A previous campaign without a cap falls through.
@@ -660,7 +664,8 @@ def create_draft(conn, org_id: str, brand_id: str, *, goal_text: str, start_date
 
     field_sources = {
         "product": "user" if product_ids else "system",
-        "objective": "user" if parsed_ok or checked is not None else "system",
+        # F50: the wizard's pick is the user's; an objective the model read is `parsed`.
+        "objective": "user" if checked is not None else "parsed" if parsed_ok else "system",
         "platform": platform_source,
         "budget": budget_source,
         "dates": dates_source,

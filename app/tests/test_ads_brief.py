@@ -370,9 +370,11 @@ class BriefBudgetTargetFromSentenceTest(_BriefTestBase):
         self.assertEqual(detail["constraints_json"]["budget"], 30000)
         self.assertEqual(detail["start_date"], expected_start)
         self.assertEqual(detail["end_date"], expected_end)
-        self.assertEqual(detail["context_json"]["field_sources"]["dates"], "user")
-        # F50 (planning #4／#12): the budget the model read from the sentence is `parsed`, never
-        # the user's own pick; so is the audience it guessed.
+        # F50 (planning #4／#12): every value the model read from the sentence is `parsed`,
+        # never the user's own pick -- dates, cap, objective, budget and the audience it guessed.
+        self.assertEqual(detail["context_json"]["field_sources"]["dates"], "parsed")
+        self.assertEqual(detail["context_json"]["field_sources"]["cap"], "parsed")
+        self.assertEqual(detail["context_json"]["field_sources"]["objective"], "parsed")
         self.assertEqual(detail["context_json"]["field_sources"]["budget"], "parsed")
         self.assertEqual(detail["context_json"]["field_sources"]["audience"], "parsed")
 
@@ -517,6 +519,24 @@ class SentencePathDefaultsTest(_SellWayBase):
                          ("meta", "brand"))
         self.assertEqual((sources["budget"], sources["audience"], sources["cap"]),
                          ("system", "system", "system"))
+
+    def test_cap_objective_and_dates_the_model_read_are_parsed(self):
+        self._reply(cap=250, period={"kind": "month", "month": 11})
+        with patch.object(brief.wizard_options, "default_platform", return_value="meta"):
+            detail = self._create(goal_text="11 月夜跑背心，每筆最多 250", start_date="",
+                                  end_date="")
+        sources = detail["context_json"]["field_sources"]
+        self.assertEqual(detail["cap"]["own_value"], 250)
+        self.assertEqual((sources["cap"], sources["objective"], sources["dates"]),
+                         ("parsed", "parsed", "parsed"))
+
+    def test_typed_dates_and_cap_stay_the_users(self):
+        self._reply(cap=250)
+        with patch.object(brief.wizard_options, "default_platform", return_value="meta"):
+            detail = self._create(goal_text="夜跑背心，每筆最多 250", picks={"cap": 300})
+        sources = detail["context_json"]["field_sources"]
+        self.assertEqual(detail["cap"]["own_value"], 300)
+        self.assertEqual((sources["cap"], sources["dates"]), ("user", "user"))
 
     def test_chips_the_user_set_stay_the_users(self):
         self._reply(platform="meta")
