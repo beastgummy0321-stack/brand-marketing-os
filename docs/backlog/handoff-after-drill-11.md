@@ -3,6 +3,7 @@
 Start here in the next session. A board, not an implementation authorization. Replaces `handoff-after-drill-10.md`'s pointer.
 
 ## Resume here
+- **2026-10-05: resume from `.work/features/F51.md` 「# Handoff」** (audit chain F48–F51: A/B/C built and integrated, D in progress).
 - **2026-10-04 whole-program audit** (user order: this round is the final fix, end the simulate→find→fix loop):
   `audit-2026-10-04/README.md` groups R1–R7 plus ~110 new verified findings into 19 generator workstreams W1–W19 with the
   machine check each must install; decisions 10–14 there extend §2 below. Carve from that README, not from §1 here.
