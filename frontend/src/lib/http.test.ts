@@ -136,6 +136,8 @@ describe("apiFetch", () => {
     mockGetAccessToken.mockResolvedValue(null);
     mockGetOrgId.mockReturnValue(null);
     mockSignOut.mockResolvedValue(undefined);
+    await signOutByUser(); // earlier cases sent tokens: after 登出 this tab is like one opened signed out
+    takePendingPath();
     const fetchMock = vi.fn(async () => new Response("{}", { status: 401 }));
     vi.stubGlobal("fetch", fetchMock);
     _setRedirectForTest(vi.fn());
@@ -166,9 +168,12 @@ describe("apiFetch", () => {
     void apiFetch("/api/x");
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(takePendingPath()).toBe("/brands/b1/ads?tab=assets");
     expect(takeSessionExpired()).toEqual({ expired: true, actionLost: false });
-    expect(takeSessionExpired()).toEqual({ expired: false, actionLost: false }); // read once
+    // F51 (drill 11 F14): the login page mounts twice after a 401 (router, then the full reload), so
+    // reading keeps the marks; the next sign-in (LoginRoute takes the path) ends them.
+    expect(takeSessionExpired()).toEqual({ expired: true, actionLost: false });
+    expect(takePendingPath()).toBe("/brands/b1/ads?tab=assets");
+    expect(takeSessionExpired()).toEqual({ expired: false, actionLost: false });
   });
 
   /** F51 Contract H (user ruling 2026-10-04): a write that met an expired session is never replayed;
@@ -188,8 +193,28 @@ describe("apiFetch", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(redirect).toHaveBeenCalledWith("/app/login");
-    expect(takePendingPath()).toBe("/brands/b1/settings");
     expect(takeSessionExpired()).toEqual({ expired: true, actionLost: true });
+    expect(takePendingPath()).toBe("/brands/b1/settings");
+  });
+
+  /** Drill 11 F14: the stored session vanished while the user worked (cleared storage); the next request
+   * carries no token, yet this tab had one — that is an expiry, and the pressed write was not sent. */
+  it("401 without a token in a tab that sent one before is an expiry too", async () => {
+    mockGetOrgId.mockReturnValue(null);
+    mockSignOut.mockResolvedValue(undefined);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 200 })));
+    mockGetAccessToken.mockResolvedValue("tok");
+    await apiFetch("/api/x");
+    mockGetAccessToken.mockResolvedValue(null);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 401 })));
+    _setRedirectForTest(vi.fn());
+    window.history.pushState({}, "", "/app/inbox");
+
+    void apiFetch("/api/interrupts/i1/resolve", { method: "POST" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(takeSessionExpired()).toEqual({ expired: true, actionLost: true });
+    expect(takePendingPath()).toBe("/inbox");
   });
 
   it("a failed connection is one sentence: a read cannot reach the server, a write's result is unknown", async () => {
@@ -408,6 +433,7 @@ describe("the way to the login page (F51 Contract H)", () => {
     leaveForLogin("expired", { write: true });
     leaveForLogin("expired"); // the sign-out broadcast that follows the 401
     expect(takeSessionExpired()).toEqual({ expired: true, actionLost: true });
+    takePendingPath();
   });
 
   it("signOutByUser forgets the path and the marks and is told apart from the broadcast", async () => {

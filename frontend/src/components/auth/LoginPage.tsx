@@ -20,9 +20,8 @@ export function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [magicLinkSent, setMagicLinkSent] = useState(false);
-  // F47-I02／F51 Contract H: `lib/http.ts` marks an expired session (and a write it did not send);
-  // read-and-clear once in an effect (StrictMode runs it twice in dev, and the second read is already
-  // empty — so only ever set it here, never clear it from the read).
+  // F47-I02／F51 Contract H: `lib/http.ts` marks an expired session (and a write it did not send); read
+  // once on mount. The marks last until the next sign-in, so every mount of this page says it.
   const [expired, setExpired] = useState<null | { actionLost: boolean }>(null);
   useEffect(() => {
     const mark = takeSessionExpired();

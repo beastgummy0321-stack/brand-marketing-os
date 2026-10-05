@@ -17,7 +17,7 @@
  * | fetch rejects with `AbortError` | nothing: rethrown untouched (callers already drop aborted reads) |
  * | fetch rejects otherwise, GET／HEAD | `ApiNetworkError` 「連不上伺服器，請檢查網路後再試一次。」 |
  * | fetch rejects otherwise, any write | `ApiNetworkError` 「沒收到伺服器回應，這次的結果還不確定。…」 |
- * | 401, the request carried a token | session expired: `leaveForLogin("expired", {write})` remembers the path (10 min TTL), marks expired and, for a write, `actionLost`; sign out; go to `/login`. A write is never replayed: the login page says it was not sent. |
+ * | 401, the request carried a token — or this tab sent one earlier and its user did not press 登出 (the stored session vanished) | session expired: `leaveForLogin("expired", {write})` remembers the path (10 min TTL), marks expired and, for a write, `actionLost`; sign out; go to `/login`. A write is never replayed: the login page says it was not sent. |
  * | 401, no token (cold invite link, page opened signed out) | `leaveForLogin("no_session")`: remember the path only, no expired line |
  * | session gone while signed in (supabase sign-out broadcast after a failed refresh), user did not press 登出 | `App.tsx` `RequireSession`: `sessionExit(…)` → `leaveForLogin("expired")` (no `actionLost`) |
  * | user pressed 登出 (`OrgMenu`) | `signOutByUser()`: forget the path and the marks |
@@ -43,6 +43,8 @@ export function _setRedirectForTest(fn: (path: string) => void): void {
 }
 
 const PENDING_PATH_KEY = "pendingPath";
+const SESSION_EXPIRED_KEY = "sessionExpired";
+const ACTION_LOST_KEY = "sessionActionLost";
 /** 記住的路徑放多久算數。邀請連結是「點開、幾分鐘內登入」的即時意圖；同一個分頁隔了
  * 更久之後為了別的事登入，是另一件事，不該被丟回那張沒收完的邀請頁。 */
 const PENDING_PATH_TTL_MS = 10 * 60 * 1000;
@@ -50,6 +52,10 @@ const PENDING_PATH_TTL_MS = 10 * 60 * 1000;
 /** True from 登出 until the next session (`takePendingPath`): `RequireSession` passes it to `sessionExit`
  * so the sign-out broadcast of a pressed 登出 is not read as an expiry. Module state, per tab. */
 let userSignedOut = false;
+
+/** True once this tab sent a token, until 登出: a later 401 without one means the stored session vanished
+ * while the user was working (an expiry), not a page opened signed out. */
+let tabHadToken = false;
 
 /** 票 03-3 §3：沒登入的受邀者點開 `/app/accept-invite?token=…`，該頁一掛載就打
  * `apiFetch` 拿 401（沒 token），整頁換成 `/app/login` 之前先把當下路徑（react-router
@@ -65,9 +71,11 @@ function rememberPendingPath(): void {
 /** `App.tsx` 的 `LoginRoute` 登入成功後呼叫一次：撈回並清掉上面記住的路徑；沒有、過期、
  * 或存的東西讀不懂（這版之前存的是純字串，跨這次部署的舊分頁就是那種）都回 `null`，
  * 呼叫端自己決定要不要用預設值 `/`。A new session also ends a 登出 (`signOutByUser`): a later
- * sign-out broadcast in this tab is an expiry again. */
+ * sign-out broadcast in this tab is an expiry again — and ends the expired marks the login page read. */
 export function takePendingPath(): string | null {
   userSignedOut = false;
+  sessionStorage.removeItem(SESSION_EXPIRED_KEY);
+  sessionStorage.removeItem(ACTION_LOST_KEY);
   const raw = sessionStorage.getItem(PENDING_PATH_KEY);
   sessionStorage.removeItem(PENDING_PATH_KEY);
   if (!raw) return null;
@@ -79,9 +87,6 @@ export function takePendingPath(): string | null {
     return null;
   }
 }
-
-const SESSION_EXPIRED_KEY = "sessionExpired";
-const ACTION_LOST_KEY = "sessionActionLost";
 
 /** Whether this tab's user pressed 登出 since the last sign-in (the `byUser` of `sessionExit`). */
 export function signedOutByUser(): boolean {
@@ -105,6 +110,7 @@ export function leaveForLogin(reason: "expired" | "no_session", { write = false 
  * 會把剛記的路徑當場清掉。 */
 export async function signOutByUser(): Promise<void> {
   userSignedOut = true;
+  tabHadToken = false;
   sessionStorage.removeItem(PENDING_PATH_KEY);
   sessionStorage.removeItem(SESSION_EXPIRED_KEY);
   sessionStorage.removeItem(ACTION_LOST_KEY);
@@ -119,15 +125,15 @@ export function sessionExit(hadSession: boolean, hasSession: boolean, byUser: bo
   return byUser ? null : "expired";
 }
 
-/** F47-I02: the login page reads this once on mount. `expired` only when the user was sent here
- * because the session ran out (a 401 with a token, or the sign-out broadcast without 登出), so the page
- * can say 「登入已過期，請重新登入」; `actionLost` when the request that found out was a write, which was
- * not sent. Read-and-clear, like `takePendingPath`. */
+/** F47-I02: the login page reads this on mount. `expired` only when the user was sent here because the
+ * session ran out (a 401 with a token, or the sign-out broadcast without 登出), so the page can say
+ * 「登入已過期，請重新登入」; `actionLost` when the request that found out was a write, which was not sent.
+ * The marks stay until the next sign-in (`takePendingPath`) or 登出 (`signOutByUser`): after a 401 the
+ * login page mounts twice — the router's `<Navigate>` on the sign-out broadcast, then `apiFetch`'s full
+ * reload — and a read that cleared them left the second, the one the user sees, bare (drill 11 F14). */
 export function takeSessionExpired(): { expired: boolean; actionLost: boolean } {
   const expired = sessionStorage.getItem(SESSION_EXPIRED_KEY) === "1";
   const actionLost = expired && sessionStorage.getItem(ACTION_LOST_KEY) === "1";
-  sessionStorage.removeItem(SESSION_EXPIRED_KEY);
-  sessionStorage.removeItem(ACTION_LOST_KEY);
   return { expired, actionLost };
 }
 
@@ -165,6 +171,7 @@ async function send(input: RequestInfo | URL, init: RequestInit, write: boolean)
 
 export async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const token = await getAccessToken();
+  if (token) tabHadToken = true;
   const orgId = getOrgId();
   const method = methodOf(input, init);
   const write = method !== "GET" && method !== "HEAD";
@@ -179,8 +186,9 @@ export async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Pr
     // F47-I02: remember the page and the marks BEFORE signing out. `signOut()` fires supabase-js's
     // auth-state broadcast, and `RequireSession` (App.tsx) can re-render into `<Navigate to="/login">`
     // before this await returns — after that `window.location` already reads `/login` and the page
-    // the user was on would be lost. Without a token nothing expired: the page was opened signed out.
-    leaveForLogin(token ? "expired" : "no_session", { write });
+    // the user was on would be lost. Without a token in a tab that never had one nothing expired: the
+    // page was opened signed out (a cold invite link).
+    leaveForLogin(token || tabHadToken ? "expired" : "no_session", { write });
     await signOut();
     redirectToLogin("/app/login");
     // 導頁已經觸發：不把 401 這個 Response 交還給呼叫端，呼叫端多半是
