@@ -123,6 +123,30 @@ class QuickPathTest(_Base):
         self.assertIsNotNone(restarted)
         self.assertEqual(restarted["step"], 3)
 
+    def test_a_scheme_alone_is_not_a_url_on_start_and_restart(self):
+        """F50 Contract I: start and restart share one website rule (`input_rules.urls`, at most 5)."""
+        sentence = "品牌網站「https://」不是完整的網址，請從 https:// 開始，例如 https://example.com。"
+        resp = self.client.post("/api/intake/brands", data={
+            "brand_name": self._brand_name(), "urls": "https://"})
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.json()["error"], sentence)
+        bid = self._create_full()
+        state.complete_draft(state.get_draft(bid))
+        resp = self.client.post(f"/api/intake/brands/{bid}/restart", data={"urls": "https://"})
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.json()["error"], sentence)
+        six = [f"https://example.com/{i}" for i in range(6)]
+        resp = self.client.post(f"/api/intake/brands/{bid}/restart", data={"urls": six})
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.json()["error"], "最多填 5 個網址。")
+        self.assertIsNone(state.get_draft(bid))  # nothing started
+
+    def test_prefill_keeps_a_product_url_only_when_it_is_full(self):
+        products, _dropped = intake_ai._check_products([
+            {"name": "甲", "url": "https://"}, {"name": "乙", "url": " https://shop.example/b "},
+            {"name": "丙", "url": "shop.example/c"}])
+        self.assertEqual([p["url"] for p in products], [None, "https://shop.example/b", None])
+
     def test_restart_blocked_when_draft_already_running(self):
         bid = self._create_full()
         resp = self.client.post(f"/api/intake/brands/{bid}/restart",
@@ -208,6 +232,13 @@ class PhotoUploadTest(_Base):
                                 files={"photo": ("empty.jpg", io.BytesIO(b""), "image/jpeg")})
         self.assertEqual(resp.status_code, 400)
         self.assertEqual(resp.json(), {"error": "「empty.jpg」是空的檔案，請換一個。"})
+        # F50 Contract I: the 10 MiB brand-photo cap is in bytes, no rounding (10.04 MB used to
+        # round to 10.0 and pass).
+        big = _JPEG + b"\x00" * (int(10.04 * 1024 * 1024) - len(_JPEG))
+        resp = self.client.post("/api/intake/photos",
+                                files={"photo": ("big.jpg", io.BytesIO(big), "image/jpeg")})
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.json(), {"error": "「big.jpg」超過 10 MB，請換一個小一點的檔案。"})
 
         png = PNG
         resp = self.client.post("/api/intake/photos",

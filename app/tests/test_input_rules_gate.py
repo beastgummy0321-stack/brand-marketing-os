@@ -48,33 +48,13 @@ _ERROR_CALL = re.compile(r"bad_request|JSONResponse|error|refus", re.I)
 
 # (file relative to app/, rule, source text of the hit) -> the issue that removes it.
 PENDING: dict[tuple[str, str, str], str] = {
-    # rule "money_refusal" — intake／brand-intelligence stores adopt the table in F50-I03, the
-    # percent scale (close_rate 0–100) is F50-I04, ads stores are F50-I05.
-    ("brand_intelligence/repository.py", "money_refusal", "qty <= 0"): "F50-I03",
-    ("brand_intelligence/repository.py", "money_refusal", "price <= 0"): "F50-I03",
-    ("brand_intelligence/repository.py", "money_refusal", "0 < close_rate <= 1"): "F50-I04",
-    ("brand_web/routes_products.py", "money_refusal", "0 < close_rate_raw <= 1"): "F50-I04",
-    ("intake/product_onboarding.py", "money_refusal", "0 < close_rate <= 1"): "F50-I04",
-    ("intake/product_onboarding.py", "money_refusal", "qty <= 0"): "F50-I03",
+    # rule "money_refusal" — ads stores adopt the table in F50-I05 (the intake／brand-intelligence
+    # stores, close_rate included, moved in F50-I03).
     ("ads/plan.py", "money_refusal", "daily_budget <= 0"): "F50-I05",
     ("ads/strategy.py", "money_refusal", "budget_cap <= 0"): "F50-I05",
-    # rule "url_prefix"
-    ("brand_web/routes_products.py", "url_prefix", 'url.startswith("http://")'): "F50-I03",
-    ("brand_web/routes_products.py", "url_prefix", 'url.startswith("https://")'): "F50-I03",
-    ("intake/ai.py", "url_prefix", 'url.strip().startswith(("https://", "http://"))'): "F50-I03",
-    ("intake/state.py", "url_prefix", 'u.startswith("http://")'): "F50-I03",
-    ("intake/state.py", "url_prefix", 'u.startswith("https://")'): "F50-I03",
     # rule "percent_bounds" — the margin card goes 0–100 and 每期調幅 gets its 100 cap in F50-I04.
     (RULE_CARDS, "percent_bounds", "每期調幅"): "F50-I04",
     (RULE_CARDS, "percent_bounds", "毛利率"): "F50-I04",
-    # rule "vocab_require" — the brand-intelligence／intake writers call vocab.require in F50-I03.
-    ("core/vocab.py", "vocab_require", "brand_fact"): "F50-I03",
-    ("core/vocab.py", "vocab_require", "product_fact"): "F50-I03",
-    ("core/vocab.py", "vocab_require", "rule"): "F50-I03",
-    ("core/vocab.py", "vocab_require", "claim"): "F50-I03",
-    ("core/vocab.py", "vocab_require", "customer_voice_source"): "F50-I03",
-    ("core/vocab.py", "vocab_require", "policy"): "F50-I03",
-    ("core/vocab.py", "vocab_require", "persona"): "F50-I03",
 }
 
 # (file relative to app/, rule, source text) -> why it is not a check of user／vendor input.

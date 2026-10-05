@@ -116,11 +116,6 @@ def get_draft(brand_id: str, conn=None) -> dict | None:
     return _row_to_draft(conn, row) if row else None
 
 
-def invalid_url(urls: list) -> str | None:
-    """回傳第一個格式不對的網址；全部合法回 None（S4.5）。"""
-    return next((u for u in urls if not (u.startswith("http://") or u.startswith("https://"))), None)
-
-
 def prev_photos(last_draft_row: dict | None) -> list:
     """上一輪草稿的照片（photos_json 形狀 → 畫面／new_draft 慣用形狀）；W1b 重新建檔沿用。"""
     if not last_draft_row:
@@ -230,15 +225,15 @@ PHOTO_KINDS = ("image/jpeg", "image/png", "image/webp")
 
 
 def validate_photo_upload(filename: str, content: bytes) -> str | None:
-    """Brand photo check (S4.6): the content (not the extension) must be JPEG / PNG / WebP and
-    not empty (F47 Contract A, `app.core.input_rules`), and one photo is at most 10 MB. Returns
-    the user sentence, or None when it passes. The one check behind `/api/intake/photos`."""
+    """Brand photo check (S4.6): not empty and at most `input_rules.UPLOAD_CAPS["brand_photo"]`
+    bytes (the photo is sent to the model; no rounding), and the content (not the extension) is
+    JPEG / PNG / WebP (F47 Contract A, F50 Contract I). Returns the user sentence, or None when it
+    passes. The one check behind `/api/intake/photos`."""
     try:
+        input_rules.check_upload(filename, len(content), path="brand_photo")
         input_rules.check_image_upload(filename, content, PHOTO_KINDS)
     except input_rules.InputRuleError as exc:
         return str(exc)
-    if round(len(content) / (1024 * 1024), 1) > 10:
-        return f"「{filename}」超過 10 MB，請換一張小一點的照片。"
     return None
 
 

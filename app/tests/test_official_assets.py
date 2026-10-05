@@ -111,7 +111,7 @@ class OfficialAssetTest(unittest.TestCase):
         resp = self._upload(brand_id, filename="巨圖.png", content=oversized,
                              content_type="image/png")
         self.assertEqual(resp.status_code, 400)
-        self.assertIn("50 MB", resp.json()["detail"])
+        self.assertEqual(resp.json()["detail"], "「巨圖.png」超過 50 MB，請換一個小一點的檔案。")
         self.assertEqual(repo.list_official_assets(web.conn, brand_id), [],
                          "被擋下來的上傳不可以留下任何一列")
 

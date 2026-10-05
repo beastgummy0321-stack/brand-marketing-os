@@ -35,7 +35,7 @@ class ContextCompilerFollowsMotherProductTest(unittest.TestCase):
             parent_id=self.mother["id"],
         )
         bi_repo.create_product_fact(
-            web.conn, self.brand_id, self.mother["id"], actor=ACTOR, fact_type="ingredient",
+            web.conn, self.brand_id, self.mother["id"], actor=ACTOR, fact_type="core_info",
             label="主成分", value="薑黃萃取物", status="confirmed", confirmed_by=ACTOR,
         )
 
@@ -66,7 +66,7 @@ class ContextCompilerReadsEveryBundleProductTest(unittest.TestCase):
                                   (self.tea, "洛神花與玫瑰花瓣"),
                                   (self.other, "別的商品的成分")):
             bi_repo.create_product_fact(
-                web.conn, self.brand_id, product_id, actor=ACTOR, fact_type="ingredient",
+                web.conn, self.brand_id, product_id, actor=ACTOR, fact_type="core_info",
                 label="成分", value=value, status="confirmed", confirmed_by=ACTOR,
             )
         bi_repo.create_claim(web.conn, self.brand_id, actor=ACTOR, claim_text="午後花茶冷泡也好喝",

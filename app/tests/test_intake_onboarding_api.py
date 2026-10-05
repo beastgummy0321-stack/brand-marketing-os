@@ -183,7 +183,7 @@ class BasicsTest(_Base):
         resp = self.client.post("/api/intake/brands", data={
             "brand_name": self._name(), "urls": [f"https://example.com/{i}" for i in range(6)]})
         self.assertEqual(resp.status_code, 400)
-        self.assertIn("最多 5 個", resp.json()["error"])
+        self.assertIn("最多填 5 個網址", resp.json()["error"])
         resp = self.client.post("/api/intake/brands", data={
             "brand_name": self._name(), "photo_tokens": ["pht_x"],
             "photo_kinds": ["product_photo"]})
@@ -382,8 +382,8 @@ class EvidenceTest(_Base):
         ok = {"proof": [{"fact_key": "founder_voice", "text": "創辦人故事"}], "policies": [],
               "cooling_off": {"applies": True}, "forbidden": ["不講第一"]}
         cases = (
-            ({"policies": [{"key": "no_such_policy", "params": {}}]}, "未知的全店政策"),
-            ({"policies": [{"key": "ship_threshold", "params": {}}]}, "門檻"),
+            ({"policies": [{"key": "no_such_policy", "params": {}}]}, "全店政策只能選"),
+            ({"policies": [{"key": "ship_threshold", "params": {}}]}, "滿額免運還沒填門檻"),
             ({"cooling_off": {"applies": False, "disclosure": "太短"}}, "告知文字"),
             ({"proof": [{"fact_key": "rumour", "text": "聽說很好"}]}, "證據要選一種"),
             ({"proof": [{"id": "bft_missing", "fact_key": "founder_voice", "text": "x"}]},
@@ -395,6 +395,37 @@ class EvidenceTest(_Base):
             self.assertIn(needle, resp.json()["error"])
         self.assertEqual(self._get(bid, "/evidence")["proof"], [])
         self.assertEqual(self._get(bid, "/evidence")["forbidden"], [])
+
+    def test_a_chosen_policy_with_an_empty_required_param_is_refused_by_field(self):
+        """Other F9: the store refuses what step 4 blocks -- a chosen policy whose required param
+        is empty -- with the sentence the step shows, keyed by the policy."""
+        from app.intake import onboarding
+        bid = self._create()
+        body = {"proof": [], "cooling_off": {"applies": True}, "forbidden": [],
+                "policies": [{"key": "first_order", "params": {"content": "送試吃包"}},
+                             {"key": "ship_threshold", "params": {"threshold": ""}},
+                             {"key": "spend_off", "params": {"threshold": 1000}}]}
+        with self.assertRaises(onboarding.FieldErrors) as caught:
+            onboarding.put_evidence(web.conn, bid, body, actor="test")
+        self.assertEqual(caught.exception.field_errors, {
+            "policies.ship_threshold": "滿額免運還沒填門檻",
+            "policies.spend_off": "滿額折還沒填「折 NT$ 或 %」",
+        })
+        self.assertEqual(str(caught.exception), "滿額免運還沒填門檻")
+        self.assertEqual(bi_repo.list_brand_policies(web.conn, bid), [])
+
+    def test_a_policy_refusal_sends_field_errors_over_http(self):
+        """The step-4 PUT answers 400 with the sentence and `field_errors` keyed by the policy."""
+        bid = self._create()
+        resp = self._put(bid, "/evidence", {
+            "proof": [], "cooling_off": {"applies": True}, "forbidden": [],
+            "policies": [{"key": "ship_threshold", "params": {}}]})
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.json(), {
+            "error": "滿額免運還沒填門檻",
+            "field_errors": {"policies.ship_threshold": "滿額免運還沒填門檻"},
+        })
+        self.assertEqual(bi_repo.list_brand_policies(web.conn, bid), [])
 
 
 # ---------------------------------------------------------------------------

@@ -587,7 +587,7 @@ class PromptCapsTest(StrategyTestBase):
     def test_facts_and_learnings_are_capped_and_basis_matches_the_prompt(self):
         for i in range(45):
             bi_repo.create_brand_fact(
-                web.conn, self.brand_id, actor=ACTOR, fact_type="other",
+                web.conn, self.brand_id, actor=ACTOR, fact_type="positioning",
                 label=f"事實{i}", value=f"值{i}", status="confirmed", confirmed_by=ACTOR,
             )
         for i in range(12):

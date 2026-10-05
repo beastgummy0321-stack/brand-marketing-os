@@ -17,6 +17,7 @@ re-export（`from app.brand_intelligence.repository_channels import ...`），�
 """
 
 
+from app.core import vocab
 from app.core.audit import write_audit
 from app.core.db import Conn, new_id, now_utc
 
@@ -50,6 +51,7 @@ def create_channel(conn: Conn, brand_id: str, *, org_id: str, actor: str,
                     channel_type: str, name: str, identifier: str | None = None,
                     status: str = "active", platform: str | None = None) -> dict:
     _require(channel_type, "owned_channel.channel_type 為必填")
+    channel_type = vocab.require("channel", channel_type)
     _require(name, "owned_channel.name 為必填")
     _require(actor, "actor 為必填")
     if status not in ("active", "inactive"):
@@ -93,6 +95,7 @@ def update_channel(conn: Conn, brand_id: str, channel_id: str, *, actor: str,
     AI 生成的 context 輸入，不像 brand_fact／rule／claim 那樣要 bump knowledge_version
     （create_channel 原本就沒 bump，這裡保持一致）。"""
     _require(channel_type, "owned_channel.channel_type 為必填")
+    channel_type = vocab.require("channel", channel_type)
     _require(name, "owned_channel.name 為必填")
     _require(actor, "actor 為必填")
     if status not in ("active", "inactive"):

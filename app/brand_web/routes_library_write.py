@@ -37,6 +37,7 @@ from app.brand_web.routes_library import (
     _fact_shape,
     _rule_shape,
 )
+from app.core import input_rules
 from app.core import vocab as md
 from app.shared import web
 from app.shared.web import JSONResponse, NotFoundKind, clean, require_actor, require_brand
@@ -56,6 +57,12 @@ async def _json_body(request: Request) -> dict:
 
 def _str_field(body: dict, key: str) -> str:
     return str(body.get(key) or "")
+
+
+def _refused(field: str, exc: input_rules.InputRuleError) -> JSONResponse:
+    """F50 Contract I: the store's vocab check (`vocab.require`) refused a type; its sentence is
+    shown under that field."""
+    return JSONResponse({"errors": {field: str(exc)}}, status_code=400)
 
 
 # ---- 品牌事實 ----
@@ -107,10 +114,14 @@ async def fact_create_api(request: Request, brand_id: str):
         return JSONResponse({"errors": errors}, status_code=400)
     src_id = brand_routes._create_source_ref(brand_id, str(actor.user_id), source_reference)
     confirmed_by = str(actor.user_id) if status == "confirmed" else None
-    row = repo.create_brand_fact(
-        web.conn, brand_id, actor=str(actor.user_id), fact_type=fact_type, label=clean(label), value=clean(value),
-        status=status, source_reference_id=src_id, confirmed_by=confirmed_by, fact_key=fact_key or None,
-    )
+    try:
+        row = repo.create_brand_fact(
+            web.conn, brand_id, actor=str(actor.user_id), fact_type=fact_type, label=clean(label),
+            value=clean(value), status=status, source_reference_id=src_id, confirmed_by=confirmed_by,
+            fact_key=fact_key or None,
+        )
+    except input_rules.InputRuleError as exc:
+        return _refused("fact_type", exc)
     return {"data": _fact_shape(brand_id, row)}
 
 
@@ -141,9 +152,12 @@ async def fact_update_api(request: Request, brand_id: str, fact_id: str):
     if errors:
         return JSONResponse({"errors": errors}, status_code=400)
     src_id = brand_routes._create_source_ref(brand_id, str(actor.user_id), source_reference) or fact["source_reference_id"]
-    row = repo.update_brand_fact(web.conn, brand_id, fact_id, actor=str(actor.user_id), fact_type=fact_type,
-                                  label=clean(label), value=clean(value), source_reference_id=src_id,
-                                  fact_key=fact_key or None)
+    try:
+        row = repo.update_brand_fact(web.conn, brand_id, fact_id, actor=str(actor.user_id),
+                                      fact_type=fact_type, label=clean(label), value=clean(value),
+                                      source_reference_id=src_id, fact_key=fact_key or None)
+    except input_rules.InputRuleError as exc:
+        return _refused("fact_type", exc)
     return {"data": _fact_shape(brand_id, row)}
 
 
@@ -203,8 +217,12 @@ async def rule_create_api(request: Request, brand_id: str):
     if errors:
         return JSONResponse({"errors": errors}, status_code=400)
     src_id = brand_routes._create_source_ref(brand_id, str(actor.user_id), source_reference)
-    row = repo.create_rule(web.conn, brand_id, actor=str(actor.user_id), rule_type=rule_type, content=clean(content),
-                            severity=severity, product_id=product_id or None, source_reference_id=src_id)
+    try:
+        row = repo.create_rule(web.conn, brand_id, actor=str(actor.user_id), rule_type=rule_type,
+                                content=clean(content), severity=severity, product_id=product_id or None,
+                                source_reference_id=src_id)
+    except input_rules.InputRuleError as exc:
+        return _refused("rule_type", exc)
     return {"data": _rule_shape(brand_id, row)}
 
 
@@ -225,9 +243,12 @@ async def rule_update_api(request: Request, brand_id: str, rule_id: str):
     if errors:
         return JSONResponse({"errors": errors}, status_code=400)
     src_id = brand_routes._create_source_ref(brand_id, str(actor.user_id), source_reference) or rule["source_reference_id"]
-    row = repo.update_rule(web.conn, brand_id, rule_id, actor=str(actor.user_id), rule_type=rule_type,
-                            content=clean(content), severity=severity, product_id=product_id or None,
-                            source_reference_id=src_id)
+    try:
+        row = repo.update_rule(web.conn, brand_id, rule_id, actor=str(actor.user_id), rule_type=rule_type,
+                                content=clean(content), severity=severity, product_id=product_id or None,
+                                source_reference_id=src_id)
+    except input_rules.InputRuleError as exc:
+        return _refused("rule_type", exc)
     return {"data": _rule_shape(brand_id, row)}
 
 
@@ -347,9 +368,12 @@ async def channel_create_api(request: Request, brand_id: str):
         errors["status"] = "請選擇狀態。"
     if errors:
         return JSONResponse({"errors": errors}, status_code=400)
-    row = repo.create_channel(web.conn, brand_id, org_id=actor.org_id, actor=str(actor.user_id),
-                               channel_type=channel_type, name=clean(name), identifier=clean(identifier),
-                               status=status)
+    try:
+        row = repo.create_channel(web.conn, brand_id, org_id=actor.org_id, actor=str(actor.user_id),
+                                   channel_type=channel_type, name=clean(name),
+                                   identifier=clean(identifier), status=status)
+    except input_rules.InputRuleError as exc:
+        return _refused("channel_type", exc)
     return {"data": _channel_shape(row)}
 
 
@@ -376,6 +400,8 @@ async def channel_update_api(request: Request, brand_id: str, channel_id: str):
     try:
         row = repo.update_channel(web.conn, brand_id, channel_id, actor=str(actor.user_id), channel_type=channel_type,
                                    name=clean(name), identifier=clean(identifier), status=status)
+    except input_rules.InputRuleError as exc:
+        return _refused("channel_type", exc)
     except ValueError:
         raise NotFoundKind("自有渠道")
     return {"data": _channel_shape(row)}
@@ -414,6 +440,12 @@ async def brand_update_api(request: Request, brand_id: str):
     region_c = clean(market_region)
     if region_c and region_c not in dict(md.MARKET_REGIONS):
         errors["market_region"] = "請選擇有效的市場地區。"
+    persona_c = clean(persona)
+    if persona_c:
+        try:
+            md.require("persona", persona_c)
+        except input_rules.InputRuleError as exc:
+            errors["persona"] = str(exc)
     goal_c = clean(conversion_goal)
     if goal_c and goal_c not in repo.CONVERSION_GOALS:
         errors["conversion_goal"] = "請選擇有效的廣告目標。"

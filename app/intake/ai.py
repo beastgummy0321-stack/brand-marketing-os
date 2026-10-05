@@ -18,7 +18,7 @@ import logging
 
 from app import storage
 from app.brand_intelligence import repository as bi_repo
-from app.core import net, vocab
+from app.core import input_rules, net, vocab
 from app.intake import onboarding
 from app.intake import repository as ir
 from app.llm import gateway, providers
@@ -250,8 +250,10 @@ def _check_products(items) -> tuple[list, int]:
             dropped += 1
             continue
         seen.add(name)
-        url = item.get("url")
-        url = url.strip() if isinstance(url, str) and url.strip().startswith(("https://", "http://")) else None
+        try:  # a product page the model read: kept only when it is a full URL (input_rules.url)
+            url = input_rules.url(item.get("url"), "商品頁網址", optional=True)
+        except input_rules.InputRuleError:
+            url = None
         products.append({"name": name, "url": url})
     return products, dropped
 

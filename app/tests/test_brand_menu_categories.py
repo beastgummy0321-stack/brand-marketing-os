@@ -45,7 +45,7 @@ class BrandMenuFourCategoriesTest(_Base):
         self.assertEqual(response.json()["data"]["facts"], [])
 
     def test_pending_fact_is_listed_with_pending_status(self):
-        bi_repo.create_brand_fact(web.conn, self.bid, fact_type="定位", label="虛構事實",
+        bi_repo.create_brand_fact(web.conn, self.bid, fact_type="positioning", label="虛構事實",
                                   value="示範內容", status="pending", actor=ACTOR)
         facts = self.client.get(f"/api/library/brands/{self.bid}").json()["data"]["facts"]
         self.assertEqual([(fact["label"], fact["status"]) for fact in facts],
@@ -56,7 +56,7 @@ class HubHomeRulesClaimsMergeTest(_Base):
     """品牌智庫首頁：「限制規則」＋「宣稱」合併為一張「規則與宣稱」，卡上分別顯示兩類筆數。"""
 
     def _add_rule_and_claim(self):
-        bi_repo.create_rule(web.conn, self.bid, rule_type="hard", content="虛構限制規則",
+        bi_repo.create_rule(web.conn, self.bid, rule_type="forbidden_word", content="虛構限制規則",
                             severity="hard", actor=ACTOR)
         bi_repo.create_claim(web.conn, self.bid, claim_text="虛構宣稱",
                              claim_type="approved", actor=ACTOR)

@@ -99,10 +99,10 @@ async def brand_restart(request: Request, brand_id: str):
         return {"quick": False, "already_running": True}  # S4.12：不開第二輪
     form = await request.form()
     description = clean(str(form.get("description") or ""))
-    urls = [clean(str(u)) for u in form.getlist("urls") if clean(str(u))]
-    bad = state.invalid_url(urls)
-    if bad:
-        return _error(400, f"「{bad}」不是有效的網址，請以 https:// 或 http:// 開頭。")
+    try:  # the same website rule as the start (F50 Contract I: urls, at most 5)
+        urls = onboarding.check_urls([clean(str(u)) for u in form.getlist("urls")])
+    except ValueError as exc:
+        return _error(400, str(exc))
     new_photos = state.resolve_photo_tokens([str(t) for t in form.getlist("photo_tokens")])
     carried = state.prev_photos(ir.get_latest_completed_draft(web.conn, brand_id))
     photos = carried + new_photos

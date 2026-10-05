@@ -168,7 +168,7 @@ class ProductDetailTest(_BaseProductsApiTest):
 
     def test_fact_shape_fields(self):
         pid = self._create_product()
-        repo.create_product_fact(web.conn, self.bid, pid, actor=ACTOR, fact_type="價格帶",
+        repo.create_product_fact(web.conn, self.bid, pid, actor=ACTOR, fact_type="core_info",
                                   label="定價", value="中價位", status="confirmed", confirmed_by=ACTOR)
         data = self.client.get(f"/api/products/brands/{self.bid}/products/{pid}").json()["data"]
         self.assertEqual(len(data["facts"]), 1)
@@ -178,8 +178,8 @@ class ProductDetailTest(_BaseProductsApiTest):
             {"id", "fact_type", "fact_type_label", "label", "value", "status",
              "confirmed_by", "confirmed_at", "source_reference"},
         )
-        # AI 快掃寫入的中文詞不在六個內建鍵裡，fallback 原樣顯示（S6.22）
-        self.assertEqual(fact["fact_type_label"], "價格帶")
+        # F50 Contract I: every stored type is a vocab key and reads as its label.
+        self.assertEqual(fact["fact_type_label"], "核心資訊")
         # F47-I03: a typed confirmer name shows as typed.
         self.assertEqual(fact["confirmed_by"], ACTOR)
 
@@ -293,6 +293,18 @@ class ResearchBackgroundTest(_BaseProductsApiTest):
         )
         self.assertEqual(resp.status_code, 400)
         self.assertEqual(repo.list_products(web.conn, self.bid), [])
+
+    def test_a_scheme_alone_is_not_a_product_page(self):
+        """F50 Contract I: research and rescan check the address with `input_rules.url`."""
+        sentence = "產品頁網址「https://」不是完整的網址，請從 https:// 開始，例如 https://example.com。"
+        resp = self.client.post(f"/api/products/brands/{self.bid}/research",
+                                json={"name": "虛構產品", "source_url": "https://"})
+        self.assertEqual((resp.status_code, resp.json()), (400, {"error": sentence}))
+        self.assertEqual(repo.list_products(web.conn, self.bid), [])
+        pid = self._create_product()
+        resp = self.client.post(f"/api/products/brands/{self.bid}/products/{pid}/rescan",
+                                json={"source_url": "https://"})
+        self.assertEqual((resp.status_code, resp.json()), (400, {"error": sentence}))
 
     def test_rescan_blocked_with_409_while_a_scan_is_already_queued(self):
         """票 08：procrastinate 的 `queueing_lock`（`product_scan:{product_id}`）擋
@@ -420,6 +432,35 @@ class EconomicsTest(_BaseProductsApiTest):
 
         self.assertEqual(self._save(pid, shipping_cost=0).status_code, 204)
         self.assertEqual(repo.get_product_economics(web.conn, self.bid, pid, raw=True)["shipping_cost"], 0)
+
+    def test_dates_and_close_rate_go_through_the_one_table(self):
+        """F50 Contract I: 生效日 is an ISO date (a non-ISO one used to be a 500) and 成交率 keeps
+        its 0–1 range through `within`; each refusal is keyed by its field, nothing is saved."""
+        pid = self._create_product()
+        for field, value, sentence in (
+                ("effective_from", "01/06/2026", "生效日請用 YYYY-MM-DD 格式（例如 2026-10-05）。"),
+                ("close_rate", 0, "成交率要大於 0、最多 1（例如 0.2＝20%）。"),
+                ("close_rate", 20, "成交率要大於 0、最多 1（例如 0.2＝20%）。")):
+            resp = self._save(pid, **{field: value})
+            self.assertEqual((resp.status_code, resp.json()),
+                             (400, {"error": sentence, "field_errors": {field: sentence}}))
+        self.assertIsNone(repo.get_product_economics(web.conn, self.bid, pid))
+        self.assertEqual(self._save(pid, effective_from="2026-01-06", close_rate=0.2).status_code, 204)
+        raw = repo.get_product_economics(web.conn, self.bid, pid, raw=True)
+        self.assertEqual((str(raw["effective_from"]), float(raw["close_rate"])), ("2026-01-06", 0.2))
+
+    def test_store_refuses_a_zero_cap_and_a_price_above_the_list_price(self):
+        """F50 Contract I: the economics store runs the same rules as product onboarding."""
+        pid = self._create_product()
+        for money, sentence in (({"cap_per_sale": 0}, "每筆上限要大於 0。"),
+                                ({"selling_price": 1280, "list_price": 999},
+                                 "售價（1280）不能大於原價（999）。")):
+            with self.assertRaises(ValueError) as caught:
+                repo.save_product_economics(
+                    web.conn, self.bid, pid, actor=ACTOR, currency="TWD", confirmed_by=ACTOR,
+                    **{"selling_price": 690, **money})
+            self.assertEqual(str(caught.exception), sentence)
+        self.assertIsNone(repo.get_product_economics(web.conn, self.bid, pid))
 
     def test_empty_cost_is_unset_and_empty_price_is_refused(self):
         """F47-I03: the form sends an empty field as null -- a cost left empty is stored unset (never

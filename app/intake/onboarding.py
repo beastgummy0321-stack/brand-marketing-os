@@ -16,10 +16,11 @@ Entry points: the functions below, called only by `app/intake/routes_onboarding_
 """
 
 import json
+import re
 from pathlib import Path
 
 from app.brand_intelligence import repository as bi_repo
-from app.core import vocab
+from app.core import input_rules, vocab
 from app.core.db import Conn
 from app.intake import repository as ir
 from app.intake import state
@@ -275,13 +276,9 @@ def check_photo_kinds(kinds: list, count: int) -> list:
 
 
 def check_urls(urls: list) -> list:
-    urls = [str(u).strip() for u in urls if str(u).strip()]
-    if len(urls) > MAX_URLS:
-        raise ValueError(f"品牌網站最多 {MAX_URLS} 個。")
-    bad = state.invalid_url(urls)
-    if bad:
-        raise ValueError(f"「{bad}」不是有效的網址，請以 https:// 或 http:// 開頭。")
-    return urls
+    """The brand's website list (step 1 start, restart and step 2): blank rows skipped, each a
+    full http(s) address, at most `MAX_URLS` (F50 Contract I, `input_rules.urls`)."""
+    return input_rules.urls(urls, "品牌網站", max_count=MAX_URLS)
 
 
 def check_market_region(value) -> str | None:
@@ -626,6 +623,41 @@ def _check_proof(value, existing_ids: set) -> list:
     return out
 
 
+class FieldErrors(ValueError):
+    """A refusal naming each field (`field_errors` {field: sentence}); `str()` is the first
+    sentence, so a caller that only maps `ValueError` to 400 still shows it."""
+
+    def __init__(self, field_errors: dict):
+        super().__init__(next(iter(field_errors.values())))
+        self.field_errors = field_errors
+
+
+def _param_word(label: str) -> str:
+    """「門檻 NT$」 -> 門檻; a label only a unit away from one character keeps its quotes
+    (「滿 NT$」) -- the words of step 4's 「滿額免運還沒填門檻」."""
+    word = re.sub(r"\s*或\s*$", "", re.sub(r"NT\$|%", "", re.sub(r"（.*?）", "", label))).strip()
+    return word if len(word) >= 2 else f"「{label}」"
+
+
+def _blank(value) -> bool:
+    return value is None or (isinstance(value, str) and not value.strip())
+
+
+def _missing_params(items: list) -> dict:
+    """{`policies.<key>`: 「〈policy〉還沒填〈param〉」} for every chosen registry policy whose
+    required param is empty (other F9: refused here instead of stored with an empty sentence)."""
+    errors = {}
+    for item in items:
+        spec = vocab.POLICY_TYPES_BY_KEY.get(item["key"]) if isinstance(item["key"], str) else None
+        params = item["params"] if isinstance(item["params"], dict) else {}
+        missing = next((p for p in (spec or {}).get("params", [])
+                        if not p.get("optional") and _blank(params.get(p["name"]))), None)
+        if spec is not None and missing is not None:
+            word = _param_word(missing["label"])
+            errors[f"policies.{spec['key']}"] = f"{spec['label']}還沒填{word}"
+    return errors
+
+
 def _check_policies(value, cooling_off) -> list:
     if not isinstance(value, list):
         raise ValueError("全店政策清單格式不對。")
@@ -637,6 +669,8 @@ def _check_policies(value, cooling_off) -> list:
             raise ValueError("7 天猶豫期請在「7 天猶豫期」那一列設定。")
         items.append({"key": item.get("key"), "params": item.get("params") or {},
                       "sentence": item.get("sentence")})
+    if missing := _missing_params(items):
+        raise FieldErrors(missing)
     cooling_off = cooling_off if isinstance(cooling_off, dict) else {"applies": True}
     if cooling_off.get("applies") is False:
         disclosure = str(cooling_off.get("disclosure") or "").strip()

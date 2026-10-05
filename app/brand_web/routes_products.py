@@ -276,11 +276,13 @@ def background_product_scan(org_id: str, brand_id: str, product_id: str, actor: 
         _research_notify(conn, brand_id, product_id, f"「{product_name}」調研完成，新增 {added} 條待確認")
 
 
-_URL_FORMAT_ERROR = "這個網址看起來不完整，記得從 https:// 開始，例如「https://example.com/products/xxx」。"
-
-
-def _valid_url(url: str) -> bool:
-    return url.startswith("http://") or url.startswith("https://")
+def _url_error(url: str) -> str | None:
+    """The product page address the research reads: a full http(s) URL (F50 Contract I)."""
+    try:
+        input_rules.url(url, "產品頁網址")
+    except input_rules.InputRuleError as exc:
+        return str(exc)
+    return None
 
 
 @router.post("/api/products/brands/{brand_id}/research")
@@ -294,8 +296,8 @@ async def product_research_start(request: Request, brand_id: str):
         return _error(400, "請填寫產品名稱。")
     if not url_c:
         return _error(400, "請填寫產品頁網址，才能請 AI 幫忙調研；不填網址請改用「新增這個產品」。")
-    if not _valid_url(url_c):
-        return _error(400, _URL_FORMAT_ERROR)
+    if url_error := _url_error(url_c):
+        return _error(400, url_error)
     product = repo.create_product(web.conn, brand_id, name=name_c, actor=str(actor.user_id))
     budget_err = product_helpers._scan_budget_error(brand_id)
     if budget_err:
@@ -317,8 +319,8 @@ async def product_rescan_start(request: Request, brand_id: str, product_id: str)
     url_c = clean(_str_field(body, "source_url"))
     if not url_c:
         return _error(400, "請填寫網址，才能請 AI 再次調研。")
-    if not _valid_url(url_c):
-        return _error(400, _URL_FORMAT_ERROR)
+    if url_error := _url_error(url_c):
+        return _error(400, url_error)
     budget_err = product_helpers._scan_budget_error(brand_id)
     if budget_err:
         return _error(422, budget_err)
@@ -495,12 +497,24 @@ _ECONOMICS_NUMBERS = (
 
 
 def _economics_numbers(body: dict) -> tuple[dict, dict]:
+    """Every typed field through the one input-rule table: the money fields, 成交率 (0–1 until
+    F50-I04) and 生效日 (`iso_date`); each refusal is kept under its own field."""
     numbers, field_errors = {}, {}
     for key, label, rule, optional in _ECONOMICS_NUMBERS:
         try:
             numbers[key] = rule(body.get(key), label, optional=optional)
         except input_rules.InputRuleError as exc:
             field_errors[key] = str(exc)
+    try:
+        numbers["close_rate"] = input_rules.within(body.get("close_rate"), "成交率",
+                                                   repo.CLOSE_RATE_BOUNDS, optional=True)
+    except input_rules.InputRuleError as exc:
+        field_errors["close_rate"] = str(exc)
+    try:
+        numbers["effective_from"] = input_rules.iso_date(body.get("effective_from"), "生效日",
+                                                         optional=True)
+    except input_rules.InputRuleError as exc:
+        field_errors["effective_from"] = str(exc)
     return numbers, field_errors
 
 
@@ -523,13 +537,6 @@ async def economics_save(request: Request, brand_id: str, product_id: str):
     confirmed_by = clean(_str_field(body, "confirmed_by"))
     if not confirmed_by:
         return _error(400, "請填寫確認人是誰。")
-    close_rate_raw = body.get("close_rate")
-    close_rate_val = None
-    if close_rate_raw is not None:
-        if isinstance(close_rate_raw, bool) or not isinstance(close_rate_raw, (int, float)) \
-                or not (0 < close_rate_raw <= 1):
-            return _error(400, "成交率請填 0 到 1 之間的數字，例如 0.2 代表五筆名單成交一筆。")
-        close_rate_val = float(close_rate_raw)
     assumptions_raw = body.get("assumptions")
     assumptions_val = None
     if assumptions_raw is not None:
@@ -541,8 +548,8 @@ async def economics_save(request: Request, brand_id: str, product_id: str):
             web.conn, brand_id, product_id, actor=str(actor.user_id),
             selling_price=price_val, currency=currency, confirmed_by=confirmed_by,
             fixed_cost=fixed_val, unit_variable_cost=unit_val, shipping_cost=ship_val,
-            effective_from=clean(_str_field(body, "effective_from")) or None,
-            close_rate=close_rate_val, assumptions=assumptions_val,
+            effective_from=numbers["effective_from"],
+            close_rate=numbers["close_rate"], assumptions=assumptions_val,
         )
     except ValueError as exc:
         return _error(400, str(exc))

@@ -61,7 +61,12 @@ async def _write(request: Request, brand_id: str, writer: Callable[..., dict]):
     try:
         data = writer(_conn(), brand_id, body, actor=str(actor.user_id))
     except ValueError as exc:
-        return _error(400, str(exc))
+        # F50 Contract I: a refusal that names its fields (`onboarding.FieldErrors`) also sends
+        # them keyed, so the step shows each sentence under its own row.
+        payload: dict = {"error": str(exc)}
+        if field_errors := getattr(exc, "field_errors", None):
+            payload["field_errors"] = field_errors
+        return JSONResponse(payload, status_code=400)
     return _envelope(data)
 
 

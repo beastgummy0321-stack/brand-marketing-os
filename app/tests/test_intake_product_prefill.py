@@ -261,7 +261,7 @@ class ProductPrefillTest(_Base):
         pid = self._create(page_url=None)
         resp = self.client.post(self._step(pid, "/scan"), json={"page_url": "shop.example/p"})
         self.assertEqual(resp.status_code, 400)
-        self.assertIn("不是有效的網址", resp.json()["error"])
+        self.assertIn("不是完整的網址", resp.json()["error"])
 
     def test_create_without_page_url_does_not_read(self):
         pid = self._create(page_url=None)

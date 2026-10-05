@@ -41,7 +41,7 @@ class OverviewNextStepWiringTest(unittest.TestCase):
         bi_repo.set_brand_switches(main.conn, brand["id"], market_region=None,
                                    conversion_goal="purchase", actor=ACTOR)
         bi_repo.create_brand_fact(
-            main.conn, brand["id"], actor=ACTOR, fact_type="other",
+            main.conn, brand["id"], actor=ACTOR, fact_type="positioning",
             label="測試事實", value="測試值", status="pending")
 
         card = self._card(brand["id"])
@@ -56,7 +56,7 @@ class OverviewNextStepWiringTest(unittest.TestCase):
             main.conn, name=f"虛構沒設定目標茶行{abs(hash(self.id())) % 100000}",
             client_name=None, actor=ACTOR, org_id=coredb.DEV_ORG_ID)
         bi_repo.create_brand_fact(
-            main.conn, brand["id"], actor=ACTOR, fact_type="other",
+            main.conn, brand["id"], actor=ACTOR, fact_type="positioning",
             label="測試事實", value="測試值", status="pending")
 
         card = self._card(brand["id"])

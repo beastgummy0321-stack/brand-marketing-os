@@ -128,7 +128,7 @@ class WorkbenchVisualIdentityTest(unittest.TestCase):
 
     def test_exclusion_kept_only_with_verbatim_fact(self):
         bi_repo.create_brand_fact(
-            self.conn, self.brand_id, actor=ACTOR, fact_type="rule", label="風格限制",
+            self.conn, self.brand_id, actor=ACTOR, fact_type="positioning", label="風格限制",
             value="不要出現任何動物元素", status="confirmed", confirmed_by=ACTOR,
         )
         data = _reply(
@@ -208,7 +208,7 @@ class WorkbenchVisualIdentityTest(unittest.TestCase):
             value=_SPEC_TEXT, status="confirmed", confirmed_by=ACTOR,
         )
         bi_repo.create_brand_fact(
-            self.conn, self.brand_id, actor=ACTOR, fact_type="rule", label="風格限制",
+            self.conn, self.brand_id, actor=ACTOR, fact_type="positioning", label="風格限制",
             value="不要出現任何動物元素", status="confirmed", confirmed_by=ACTOR,
         )
         data = _reply(excluded_looks=[{"look": looks.BRAND_SPEC, "fact": "不要出現任何動物元素"}])
@@ -231,7 +231,7 @@ class WorkbenchVisualIdentityTest(unittest.TestCase):
 
     def test_exclusion_can_drop_below_minimum(self):
         bi_repo.create_brand_fact(
-            self.conn, self.brand_id, actor=ACTOR, fact_type="rule", label="風格限制",
+            self.conn, self.brand_id, actor=ACTOR, fact_type="positioning", label="風格限制",
             value="不要出現任何動物元素", status="confirmed", confirmed_by=ACTOR,
         )
         data = _reply(
@@ -247,7 +247,7 @@ class WorkbenchVisualIdentityTest(unittest.TestCase):
 
     def test_exclusion_of_unknown_look_key_dropped(self):
         bi_repo.create_brand_fact(
-            self.conn, self.brand_id, actor=ACTOR, fact_type="rule", label="風格限制",
+            self.conn, self.brand_id, actor=ACTOR, fact_type="positioning", label="風格限制",
             value="不要出現任何動物元素", status="confirmed", confirmed_by=ACTOR,
         )
         data = _reply(excluded_looks=[{"look": "not_a_look", "fact": "不要出現任何動物元素"}])

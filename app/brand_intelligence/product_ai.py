@@ -13,6 +13,8 @@ brand_intelligence 的概念（`repository.create_product` / `list_products` 都
 AI 呼叫與網頁抓取留在 app.brand_web.routes_products。
 """
 
+from app.core import vocab
+
 PARSE_FAIL_MESSAGE = "AI 有回覆，但格式讀不成預期的樣子。可以再試一次。"
 
 
@@ -22,8 +24,22 @@ PARSE_FAIL_MESSAGE = "AI 有回覆，但格式讀不成預期的樣子。可以�
 
 COST_PRODUCT_SCAN = 0.30  # 校準依據同 COST_SCAN（單次頁面讀取＋一次整理，同量級呼叫）
 
-# 事實分類固定五類（跟建檔精靈初掃「看起來像哪一面向」同一套詞彙，DoR 架構限制）
-PRODUCT_SCAN_FACT_TYPES = ("產品線", "價格帶", "受眾", "語調", "法規風險")
+# F50 Contract I (lead ruling 2026-10-05, one vocabulary): the scan writes `product_fact` rows,
+# so its types are `vocab.PRODUCT_FACT_TYPES` keys -- core_info (product line and specs, price
+# band) and audience. Tone and regulatory risk are brand facts (`tone`／`regulatory`), not asked
+# here. `_SCAN_TYPE_HINTS` = what each type covers, in the prompts' words.
+PRODUCT_SCAN_FACT_TYPES = ("core_info", "audience")
+_SCAN_TYPE_HINTS = {"core_info": "產品線與規格、價格帶", "audience": "目標受眾"}
+# A reply written to the old five-type contract (a handoff package copied before this change):
+# its product types map onto the vocab; its brand-level types are left out, not stored.
+_LEGACY_SCAN_TYPES = {"產品線": "core_info", "價格帶": "core_info", "受眾": "audience"}
+_BRAND_LEVEL_SCAN_TYPES = frozenset({"語調", "法規風險"})
+
+
+def scan_types_text() -> str:
+    """「core_info（產品線與規格、價格帶）、audience（目標受眾）」 -- the type list both prompts quote."""
+    return "、".join(f"{key}（{_SCAN_TYPE_HINTS[key]}）" for key in PRODUCT_SCAN_FACT_TYPES)
+
 
 _PRODUCT_SCAN_SYSTEM = (
     "你是資深品牌顧問，正在替一個新產品做快速調研，只整理看得出根據的產品事實。"
@@ -38,14 +54,19 @@ def _validate_scan_reply(data):
     兩邊要求外部 AI 回覆同一份契約，驗證規則只寫一次。"""
     facts = (data or {}).get("facts") if isinstance(data, dict) else None
     if not isinstance(facts, list) or not all(
-        isinstance(f, dict) and f.get("fact_type") in PRODUCT_SCAN_FACT_TYPES
+        isinstance(f, dict)
+        and (f.get("fact_type") in PRODUCT_SCAN_FACT_TYPES
+             or f.get("fact_type") in _LEGACY_SCAN_TYPES
+             or f.get("fact_type") in _BRAND_LEVEL_SCAN_TYPES)
         and str(f.get("label") or "").strip() and str(f.get("value") or "").strip()
         for f in facts
     ):
         return None
     clean_facts = [
-        {"fact_type": f["fact_type"], "label": str(f["label"]).strip(), "value": str(f["value"]).strip()}
+        {"fact_type": _LEGACY_SCAN_TYPES.get(f["fact_type"], f["fact_type"]),
+         "label": str(f["label"]).strip(), "value": str(f["value"]).strip()}
         for f in facts
+        if f["fact_type"] not in _BRAND_LEVEL_SCAN_TYPES
     ]
     # price 選填：格式不對或看不出金額就當沒抓到，不讓整次快掃失敗（架構限制：選填不報錯）。
     price = None
@@ -61,7 +82,7 @@ def _validate_scan_reply(data):
 # ---------------------------------------------------------------------------
 # (2) 產品調研交接包（GitHub issue #7）：比快掃更深的調研——組一份交接包文字給使用者，
 # 貼去外部 AI 網頁版跑深研，再把結果貼回來解析入庫。回覆契約跟 run_product_scan 完全
-# 同形狀（facts 五類＋選填 price），因此解析與驗證直接共用 _validate_scan_reply。
+# 同形狀（facts 的類別＋選填 price），因此解析與驗證直接共用 _validate_scan_reply。
 # ---------------------------------------------------------------------------
 
 COST_PRODUCT_HANDOFF_FIX = 0.50  # 貼回格式修復，跟建檔精靈貼回修復（intake.script.COST_PASTE_FIX）同量級呼叫
@@ -74,7 +95,7 @@ HANDOFF_FORMAT_BLOCK = f"""【回覆格式——請只回傳這個 JSON，不要
   "price": {{"amount": 數字, "currency": "幣別代碼，例如 TWD 或 USD"}}
 }}
 規則：
-- facts 的 fact_type 只能是{ '、'.join(f'「{t}」' for t in PRODUCT_SCAN_FACT_TYPES) }這五種之一，看不出根據的類別就不要列。
+- facts 的 fact_type 只能是{scan_types_text()}這 {len(PRODUCT_SCAN_FACT_TYPES)} 種之一（填英文代號），看不出根據的類別就不要列。
 - 每一條 facts 都要有 label（短標題）與 value（完整說明），不能是空字串。
 - price 是選填：查得到清楚的售價才回傳；查不到、不確定，就整個不要有 price 這個欄位，不要用 0 或亂猜。
 - 除了這個 JSON 以外，不要輸出任何其他文字——不要有開頭的說明，也不要有結尾的補充。"""
@@ -92,7 +113,7 @@ def _known_product_facts_text(product_facts: list) -> str:
     lines = []
     for f in product_facts:
         tag = "已確認" if f["status"] == "confirmed" else "待確認"
-        lines.append(f"- （{tag}・{f['fact_type']}）{f['label']}：{f['value']}")
+        lines.append(f"- （{tag}・{vocab.product_fact_type_label(f['fact_type'])}）{f['label']}：{f['value']}")
     return "\n".join(lines)
 
 
@@ -112,7 +133,7 @@ def build_product_handoff_prompt(brand_name: str, product_name: str,
         f"【這個產品目前已知的事實】\n{_known_product_facts_text(product_facts)}\n\n"
         f"【調研任務】請針對「{product_name}」這個產品做更深入的調研，"
         "補齊或更新上面「已知事實」還沒涵蓋、或值得再查證的部分，聚焦在："
-        "產品線與規格、價格帶、目標受眾、語調風格、可能的法規風險這五個面向。"
+        "產品線與規格、價格帶、目標受眾這幾個面向。"
         "查得到就附來源；查不到就照實說查不到，不要用猜的當成肯定的事實。\n\n"
         f"{HANDOFF_FORMAT_BLOCK}"
     )
