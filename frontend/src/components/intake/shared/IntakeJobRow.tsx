@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { secondsSince } from "@/lib/format";
 
 /** What the row reads of a background job. The legacy intake jobs (`IntakeJobState`) carry the stage and timing;
  * the onboarding scan (`OnboardingScan`, F42-I07) carries only status and error, so its running row is the label
@@ -7,7 +8,8 @@ export interface IntakeJobRowState {
   status: string;
   error: string | null;
   stage?: string;
-  started_at?: string;
+  /** null (F50-I07 `unknown`, or no real start) = no 「已等 X 秒」, never a count from now. */
+  started_at?: string | null;
   usual_range_text?: string;
 }
 
@@ -24,12 +26,12 @@ export function IntakeJobRow({
   runningLabel: string;
   actions: { label: string; onClick: () => void }[];
 }) {
-  const [now, setNow] = useState(() => Date.now());
-  const timed = job.started_at !== undefined;
+  const [now, setNow] = useState(() => Date.now()); // ELAPSED_OK: waited-seconds counter
+  const timed = typeof job.started_at === "string" && job.started_at !== "";
 
   useEffect(() => {
     if (!timed || (job.status !== "running" && job.status !== "waiting")) return;
-    const timer = setInterval(() => setNow(Date.now()), 1000);
+    const timer = setInterval(() => setNow(Date.now()), 1000); // ELAPSED_OK: waited-seconds counter tick
     return () => clearInterval(timer);
   }, [job.status, timed]);
 
@@ -53,11 +55,11 @@ export function IntakeJobRow({
     );
   }
 
-  const elapsedSeconds = timed ? Math.max(0, Math.round((now - new Date(job.started_at as string).getTime()) / 1000)) : 0;
+  const elapsedSeconds = timed ? secondsSince(job.started_at, now) : null;
   return (
     <div role="status" className="flex items-center gap-2 rounded-md border border-dashed border-border bg-muted/40 p-3 text-sm text-muted-foreground">
       <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-primary" aria-hidden="true" />
-      {timed
+      {elapsedSeconds !== null
         ? `${runningLabel}：${job.stage ?? ""}，已等 ${elapsedSeconds} 秒（通常${job.usual_range_text ?? ""}），可以先離開這裡`
         : runningLabel}
     </div>

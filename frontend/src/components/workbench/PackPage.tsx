@@ -20,7 +20,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/layout/ui/dropdown-menu";
 import { useWorkspace } from "@/components/layout/WorkspaceContext";
-import { formatSyncTime } from "@/lib/format";
+import { formatUpdatedAt } from "@/lib/format";
+import { formatInstant, useOrgClock } from "@/lib/orgClock";
 import { cn } from "@/lib/utils";
 import {
   approvePack,
@@ -31,7 +32,7 @@ import {
   type PackDetail,
   type PackSetRow,
 } from "@/lib/workbenchApi";
-import { ClosePackDialog, PackStatusBadge, updatedLabel } from "./WorkbenchHomePage";
+import { ClosePackDialog, PackStatusBadge } from "./WorkbenchHomePage";
 
 const SUMMARY_FIELDS: { key: keyof PackDetail["summary"]; label: string }[] = [
   { key: "situation", label: "情境" },
@@ -59,6 +60,7 @@ type LoadState =
  * 計數，不是新發明一條規則）。 */
 export function PackPage({ brandId, packId }: { brandId: string; packId: string }) {
   const { brands } = useWorkspace();
+  const clock = useOrgClock();
   const navigate = useNavigate();
   const brand = brands.find((b) => b.brand_id === brandId);
   const [state, setState] = useState<LoadState>({ status: "loading" });
@@ -162,7 +164,7 @@ export function PackPage({ brandId, packId }: { brandId: string; packId: string 
                   )}
                 </div>
                 <p className="text-sm text-muted-foreground">
-                  建立於 {formatSyncTime(pack.created_at)} ｜ 最後更新 {updatedLabel(pack.updated_at)}
+                  建立於 {formatInstant(pack.created_at, clock.timezone, "md_hm")} ｜ 最後更新 {formatUpdatedAt(pack.updated_at, clock.timezone)}
                 </p>
               </div>
               <div className="flex items-center gap-2">

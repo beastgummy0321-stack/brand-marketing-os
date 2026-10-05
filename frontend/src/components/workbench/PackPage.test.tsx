@@ -11,7 +11,11 @@ vi.mock("@/lib/workbenchApi", async () => {
   return { ...actual, getPack: vi.fn(), closePack: vi.fn() };
 });
 vi.mock("@/components/layout/WorkspaceContext", () => ({
-  useWorkspace: () => ({ brands: [{ brand_id: "brd_1", brand_name: "測試品牌" }] }),
+  useWorkspace: () => ({
+    brands: [{ brand_id: "brd_1", brand_name: "測試品牌" }],
+    // F50-I14: the org is in Taipei whatever zone the test runner is in.
+    identity: { org: { id: "org_1", timezone: "Asia/Taipei", today: "2026-10-04" } },
+  }),
 }));
 
 import type { PackDetail } from "@/lib/workbenchApi";
@@ -241,5 +245,13 @@ describe("PackPage F47-I04（Q7 覆蓋核准、關閉確認）", () => {
     renderRouted();
     expect(await screen.findByText("已關閉", { selector: "[data-slot=badge]" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "更多操作" })).toBeNull();
+  });
+});
+
+describe("PackPage stamps on the org clock (F50-I14, Contract K)", () => {
+  it("建立於／最後更新 print in Taipei: 2026-09-01T00:30Z is 09/01 08:30", async () => {
+    mockGetPack.mockResolvedValue(packDetail({ created_at: "2026-09-01T00:30:00Z", updated_at: "2026-09-02T16:05:00Z" }));
+    renderPack();
+    expect(await screen.findByText("建立於 09/01 08:30 ｜ 最後更新 09/03 00:05")).toBeTruthy();
   });
 });

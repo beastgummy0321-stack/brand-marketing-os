@@ -264,7 +264,9 @@ export function FreeJobPage({ brandId }: { brandId: string }) {
       part: o.part, label: PART_LABEL[o.part], selected: 0,
       required: o.part === "image_prompt" ? 1 : (o.count ?? 1),
     })),
-    updated_at: new Date().toISOString(),
+    // F50-I14 (Contract K): no pack exists yet, so no made-up 「更新於」 — the tile leaves the stamp out; the
+    // created pack's real times are read on its own page after 建立.
+    updated_at: "",
   };
 
   return (

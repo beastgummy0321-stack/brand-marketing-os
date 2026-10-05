@@ -9,6 +9,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ActiveJobsBell } from "./ActiveJobsBell";
 import { fetchActiveJobs, type ActiveJob, type ActiveJobsSnapshot } from "@/lib/jobsApi";
 
+// F50-I14: the org is in Taipei whatever zone the test runner is in.
+vi.mock("./WorkspaceContext", () => ({
+  useWorkspace: () => ({ identity: { org: { id: "org_1", timezone: "Asia/Taipei", today: "2026-10-03" } } }),
+}));
+
 vi.mock("@/lib/jobsApi", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/jobsApi")>();
   return { ...actual, fetchActiveJobs: vi.fn() };
@@ -82,6 +87,13 @@ describe("ActiveJobsBell", () => {
     await userEvent.keyboard("{Escape}");
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(document.activeElement).toBe(pill);
+  });
+
+  it("讀取於 prints 08:30 for 00:30Z with the org in Taipei, whatever the runner's zone (F50-I14, Contract K)", async () => {
+    vi.mocked(fetchActiveJobs).mockResolvedValue({ ...QUEUE, generated_at: "2026-10-03T00:30:00Z" });
+    render(<ActiveJobsBell />);
+    await userEvent.click(await screen.findByRole("button", { name: /正在同步成效/ }));
+    expect(screen.getByRole("dialog", { name: "背景工作" }).textContent).toContain("讀取於 10/03 08:30");
   });
 
   it("nothing of yours queued behind the running one: no 「還有 0 件」", async () => {

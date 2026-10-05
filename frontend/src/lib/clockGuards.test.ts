@@ -30,24 +30,9 @@ const PATTERNS: { name: string; re: RegExp }[] = [
 
 const EXCUSE = /ELAPSED_OK:\s*\S/;
 
-/** Files outside the ads centre that still build dates today; F50-I14 moves them onto the org clock. */
-const ALLOWLIST: Record<string, string> = {
-  "components/inbox/InboxItemCard.tsx": "F50-I14",
-  "components/intake/HistoryPage.tsx": "F50-I14",
-  "components/intake/shared/IntakeJobRow.tsx": "F50-I14",
-  "components/intake/steps/ScanStep.tsx": "F50-I14",
-  "components/layout/ActiveJobsBell.tsx": "F50-I14",
-  "components/layout/Topbar.tsx": "F50-I14",
-  "components/library/tabs/FactsTab.tsx": "F50-I14",
-  "components/products/ProductDetailPage.tsx": "F50-I14",
-  "components/products/shared/ResearchProgressRow.tsx": "F50-I14",
-  "components/products/tabs/FactsTab.tsx": "F50-I14",
-  "components/workbench/FreeJobPage.tsx": "F50-I14",
-  "components/workbench/PackPage.tsx": "F50-I14",
-  "components/workbench/WorkbenchHomePage.tsx": "F50-I14",
-  "lib/format.ts": "F50-I14",
-  "lib/http.ts": "F50-I14",
-};
+/** Empty since F50-I14 moved the last screens outside the ads centre onto the org clock. A new entry must name the
+ * issue that removes it; prefer fixing the file. */
+const ALLOWLIST: Record<string, string> = {};
 
 function listFiles(dir: string): string[] {
   const out: string[] = [];

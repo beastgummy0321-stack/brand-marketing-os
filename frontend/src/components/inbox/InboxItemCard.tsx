@@ -4,12 +4,14 @@ import { Badge } from "@/components/layout/ui/badge";
 import { Button } from "@/components/layout/ui/button";
 import type { InboxItem } from "@/lib/inboxApi";
 import { internalHref } from "@/lib/internalHref";
+import { formatInstant, useOrgClock } from "@/lib/orgClock";
 import { SEVERITY_DOT_CLASS, SEVERITY_LABEL } from "@/lib/severity";
 import { cn } from "@/lib/utils";
 
-function resolvedDate(iso: string): string {
-  const date = new Date(iso);
-  return Number.isNaN(date.getTime()) ? iso : date.toLocaleString("zh-TW", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+/** F50-I14 (Contract K): `YYYY/MM/DD HH:mm` on the org's clock, not the viewer's zone; "" when unreadable. */
+function resolvedStamp(iso: string | null, tz: string): string {
+  const day = formatInstant(iso, tz, "ymd");
+  return day ? `${day} ${formatInstant(iso, tz, "hm")}` : "";
 }
 
 /** 緊湊清單列：全文與操作集中在右侧詳情，避免一長串重複按鈕。 */
@@ -41,6 +43,8 @@ export function InboxItemDetail({ item, variant, resolving, busy, error, onResol
   error?: string;
   onResolve: (id: string) => void;
 }) {
+  const clock = useOrgClock();
+  const resolved = resolvedStamp(item.resolved_at, clock.timezone);
   return <section aria-label="事項詳情" className="flex min-w-0 flex-col gap-6 p-6">
     <div className="flex flex-wrap items-center gap-2">
       <Badge variant="secondary">{item.brand_name ?? "全站"}</Badge>
@@ -53,7 +57,7 @@ export function InboxItemDetail({ item, variant, resolving, busy, error, onResol
     </div>
     {variant === "done" && <div className="flex items-center gap-2 rounded-lg bg-muted/60 p-3 text-sm text-muted-foreground">
       <CheckCheck className="size-4" aria-hidden="true" />
-      {item.resolved_at ? `已標記處理於 ${resolvedDate(item.resolved_at)}` : "已標記處理"}
+      {resolved ? `已標記處理於 ${resolved}` : "已標記處理"}
     </div>}
     {error && <p role="alert" className="text-sm text-danger">{error}</p>}
     <div className="flex flex-wrap items-center gap-3 border-t border-border pt-5">

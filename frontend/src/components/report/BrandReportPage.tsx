@@ -7,6 +7,7 @@ import {
   generateBrandReport,
   type BrandReportResponse,
 } from "@/lib/brandReportApi";
+import { formatInstant, useOrgClock } from "@/lib/orgClock";
 
 type PageState =
   | { status: "loading" }
@@ -19,15 +20,13 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : "操作失敗，請稍後再試。";
 }
 
-function dateLabel(value: string): string {
-  return value.slice(0, 10);
-}
-
 function costLabel(cost: number | null): string | null {
   return cost === null ? null : `這份報告花了 NT$${cost.toFixed(2)}`;
 }
 
 export function BrandReportPage({ brandId }: { brandId: string }) {
+  // F50-I14 (Contract K): 生成日期 is the org's calendar day of `generated_at`, not its UTC date.
+  const clock = useOrgClock();
   const [state, setState] = useState<PageState>({ status: "loading" });
   const [params, setParams] = useSearchParams();
   const requestedChapter = Number(params.get("chapter") ?? "1") - 1;
@@ -145,7 +144,7 @@ export function BrandReportPage({ brandId }: { brandId: string }) {
           <article className="flex flex-col gap-4">
             <p className="text-sm text-muted-foreground">
               {[
-                `生成日期 ${dateLabel(report.generated_at)}`,
+                `生成日期 ${formatInstant(report.generated_at, clock.timezone, "ymd")}`,
                 `依據第 ${report.brand_version} 版品牌資料`,
                 report.model,
                 costLabel(report.cost),

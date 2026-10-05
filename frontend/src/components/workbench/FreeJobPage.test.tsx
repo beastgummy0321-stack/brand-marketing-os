@@ -11,7 +11,11 @@ vi.mock("@/lib/workbenchApi", async () => {
   return { ...actual, parseFreeText: vi.fn(), createFreePack: vi.fn() };
 });
 vi.mock("@/components/layout/WorkspaceContext", () => ({
-  useWorkspace: () => ({ brands: [{ brand_id: "brd_1", brand_name: "測試品牌" }] }),
+  useWorkspace: () => ({
+    brands: [{ brand_id: "brd_1", brand_name: "測試品牌" }],
+    // F50-I14: the org is in Taipei whatever zone the test runner is in.
+    identity: { org: { id: "org_1", timezone: "Asia/Taipei", today: "2026-10-04" } },
+  }),
 }));
 
 import { parseFreeText } from "@/lib/workbenchApi";
@@ -204,5 +208,18 @@ describe("FreeJobPage product list read (F29-I10)", () => {
     // F50 Contract R: a free job's context is a knowledge product; sell-ways are not listed.
     expect(screen.queryByRole("option", { name: "夜跑鞋 · 單雙" })).toBeNull();
     expect(screen.queryByRole("alert")).toBeNull();
+  });
+});
+
+describe("FreeJobPage preview card (F50-I14, Contract K)", () => {
+  it("the not-yet-created pack shows no made-up 「更新於」 stamp", async () => {
+    render(
+      <MemoryRouter>
+        <FreeJobPage brandId="brd_1" />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByText("自由工作 #（建立後產生）")).toBeTruthy();
+    expect(screen.queryByText(/更新於/)).toBeNull();
+    expect(screen.queryByText(/小時前/)).toBeNull();
   });
 });

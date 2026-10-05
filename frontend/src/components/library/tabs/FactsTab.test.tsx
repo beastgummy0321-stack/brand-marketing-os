@@ -9,6 +9,11 @@ vi.mock("@/components/workbench", () => ({
   ),
 }));
 
+// F50-I14: the org is in Taipei whatever zone the test runner is in.
+vi.mock("@/components/layout/WorkspaceContext", () => ({
+  useWorkspace: () => ({ identity: { org: { id: "org_1", timezone: "Asia/Taipei", today: "2026-10-04" } } }),
+}));
+
 import type { LibraryBrandFact } from "@/lib/libraryApi";
 import { FactsTab } from "./FactsTab";
 
@@ -135,5 +140,13 @@ describe("確認人 (F47-I03, drill-10 甲 品牌智庫 #5)", () => {
     const details = screen.getByText(/詳細（確認人/).closest("details")!;
     expect(details.textContent).toContain("確認人：owner@example.com");
     expect(details.textContent).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-/);
+  });
+});
+
+describe("FactsTab 確認時間 on the org clock (F50-I14, Contract K)", () => {
+  it("a fact confirmed at 2026-10-03T23:30Z prints the Taipei day 2026/10/04, not the UTC date", () => {
+    render(<FactsTab brandId="brd_1" facts={[fact({ confirmed_at: "2026-10-03T23:30:00+00:00" })]} onChanged={() => {}} />);
+    const details = screen.getByText(/詳細（確認人/).closest("details")!;
+    expect(details.textContent).toContain("確認時間：2026/10/04");
   });
 });

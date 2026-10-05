@@ -8,17 +8,16 @@ import { useWorkspace } from "./WorkspaceContext";
 import { Button } from "./ui/button";
 import { cn } from "@/lib/utils";
 import { getStatusSummary, type AdsStatusSummary } from "@/lib/adsStatusApi";
+import { formatInstant, useOrgClock } from "@/lib/orgClock";
 
 type SyncState = { status: "loading" } | { status: "error" } | { status: "ready"; summary: AdsStatusSummary };
 
 /** F27（feature Decisions「queue auto refresh daily」）：不用輪詢，換頁重打一次就夠——投放
  * 中心本來就是每天一次的節奏，不需要即時性。`M/D HH:MM` 跟全站其餘日期格式一樣不補零日期、
- * 補零時分（`ads/home/status.ts::formatRevisitLabel` 先例），瀏覽器本地時區。 */
-function formatSyncedAt(iso: string): string {
-  const d = new Date(iso);
-  const hh = String(d.getHours()).padStart(2, "0");
-  const mm = String(d.getMinutes()).padStart(2, "0");
-  return `${d.getMonth() + 1}/${d.getDate()} ${hh}:${mm}`;
+ * 補零時分（`ads/home/status.ts::formatRevisitLabel` 先例）；F50-I14 (Contract K): on the org's clock,
+ * not the viewer's zone. */
+function formatSyncedAt(iso: string, tz: string): string {
+  return `${formatInstant(iso, tz, "md")} ${formatInstant(iso, tz, "hm")}`;
 }
 
 /** F27-I20（feature Decisions「Screens → Top bar」，contract I `status-summary`）：品牌路由才
@@ -28,6 +27,7 @@ function formatSyncedAt(iso: string): string {
  * 畫，殼層本身絕不現錯誤字；換頁（`location.pathname` 變）就重打一次。 */
 function SyncStatus({ brandId }: { brandId: string }) {
   const location = useLocation();
+  const clock = useOrgClock();
   const [state, setState] = useState<SyncState>({ status: "loading" });
 
   useEffect(() => {
@@ -44,7 +44,7 @@ function SyncStatus({ brandId }: { brandId: string }) {
   // F47 Contract H (drill-10 Q4): the warning is the connections page's own count — the page this link opens —
   // and its first note says which source and why (the title), never a separate per-campaign recount.
   const failing = summary.attention.count > 0;
-  const syncedText = summary.last_success_at ? `最近同步 ${formatSyncedAt(summary.last_success_at)}` : "尚未同步";
+  const syncedText = summary.last_success_at ? `最近同步 ${formatSyncedAt(summary.last_success_at, clock.timezone)}` : "尚未同步";
   const fullText = `${syncedText}${failing ? `・${summary.attention.count} 個資料來源要處理` : ""}`;
   const title = failing && summary.attention.note ? summary.attention.note : fullText;
 

@@ -196,15 +196,9 @@ export function ProductDetailPage({ brandId, productId }: { brandId: string; pro
     try {
       await startRescan(brandId, productId, trimmed);
       hadActiveJobRef.current = true;
-      setJob({
-        status: "running",
-        stage: "讀取網址中",
-        started_at: new Date().toISOString(),
-        usual_range_text: "30 到 60 秒",
-        error: null,
-        added_count: null,
-        price_created: false,
-      });
+      // F50-I14 (Contract K, intake #10): the row shows the server's job state, read right away — never a
+      // made-up start of "now".
+      checkJob();
       if (!pollRef.current) pollRef.current = setInterval(checkJob, 2000);
       setTab("facts");
     } catch (err) {
