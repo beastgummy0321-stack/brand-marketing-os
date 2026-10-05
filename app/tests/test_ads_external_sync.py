@@ -386,18 +386,29 @@ class ExternalSyncTest(unittest.TestCase):
         # over to a new day but a UTC-8 account has not -- the org's "yesterday" is still today in
         # the account's own timezone, so that day must stay undecided (not derived) under the
         # account's clock, even though the org-based cutoff would have allowed it.
+        # F50-I18: every clock the path reads is frozen at `moment` for the whole test -- the
+        # cutoff (`coverage.account_last_complete_day` -> `settings.today_in` -> `db.now_utc`) as
+        # well as the names `external_sync` and `external_repository` bound -- so the answer does
+        # not depend on the hour the suite runs (it went red after 08:00 UTC, when the UTC-8
+        # account's real today had rolled over too).
         real_today = settings.today_for_org(self.conn, org_id=self.org)
         moment = datetime.combine(real_today, dt_time(1, 0), tzinfo=UTC)
         org_yesterday = real_today - timedelta(days=1)  # still "today" for the UTC-8 account
         demo_day = org_yesterday - timedelta(days=3)
 
-        with self._accounts_with_timezone("Etc/GMT+8"):
+        with (
+            self._accounts_with_timezone("Etc/GMT+8"),
+            patch.object(db, "now_utc", return_value=moment),
+            patch.object(sync, "now_utc", return_value=moment),
+            patch.object(repo, "now_utc", return_value=moment),
+        ):
+            self.assertEqual(settings.today_for_org(self.conn, org_id=self.org), real_today)
             self.run_pages(sync.request_sync(self.conn, self.org, self.brand, "other", "account"))
             campaign = repo.import_cached(
                 self.conn, self.org, self.brand, "other", "account", "portfolio", "root", "test"
             )
             self.conn.commit()
-            with patch.object(sync, "now_utc", return_value=moment), patch.object(
+            with patch.object(
                 self.reader, "read_observations",
                 return_value=SourcePage(_demo_and_target_items(demo_day, org_yesterday)),
             ):
