@@ -237,3 +237,12 @@ drill 9 #9: quantity had no unit, so a ×N sell-way priced its cost from whichev
 Supersedes F43's 「食安法 hits forced 不能講」 (decision 13). `product_onboarding.get_evidence`／`_check_claims` and `custom.py` keep
 the user's 可以講／不能講 and attach `statutory` as a flag; the product claims step shows the reminder on the row and both buttons
 stay usable. The reminder has no regulation link yet (no URL field is served).
+
+### F50 (2026-10-05): one input-rule table, one readiness, archived lists
+Intake stores validate through `app/core/input_rules.py` and send keyed `field_errors`; percentages are 0–100; enums go through
+`vocab.require`. The product scan uses the vocab types `core_info`／`audience` only (語調／法規風險 are brand facts). Readiness has
+one owner (`brand_intelligence.product_readiness`／`sellable_products`／`knowledge_products`): zero customer groups is not ready,
+`status()` serves `ready`, `checklist` and `missing`; knowledge products hold no money; every root product is born through
+onboarding; the done page's title follows `ready` and 「繼續建檔 →」 opens the first missing step. Archived products and brands are
+listed and restored on the products page and the brand overview. The library read lists queued customer-voice jobs. Details:
+`ads.md` §6.52.

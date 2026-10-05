@@ -2087,3 +2087,39 @@ readers). Leftover allowances live one file per owner in `frontend/src/component
   approval (new revision); copy options are this sell-way's only; structure ads serve `slot_state`／`slot_label`; a material hand-off
   left `unknown` retries on the same pack.
 - **Drill tool.** `scripts/drill/fake_meta.py` mirrors the planned landing URL and audience so drill readback can confirm them.
+
+### 6.52 One clock, one input-rule table, one readiness, one background outcome（ruled 2026-10-04；built in F50）
+Audit 2026-10-04 W11–W14 (decisions 9, 11; C rulings 2026-10-04: margin default 45 %, one automatic retry of a program-refused
+strategy／plan, archived lists with restore, SKU cost 0 kept, list price below selling price refused). Machine checks:
+`app/tests/test_clock_rule.py`, `test_input_rules_gate.py`, `test_readiness_gate.py`, `test_background_outcome_gate.py`,
+`frontend/src/lib/clockGuards.test.ts`, `frontend/src/lib/clientRules.test.ts` (allowlists name the removing issue; stale fails).
+- **Clock (Contract K).** `app/core/settings.py` holds the which-clock-for-which-question table: instants from `db.now_utc()`;
+  the user's day／month from `today_for_org`／`org_month_start`／`org_day_start`／`day_window`; "which platform day is complete"
+  from `app/ads/coverage.last_complete_day` (account zone; no zone → org's yesterday minus one, fail-closed); a queued job's run
+  time from the queue's own clock (SQL `now()`, `background/recovery._queue_now`) — never the product clock, which drills move.
+  Read ranges are clipped to the last complete day when recorded. Frontend: `lib/orgClock` (`useOrgClock`, `formatInstant`,
+  `formatDay`, `addDays`, …) is the only `Date` maker; elapsed counters carry `ELAPSED_OK`. Deferrals send `revisit_on` (an org
+  calendar date after today; `revisit_at` input removed). An ended campaign's totals say 「結束前 n 天」; a not-started one has no
+  window (「還沒開始」).
+- **Input rules (Contract I).** `app/core/input_rules.py` is the one table (money, count, percent 0–100, ISO date, `date_within`,
+  enums via `vocab.require`, URL, uploads `UPLOAD_CAPS` with separate empty／oversize sentences, API key). Stores call it; the
+  frontend sends the typed text (`lib/typedNumber.typedValue`) and prints the server's sentence (`field_errors` keyed per row on
+  intake routes). Percentages are stored 0–100 (`close_rate`, the margin card; data migrated). `/rules` serves `limits`. Ad-set
+  dates must sit inside the campaign (400 `group_dates_outside`). Model-read brief fields are stored `parsed`.
+- **Readiness (Contract R).** `brand_intelligence` facade `product_readiness`／`sellable_products`／`knowledge_products` are the
+  only readers; zero customer groups is not ready (complete and the who step refuse); archived products' sell-ways and bundles are
+  not sellable (derived, no cascade write); knowledge products hold no money (409, money lives on sell-ways); every root product
+  is born through onboarding; the product list items carry `kind`. Archived products／brands are listed and restored on existing
+  screens (`?status=archived`, `GET /api/dashboard/archived-brands`, `POST /api/library/brands/{b}/restore`).
+- **Background outcome (Contract J).** Every job registers through `background.register`; a handler returns `Empty(code, text)`
+  or `Failed(code, text)` (or raises `JobFailed`), stored in `background_job_result` and read by `background.outcome`／`job_state`
+  (`unknown` is never invented). Failures fail the job and reach the bell. `llm_task.error_code` is written on every failure;
+  program refusals go through `gateway.record_refusal` (`program_refused`). Planner refusals carry codes (`plan.REFUSALS`,
+  `strategy.REFUSALS`, `brief.REFUSALS`), are retried once with the reasons fed back (never `llm_failed`), and a second refusal
+  returns 502 with `details {refusal, reason}`; a campaign being planned holds an advisory lock and serves `busy`. Ads queue
+  refresh runs per brand (`background.ads_queue_refresh`); ads job codes include `runtime_error`, `queue_refresh_failed`,
+  `preview_retry`, `original_missing`, `preview_failed`, `input_changed`, `reply_invalid`, `nothing_to_judge`. Meta backfill and
+  daily pull, schedule pack submission and workbench rounds store their outcome; a stuck workbench round recovers after
+  `repository.GENERATION_TIMEOUT_S`.
+- **Known limits.** The Meta backfill outcome is per org while rows are per brand; a retried customer-voice failure stays listed
+  for 24 h.

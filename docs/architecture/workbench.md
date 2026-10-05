@@ -377,3 +377,8 @@ promise. Approved product claims count as typed (the length／fulfilment filters
 `validate_claims` returns `forbidden_terms`; the workbench warns on them and the ads slot blocks on the same list. The offer an ad
 was written for is `live_creative.offer_for` (the dispatch snapshot, else the current key). `workbench.statutory_reminder` serves the
 食安法 reminder for slot copy (computed at read, never stored, never blocking).
+
+### 5.17 Background outcomes（F50, 2026-10-05）
+Workbench jobs register through `background.register`; a round stuck in queued／running with no live job is reconciled to failed
+after `repository.GENERATION_TIMEOUT_S` (the one generation timeout), `material_handoff.start` restarts a failed set on the same
+pack, and `free_parse` returns its fallback `reason` and `error_code` (「AI 這次沒有給出可用的結果（…），先照預設往下。」).
