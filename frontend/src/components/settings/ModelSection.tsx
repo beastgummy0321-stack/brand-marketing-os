@@ -8,14 +8,14 @@ import { useFormSubmit } from "@/lib/useFormSubmit";
 /** 使用的模型小節（S15.19–S15.21）。文案沿用既有 `app/templates/settings.html:160-191`。 */
 export function ModelSection({ data, onSaved }: { data: SettingsData; onSaved: () => void }) {
   const [model, setModel] = useState(data.current_model);
-  const { saving, error, submit } = useFormSubmit(async () => {
+  const { saving, error, saved, submit, formProps } = useFormSubmit(async () => {
     await saveModel(model);
     onSaved();
   });
 
   return (
     <SectionCard title="使用的模型">
-      <form
+      <form {...formProps}
         className="flex flex-col gap-4"
         onSubmit={(e) => {
           e.preventDefault();
@@ -41,7 +41,7 @@ export function ModelSection({ data, onSaved }: { data: SettingsData; onSaved: (
         </label>
         {error && <p className="text-sm text-danger">{error}</p>}
         <div>
-          <SaveButton saving={saving} label="儲存模型設定" />
+          <SaveButton saving={saving} saved={saved} label="儲存模型設定" />
         </div>
       </form>
 

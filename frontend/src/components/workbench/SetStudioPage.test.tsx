@@ -479,7 +479,7 @@ describe("SetStudioPage 四個控制（F02-I17）", () => {
 
     const link = await screen.findByRole("link", { name: /回到投放中心/ });
     expect(link.getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_1?tab=assets");
-    expect(screen.getByText(LOCK_REASON)).toBeTruthy();
+    expect(screen.getAllByText(LOCK_REASON).length).toBeGreaterThan(0);
     expect(
       (screen.getByRole("button", { name: "選定" }) as HTMLButtonElement).disabled,
     ).toBe(true);

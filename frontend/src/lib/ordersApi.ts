@@ -1,6 +1,6 @@
 /** 訂單總覽 API（票 01-orders-page-read／02-orders-page-actions）。 */
 
-import { apiFetch, errorMessageFrom, throwIfFailed } from "./http";
+import { apiFetch, readJson } from "./http";
 
 export interface SkuMargin {
   sku: string;
@@ -80,9 +80,7 @@ export interface OrdersPageData {
 
 export async function fetchOrders(brandId: string, page = 1): Promise<OrdersPageData> {
   const res = await apiFetch(`/api/brands/${encodeURIComponent(brandId)}/orders?page=${page}`);
-  if (res.status === 404) throw new Error("找不到這個品牌。");
-  await throwIfFailed(res, `讀取失敗（狀態碼 ${res.status}）`);
-  return (await res.json()) as OrdersPageData;
+  return readJson<OrdersPageData>(res, `讀取失敗（狀態碼 ${res.status}）`);
 }
 
 async function postOrderAction(path: string, body: BodyInit, headers?: HeadersInit): Promise<string> {
@@ -90,8 +88,7 @@ async function postOrderAction(path: string, body: BodyInit, headers?: HeadersIn
   // 票 07-3：錯誤外殼交給 `http.ts` 那支共用解析（三種外殼都吃）。原本只認 `detail`，
   // 碰到 `web.ApiError` 的 `{"error": {"code","message"}}` 就退回 fallback，使用者看到
   // 「送出失敗（狀態碼 401）」而不是「請先登入」。成功時的 `message` 仍然自己讀。
-  const payload = (await res.json()) as { message?: string };
-  if (!res.ok) throw new Error(errorMessageFrom(payload, `送出失敗（狀態碼 ${res.status}）`));
+  const payload = await readJson<{ message?: string }>(res, `送出失敗（狀態碼 ${res.status}）`);
   return payload.message ?? "已儲存。";
 }
 

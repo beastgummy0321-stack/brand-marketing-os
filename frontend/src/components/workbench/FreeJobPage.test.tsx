@@ -223,3 +223,14 @@ describe("FreeJobPage preview card (F50-I14, Contract K)", () => {
     expect(screen.queryByText(/小時前/)).toBeNull();
   });
 });
+
+
+it("explains why an empty free job cannot be created and clears the reason after typing", async () => {
+  render(<MemoryRouter><FreeJobPage brandId="brd_1"/></MemoryRouter>);
+  const button = screen.getByRole("button",{name:"建立自由工作 →"});
+  expect(button).toHaveProperty("disabled",true);
+  expect(document.getElementById(button.getAttribute("aria-describedby")!)?.textContent).toBe("先填寫你想創作的內容");
+  await userEvent.type(screen.getByLabelText("告訴 AI 你想創作什麼"),"新品文案");
+  expect(button).toHaveProperty("disabled",false);
+  expect(screen.queryByText("先填寫你想創作的內容")).toBeNull();
+});

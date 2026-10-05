@@ -244,7 +244,7 @@ export function FreeJobPage({ brandId }: { brandId: string }) {
   }
 
   const trimmedLen = text.length;
-  const canSubmit = trimmedLen > 0 && trimmedLen <= MAX_LEN && !parsing && !submitting;
+  const disabledReason = trimmedLen === 0 ? "先填寫你想創作的內容" : trimmedLen > MAX_LEN ? `內容請縮短到 ${MAX_LEN} 字以內` : undefined;
 
   const previewOutputs: FreeParseOutput[] = spec?.outputs.length
     ? spec.outputs
@@ -497,7 +497,7 @@ export function FreeJobPage({ brandId }: { brandId: string }) {
           {error && <p className="text-sm text-destructive">{error}</p>}
 
           <div className="flex justify-end">
-            <Button size="lg" disabled={!canSubmit} onClick={() => void handlePrimaryAction()}>
+            <Button size="lg" busy={parsing || submitting} disabledReason={disabledReason} onClick={() => void handlePrimaryAction()}>
               {parsing && <Loader2 className="size-4 animate-spin" />}
               {spec ? "確認並生成" : "建立自由工作 →"}
             </Button>

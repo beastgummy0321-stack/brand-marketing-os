@@ -12,7 +12,7 @@
  * constant table has no enumeration endpoint, so the frontend side-panel dropdown options are
  * copied here next to the matching API calls as "values that never change" (code-rules §2). */
 
-import { apiFetch, throwIfFailed } from "./http";
+import { apiFetch, readJson, throwIfFailed } from "./http";
 
 export interface LibraryBrandFact {
   id: string;
@@ -242,9 +242,7 @@ interface Envelope<T> {
 
 export async function fetchLibrary(brandId: string): Promise<LibraryData> {
   const res = await apiFetch(`/api/library/brands/${encodeURIComponent(brandId)}`);
-  if (res.status === 404) throw new Error("找不到這個品牌。");
-  await throwIfFailed(res, `品牌智庫讀取失敗（狀態碼 ${res.status}）`);
-  const body: Envelope<LibraryData> = await res.json();
+  const body = await readJson<Envelope<LibraryData>>(res, `品牌智庫讀取失敗（狀態碼 ${res.status}）`);
   return body.data;
 }
 
@@ -262,8 +260,7 @@ async function postJson<T>(path: string, body: unknown = {}, method: string = "P
     body: JSON.stringify(body),
   });
   // `{errors}` (per-field dict) is read by `throwIfFailed` too: every field's message, joined with 「；」.
-  await throwIfFailed(res, `處理失敗（狀態碼 ${res.status}）`);
-  return (await res.json()) as T;
+  return readJson<T>(res, `處理失敗（狀態碼 ${res.status}）`);
 }
 
 // ---- 品牌事實 ----
@@ -414,8 +411,7 @@ export async function submitCustomerVoice(
     headers: { "content-type": "application/json" },
     body: JSON.stringify(fields),
   });
-  await throwIfFailed(res, `送出失敗（狀態碼 ${res.status}）`);
-  return res.json();
+  return readJson(res, `送出失敗（狀態碼 ${res.status}）`);
 }
 
 /** 佔位卡輪詢：後端補接口階段會定案真實輪詢間隔／端點，本票先定「不能同步擋住 request」
@@ -427,8 +423,7 @@ export async function fetchCustomerVoiceJob(
   const res = await apiFetch(
     `/api/library/brands/${encodeURIComponent(brandId)}/customer-voice/jobs/${encodeURIComponent(jobKey)}`,
   );
-  await throwIfFailed(res, `查詢失敗（狀態碼 ${res.status}）`);
-  return res.json();
+  return readJson(res, `查詢失敗（狀態碼 ${res.status}）`);
 }
 
 export async function archiveCustomerVoice(brandId: string, cvId: string): Promise<void> {

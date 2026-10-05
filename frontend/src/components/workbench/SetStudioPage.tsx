@@ -458,7 +458,7 @@ function ProductPanel({
           </span>
         </div>
         <Button
-          disabled={generating || locked}
+          busy={generating} disabledReason={locked ? set.lock.reason || "素材組目前已鎖定" : undefined}
           title={runLabel.title}
           aria-label={runLabel.title}
           onClick={() => void handleRun()}
@@ -533,7 +533,7 @@ function ProductPanel({
             尚需選定：{missingLabels.join("、")}
           </span>
         )}
-        <Button disabled={!allDone || set.lock.locked} onClick={onFinish}>完成此素材組</Button>
+        <Button disabledReason={set.lock.locked ? set.lock.reason || "素材組目前已鎖定" : !allDone ? "先選定每一項需要的素材" : undefined} onClick={onFinish}>完成此素材組</Button>
       </div>
     </div>
   );
@@ -613,7 +613,7 @@ export function VersionBadge({
           )}
           {confirming && (
             <div className="mt-2 flex flex-wrap gap-2">
-              <Button size="sm" disabled={disabled} onClick={onSelect}>確認無誤，選定此版</Button>
+              <Button size="sm" disabledReason={disabled ? "素材組目前已鎖定，暫時不能更換版本" : undefined} onClick={onSelect}>確認無誤，選定此版</Button>
               <Button size="sm" variant="outline" onClick={() => setConfirming(false)}>返回查看</Button>
             </div>
           )}
@@ -622,7 +622,7 @@ export function VersionBadge({
       <Button
         size="sm"
         variant={selected ? "default" : "outline"}
-        disabled={disabled || blockedByFull}
+        disabledReason={disabled ? "素材組目前已鎖定，暫時不能更換版本" : blockedByFull ? "已選滿，先取消一張再選" : undefined}
         onClick={() => {
           if (needsConfirm) setConfirming(true);
           else onSelect();
@@ -630,9 +630,8 @@ export function VersionBadge({
       >
         {selected ? "✓ 已選定" : "選定"}
       </Button>
-      {blockedByFull && <span className="text-xs text-muted-foreground">已選滿，先取消一張再選</span>}
       {onSimilar && (
-        <Button size="sm" variant="outline" disabled={disabled} onClick={onSimilar}>
+        <Button size="sm" variant="outline" disabledReason={disabled ? "素材組目前已鎖定，暫時不能產生相似版本" : undefined} onClick={onSimilar}>
           相似版本
         </Button>
       )}

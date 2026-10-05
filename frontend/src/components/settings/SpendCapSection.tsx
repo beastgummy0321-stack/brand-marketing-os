@@ -52,7 +52,7 @@ export function SpendCapSection({ data, onSaved }: { data: SettingsData; onSaved
           </label>
           {budgetForm.error && <p className="text-sm text-danger">{budgetForm.error}</p>}
           <div>
-            <SaveButton saving={budgetForm.saving} label="儲存花費上限" />
+            <SaveButton saving={budgetForm.saving} saved={budgetForm.saved} label="儲存花費上限" />
           </div>
         </form>
       </div>

@@ -531,10 +531,10 @@ export function ClosePackDialog({
         </DialogDescription>
         {error && <p role="alert" className="text-sm text-danger">{error}</p>}
         <DialogFooter>
-          <Button type="button" variant="outline" disabled={busy} onClick={cancel}>
+          <Button type="button" variant="outline" busy={busy} onClick={cancel}>
             取消
           </Button>
-          <Button type="button" disabled={busy} onClick={() => void confirm()}>
+          <Button type="button" busy={busy} onClick={() => void confirm()}>
             {busy ? "關閉中…" : "確定關閉"}
           </Button>
         </DialogFooter>

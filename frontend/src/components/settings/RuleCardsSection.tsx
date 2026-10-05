@@ -1,3 +1,4 @@
+import { Button } from "@/components/layout/ui/button";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { Skeleton } from "@/components/layout/Skeleton";
@@ -250,15 +251,15 @@ function RuleCardItem({
         {formError && <p role="alert" className="text-xs text-danger">{formError}</p>}
         {resetForm.error && <p className="text-xs text-danger">{resetForm.error}</p>}
         <div className="flex items-center gap-2">
-          <SaveButton saving={saveForm.saving} label="儲存這張卡" />
-          <button
+          <SaveButton saving={saveForm.saving} saved={saveForm.saved} label="儲存這張卡" />
+          <Button variant="outline" size="sm"
             type="button"
             onClick={handleReset}
-            disabled={resetForm.saving}
+            busy={resetForm.saving}
             className="rounded-md border border-border px-3 py-2 text-xs font-medium text-muted-foreground hover:border-primary hover:text-primary disabled:cursor-not-allowed disabled:opacity-50"
           >
             {resetForm.saving ? "正在重設整張卡…" : "重設整張卡"}
-          </button>
+          </Button>
         </div>
       </form>
     </div>

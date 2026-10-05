@@ -1,3 +1,4 @@
+import { Button } from "@/components/layout/ui/button";
 import { useEffect, useState } from "react";
 import { deleteProduct, fetchDeleteImpact, type ProductDeleteImpact } from "@/lib/productsApi";
 import { SidePanel } from "@/components/layout/SidePanel";
@@ -88,21 +89,21 @@ export function ProductDeletePanel({
 
         {form.error && <p className="text-sm text-danger">{form.error}</p>}
         <div className="flex items-center gap-3">
-          <button
+          <Button variant="outline" size="sm"
             type="submit"
-            disabled={form.saving}
+            busy={form.saving}
             className="rounded-md bg-danger px-4 py-2 text-sm font-medium text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {form.saving ? "刪除中…" : "永久刪除這個產品"}
-          </button>
-          <button
+          </Button>
+          <Button variant="outline" size="sm"
             type="button"
             onClick={onClose}
-            disabled={form.saving}
+            busy={form.saving}
             className="text-sm text-muted-foreground hover:underline"
           >
             取消
-          </button>
+          </Button>
         </div>
       </form>
     </SidePanel>

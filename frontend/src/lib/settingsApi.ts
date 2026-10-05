@@ -3,7 +3,7 @@
  * {data, generated_at}，見 lib/api.ts `Envelope<T>`。表單欄位名沿用既有 Jinja 表單
  * （settings.html／settings_ads.html）的既有欄位名，不自創命名。 */
 import { fetchOverview } from "./api";
-import { apiFetch, throwIfFailed } from "./http";
+import { apiFetch, readJson, throwIfFailed } from "./http";
 
 export interface ModelChoice {
   id: string;
@@ -72,8 +72,7 @@ interface Envelope<T> {
 
 export async function fetchSettings(): Promise<SettingsData> {
   const res = await apiFetch("/api/settings");
-  await throwIfFailed(res, `設定讀取失敗（狀態碼 ${res.status}）`);
-  const body: Envelope<SettingsData> = await res.json();
+  const body = await readJson<Envelope<SettingsData>>(res, `設定讀取失敗（狀態碼 ${res.status}）`);
   return body.data;
 }
 
@@ -118,8 +117,7 @@ export async function fetchBrandOptions(): Promise<BrandOption[]> {
 
 export async function fetchRuleCards(brandId: string): Promise<RuleCardsData> {
   const res = await apiFetch(`/api/settings/rule-cards/brands/${encodeURIComponent(brandId)}`);
-  await throwIfFailed(res, `規則卡讀取失敗（狀態碼 ${res.status}）`);
-  const body: Envelope<RuleCardsData> = await res.json();
+  const body = await readJson<Envelope<RuleCardsData>>(res, `規則卡讀取失敗（狀態碼 ${res.status}）`);
   return body.data;
 }
 
@@ -138,8 +136,7 @@ export async function saveRuleCard(
       body: JSON.stringify(fields),
     },
   );
-  await throwIfFailed(res, `規則卡儲存失敗（狀態碼 ${res.status}）`);
-  const body: Envelope<RuleCard> = await res.json();
+  const body = await readJson<Envelope<RuleCard>>(res, `規則卡儲存失敗（狀態碼 ${res.status}）`);
   return body.data;
 }
 
@@ -148,7 +145,6 @@ export async function resetRuleCard(brandId: string, cardKey: string): Promise<R
     `/api/settings/rule-cards/brands/${encodeURIComponent(brandId)}/${encodeURIComponent(cardKey)}/reset`,
     { method: "POST" },
   );
-  await throwIfFailed(res, `規則卡重設失敗（狀態碼 ${res.status}）`);
-  const body: Envelope<RuleCard> = await res.json();
+  const body = await readJson<Envelope<RuleCard>>(res, `規則卡重設失敗（狀態碼 ${res.status}）`);
   return body.data;
 }

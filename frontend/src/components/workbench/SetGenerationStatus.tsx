@@ -82,8 +82,8 @@ export function SetGenerationStatus({
             <Button
               size="sm"
               variant="outline"
-              disabled={busy || partLocked}
-              disabledReason={partLocked && !busy ? (set.lock.reason ?? undefined) : undefined}
+              busy={busy}
+              disabledReason={partLocked && !busy ? (set.lock.reason || "素材組目前已鎖定") : undefined}
               onClick={() => void regenerate()}
             >
               {busy ? "送出中…" : "重新生成"}

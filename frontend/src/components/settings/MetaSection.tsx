@@ -71,7 +71,7 @@ export function MetaSection() {
       title="Meta 廣告帳戶"
       description="貼上 Meta 的存取權杖，系統會列出這把權杖看得到的廣告帳戶，再決定每個帳號要給哪個品牌用。"
     >
-      <form
+      <form {...connectForm.formProps}
         className="flex flex-col gap-2"
         onSubmit={(e) => {
           e.preventDefault();
@@ -100,7 +100,7 @@ export function MetaSection() {
         </label>
         {connectForm.error && <p className="text-sm text-danger">{connectForm.error}</p>}
         <div>
-          <SaveButton saving={connectForm.saving} label="連接" pendingLabel="連接中…" />
+          <SaveButton saving={connectForm.saving} saved={connectForm.saved} label="連接" pendingLabel="連接中…" />
         </div>
       </form>
 

@@ -171,17 +171,17 @@ describe("F12 任務包的一般完成路徑", () => {
 });
 
 describe("F40-I05 核准整包灰掉時的原因列（drill-7 #14）", () => {
-  it("按鈕停用且有 blocking_text：原因以「⚠ 」開頭、與按鈕同列、帶警示色", async () => {
+  it("a blocked approval prints the served reason and describes the button", async () => {
     const reason = "還沒勾「確認內容符合品牌規範」「可核准整包並回報上游」";
     mockGetPack.mockResolvedValue(packDetail({ can_approve: false, blocking_text: reason }));
     renderPack();
 
-    const note = await screen.findByRole("note", { name: "核准整包停用原因" });
-    expect(note.textContent).toBe(`⚠ ${reason}`);
-    expect(note.className).toContain("text-warning");
+    const note = await screen.findByText(reason);
+    expect(note.textContent).toBe(reason);
     const approveButton = screen.getByRole("button", { name: "核准整包" });
     expect((approveButton as HTMLButtonElement).disabled).toBe(true);
     expect(note.parentElement).toBe(approveButton.parentElement);
+    expect(approveButton.getAttribute("aria-describedby")).toBe(note.id);
   });
 
   it("按鈕可點時：不渲染原因列", async () => {

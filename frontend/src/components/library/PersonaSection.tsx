@@ -1,3 +1,4 @@
+import { Button } from "@/components/layout/ui/button";
 import { useEffect, useRef, useState } from "react";
 import { SidePanel } from "@/components/layout/SidePanel";
 import { Skeleton } from "@/components/layout/Skeleton";
@@ -95,11 +96,11 @@ export function PersonaSection({ brandId }: { brandId: string }) {
           <h2 className="font-display text-lg text-foreground">👥 典型客人</h2>
           <p className="text-sm text-muted-foreground">依已確認資料和顧客原話整理。</p>
         </div>
-        <button type="button" disabled={starting || running} onClick={() => {
+        <Button variant="outline" size="sm" type="button" busy={starting || running} onClick={() => {
           if (empty || window.confirm("會重新產生並取代現有人物誌（含你手動改過的）")) void generate();
         }} className="rounded-md border border-primary px-3 py-1.5 text-sm font-medium text-primary hover:bg-primary/10 disabled:cursor-not-allowed disabled:opacity-50">
           {starting ? "開始整理中…" : running ? "正在整理…" : empty ? "產生人物誌" : "🔄 重新產生"}
-        </button>
+        </Button>
       </div>
 
       {running && <p role="status" aria-live="polite" className="rounded-md border border-dashed border-border bg-muted/40 p-3 text-sm text-muted-foreground">AI 正在整理典型客人中…好了會通知你，也可以先看下面的顧客原話。</p>}
@@ -112,7 +113,7 @@ export function PersonaSection({ brandId }: { brandId: string }) {
             <article key={persona.id} className="flex flex-col gap-2 rounded-md border border-border p-4 text-sm">
               <div className="flex items-start justify-between gap-3">
                 <h3 className="font-medium text-foreground">{persona.title}</h3>
-                <button type="button" disabled={running} onClick={() => setEditing(persona)} className="rounded-md border border-border px-2 py-1 text-sm font-medium text-foreground hover:border-primary hover:text-primary disabled:cursor-not-allowed disabled:opacity-50">改</button>
+                <Button variant="outline" size="sm" type="button" busy={running} onClick={() => setEditing(persona)} className="rounded-md border border-border px-2 py-1 text-sm font-medium text-foreground hover:border-primary hover:text-primary disabled:cursor-not-allowed disabled:opacity-50">改</Button>
               </div>
               <p className="text-muted-foreground">什麼時候需要：{persona.when_needed}</p>
               <p className="text-muted-foreground">在意：{persona.care_about}</p>

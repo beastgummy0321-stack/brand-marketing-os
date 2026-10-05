@@ -238,3 +238,10 @@ describe("ProductDetailPage on the org clock, no invented job start (F50-I14, Co
     expect(screen.queryByText(/已等/)).toBeNull();
   });
 });
+
+
+it("uses the 404 status regardless of the error sentence", async () => {
+  vi.mocked(fetchProductDetail).mockRejectedValue(new ApiResponseError("任意新文案",404,{}));
+  renderPage();
+  expect(await screen.findByText("找不到這個產品")).toBeTruthy();
+});

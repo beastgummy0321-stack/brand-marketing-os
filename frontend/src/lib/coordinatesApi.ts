@@ -2,7 +2,7 @@
  * 三支端點——這支分頁自己抓資料（station ① decision 3），不透過 `libraryApi.ts` 的
  * `fetchLibrary()`。回應形狀跟 `scheduleApi.ts` 同一個模組的其他端點一樣不套
  * `{data, generated_at}` 信封，直接照抄路由回傳的欄位。 */
-import { apiFetch, errorMessageFromResponse } from "./http";
+import { apiFetch, readJson } from "./http";
 
 /** `CONSTITUTION.md` 規則 5 的七個維度鍵名。`components/schedule/CampaignTree.tsx`（票 05）
  * 直接 import 下面的 `COORDINATE_DIMENSIONS` 顯示節點座標，不另開一份鏡射——那個元件已經
@@ -41,10 +41,7 @@ export interface Coordinate {
 
 export async function fetchCoordinates(brandId: string): Promise<Coordinate[]> {
   const res = await apiFetch(`/api/schedule/brands/${encodeURIComponent(brandId)}/coordinates`);
-  if (!res.ok) {
-    throw new Error(await errorMessageFromResponse(res, `讀取失敗（狀態碼 ${res.status}）`));
-  }
-  const body: { coordinates: Coordinate[] } = await res.json();
+  const body = await readJson<{ coordinates: Coordinate[] }>(res, `讀取失敗（狀態碼 ${res.status}）`);
   return body.coordinates;
 }
 
@@ -57,10 +54,7 @@ export async function createCoordinate(
     headers: { "content-type": "application/json" },
     body: JSON.stringify(fields),
   });
-  if (!res.ok) {
-    throw new Error(await errorMessageFromResponse(res, `新增失敗（狀態碼 ${res.status}）`));
-  }
-  return (await res.json()) as Coordinate;
+  return readJson<Coordinate>(res, `新增失敗（狀態碼 ${res.status}）`);
 }
 
 export async function setCoordinateDisabled(
@@ -76,8 +70,5 @@ export async function setCoordinateDisabled(
       body: JSON.stringify({ disabled }),
     },
   );
-  if (!res.ok) {
-    throw new Error(await errorMessageFromResponse(res, `更新失敗（狀態碼 ${res.status}）`));
-  }
-  return (await res.json()) as Coordinate;
+  return readJson<Coordinate>(res, `更新失敗（狀態碼 ${res.status}）`);
 }

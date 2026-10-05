@@ -129,3 +129,14 @@ describe("LibraryPage 投放學到的（F46-I06）", () => {
     expect(mockLearnings).toHaveBeenCalledTimes(2);
   });
 });
+
+
+it("explains why brand editing is unavailable after a failed read", async () => {
+  mockFetchLibrary.mockRejectedValue(new Error("暫時讀不到"));
+  mockLearnings.mockResolvedValue(LEARNED);
+  render(<MemoryRouter><LibraryPage brandId="brand-1"/></MemoryRouter>);
+  const reason=await screen.findByText("先重新載入品牌資料");
+  const button=screen.getByRole("button",{name:"品牌資料"});
+  expect(button).toHaveProperty("disabled",true);
+  expect(button.getAttribute("aria-describedby")).toBe(reason.id);
+});

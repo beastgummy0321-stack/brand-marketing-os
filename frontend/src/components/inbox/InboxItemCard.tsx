@@ -61,7 +61,7 @@ export function InboxItemDetail({ item, variant, resolving, busy, error, onResol
     {error && <p role="alert" className="text-sm text-danger">{error}</p>}
     <div className="flex flex-wrap items-center gap-3 border-t border-border pt-5">
       {item.action_url && <Button variant="outline" asChild><Link to={item.action_url}>前往詳情<ArrowUpRight className="size-4" aria-hidden="true" /></Link></Button>}
-      {variant === "open" && <Button type="button" onClick={() => onResolve(item.id)} disabled={busy}>{resolving ? "標記中…" : "標記已處理"}</Button>}
+      {variant === "open" && <Button type="button" onClick={() => onResolve(item.id)} busy={busy}>{resolving ? "標記中…" : "標記已處理"}</Button>}
     </div>
   </section>;
 }
