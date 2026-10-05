@@ -30,10 +30,9 @@
 from fastapi import APIRouter, Request
 from fastapi.responses import Response
 
-from app.background import JOB_FAILED_MESSAGE
 from app.background import enqueue as background_enqueue
 from app.background import is_active as background_is_active
-from app.background import job_outcome as background_job_outcome
+from app.background import job_state as background_job_state
 from app.brand_intelligence import background_job, product_ai
 from app.brand_intelligence import repository as repo
 from app.brand_web import product_ai_calls
@@ -41,6 +40,7 @@ from app.brand_web import routes as legacy_routes
 from app.brand_web import routes_product_helpers as product_helpers
 from app.brand_web.routes_library import confirmer_label
 from app.core import cleanup, input_rules
+from app.core import interrupts as core_interrupts
 from app.core import settings as coresettings
 from app.core import vocab as md
 from app.core.db import connection as core_db_connection
@@ -220,46 +220,31 @@ def _research_state(conn, brand_id: str, product_id: str) -> dict:
     None／False——前端 `ProductDetailPage.tsx` 的 `done` 分支本來就不讀這兩個值
     （轉成功就整包重新 `load()`），這裡是有回報過的簡化，不是悄悄近似。
 
-    F31 Contract J 先看佇列：最新的 job 還在排／在跑＝running（即使有舊的 llm_task 列）；
-    最新的 job 失敗＝failed（沒有那次呼叫的錯誤可引用時講背景程式）。其餘照 llm_task 列。"""
+    F50-I07（Contract J）：狀態一律經 `background.job_state()` 判斷——佇列說還在跑／失敗
+    就照它，`started_at` 是真的開始（或排入）時間；沒有 job 也沒有列＝`unknown`、
+    `started_at: None`，不再編一個「現在」冒充完成。成功列還要重驗抽取結果。"""
     row = conn.execute(
         "SELECT * FROM llm_task WHERE brand_id = %s AND task_type = 'product_scan' "
         "AND context_scope_json->>'product_id' = %s ORDER BY started_at DESC LIMIT 1",
         (brand_id, product_id),
     ).fetchone()
-    outcome = background_job_outcome(f"product_scan:{product_id}")
-    if outcome == "active":
-        running_row = row is not None and row["status"] == "running"
-        return {"status": "running", "stage": "讀取網址中",
-                "started_at": row["started_at"] if running_row else now_iso(),
-                "usual_range_text": _RESEARCH_USUAL_RANGE, "error": None, "added_count": None,
-                "price_created": False}
-    if outcome == "failed":
-        own_error = row is not None and row["status"] not in ("running", "succeeded") and row["error"]
-        return {"status": "failed", "stage": "整理事實中",
-                "started_at": row["started_at"] if row is not None else now_iso(),
-                "usual_range_text": _RESEARCH_USUAL_RANGE,
-                "error": row["error"] if own_error else JOB_FAILED_MESSAGE,
-                "added_count": None, "price_created": False}
-    if row is None:
-        return {"status": "done", "stage": "", "started_at": now_iso(),
-                "usual_range_text": "", "error": None, "added_count": None, "price_created": False}
-    if row["status"] == "running":
-        return {"status": "running", "stage": "讀取網址中", "started_at": row["started_at"],
-                "usual_range_text": _RESEARCH_USUAL_RANGE, "error": None, "added_count": None,
-                "price_created": False}
-    if row["status"] == "succeeded":
+    state = background_job_state(f"product_scan:{product_id}", row)
+    shape = {"status": state["status"], "stage": "", "started_at": state["started_at"],
+             "usual_range_text": _RESEARCH_USUAL_RANGE, "error": None, "added_count": None,
+             "price_created": False}
+    if state["status"] == "running":
+        return {**shape, "stage": "讀取網址中"}
+    if state["status"] == "failed":
+        return {**shape, "stage": "整理事實中", "error": state["error"]}
+    if state["status"] == "unknown":
+        return {**shape, "usual_range_text": ""}
+    if row is not None and row["status"] == "succeeded":
         result = product_ai._validate_scan_reply(gateway.parse_json_reply(row["rendered_output"]))
-        if result is not None:
-            return {"status": "done", "stage": "完成", "started_at": row["started_at"],
-                    "usual_range_text": _RESEARCH_USUAL_RANGE, "error": None, "added_count": None,
-                    "price_created": False}
-        error = product_ai_calls.PARSE_FAIL_MESSAGE  # llm_task 成功但抽取結果驗證失敗
-    else:
-        error = row["error"]
-    return {"status": "failed", "stage": "整理事實中", "started_at": row["started_at"],
-            "usual_range_text": _RESEARCH_USUAL_RANGE, "error": error, "added_count": None,
-            "price_created": False}
+        if result is None:  # llm_task 成功但抽取結果驗證失敗
+            return {**shape, "status": "failed", "stage": "整理事實中",
+                    "error": product_ai_calls.PARSE_FAIL_MESSAGE}
+        return {**shape, "status": "done", "stage": "完成"}
+    return {**shape, "status": "done", "usual_range_text": "", "error": state["error"]}
 
 
 def _research_notify(conn, brand_id: str, product_id: str, message: str) -> None:
@@ -288,11 +273,13 @@ def background_product_scan(org_id: str, brand_id: str, product_id: str, actor: 
             conn.rollback()  # 失敗的交易先收掉，通知才寫得進去
             ok, error = False, exc
         if not ok:
-            _research_notify(conn, brand_id, product_id, f"「{product_name}」調研失敗，可以重試")
+            _research_notify(conn, brand_id, product_id,
+                             core_interrupts.notice("調研失敗，可以重試", product_name))
             if error is not None:
                 raise error  # Contract J：job 結局要是 failed，狀態端點才不會讀成完成
             return
-        _research_notify(conn, brand_id, product_id, f"「{product_name}」調研完成，新增 {added} 條待確認")
+        _research_notify(conn, brand_id, product_id,
+                         core_interrupts.notice(f"調研完成，新增 {added} 條待確認", product_name))
 
 
 def _url_error(url: str) -> str | None:

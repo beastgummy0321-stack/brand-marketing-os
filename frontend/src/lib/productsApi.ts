@@ -94,12 +94,14 @@ export interface ProductDeleteImpact {
   count: number;
 }
 
-export type ResearchJobStatus = "waiting" | "running" | "done" | "failed";
+/** `unknown` (F50-I07, Contract J): neither a queued job nor an AI call exists for this product,
+ * so the server does not claim done; `started_at` is then null (never a made-up "now"). */
+export type ResearchJobStatus = "waiting" | "running" | "done" | "failed" | "unknown";
 
 export interface ResearchJobState {
   status: ResearchJobStatus;
   stage: string;
-  started_at: string;
+  started_at: string | null;
   usual_range_text: string;
   error: string | null;
   added_count: number | null;

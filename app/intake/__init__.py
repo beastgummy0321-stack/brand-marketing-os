@@ -25,15 +25,12 @@ def register(app) -> None:  # 掛路由（票 03-1）＋掛背景 task（票 09�
         app.include_router(intake_api_router)
         _routes_mounted = True
 
-    from app.background import app as background_app
+    from app import background
     from app.intake.persona_generation import background_intake_persona
     from app.intake.product_prefill import background_intake_product_prefill
     from app.intake.routes_api import background_intake_scan
 
-    a = background_app()  # 簽章相同的可以迴圈註冊（跟 brand_web 三支簽章互異、逐支手寫不同）
-    for name, func in (("background.intake_scan", background_intake_scan),
-                       ("background.intake_persona", background_intake_persona)):
-        if name not in a.tasks:
-            a.task(name=name)(func)
-    if "background.intake_product_prefill" not in a.tasks:  # F43-I06: its own signature
-        a.task(name="background.intake_product_prefill")(background_intake_product_prefill)
+    # F50-I07: every task goes through `background.register` (Contract J; idempotent).
+    background.register("background.intake_scan", background_intake_scan)
+    background.register("background.intake_persona", background_intake_persona)
+    background.register("background.intake_product_prefill", background_intake_product_prefill)

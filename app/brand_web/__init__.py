@@ -34,18 +34,13 @@ def register(app) -> None:
         app.include_router(report_api_router)
         _routes_mounted = True
 
-    from app.background import app as background_app
+    from app import background
     from app.brand_web.routes_library import background_customer_voice_extraction
     from app.brand_web.routes_products import background_product_scan
     from app.brand_web.routes_report_api import background_brand_report
 
-    # 個別列出、不放進一個共用 tuple／dict 迴圈裡：三支 task body 簽章不同，pyright 會把
-    # 迴圈變數的型別統一成交集失敗的 Union，逐支呼叫 `a.task(name=...)(func)` 才留得住
-    # 各自正確的型別。
-    a = background_app()
-    if "background.customer_voice_extraction" not in a.tasks:
-        a.task(name="background.customer_voice_extraction")(background_customer_voice_extraction)
-    if "background.product_scan" not in a.tasks:
-        a.task(name="background.product_scan")(background_product_scan)
-    if "background.brand_report" not in a.tasks:
-        a.task(name="background.brand_report")(background_brand_report)
+    # F50-I07: every task goes through `background.register` (Contract J; idempotent).
+    background.register("background.customer_voice_extraction",
+                        background_customer_voice_extraction)
+    background.register("background.product_scan", background_product_scan)
+    background.register("background.brand_report", background_brand_report)

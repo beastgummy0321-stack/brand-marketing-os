@@ -18,10 +18,10 @@ from app.core import interrupts as core_interrupts
 
 
 def notify(conn, brand_id: str, *, category: str, dedupe_key: str, message: str, action_url: str) -> None:
-    """背景工作完成／失敗時送打斷佇列通知；超過卡片字數上限就截斷
-    （`core_interrupts.enqueue` 對超長訊息會直接 raise，兩邊呼叫端原本都是各自截斷）。"""
-    if len(message) > core_interrupts.MAX_MESSAGE_LEN:
-        message = message[: core_interrupts.MAX_MESSAGE_LEN]
+    """背景工作完成／失敗時送打斷佇列通知。F50-I07（Contract J，intake #9）：這裡不再截斷
+    ——尾巴一刀切下去，長商品名會把「完成」「失敗」一起切掉，兩種通知變得一模一樣。呼叫端用
+    `core_interrupts.notice(outcome, subject)` 組句子（結果永遠完整，只縮主題）；超長訊息由
+    `core_interrupts.enqueue` 照舊拒收。"""
     brand = bi_repo.get_brand(conn, brand_id)
     assert brand is not None, f"找不到品牌：{brand_id}"
     core_interrupts.enqueue(

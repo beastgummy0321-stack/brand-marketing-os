@@ -343,7 +343,9 @@ class ResearchBackgroundTest(_BaseProductsApiTest):
         status = self.client.get(
             f"/api/products/brands/{self.bid}/products/{pid}/research-status"
         ).json()["data"]
-        self.assertEqual(status["status"], "done")  # 從沒排進佇列，穩態預設
+        # F50-I07 (Contract J): never queued and no AI call = unknown, not a claimed "done"
+        # with a made-up start time.
+        self.assertEqual((status["status"], status["started_at"]), ("unknown", None))
 
     def test_bad_url_format_rejected_before_creating_product(self):
         resp = self.client.post(
@@ -393,11 +395,14 @@ class ResearchBackgroundTest(_BaseProductsApiTest):
         self.assertEqual(len(facts), 2)
         self.assertEqual(len(product_ai.PROVIDER.calls), 1)
 
-    def test_unknown_key_reports_done_steady_state(self):
+    def test_never_researched_product_reports_unknown_without_a_made_up_time(self):
+        """F50-I07 (Contract J, intake #10): no job and no AI call is `unknown` with
+        `started_at: None` -- it used to read `done` with `started_at = now`."""
         pid = self._create_product()
         resp = self.client.get(f"/api/products/brands/{self.bid}/products/{pid}/research-status")
         self.assertEqual(resp.status_code, 200)
-        self.assertEqual(resp.json()["data"]["status"], "done")
+        data = resp.json()["data"]
+        self.assertEqual((data["status"], data["started_at"]), ("unknown", None))
 
 
 class ProductFactCrudTest(_BaseProductsApiTest):

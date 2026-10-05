@@ -94,10 +94,21 @@ export interface LibraryCustomerVoice {
   extraction: CustomerVoiceExtractionItem[];
 }
 
+/** `unknown` (F50-I07, Contract J): neither a queued job nor an AI call exists for this key. */
 export type CustomerVoiceJobStatus =
   | { status: "running" }
+  | { status: "unknown" }
   | { status: "done"; result: LibraryCustomerVoice }
   | { status: "failed"; message: string };
+
+/** One customer-voice job of the last 24 h (newest per key), so a reload still sees it
+ * (F50-I07). `error` is set when it failed; `started_at` is when its AI call started. */
+export interface LibraryCustomerVoiceJob {
+  job_key: string;
+  status: "running" | "unknown" | "done" | "failed";
+  error: string | null;
+  started_at: string | null;
+}
 
 export interface LibraryBrandProfile {
   id: string;
@@ -125,6 +136,7 @@ export interface LibraryData {
   assets: LibraryAsset[];
   channels: LibraryChannel[];
   customer_voices: LibraryCustomerVoice[];
+  customer_voice_jobs?: LibraryCustomerVoiceJob[];
 }
 
 export const BRAND_FACT_TYPES: [string, string][] = [

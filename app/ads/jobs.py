@@ -3,7 +3,6 @@
 import logging
 
 from app import background
-from app.background import app as background_app
 from app.core.db import connection
 
 logger = logging.getLogger(__name__)
@@ -90,45 +89,32 @@ def _dispatch_runtime_beat(timestamp: int):
 
 
 def register_tasks() -> None:
-    """掛兩個 task，冪等（可以呼叫任意次）——見本檔檔頭「為什麼不能只做一次」。"""
-    a = background_app()
-    if _TASK_NAME not in a.tasks:
-        a.task(name=_TASK_NAME)(close_expired_campaigns)
-    if _DISPATCH_TASK_NAME not in a.tasks:
-        a.periodic(cron=_CLOSE_CRON, periodic_id=_DISPATCH_PERIODIC_ID)(
-            a.task(name=_DISPATCH_TASK_NAME)(_dispatch_close_expired)
-        )
+    """掛 ads 的 task，冪等（可以呼叫任意次）——見本檔檔頭「為什麼不能只做一次」。
+    F50-I07: every one goes through `background.register` (Contract J)."""
+    background.register(_TASK_NAME, close_expired_campaigns)
+    background.register(_DISPATCH_TASK_NAME, _dispatch_close_expired,
+                        cron=_CLOSE_CRON, periodic_id=_DISPATCH_PERIODIC_ID)
 
     from app.ads import external_sync
-    if external_sync.TASK not in a.tasks:
-        a.task(name=external_sync.TASK)(external_sync.run_sync)
-    if "ads.external_pending" not in a.tasks:
-        a.periodic(cron="* * * * *",periodic_id="ads_external_pending")(
-            a.task(name="ads.external_pending")(external_sync.dispatch_pending))
-    if "ads.external_daily" not in a.tasks:
-        a.periodic(cron="0 5 * * *",periodic_id="ads_external_daily")(
-            a.task(name="ads.external_daily")(external_sync.dispatch_daily))
-    if "ads.queue_refresh_daily" not in a.tasks:
-        a.periodic(cron="30 6 * * *", periodic_id="ads_queue_refresh_daily")(
-            a.task(name="ads.queue_refresh_daily")(_dispatch_queue_refresh))
+    background.register(external_sync.TASK, external_sync.run_sync)
+    background.register("ads.external_pending", external_sync.dispatch_pending,
+                        cron="* * * * *", periodic_id="ads_external_pending")
+    background.register("ads.external_daily", external_sync.dispatch_daily,
+                        cron="0 5 * * *", periodic_id="ads_external_daily")
+    background.register("ads.queue_refresh_daily", _dispatch_queue_refresh,
+                        cron="30 6 * * *", periodic_id="ads_queue_refresh_daily")
 
     from app.ads import user_assets
-    if user_assets.TASK not in a.tasks:
-        a.task(name=user_assets.TASK)(user_assets.process_preview)
-    if "ads.user_asset_pending" not in a.tasks:
-        a.periodic(cron="* * * * *",periodic_id="ads_user_asset_pending")(
-            a.task(name="ads.user_asset_pending")(user_assets.dispatch_pending))
+    background.register(user_assets.TASK, user_assets.process_preview)
+    background.register("ads.user_asset_pending", user_assets.dispatch_pending,
+                        cron="* * * * *", periodic_id="ads_user_asset_pending")
 
     from app.ads import asset_suggestions
-    if asset_suggestions.TASK not in a.tasks:
-        a.task(name=asset_suggestions.TASK)(asset_suggestions.run)
-    if "ads.asset_suggestion_pending" not in a.tasks:
-        a.periodic(cron="* * * * *",periodic_id="ads_asset_suggestion_pending")(
-            a.task(name="ads.asset_suggestion_pending")(asset_suggestions.dispatch_pending))
+    background.register(asset_suggestions.TASK, asset_suggestions.run)
+    background.register("ads.asset_suggestion_pending", asset_suggestions.dispatch_pending,
+                        cron="* * * * *", periodic_id="ads_asset_suggestion_pending")
 
     from app.ads import runtime
-    if runtime.TASK not in a.tasks:
-        a.task(name=runtime.TASK)(runtime.run_campaign)
-    if "ads.runtime_dispatch" not in a.tasks:
-        a.periodic(cron="* * * * *", periodic_id="ads_runtime")(
-            a.task(name="ads.runtime_dispatch")(_dispatch_runtime_beat))
+    background.register(runtime.TASK, runtime.run_campaign)
+    background.register("ads.runtime_dispatch", _dispatch_runtime_beat,
+                        cron="* * * * *", periodic_id="ads_runtime")

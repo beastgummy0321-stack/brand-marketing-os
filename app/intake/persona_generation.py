@@ -9,6 +9,7 @@ from app.background import is_active as background_is_active
 from app.background import job_outcome as background_job_outcome
 from app.brand_intelligence import background_job, personas
 from app.brand_intelligence import repository as repo
+from app.core import interrupts as core_interrupts
 from app.core.db import connection as core_db_connection
 from app.core.db import new_id
 from app.llm import context_compiler, gateway, providers
@@ -181,9 +182,9 @@ def background_intake_persona(org_id: str, brand_id: str) -> None:
             conn.rollback()  # 失敗的交易先收掉，通知才寫得進去
             ok, error = False, exc
         if ok:
-            _notify(conn, brand_id, f"「{brand_name}」人物誌好了")
+            _notify(conn, brand_id, core_interrupts.notice("人物誌好了", brand_name))
         else:
-            _notify(conn, brand_id, f"「{brand_name}」人物誌失敗，可重試")
+            _notify(conn, brand_id, core_interrupts.notice("人物誌沒做成，可以重試", brand_name))
         if error is not None:
             raise error  # Contract J：job 結局要是 failed，狀態端點才不會讀成完成
 

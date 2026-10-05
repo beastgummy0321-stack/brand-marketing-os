@@ -23,9 +23,7 @@ def enqueue(org, brand, campaign, review_id):
 
 
 def register_tasks():
-    app = background.app()
-    if TASK not in app.tasks:
-        app.task(name=TASK)(run)
+    background.register(TASK, run)
 
 
 def settle(conn, org, review_id, task):

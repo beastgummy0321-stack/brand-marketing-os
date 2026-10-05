@@ -34,6 +34,7 @@ import calendar
 from datetime import date, timedelta
 from zoneinfo import ZoneInfo
 
+from app import background
 from app.background import app as background_app
 from app.core import settings as coresettings
 from app.core.db import connection
@@ -152,15 +153,10 @@ def register_task() -> None:
     """掛 procrastinate task，冪等（可以呼叫任意次）——見本檔檔頭「為什麼不能只做一次」。
     連同掛上每日排程的 periodic dispatch task（票 05 fix round）與 37 個月補拉的背景工作
     （票 past-ads/02，ADR 0067 §1.8）。"""
-    a = background_app()
-    if _TASK_NAME not in a.tasks:
-        a.task(name=_TASK_NAME)(run_daily_pull)
-    if _DISPATCH_TASK_NAME not in a.tasks:
-        a.periodic(cron=_DAILY_PULL_CRON, periodic_id=_DISPATCH_PERIODIC_ID)(
-            a.task(name=_DISPATCH_TASK_NAME)(_dispatch_daily_pull)
-        )
-    if _BACKFILL_TASK_NAME not in a.tasks:
-        a.task(name=_BACKFILL_TASK_NAME)(run_backfill)
+    background.register(_TASK_NAME, run_daily_pull)
+    background.register(_DISPATCH_TASK_NAME, _dispatch_daily_pull,
+                        cron=_DAILY_PULL_CRON, periodic_id=_DISPATCH_PERIODIC_ID)
+    background.register(_BACKFILL_TASK_NAME, run_backfill)
 
 
 def _earliest_pullable(today: date) -> date:

@@ -183,6 +183,79 @@ class LLMGatewayTest(unittest.TestCase):
         self.assertEqual(row["status"], "timeout")
         rows = self._rows_for_brand()
         self.assertTrue(all(r["status"] == "timeout" for r in rows))
+        # F50-I07 (Contract J): the kind is stored beside the sentence.
+        self.assertTrue(all(r["error_code"] == "timeout" for r in rows))
+        self.assertEqual(row["error"], "AI 服務逾時未回應")
+
+    def test_error_code_names_each_provider_failure_kind(self):
+        """F50-I07: refusal, missing key and a plain provider error each keep their kind."""
+        cases = [
+            (ProviderError("模型婉拒本次請求（分類：cyber）"), "refused"),
+            (ProviderError(providers.MISSING_KEY_MESSAGE), "no_credentials"),
+            (ProviderError("無法連線到 AI 服務，請檢查網路後再試一次。"), "provider"),
+            (SpendCapExceededError("這個月的 AI 用量已達上限"), "spend_cap"),
+        ]
+        for exc, code in cases:
+            with self.subTest(code=code):
+                row = gateway.run_task(
+                    self.conn, FakeProvider(exception=exc, fail_first_n=2),
+                    brand_id=self.brand["id"], task_type="analyzeBrandContext",
+                    prompt_template_id="tpl_brand_context", prompt_template_version="v1",
+                    system=None, messages=[{"role": "user", "content": "分析"}],
+                    context=self._context(),
+                )
+                self.assertEqual((row["status"], row["error_code"], row["error"]),
+                                 ("failed", code, str(exc)))
+
+    def test_truncated_reply_is_coded_truncated(self):
+        provider = FakeProvider(response=ProviderResponse(
+            output_text='{"value": "最大化轉換次', structured=None,
+            usage=Usage(input_tokens=10, output_tokens=16000), stop_reason="max_tokens",
+        ))
+        row = gateway.run_task(
+            self.conn, provider,
+            brand_id=self.brand["id"], task_type="analyzeBrandContext",
+            prompt_template_id="tpl_brand_context", prompt_template_version="v1",
+            system=None, messages=[{"role": "user", "content": "分析"}],
+            context=self._context(),
+        )
+        self.assertEqual((row["status"], row["error_code"]), ("failed", "truncated"))
+        self.assertIn("截斷", row["error"])
+
+    def test_succeeded_row_has_no_error_code_and_record_refusal_keeps_the_kind(self):
+        provider = FakeProvider(response=ProviderResponse(
+            output_text="{}", structured=None, usage=Usage(input_tokens=1, output_tokens=1),
+            stop_reason="end_turn",
+        ))
+        row = gateway.run_task(
+            self.conn, provider,
+            brand_id=self.brand["id"], task_type="analyzeBrandContext",
+            prompt_template_id="tpl_brand_context", prompt_template_version="v1",
+            system=None, messages=[{"role": "user", "content": "分析"}],
+            context=self._context(),
+        )
+        self.assertIsNone(row["error_code"])
+        gateway.record_refusal(self.conn, row["id"], "menu_violation", "用了選單外的座標")
+        stored = gateway.get_task(self.conn, row["id"])
+        self.assertEqual((stored["status"], stored["error_code"], stored["error"]),
+                         ("succeeded", "program_refused", "menu_violation: 用了選單外的座標"))
+        with self.assertRaises(ValueError):
+            gateway.record_refusal(self.conn, row["id"], "", "")
+
+    def test_error_code_column_refuses_an_unknown_kind(self):
+        row = gateway._insert_running_row(
+            self.conn, org_id=db.DEV_ORG_ID, brand_id=self.brand["id"],
+            task_type="analyzeBrandContext", context=self._context(),
+            prompt_template_id="tpl", prompt_template_version="v1", provider_name="fake",
+            model="claude-opus-5", attempt_no=1,
+        )
+        with self.assertRaises(Exception):
+            gateway._mark_failed(self.conn, row["id"], status="failed", error="x",
+                                 error_code="something_else")
+        self.conn.rollback()
+        self.assertEqual(set(gateway.ERROR_CODES),
+                         {"timeout", "refused", "provider", "truncated", "spend_cap",
+                          "no_credentials", "program_refused"})
 
     def test_large_prompt_is_not_retried_even_with_max_retries_set(self):
         # 輸入長度 > LARGE_PROMPT_CHARS（24000）＋一定逾時的 provider：重送同樣的大 prompt

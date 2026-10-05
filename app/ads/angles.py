@@ -89,9 +89,7 @@ def enqueue(org, brand, campaign, entity_id, copy_hash):
 
 
 def register_tasks():
-    app = background.app()
-    if TASK not in app.tasks:
-        app.task(name=TASK)(run)
+    background.register(TASK, run)
 
 
 def run(org_id, brand_id, campaign_id, entity_id, copy_hash):

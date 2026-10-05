@@ -48,7 +48,7 @@ have changed the picture out from under it before the worker gets to it.
 import logging
 
 from app import workbench  # module entry point only (docs/contracts/workbench.md)
-from app.background import app as background_app
+from app import background
 from app.brand_intelligence import repository as bi_repo
 from app.core import rule_cards
 from app.core.db import connection, jsonb, new_id
@@ -751,8 +751,5 @@ def register_tasks() -> None:
     `app/meta/daily_pull.py` 檔頭：`app.background.app()` 的 DSN 換了會整顆重建，只註冊一次
     在 import 期會在任何 DSN 換過之後悄悄失效。task 名稱＝`background.<task_type>`，跟
     `routes.py` 端點 enqueue 時組的字串（`f"background.{TASK_TYPE}"`）是同一個。"""
-    a = background_app()
     for task_type, func in _JOBS.items():
-        name = f"background.{task_type}"
-        if name not in a.tasks:
-            a.task(name=name)(func)
+        background.register(f"background.{task_type}", func)

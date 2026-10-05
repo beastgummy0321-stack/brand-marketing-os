@@ -55,6 +55,10 @@ BRAND_AGNOSTIC_EXCEPTIONS = {
     "ad_channel": "票 T3a（ADR 0055 §5）：組織層「這個組織連了哪些廣告平台」清單，一個"
         "組織可能同時服務好幾個品牌，頻道本身不屬於單一品牌；真正的品牌歸屬在"
         "channel_entity_map（有 NOT NULL brand_id，照常過這個檢查，不在例外清單）",
+    "background_job_result": "F50-I07（Contract J）：佇列工作的結局表，主鍵 (org_id, lock)，"
+        "每個 queueing lock 只留最新一次 failed／empty／done＋code。它跟 procrastinate 的 job "
+        "同一個租戶邊界——job 只在 args 帶 org_id（ADR 0038），排程分派與帳號層工作（例如 "
+        "meta_daily_pull）沒有單一品牌，硬塞 brand_id 等於任意挑一個",
 }
 
 
