@@ -374,7 +374,7 @@ def test_upload_waits_for_confirmation_then_assigns_the_confirmed_revision(env):
     assert (slot["state"], slot["thumbnail_url"]) == ("blocked", thumb(env, asset))
     assert slot["copy"] == placement_copy("待確認", {**partial, "description": None})
     assert slot["blocked"] == {
-        "text": "請补齊標題、內文與說明，或補充可用品牌事實。", "terms": [], "fix": "copy",
+        "text": "請補齊標題、內文與說明，或補充可用品牌事實。", "terms": [], "fix": "copy",
         "more": 0,
     }
     assert response.json()["slots"]["ready"] == 0
@@ -1240,7 +1240,7 @@ def test_refusal_details_name_the_exit_that_fixes_each_reason(env):
         (
             user_asset(env), {"headline": "標題"}, None,
             [
-                refusal("copy", "請补齊標題、內文與說明，或補充可用品牌事實。"),
+                refusal("copy", "請補齊標題、內文與說明，或補充可用品牌事實。"),
                 refusal("campaign", "請補這件素材的投放用途。"),
             ],
         ),
@@ -1659,7 +1659,7 @@ def test_the_advanced_confirm_route_stores_its_refusal(env):
     assert response.status_code == 200, response.text
     body = response.json()["placement"]
     assert (body["status"], body["confirmed_at"]) == ("pending", None)
-    expected = [refusal("copy", "請补齊標題、內文與說明，或補充可用品牌事實。")]
+    expected = [refusal("copy", "請補齊標題、內文與說明，或補充可用品牌事實。")]
     assert body["blocked_reasons"] == expected
     assert stored_reasons(env, placement["id"]) == expected
 

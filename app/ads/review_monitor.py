@@ -438,6 +438,8 @@ def required_windows(conn, org, brand, campaign):
     ).fetchall()
     if len(rows) > 500:
         raise ValueError("活動監測數量超過單次來源補回上限，請縮小活動範圍。")
+    if not rows:
+        return []  # no monitor: no window, and no account read for a cutoff nobody needs
     last = coverage.last_complete_day(conn, org, brand, campaign)
     result = []
     for row in rows:
