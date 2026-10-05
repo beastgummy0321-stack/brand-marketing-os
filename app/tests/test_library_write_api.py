@@ -327,6 +327,41 @@ class LibraryWriteApiTest(unittest.TestCase):
         )
         self.assertEqual(resp.status_code, 404)
 
+    # ---- F50-I17：還原封存的品牌 ----
+
+    def test_brand_restore_sets_only_the_status_back_to_active(self):
+        brand_id = self._new_brand("封存品牌")
+        repo.update_brand(web.conn, brand_id, name="封存品牌甲", client_name="客戶甲",
+                          status="archived", actor=ACTOR)
+        resp = self.client.post(f"/api/library/brands/{brand_id}/restore")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["data"]["name"], "封存品牌甲")
+        restored = repo.get_brand(web.conn, brand_id)
+        self.assertEqual((restored["status"], restored["name"], restored["client_name"]),
+                         ("active", "封存品牌甲", "客戶甲"))
+
+    def test_brand_restore_on_an_active_brand_is_409_with_a_sentence(self):
+        brand_id = self._new_brand("使用中品牌")
+        resp = self.client.post(f"/api/library/brands/{brand_id}/restore")
+        self.assertEqual(resp.status_code, 409)
+        self.assertEqual(resp.json()["error"], "這個品牌沒有封存，不用還原。")
+        self.assertEqual(repo.get_brand(web.conn, brand_id)["status"], "active")
+
+    def test_brand_restore_of_another_orgs_brand_is_404(self):
+        _SEQ[0] += 1
+        other_org = f"org_restore_test_{_SEQ[0]}_{id(self)}"
+        web.conn.execute("INSERT INTO organisation (id, name, kind) VALUES (%s, %s, 'personal')"
+                         " ON CONFLICT (id) DO NOTHING", (other_org, other_org))
+        web.conn.commit()
+        foreign = repo.create_brand(web.conn, name=f"別家品牌{_SEQ[0]}", client_name=None,
+                                    actor=ACTOR, org_id=other_org)["id"]
+        repo.update_brand(web.conn, foreign, name=f"別家品牌{_SEQ[0]}", client_name=None,
+                          status="archived", actor=ACTOR)
+        resp = self.client.post(f"/api/library/brands/{foreign}/restore")
+        self.assertEqual(resp.status_code, 404)
+        self.assertEqual(repo.get_brand(web.conn, foreign)["status"], "archived")
+        self.assertEqual(self.client.post("/api/library/brands/does-not-exist/restore").status_code, 404)
+
     # ---- F34-I01（Contract R）：適用法規 ----
 
     def test_regulatory_regime_put_sets_and_clears(self):

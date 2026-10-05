@@ -140,5 +140,38 @@ class DashboardOverviewApiTest(unittest.TestCase):
         self.assertEqual(row["status"], "open")
 
 
+class ArchivedBrandsApiTest(unittest.TestCase):
+    """F50-I17: `GET /api/dashboard/archived-brands` = the org's archived brands, nothing else."""
+
+    def setUp(self):
+        self.client = TestClient(main.app)
+        suffix = abs(hash(self.id())) % 100000
+        self.active = bi_repo.create_brand(main.conn, name=f"虛構營業中{suffix}", client_name=None,
+                                           actor=ACTOR, org_id=coredb.DEV_ORG_ID)
+        self.archived = bi_repo.create_brand(main.conn, name=f"虛構收起來{suffix}", client_name="客戶",
+                                             actor=ACTOR, org_id=coredb.DEV_ORG_ID)
+        bi_repo.update_brand(main.conn, self.archived["id"], name=self.archived["name"],
+                             client_name="客戶", status="archived", actor=ACTOR)
+        other_org = f"org_archived_test_{suffix}"
+        main.conn.execute("INSERT INTO organisation (id, name, kind) VALUES (%s, %s, 'personal')"
+                          " ON CONFLICT (id) DO NOTHING", (other_org, other_org))
+        main.conn.commit()
+        self.foreign = bi_repo.create_brand(main.conn, name=f"虛構別家{suffix}", client_name=None,
+                                            actor=ACTOR, org_id=other_org)
+        bi_repo.update_brand(main.conn, self.foreign["id"], name=self.foreign["name"],
+                             client_name=None, status="archived", actor=ACTOR)
+
+    def test_lists_only_this_orgs_archived_brands(self):
+        resp = self.client.get("/api/dashboard/archived-brands")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()["data"]
+        self.assertIn({"brand_id": self.archived["id"], "name": self.archived["name"]}, data)
+        ids = {item["brand_id"] for item in data}
+        self.assertNotIn(self.active["id"], ids)
+        self.assertNotIn(self.foreign["id"], ids)
+        overview_ids = {c["brand_id"] for c in self.client.get("/api/dashboard/overview").json()["data"]}
+        self.assertNotIn(self.archived["id"], overview_ids)
+
+
 if __name__ == "__main__":
     unittest.main()

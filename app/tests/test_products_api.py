@@ -276,6 +276,50 @@ class ArchiveTest(_BaseProductsApiTest):
         self.assertEqual(repo.get_product(web.conn, self.bid, pid)["status"], "active")
 
 
+class ArchivedListTest(_BaseProductsApiTest):
+    """F50-I17: `?status=archived` lists the brand's archived root products for the products page's
+    「已封存」 fold; restoring keeps going through the `…/archive` toggle."""
+
+    _ready_product = ProductListReadinessTest._ready_product
+    _listed = ProductListReadinessTest._listed
+
+    def _archived(self):
+        resp = self.client.get(f"/api/products/brands/{self.bid}?status=archived")
+        self.assertEqual(resp.status_code, 200)
+        return resp.json()["data"]
+
+    def test_lists_archived_roots_only_and_restore_moves_them_back(self):
+        tea, tea_box = self._ready_product("虛構回甘烏龍")
+        gummy, _ = self._ready_product("虛構軟糖")
+        self.assertEqual(self._archived(), [])
+        self.client.post(f"/api/products/brands/{self.bid}/products/{tea}/archive")
+        archived = self._archived()
+        self.assertEqual([(item["id"], item["kind"], item["status"]) for item in archived],
+                         [(tea, "knowledge", "archived")])
+        self.assertEqual(set(archived[0].keys()),
+                         {"id", "name", "status", "fact_count", "pending_fact_count",
+                          "economics_status", "parent_id", "kind"})
+        self.assertNotIn(tea_box, [item["id"] for item in archived])
+        self.assertNotIn(tea, [item_id for item_id, _ in self._listed()])
+        resp = self.client.post(f"/api/products/brands/{self.bid}/products/{tea}/archive")
+        self.assertEqual(resp.status_code, 204)
+        self.assertEqual(self._archived(), [])
+        self.assertEqual(self._listed()[:2], [(tea, "knowledge"), (gummy, "knowledge")])
+
+    def test_restore_onto_an_active_same_name_product_is_409_with_the_sentence(self):
+        first = self._create_product("超能特惠組")
+        self.client.post(f"/api/products/brands/{self.bid}/products/{first}/archive")
+        self._create_product("超能特惠組")
+        resp = self.client.post(f"/api/products/brands/{self.bid}/products/{first}/archive")
+        self.assertEqual(resp.status_code, 409)
+        self.assertEqual(resp.json()["error"], "已有同名產品")
+        self.assertEqual([item["id"] for item in self._archived()], [first])
+
+    def test_unknown_status_is_400_and_unknown_brand_is_404(self):
+        self.assertEqual(self.client.get(f"/api/products/brands/{self.bid}?status=gone").status_code, 400)
+        self.assertEqual(self.client.get("/api/products/brands/brd_不存在?status=archived").status_code, 404)
+
+
 class ResearchBackgroundTest(_BaseProductsApiTest):
     """S6.10–S6.11／S6.17／S6.29–S6.31：AI 調研佇列工作狀態機（票 08：從行程內
     dict＋thread 搬上 `app.background` 佇列，啟動→跑 worker→GET 讀最終狀態，或失敗
