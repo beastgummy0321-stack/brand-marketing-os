@@ -17,16 +17,16 @@ docs/contracts/background.md）——三個搬上佇列的 kind 裡最貼近 `ap
 
 from fastapi import APIRouter, HTTPException, Request
 
-from app.background import JOB_FAILED_MESSAGE
 from app.background import enqueue as background_enqueue
 from app.background import is_active as background_is_active
-from app.background import job_outcome as background_job_outcome
+from app.background import job_state as background_job_state
 from app.brand_intelligence import background_job
 from app.brand_intelligence import report as brand_report_mod
 from app.brand_intelligence import repository as repo
 from app.brand_web import report_service
+from app.core import interrupts as core_interrupts
 from app.core.db import connection as core_db_connection
-from app.core.db import new_id, now_iso
+from app.core.db import new_id
 from app.shared import web
 from app.shared.web import JSONResponse, NotFoundKind, require_actor, require_brand
 
@@ -73,35 +73,33 @@ def _job_shape(brand_id: str) -> dict:
     `_display_task_row()` 同一個讀法，套到單一 task_type：一個品牌同時只有一次報告
     在跑，不必分「還在跑」與「上一次成功」兩層顯示。
 
-    F31 Contract J 先看佇列：最新的 job 還在排／在跑＝running（即使有舊的 llm_task 列）；
-    最新的 job 失敗＝failed（沒有那次呼叫的錯誤可引用時講背景程式）。成功列還要重驗：
-    AI 成功但回覆讀不成五章時 `report_service.generate()` 不入庫，最新報告就不是這一列產的
-    ——那是失敗，不是 idle。"""
+    F50-I07（Contract J）：狀態經 `background.job_state()`——還在排／在跑＝running，
+    `started_at` 是真的開始（或排入）時間，不編「現在」；失敗＝failed（列自己的錯誤，否則
+    佇列記下的句子）。沒有 job 也沒有列＝這個品牌從沒要過報告，就是報告頁原本的 `idle`
+    （確知的事實，不是猜的）。成功列還要重驗：AI 成功但回覆讀不成五章時
+    `report_service.generate()` 不入庫，最新報告就不是這一列產的——那是失敗，不是 idle。"""
     row = _latest_report_task_row(web.conn, brand_id)
-    outcome = background_job_outcome(f"brand_report:{brand_id}")
-    if outcome == "active":
-        running_row = row is not None and row["status"] == "running" and row["started_at"]
-        return {"status": "running", "stage": "正在整理五章",
-                "started_at": row["started_at"] if running_row else now_iso()}
-    if outcome == "failed":
-        own_error = row is not None and row["status"] not in ("running", "succeeded") and row["error"]
-        return {"status": "failed", "message": row["error"] if own_error else JOB_FAILED_MESSAGE}
-    if row is None:
+    state = background_job_state(f"brand_report:{brand_id}", row)
+    if state["status"] == "running":
+        return {"status": "running", "stage": "正在整理五章", "started_at": state["started_at"]}
+    if state["status"] == "failed":
+        return {"status": "failed", "message": state["error"]}
+    if state["status"] == "unknown" or row is None:
         return {"status": "idle"}
     if row["status"] == "succeeded":
         report = repo.get_latest_brand_report(web.conn, brand_id)
         if report is None or report["llm_task_id"] != row["id"]:
             return {"status": "failed", "message": brand_report_mod.PARSE_FAIL_MESSAGE}
-        return {"status": "idle"}
-    if row["status"] == "running":
-        return {"status": "running", "stage": "正在整理五章", "started_at": row["started_at"]}
-    return {"status": "failed", "message": row["error"] or "報告生成失敗。"}
+    return {"status": "idle"}
 
 
-def _notify(brand_id: str, message: str) -> None:
+def _notify(brand_id: str, outcome: str) -> None:
+    brand = repo.get_brand(web.conn, brand_id)
+    subject = brand["name"] if brand is not None else ""
     background_job.notify(
         web.conn, brand_id, category="brand_report_done", dedupe_key=new_id("rptjob"),
-        message=message, action_url=f"/app/brands/{brand_id}/report",
+        message=core_interrupts.notice(outcome, subject),
+        action_url=f"/app/brands/{brand_id}/report",
     )
 
 
@@ -111,14 +109,14 @@ def background_brand_report(org_id: str, brand_id: str, actor: str) -> None:
     with core_db_connection() as conn:
         error = None
         try:
-            ok, message = report_service.generate(conn, brand_id, actor)
+            ok, _message = report_service.generate(conn, brand_id, actor)
         except Exception as exc:  # noqa: BLE001 — 先寄失敗通知，再往上丟讓 job 記成失敗
             conn.rollback()  # 失敗的交易先收掉，通知才寫得進去
-            ok, message, error = False, f"背景執行發生未預期錯誤：{exc}", exc
+            ok, error = False, exc
         if ok:
-            _notify(brand_id, "顧問分析報告已生成。")
-        else:
-            _notify(brand_id, f"顧問分析報告生成失敗：{message or '報告生成失敗。'}")
+            _notify(brand_id, "顧問分析報告已生成")
+        else:  # the reason itself is on the report page (`_job_shape` quotes the llm error)
+            _notify(brand_id, "顧問分析報告沒生成，可以重試")
         if error is not None:
             raise error  # Contract J：job 結局要是 failed，狀態端點才不會讀成完成
 

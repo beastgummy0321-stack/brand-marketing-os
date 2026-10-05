@@ -286,5 +286,27 @@ message="結算上一期，待寫進筆記本",
         self.assertIn(row_id, open_ids)
 
 
+class NoticeSentenceTest(unittest.TestCase):
+    """F50-I07 (Contract J, intake #9): `notice(outcome, subject)` never cuts the outcome."""
+
+    def test_a_sixty_character_name_keeps_success_and_failure_apart(self):
+        name = "超" * 60
+        done = core_interrupts.notice("讀完商品頁", name)
+        failed = core_interrupts.notice("商品頁沒讀成", name)
+        self.assertNotEqual(done, failed)
+        for message, outcome in ((done, "讀完商品頁"), (failed, "商品頁沒讀成")):
+            self.assertTrue(message.startswith(f"{outcome}："), message)
+            self.assertTrue(message.endswith("…"), message)
+            self.assertEqual(len(message), core_interrupts.MAX_MESSAGE_LEN)
+
+    def test_a_short_name_is_left_whole(self):
+        self.assertEqual(core_interrupts.notice("人物誌好了", "晨露茶飲"), "人物誌好了：晨露茶飲")
+        self.assertEqual(core_interrupts.notice("顧問分析報告已生成", ""), "顧問分析報告已生成")
+
+    def test_an_outcome_too_long_to_fit_is_a_programming_error(self):
+        with self.assertRaises(ValueError):
+            core_interrupts.notice("結" * (core_interrupts.MAX_MESSAGE_LEN - 1), "名字")
+
+
 if __name__ == "__main__":
     unittest.main()

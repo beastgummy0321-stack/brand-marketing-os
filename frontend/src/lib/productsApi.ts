@@ -94,7 +94,12 @@ export interface ProductDeleteImpact {
   count: number;
 }
 
-export type ResearchJobStatus = "waiting" | "running" | "done" | "failed";
+/** `unknown` (F50-I07, Contract J): neither a queued job nor an AI call exists for this product,
+ * so the server does not claim done. `started_at` is the real start (or queue) time while
+ * running／waiting; with `unknown` (and a done／failed job that made no AI call) the server sends
+ * null rather than a made-up "now" — the page drops the job in those states and never reads it.
+ * It stays typed `string` because `ResearchProgressRow` (outside F50-I07) reads it while running. */
+export type ResearchJobStatus = "waiting" | "running" | "done" | "failed" | "unknown";
 
 export interface ResearchJobState {
   status: ResearchJobStatus;

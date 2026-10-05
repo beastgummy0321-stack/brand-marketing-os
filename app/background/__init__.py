@@ -18,7 +18,17 @@
    F29-I05 另提供唯讀的 `queue_snapshot(*, since) -> dict`（整條佇列的排隊順序與今天
    做完／失敗數，呼叫端目前只有 `app/dashboard/routes_jobs_api.py`）。F31-I02（Contract J）
    另提供唯讀的 `job_outcome(lock) -> "active"|"failed"|"succeeded"|None`（這個 lock 最新
-   一個 job 的結局），供 `app/intake`／`app/brand_web` 的狀態端點判斷。其餘一律私有。
+   一個 job 的結局），供 `app/intake`／`app/brand_web` 的狀態端點判斷。
+   F50-I07（feature F50 Contract J，one background outcome）另提供：
+   `register(name, func, *, cron=None, periodic_id=None)`——全站唯一的 task 註冊方式（冪等）；
+   handler 回傳 `Empty(code, text)` 記 `empty`、回傳 `Failed(code, text)` 或拋
+   `JobFailed(code, text)` 記 `failed` 並讓 procrastinate 把 job 記成失敗（小鈴鐺的
+   `failed_today` 因此算得到）、其他例外記 `failed`／`unexpected` 後原樣往上丟、一般回傳記
+   `done`；結局寫進 `background_job_result`（每個 (org_id, lock) 留最新一次）。
+   `outcome(lock) -> {state, code, text, finished_at, started_at} | None` 讀它；
+   `job_state(lock, llm_row) -> {status, started_at, error}` 是各狀態端點共用的讀法，
+   沒有 job 也沒有列時是 `unknown`／`started_at: None`（不編一個「現在」）。
+   `job_outcome()` 只剩一層轉接，等最後一個呼叫端搬走。其餘一律私有。
 3. 呼叫端：`app()` 目前是本模組自己的測試檔、app/meta（掛 task）、app/schedule（
    `register_tasks()` 掛三個生成 task）與 `app/worker.py`（起 worker 前先建，ADR 0063）；
    `enqueue()` 目前是 app/schedule/routes.py（三支 POST 端點）與本模組自己的測試檔；
@@ -116,10 +126,13 @@ invisible to it (drill 10 W4: 「找不到工單」 from `app/workbench/reposito
 """
 
 import asyncio
+import functools
+import inspect
 import logging
 import re
 import sys
-from collections.abc import Collection
+from collections.abc import Callable, Collection
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 import procrastinate
@@ -198,10 +211,145 @@ def app() -> procrastinate.App:
     if _app is None or _app_dsn != current_dsn:
         queue_dsn = _with_search_path(current_dsn, _queue_search_path())
         new_app = procrastinate.App(connector=procrastinate.PsycopgConnector(conninfo=queue_dsn))
-        new_app.task(name="background.noop")(_noop)
+        _register_on(new_app, "background.noop", _noop)
         _app = new_app
         _app_dsn = current_dsn
     return _app
+
+
+# ---------------------------------------------------------------------------
+# F50 Contract J: one background outcome. Every task is registered through `register()`; the
+# wrapper stores what the handler ended as in `background_job_result` and makes a failure a
+# failed procrastinate job (the bell's `failed_today` counts it).
+# ---------------------------------------------------------------------------
+
+#: Code stored for an exception the handler did not turn into a `Failed`／`JobFailed`.
+UNEXPECTED_CODE = "unexpected"
+#: Code `outcome()` reports for a failed job that left no stored outcome (a worker that does
+#: not know the task, a job cancelled／aborted, a job that died before the wrapper wrote).
+JOB_FAILED_CODE = "job_failed"
+
+
+@dataclass(frozen=True)
+class Empty:
+    """Handler return value: the job ran fine and found nothing to do (`state = empty`)."""
+
+    code: str
+    text: str | None = None
+
+
+@dataclass(frozen=True)
+class Failed:
+    """Handler return value: the job failed (`state = failed`); the wrapper raises `JobFailed`."""
+
+    code: str
+    text: str | None = None
+
+
+class JobFailed(Exception):
+    """Raised by a handler (or by the wrapper for a returned `Failed`): the job failed with
+    `code` and the sentence `text`. procrastinate marks the job failed."""
+
+    def __init__(self, code: str, text: str | None = None):
+        super().__init__(f"{code}: {text}" if text else code)
+        self.code = code
+        self.text = text
+
+
+_REGISTERED_ATTR = "__background_register__"
+
+_UPSERT_RESULT_SQL = """
+INSERT INTO background_job_result (org_id, lock, task_name, job_id, state, code, text, finished_at)
+VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+ON CONFLICT (org_id, lock) DO UPDATE SET
+    task_name = EXCLUDED.task_name, job_id = EXCLUDED.job_id, state = EXCLUDED.state,
+    code = EXCLUDED.code, text = EXCLUDED.text, finished_at = EXCLUDED.finished_at
+"""
+
+
+def _record(job, state: str, code: str | None, text: str | None) -> None:
+    """Store the outcome on a connection of its own, after the handler finished — never the
+    handler's connection, so nothing the handler rolled back is committed here. A job without
+    an `org_id` argument (a periodic dispatcher) has no row; a job without a queueing lock is
+    keyed by its task name. Bookkeeping never replaces the handler's outcome: a failed write
+    is logged and swallowed."""
+    org_id = (job.task_kwargs or {}).get("org_id")
+    if not org_id:
+        return
+    lock = job.queueing_lock or job.task_name
+    try:
+        with db.connection() as conn:
+            db.set_tenant_scope(conn, org_id)
+            conn.execute(_UPSERT_RESULT_SQL, (org_id, lock, job.task_name, job.id, state, code,
+                                              text, db.now_utc()))
+            conn.commit()
+    except Exception:  # noqa: BLE001 — the job's own outcome must survive a bookkeeping failure
+        _log.exception("could not record background outcome %s for %s", state, lock)
+
+
+def _wrap(name: str, func: Callable) -> Callable:
+    if inspect.iscoroutinefunction(func):
+        raise TypeError(f"background task {name} must be a plain function")
+
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        # procrastinate hands the JobContext first (pass_context=True); a direct call without
+        # one (a test harness calling `.func(**kwargs)`) runs the handler and records nothing.
+        context = args[0] if args and isinstance(args[0], procrastinate.JobContext) else None
+        if context is not None:
+            args = args[1:]
+        job = context.job if context is not None else None
+        try:
+            result = func(*args, **kwargs)
+        except JobFailed as exc:
+            if job is not None:
+                _record(job, "failed", exc.code, exc.text)
+            raise
+        except Exception:
+            if job is not None:
+                _record(job, "failed", UNEXPECTED_CODE, JOB_FAILED_MESSAGE)
+            raise
+        if isinstance(result, Failed):
+            if job is not None:
+                _record(job, "failed", result.code, result.text)
+            raise JobFailed(result.code, result.text)
+        if isinstance(result, Empty):
+            if job is not None:
+                _record(job, "empty", result.code, result.text)
+            return None
+        if job is not None:
+            _record(job, "done", None, None)
+        return result
+
+    setattr(wrapper, _REGISTERED_ATTR, True)
+    return wrapper
+
+
+def _register_on(a: procrastinate.App, name: str, func: Callable, *, cron: str | None = None,
+                 periodic_id: str | None = None) -> None:
+    if name in a.tasks:
+        return
+    task = a.task(name=name, pass_context=True)(_wrap(name, func))
+    if cron is not None:
+        if periodic_id is None:
+            a.periodic(cron=cron)(task)
+        else:
+            a.periodic(cron=cron, periodic_id=periodic_id)(task)
+
+
+def register(name: str, func: Callable, *, cron: str | None = None,
+             periodic_id: str | None = None) -> None:
+    """The only way a task is registered (Contract J). Idempotent: a name already on the
+    current `app()` is left alone (the App is rebuilt when the DSN changes, so callers
+    re-register). `cron`／`periodic_id` make it periodic exactly like `App.periodic`. The
+    handler keeps its own signature (`functools.wraps`); the job context comes from
+    procrastinate (`pass_context`), not from a parameter the handler declares."""
+    _register_on(app(), name, func, cron=cron, periodic_id=periodic_id)
+
+
+def is_registered_through_register(task) -> bool:
+    """True when a procrastinate task was registered by `register()` (the Contract J scanner)."""
+    return bool(getattr(task.func, _REGISTERED_ATTR, False))
 
 
 #: F31-I15: pool sizing for the defer App. Every caller (`enqueue()`, `is_active()`,
@@ -296,27 +444,128 @@ _ACTIVE_STATUSES = frozenset({"todo", "doing", "aborting"})
 _FAILED_STATUSES = frozenset({"failed", "cancelled", "aborted"})
 
 
-def job_outcome(lock: str) -> str | None:
-    """Feature F31 Contract J: outcome of the newest job carrying this `queueing_lock`.
+# The newest job carrying a queueing lock, with the time its wait began (started, else queued).
+# "Newest" = highest job id; procrastinate never deletes finished jobs here (default
+# `delete_job=never`) and never clears `queueing_lock` on completion (see `is_active()`).
+_NEWEST_JOB_SQL = """
+SELECT j.id, j.status::text AS status, j.args,
+       (SELECT max(e.at) FROM procrastinate_events e
+         WHERE e.job_id = j.id AND e.type = 'started') AS started_at,
+       (SELECT max(e.at) FROM procrastinate_events e
+         WHERE e.job_id = j.id
+           AND e.type IN ('deferred', 'deferred_for_retry', 'retried')) AS queued_at
+  FROM procrastinate_jobs j
+ WHERE j.queueing_lock = %(lock)s
+ ORDER BY j.id DESC
+ LIMIT 1
+"""
+_RESULT_SQL = (
+    "SELECT state, code, text, finished_at, job_id FROM background_job_result"
+    " WHERE org_id = %s AND lock = %s"
+)
 
-    Returns "active" (todo/doing), "failed" (failed, or cancelled/aborted: it never finished
-    its work), "succeeded", or None when no job with this lock ever existed. Memory queue mode
-    (e2e) always returns None: jobs never run there, callers fall back to their `llm_task` rule.
 
-    "Newest" = highest job id; procrastinate never deletes finished jobs here (default
-    `delete_job=never`) and never clears `queueing_lock` on completion (see `is_active()`).
-    Reads through `job_manager.list_jobs(queueing_lock=...)`, procrastinate's own public query
-    surface, not hand SQL on `procrastinate_jobs`."""
+def _stored_result(org_id: str, lock: str):
+    """The stored outcome row for this org and lock, read on the caller's bound connection
+    when there is one (its tenant scope applies), else on a borrowed one."""
+    try:
+        conn = db.current()
+    except RuntimeError:
+        with db.connection() as borrowed:
+            return borrowed.execute(_RESULT_SQL, (org_id, lock)).fetchone()
+    return conn.execute(_RESULT_SQL, (org_id, lock)).fetchone()
+
+
+def outcome(lock: str) -> dict | None:
+    """Contract J: how the newest job carrying this `queueing_lock` ended.
+
+    `{state, code, text, finished_at, started_at}` with `state`:
+    - `running` — the job is todo／doing／aborting (`started_at` = when it started, else when it
+      was queued: the real start of the wait, never a made-up "now");
+    - `failed` — procrastinate failed／cancelled／aborted: the stored code／text when the wrapper
+      wrote them for this job, else `job_failed` + `JOB_FAILED_MESSAGE`;
+    - `empty`／`done` — succeeded: the stored state (`done` when this job left no row).
+    None when no job ever carried the lock, and always in memory queue mode (e2e: jobs never
+    run there; callers fall back to their `llm_task` rule). The stored row is read with the
+    job's own `org_id` argument and only counts when it was written by this very job."""
     if config.settings().brand_os_job_queue == "memory":
         return None
-    jobs = _sync_app_for_defer().job_manager.list_jobs(queueing_lock=lock)
-    if not jobs:
+    rows = _sync_app_for_defer().connector.execute_query_all(_NEWEST_JOB_SQL, lock=lock)
+    if not rows:
         return None
-    newest = max(jobs, key=lambda job: job.id or 0)
-    status = str(newest.status)
+    job = rows[0]
+    status = job["status"]
+    started_at = job["started_at"] or job["queued_at"]
     if status in _ACTIVE_STATUSES:
-        return "active"
+        return {"state": "running", "code": None, "text": None, "finished_at": None,
+                "started_at": started_at}
+    args = job["args"] if isinstance(job["args"], dict) else {}
+    org_id = args.get("org_id")
+    stored = _stored_result(org_id, lock) if org_id else None
+    if stored is not None and stored["job_id"] != job["id"]:
+        stored = None  # an older job's outcome under the same lock
+    finished_at = stored["finished_at"] if stored is not None else None
     if status in _FAILED_STATUSES:
+        if stored is not None and stored["state"] == "failed":
+            return {"state": "failed", "code": stored["code"],
+                    "text": stored["text"] or JOB_FAILED_MESSAGE, "finished_at": finished_at,
+                    "started_at": started_at}
+        return {"state": "failed", "code": JOB_FAILED_CODE, "text": JOB_FAILED_MESSAGE,
+                "finished_at": finished_at, "started_at": started_at}
+    if stored is not None and stored["state"] == "empty":
+        return {"state": "empty", "code": stored["code"], "text": stored["text"],
+                "finished_at": finished_at, "started_at": started_at}
+    return {"state": "done", "code": None, "text": None, "finished_at": finished_at,
+            "started_at": started_at}
+
+
+def job_state(lock: str, llm_row) -> dict:
+    """Contract J: the status screens show for one job, from its queue outcome and the newest
+    `llm_task` row of that job (`llm_row`, or None). Returns `{status, started_at, error}`:
+
+    - `running`: the queue says running (`started_at` from a running `llm_row`, else from the
+      queue), or there is no queue outcome and the row is running;
+    - `failed`: the queue says failed (`error` = the row's own error when the row failed,
+      else the stored sentence), or the row failed (its own `error`, never replaced);
+    - `empty`: the job found nothing to do (`error` carries the stored sentence to show);
+    - `done`: the queue says done and the row (if any) succeeded;
+    - `unknown`: neither a job nor a row exists — `started_at` None, never a fabricated now.
+    Readers still judge a succeeded row's content (parse／validation) themselves."""
+    found = outcome(lock)
+    row = llm_row
+    row_started = row["started_at"] if row is not None else None
+    row_running = row is not None and row["status"] == "running"
+    if found is not None and found["state"] == "running":
+        started = row_started if row_running else found["started_at"]
+        return {"status": "running", "started_at": started, "error": None}
+    if found is not None and found["state"] == "failed":
+        own_error = (row["error"] if row is not None
+                     and row["status"] not in ("running", "succeeded") else None)
+        return {"status": "failed", "started_at": row_started,
+                "error": own_error or found["text"]}
+    if found is not None and found["state"] == "empty":
+        return {"status": "empty", "started_at": row_started, "error": found["text"]}
+    if row is None:
+        return {"status": "done" if found is not None else "unknown", "started_at": None,
+                "error": None}
+    if row_running:
+        return {"status": "running", "started_at": row_started, "error": None}
+    if row["status"] == "succeeded":
+        return {"status": "done", "started_at": row_started, "error": None}
+    return {"status": "failed", "started_at": row_started,
+            "error": row["error"] or JOB_FAILED_MESSAGE}
+
+
+def job_outcome(lock: str) -> str | None:
+    """Feature F31 Contract J, kept as a thin wrapper over `outcome()` until its last caller
+    moves: "active" (running), "failed", "succeeded" (done or empty), or None (no job ever
+    carried the lock; always None in memory queue mode)."""
+    found = outcome(lock)
+    if found is None:
+        return None
+    if found["state"] == "running":
+        return "active"
+    if found["state"] == "failed":
         return "failed"
     return "succeeded"
 

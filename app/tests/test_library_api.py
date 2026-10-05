@@ -335,12 +335,13 @@ class CustomerVoiceBackgroundTest(unittest.TestCase):
         self.assertEqual(len(fake.calls), 0)
         self.assertEqual(repo.list_customer_voices(web.conn, self.bid), [])
 
-    def test_job_status_unknown_key_reports_running_not_error(self):
-        """比照 mocks/handlers.ts 的預設值：查不到的 job_key 回 running，不是 404
-        （避免第一次輪詢跟背景執行緒真正寫入之間的極短暫競態被前端誤判成錯誤）。"""
+    def test_job_status_unknown_key_reports_unknown_not_error(self):
+        """F50-I07（Contract J，intake #10）：沒有 job 也沒有 AI 呼叫的 job_key 回
+        `unknown`，不是 404，也不再猜「還在跑」。剛送出、worker 還沒撿走的那一刻佇列裡已經
+        有 job，讀得到 running，所以不會被誤判成錯誤。"""
         resp = self.client.get(f"/api/library/brands/{self.bid}/customer-voice/jobs/job_不存在")
         self.assertEqual(resp.status_code, 200)
-        self.assertEqual(resp.json(), {"status": "running"})
+        self.assertEqual(resp.json(), {"status": "unknown"})
 
 
 if __name__ == "__main__":

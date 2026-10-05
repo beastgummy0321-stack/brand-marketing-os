@@ -12,6 +12,11 @@ F29-I05（feature Contract G）：資料來源從「`llm_task` 裡 running 的�
 沒有 `brand_id` 的工作（例如每分鐘的排程器、只帶 org 的每日拉取）與品牌已被刪掉的工作
 都不列出，只算進 `other_count`，但仍佔位置（同一個 worker）。job 的 args 絕不原樣吐出。
 
+`done_today`／`failed_today`（F50-I07，Contract J）：數的是 procrastinate 今天（組織的一天）
+記下的 succeeded／failed。每個 task 都經 `background.register()` 註冊，handler 回
+`Failed`、拋 `JobFailed` 或拋任何例外，job 都會是 failed——吞掉的失敗不再算成完成；回
+`Empty`（沒有東西要做）算完成。形狀不變。
+
 對外進入點：本檔的 `router`。誰依賴它：只有 `app/main.py`。
 """
 

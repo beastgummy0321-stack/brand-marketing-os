@@ -19,6 +19,7 @@
 
 import os
 import re
+from datetime import timedelta
 from pathlib import Path
 from uuid import UUID
 
@@ -28,15 +29,16 @@ from fastapi.responses import Response
 import app.storage as storage
 from app.background import JOB_FAILED_MESSAGE
 from app.background import enqueue as background_enqueue
-from app.background import job_outcome as background_job_outcome
+from app.background import job_state as background_job_state
 from app.brand_intelligence import background_job
 from app.brand_intelligence import customer_voice as cv_mod
 from app.brand_intelligence import repository as repo
 from app.core import cleanup, input_rules
+from app.core import interrupts as core_interrupts
 from app.core import settings as core_settings
 from app.core import vocab as md
 from app.core.db import connection as core_db_connection
-from app.core.db import new_id, now_iso
+from app.core.db import new_id, now_iso, now_utc
 from app.identity import repository as identity_repo
 from app.llm import gateway, providers
 from app.shared import web
@@ -267,6 +269,7 @@ def library_bundle(request: Request, brand_id: str):
         "channels": [_channel_shape(c) for c in repo.list_channels(web.conn, brand_id)],
         "customer_voices": [_customer_voice_shape(v)
                              for v in repo.list_customer_voices(web.conn, brand_id)],
+        "customer_voice_jobs": _cv_recent_jobs(web.conn, brand_id),
     }
     return {"data": data, "generated_at": now_iso()}
 
@@ -396,9 +399,10 @@ def background_customer_voice_extraction(org_id: str, brand_id: str, job_key: st
         channel_label = md.customer_voice_channel_label(source_channel)
         if ok:
             n = len(result["extraction"])
-            message = f"「{channel_label}」原話分析完成，{f'找到 {n} 條重點' if n else '沒有找到重點'}"
+            message = core_interrupts.notice(
+                f"原話分析完成，{f'找到 {n} 條重點' if n else '沒有找到重點'}", channel_label)
         else:
-            message = f"「{channel_label}」原話分析失敗，可以重試"
+            message = core_interrupts.notice("原話分析失敗，可以重試", channel_label)
         background_job.notify(
             conn, brand_id, category="customer_voice_extraction_done", dedupe_key=job_key,
             message=message, action_url=f"/app/brands/{brand_id}/library",
@@ -407,34 +411,58 @@ def background_customer_voice_extraction(org_id: str, brand_id: str, job_key: st
             raise error  # Contract J：job 結局要是 failed，狀態端點才不會讀成還在跑
 
 
-def _cv_job_status(conn, brand_id: str, job_key: str) -> dict:
-    """讀 llm_task 取代讀行程內 dict（票 08）：`job_key` 存在 `context_scope_json`
-    裡（見 `extract()`），這裡反查最新一列。查不到＝還沒排到或還沒寫列，跟原本
-    「查不到的 job_key 回 running」是同一個誠實預設（避免第一次輪詢跟背景工作真正
-    寫入之間的極短暫競態被前端誤判成錯誤）。
+_CV_TASK_SQL = (
+    "SELECT * FROM llm_task WHERE brand_id = %s AND task_type = 'customer_voice_extraction' "
+    "AND context_scope_json->>'job_key' = %s ORDER BY started_at DESC LIMIT 1"
+)
+#: F50-I07 (other F10): how far back the library payload lists customer-voice jobs.
+CV_RECENT_JOBS_HOURS = 24
 
-    F31 Contract J 先看佇列：最新的 job 還在排／在跑＝running；最新的 job 失敗＝failed
-    （這次呼叫留下失敗列就引用它的錯誤，否則講背景程式）。其餘照 llm_task 列。"""
-    row = conn.execute(
-        "SELECT * FROM llm_task WHERE brand_id = %s AND task_type = 'customer_voice_extraction' "
-        "AND context_scope_json->>'job_key' = %s ORDER BY started_at DESC LIMIT 1",
-        (brand_id, job_key),
-    ).fetchone()
-    outcome = background_job_outcome(f"customer_voice_extraction:{job_key}")
-    if outcome == "active":
-        return {"status": "running"}
-    if outcome == "failed":
-        own_error = row is not None and row["status"] not in ("running", "succeeded") and row["error"]
-        return {"status": "failed", "message": row["error"] if own_error else JOB_FAILED_MESSAGE}
-    if row is None or row["status"] == "running":
-        return {"status": "running"}
-    if row["status"] != "succeeded":
-        return {"status": "failed", "message": row["error"] or "背景任務失敗，可以重試。"}
+
+def _cv_status_from(conn, brand_id: str, job_key: str, row) -> dict:
+    """One customer-voice job's status from its queue outcome and its newest `llm_task` row
+    (F50-I07, Contract J): `background.job_state()` decides running／failed／unknown; a
+    succeeded row still has to have produced a stored customer voice."""
+    state = background_job_state(f"customer_voice_extraction:{job_key}", row)
+    if state["status"] in ("running", "unknown"):
+        return {"status": state["status"]}
+    if state["status"] in ("failed", "empty") or row is None or row["status"] != "succeeded":
+        return {"status": "failed", "message": state["error"] or JOB_FAILED_MESSAGE}
     cv = repo.get_customer_voice_by_llm_task_id(conn, brand_id, row["id"])
     if cv is None:
         # llm_task 成功但抽取結果解析／驗證失敗（誠實失敗，沒有入庫）——見 extract()。
         return {"status": "failed", "message": PARSE_FAIL_MESSAGE}
     return {"status": "done", "result": _customer_voice_shape(cv)}
+
+
+def _cv_job_status(conn, brand_id: str, job_key: str) -> dict:
+    """讀 llm_task 取代讀行程內 dict（票 08）：`job_key` 存在 `context_scope_json`
+    裡（見 `extract()`），這裡反查最新一列。
+
+    F50-I07（Contract J）：佇列還在排／在跑＝running；失敗＝failed（這次呼叫留下失敗列就
+    引用它的錯誤，否則講背景程式）；沒有 job 也沒有列＝`unknown`（不再猜「還在跑」）。"""
+    row = conn.execute(_CV_TASK_SQL, (brand_id, job_key)).fetchone()
+    return _cv_status_from(conn, brand_id, job_key, row)
+
+
+def _cv_recent_jobs(conn, brand_id: str) -> list:
+    """F50-I07 (other F10): the brand's customer-voice jobs of the last 24 h, newest per
+    `job_key`, as `[{job_key, status, error, started_at}]` (newest first) — so a reload still
+    shows a job that is running or failed."""
+    rows = conn.execute(
+        "SELECT DISTINCT ON (context_scope_json->>'job_key') * FROM llm_task"
+        " WHERE brand_id = %s AND task_type = 'customer_voice_extraction'"
+        " AND context_scope_json->>'job_key' IS NOT NULL AND started_at >= %s"
+        " ORDER BY context_scope_json->>'job_key', started_at DESC",
+        (brand_id, now_utc() - timedelta(hours=CV_RECENT_JOBS_HOURS)),
+    ).fetchall()
+    jobs = []
+    for row in sorted(rows, key=lambda r: r["started_at"], reverse=True):
+        job_key = row["context_scope_json"]["job_key"]
+        status = _cv_status_from(conn, brand_id, job_key, row)
+        jobs.append({"job_key": job_key, "status": status["status"],
+                     "error": status.get("message"), "started_at": row["started_at"]})
+    return jobs
 
 
 @router.post("/api/library/brands/{brand_id}/customer-voice")

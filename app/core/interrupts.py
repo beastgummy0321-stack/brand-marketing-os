@@ -81,6 +81,30 @@ MAX_MESSAGE_LEN = 30  # 原設計文件規則 4（已刪）：一卡一句 ≤30
 STALE_AFTER_DAYS = 14  # 資訊性項目逾期自動降級封存的門檻（比照 0025 期末＋14 天結算節奏）
 
 
+def notice(outcome: str, subject: str) -> str:
+    """F50 Contract J (intake #9): one background-job notice = `"{outcome}：{subject}"`.
+
+    The outcome (what happened: 「讀完商品頁」／「商品頁沒讀成」) is never cut, so success and
+    failure always read differently; only the subject (a product／brand name) is shortened with
+    「…」 to fit `MAX_MESSAGE_LEN`. An empty subject leaves the outcome alone. An outcome that
+    cannot fit by itself is a programming error (ValueError), not something to truncate."""
+    outcome = outcome.strip()
+    subject = (subject or "").strip()
+    if not outcome:
+        raise ValueError("notice outcome 為必填")
+    if not subject:
+        if len(outcome) > MAX_MESSAGE_LEN:
+            raise ValueError(f"通知結果超過 {MAX_MESSAGE_LEN} 字：{outcome}")
+        return outcome
+    head = f"{outcome}："
+    room = MAX_MESSAGE_LEN - len(head)
+    if room < 2:
+        raise ValueError(f"通知結果太長，放不下主題：{outcome}")
+    if len(subject) > room:
+        subject = subject[: room - 1] + "…"
+    return head + subject
+
+
 def enqueue(conn, *, org_id: str, category: str, dedupe_key: str, message: str,
             brand_id: str | None = None, campaign_period_id: str | None = None,
             action_url: str | None = None, kind: str | None = None,

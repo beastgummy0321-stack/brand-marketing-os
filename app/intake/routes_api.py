@@ -19,6 +19,7 @@ from fastapi import APIRouter, File, Request, UploadFile
 from app import schedule
 from app.brand_intelligence import background_job
 from app.brand_intelligence import repository as repo
+from app.core import interrupts as core_interrupts
 from app.core.db import connection as core_db_connection
 from app.core.db import new_id, now_iso
 from app.intake import ai, onboarding, state
@@ -139,7 +140,8 @@ def draft_get(request: Request, brand_id: str):
 def _notify_step_done(conn, brand_id: str, brand_name: str, ok: bool, *, verbs: tuple) -> None:
     background_job.notify(
         conn, brand_id, category="intake_ai_step_done", dedupe_key=new_id("itkjob"),
-        message=f"「{brand_name}」{verbs[0] if ok else verbs[1]}", action_url=f"/app/brands/{brand_id}/intake",
+        message=core_interrupts.notice(verbs[0] if ok else verbs[1], brand_name),
+        action_url=f"/app/brands/{brand_id}/intake",
     )
 
 

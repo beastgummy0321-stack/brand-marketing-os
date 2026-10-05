@@ -20,7 +20,7 @@ import json
 import random
 import re
 
-from app.background import app as background_app
+from app import background
 from app.brand_intelligence import repository as bi_repo
 from app.core.db import APP_DIR, connection, now_utc
 from app.llm import context_compiler, gateway, methodology, providers
@@ -858,7 +858,4 @@ def register_tasks() -> None:
     """掛一個生成 task，冪等——同一個原因、同一個模式，見 `app/schedule/jobs.py
     register_tasks()` 檔頭：`app.background.app()` 的 DSN 換了會整顆重建，只註冊一次在
     import 期會在任何 DSN 換過之後悄悄失效。"""
-    a = background_app()
-    name = "background.workbench_generate"
-    if name not in a.tasks:
-        a.task(name=name)(workbench_generate)
+    background.register("background.workbench_generate", workbench_generate)

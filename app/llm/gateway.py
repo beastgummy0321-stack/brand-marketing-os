@@ -9,7 +9,8 @@
 2. 呼叫 provider.complete()（timeout 預設 300s，來源見 TaskOptions.timeout_s）。
 3. 成功：寫 structured_output_json／rendered_output／usage_json／cost／finished_at，
    status=succeeded；逐字保留模型輸出，不改寫（principles 第 2 條）。
-4. 失敗：寫 error／finished_at，status=failed 或 timeout；失敗重試 1 次，
+4. 失敗：寫 error／error_code（F50 Contract J：錯誤的種類，見 `ERROR_CODES`）／finished_at，
+   status=failed 或 timeout；失敗重試 1 次，
    重試＝新的一列 llm_task（attempt_no+1），不冒充前次（principles 第 6 條）。
 5. 全部嘗試皆失敗時，回傳最後一次嘗試的（失敗）列——不拋例外偽裝成功，也不編造內容
    （誠實狀態，principles 第 16 條）；呼叫端依 row["status"] 判斷。
@@ -211,10 +212,49 @@ def _mark_succeeded(conn: db.Conn, row_id: str, *,
     conn.commit()
 
 
-def _mark_failed(conn: db.Conn, row_id: str, *, status: str, error: str) -> None:
+#: F50 Contract J: the kinds `llm_task.error_code` may hold (migration
+#: 20261005000104_core_llm_task_error_code.sql carries the same list as a CHECK).
+ERROR_CODES = ("timeout", "refused", "provider", "truncated", "spend_cap", "no_credentials",
+               "program_refused")
+
+
+def _error_code(exc: ProviderError) -> str:
+    """Which kind of provider failure this is. Providers raise one `ProviderError` family with
+    human sentences; the kinds that have their own class are read from it, the two that are
+    only a sentence (missing key, model refusal) from that exact sentence."""
+    if isinstance(exc, SpendCapExceededError):
+        return "spend_cap"
+    if isinstance(exc, ProviderTimeoutError):
+        return "timeout"
+    message = str(exc)
+    if message.startswith(providers.MISSING_KEY_MESSAGE):
+        return "no_credentials"
+    if message.startswith("模型婉拒"):
+        return "refused"
+    return "provider"
+
+
+def _mark_failed(conn: db.Conn, row_id: str, *, status: str, error: str, error_code: str) -> None:
     conn.execute(
-        "UPDATE llm_task SET status = %s, error = %s, finished_at = %s WHERE id = %s",
-        (status, error, db.now_utc(), row_id),
+        "UPDATE llm_task SET status = %s, error = %s, error_code = %s, finished_at = %s"
+        " WHERE id = %s",
+        (status, error, error_code, db.now_utc(), row_id),
+    )
+    conn.commit()
+
+
+def record_refusal(conn: db.Conn, task_id: str, code: str, text: str) -> None:
+    """F50 Contract J: the program refused a model reply (a planner rule, an unreadable reply).
+
+    Written beside the provider's outcome — `error_code = 'program_refused'`, `error =
+    "{code}: {text}"` — so the row says why its reply was not used. `status` keeps what the
+    provider call ended as (the model did answer, and was paid for); the caller's own refusal
+    (its 502／code) is what the screen shows. Commits, like every other llm_task write here."""
+    if not code or not text:
+        raise ValueError("record_refusal needs a code and a text")
+    conn.execute(
+        "UPDATE llm_task SET error = %s, error_code = 'program_refused' WHERE id = %s",
+        (f"{code}: {text}", task_id),
     )
     conn.commit()
 
@@ -324,14 +364,16 @@ def run_task(
             error = str(exc)
             if is_large_prompt:
                 error = f"{error}{LARGE_PROMPT_NO_RETRY_SUFFIX}"
-            _mark_failed(conn, row["id"], status="timeout", error=error)
+            _mark_failed(conn, row["id"], status="timeout", error=error,
+                         error_code=_error_code(exc))
             row = get_task(conn, row["id"])
             continue
         except ProviderError as exc:
             error = str(exc)
             if is_large_prompt:
                 error = f"{error}{LARGE_PROMPT_NO_RETRY_SUFFIX}"
-            _mark_failed(conn, row["id"], status="failed", error=error)
+            _mark_failed(conn, row["id"], status="failed", error=error,
+                         error_code=_error_code(exc))
             row = get_task(conn, row["id"])
             continue
 
@@ -370,7 +412,7 @@ def run_task(
                 (response.output_text, db.jsonb(usage), cost, row["id"]),
             )
             _mark_failed(
-                conn, row["id"], status="failed",
+                conn, row["id"], status="failed", error_code="truncated",
                 error=(f"產出超過長度上限（{opts.max_tokens} tokens）被截斷，這次的內容不完整。"
                        "請提高該任務的 max_tokens，或把要產出的東西拆小。"),
             )
