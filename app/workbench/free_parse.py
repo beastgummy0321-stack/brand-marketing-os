@@ -23,7 +23,30 @@ DEPARTMENT_PATH = APP_DIR / "departments" / "workbench" / "free_parse.md"
 PROVIDER = providers.AnthropicProvider()
 
 _VALID_PARTS = {"copy", "image_prompt", "video_script"}
-NOT_PARSED_NOTE = "AI 沒能整理出規格，下面是你填的設定，可以直接建立。"
+
+# F50 Contract J: why a parse fell back. `llm_failed` carries the gateway's `error_code`.
+REASONS = {
+    "llm_failed": "AI 這次沒有回覆",
+    "reply_unreadable": "回覆不是看得懂的格式",
+    "reply_invalid": "回覆裡沒有可以用的產出項目",
+}
+# The plain words for an `llm_failed` row's `error_code` (`gateway.ERROR_CODES`).
+_LLM_ERROR_WORDS = {
+    "timeout": "等太久沒有回應",
+    "refused": "AI 婉拒了這段描述",
+    "provider": "AI 服務出錯",
+    "truncated": "回覆太長被截斷",
+    "spend_cap": "已到 AI 花費上限",
+    "no_credentials": "還沒設定 AI 金鑰",
+}
+
+
+def not_parsed_note(reason: str, error_code: str | None = None) -> str:
+    """The one fallback sentence, naming why (「AI 這次沒有讀懂（…），先照預設往下」)."""
+    words = REASONS[reason]
+    if reason == "llm_failed" and error_code in _LLM_ERROR_WORDS:
+        words = _LLM_ERROR_WORDS[error_code]
+    return f"AI 這次沒有讀懂（{words}），先照預設往下。"
 
 
 def _valid_outputs(outputs) -> list | None:
@@ -81,7 +104,11 @@ def _merged_spec(defaults: dict, parsed: dict) -> dict:
 def parse(conn, *, brand_id: str, free_text: str, defaults: dict) -> dict:
     """回傳 `{"parsed": bool, "note": str|None, "spec": dict}`。一次 `gateway.run_task`；
     逾時、失敗、非 JSON 或形狀不合的回覆一律回退到 `defaults`——**永不是死路**（票面
-    「失敗是永遠不是死路」那條規則）：呼叫端拿到 `parsed: false` 照樣可以按下一步。"""
+    「失敗是永遠不是死路」那條規則）：呼叫端拿到 `parsed: false` 照樣可以按下一步。
+
+    F50 Contract J: a fallback also carries `reason` (a key of `REASONS`) and `error_code`
+    (the `llm_task.error_code` for `llm_failed`, else None), and its `note` names the reason.
+    A reply the program refused is recorded on its row with `gateway.record_refusal`."""
     department_text = DEPARTMENT_PATH.read_text(encoding="utf-8")
     prompt = department_text + "\n\n## 這段自由描述\n\n" + free_text
 
@@ -97,13 +124,18 @@ def parse(conn, *, brand_id: str, free_text: str, defaults: dict) -> dict:
         options=gateway.TaskOptions(max_tokens=2000, timeout_s=60.0, max_retries=0),
     )
 
-    fallback = {"parsed": False, "note": NOT_PARSED_NOTE, "spec": dict(defaults or {})}
+    def fallback(reason: str, error_code: str | None = None) -> dict:
+        return {"parsed": False, "reason": reason, "error_code": error_code,
+                "note": not_parsed_note(reason, error_code), "spec": dict(defaults or {})}
+
     if task_row["status"] != "succeeded":
-        return fallback
+        return fallback("llm_failed", task_row.get("error_code"))
 
     data = gateway.parse_json_reply(task_row.get("rendered_output") or "")
     parsed = _validate_reply(data) if data is not None else None
     if parsed is None:
-        return fallback
+        reason = "reply_unreadable" if data is None else "reply_invalid"
+        gateway.record_refusal(conn, task_row["id"], reason, REASONS[reason])
+        return fallback(reason)
 
     return {"parsed": True, "note": None, "spec": _merged_spec(defaults, parsed)}

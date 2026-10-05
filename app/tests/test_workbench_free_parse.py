@@ -47,6 +47,14 @@ class _FreeParseTestBase(unittest.TestCase):
         ).fetchone()
         return row["c"]
 
+    def _last_task(self) -> dict:
+        row = web.conn.execute(
+            "SELECT error, error_code FROM llm_task WHERE brand_id = %s"
+            " AND task_type = 'workbench_free_parse' ORDER BY started_at DESC LIMIT 1",
+            (self.brand_id,),
+        ).fetchone()
+        return dict(row)
+
 
 class ValidReplyTest(_FreeParseTestBase):
     def test_valid_reply_returns_parsed_spec(self):
@@ -96,9 +104,15 @@ class UnknownPartTest(_FreeParseTestBase):
         )
 
         self.assertFalse(result["parsed"])
-        self.assertEqual(result["note"], free_parse.NOT_PARSED_NOTE)
+        self.assertEqual(result["reason"], "reply_invalid")
+        self.assertIsNone(result["error_code"])
+        self.assertEqual(
+            result["note"], "AI 這次沒有讀懂（回覆裡沒有可以用的產出項目），先照預設往下。",
+        )
         self.assertEqual(result["spec"], self.defaults)
         self.assertEqual(self._task_count(), 1)
+        self.assertEqual(self._last_task()["error_code"], "program_refused")
+        self.assertTrue(self._last_task()["error"].startswith("reply_invalid: "))
 
 
 class NonJsonReplyTest(_FreeParseTestBase):
@@ -111,9 +125,13 @@ class NonJsonReplyTest(_FreeParseTestBase):
         )
 
         self.assertFalse(result["parsed"])
-        self.assertEqual(result["note"], free_parse.NOT_PARSED_NOTE)
+        self.assertEqual(result["reason"], "reply_unreadable")
+        self.assertEqual(
+            result["note"], "AI 這次沒有讀懂（回覆不是看得懂的格式），先照預設往下。",
+        )
         self.assertEqual(result["spec"], self.defaults)
         self.assertEqual(self._task_count(), 1)
+        self.assertEqual(self._last_task()["error_code"], "program_refused")
 
 
 class ProviderTimeoutTest(_FreeParseTestBase):
@@ -128,8 +146,13 @@ class ProviderTimeoutTest(_FreeParseTestBase):
         )
 
         self.assertFalse(result["parsed"])
-        self.assertEqual(result["note"], free_parse.NOT_PARSED_NOTE)
+        # F50 Contract J: the fallback keeps why — the provider timed out.
+        self.assertEqual(result["reason"], "llm_failed")
+        self.assertEqual(result["error_code"], "timeout")
+        self.assertEqual(result["note"], "AI 這次沒有讀懂（等太久沒有回應），先照預設往下。")
         self.assertEqual(result["spec"], self.defaults)
+        # The provider's own error is kept on the row, never replaced.
+        self.assertEqual(self._last_task()["error"], "AI 服務逾時未回應，請再試一次。")
         # max_retries=0：逾時只寫一列，不因為 gateway 預設的重試邏輯多花一次錢
         # （票面理由：使用者盯著轉圈圈的按鈕，不是背景 worker 排隊）。
         self.assertEqual(self._task_count(), 1)

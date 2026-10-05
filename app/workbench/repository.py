@@ -751,6 +751,67 @@ def pack_for_source(conn: _AnyConn, org_id: str, brand_id: str, source_kind: str
 # ---------------------------------------------------------------------------
 
 
+#: The provider timeout of one generation call (`jobs.py` hands it to every round's
+#: `TaskOptions`). A `queued`／`running` round with no job behind it is only declared dead once
+#: it has waited this long — it covers the gap between `run_part` writing `queued` and enqueueing.
+GENERATION_TIMEOUT_S = 480.0
+
+
+def _newest_outcome(found: list) -> dict | None:
+    """The outcome of the most recently started (else queued) job among `found`."""
+    dated = [o for o in found if o.get("started_at") is not None]
+    if dated:
+        return max(dated, key=lambda o: o["started_at"])
+    return found[0] if found else None
+
+
+def _reconcile_running(conn: _AnyConn, org_id: str, brand_id: str, brief: dict) -> dict:
+    """F50 Contract J (intake #11): the one place a `queued`／`running` round is checked against
+    its job. Every part lock `workbench:{brief_id}:{part}` is read through
+    `background.outcome()` (a brief has one status column but a lock per part):
+
+    - a job still running → the round is live, the brief is returned unchanged;
+    - the newest job ended failed → the brief is marked `failed` with that outcome's text;
+    - no job (None), or the newest ended done／empty while the brief still waits (its enqueue
+      never happened) → marked `failed` with `JOB_FAILED_MESSAGE`, but only once the brief has
+      waited longer than `GENERATION_TIMEOUT_S` (compared in SQL against the `updated_at` SQL
+      wrote).
+    The UPDATE re-checks `status IN ('queued','running')`, so a round that finished meanwhile is
+    never overwritten. Returns the brief as stored afterwards."""
+    if brief["status"] not in ("queued", "running"):
+        return brief
+    from app import background
+
+    found = [
+        o for o in (
+            background.outcome(f"workbench:{brief['id']}:{part}") for part in sorted(_PART_NAMES)
+        ) if o is not None
+    ]
+    if any(o["state"] == "running" for o in found):
+        return brief
+    newest = _newest_outcome(found)
+    if newest is not None and newest["state"] == "failed":
+        cursor = conn.execute(
+            "UPDATE workbench_brief SET status = 'failed', last_error = %s, updated_at = now()"
+            " WHERE org_id = %s AND brand_id = %s AND id = %s"
+            " AND status IN ('queued', 'running')",
+            (newest["text"] or background.JOB_FAILED_MESSAGE, org_id, brand_id, brief["id"]),
+        )
+    else:
+        cursor = conn.execute(
+            "UPDATE workbench_brief SET status = 'failed', last_error = %s, updated_at = now()"
+            " WHERE org_id = %s AND brand_id = %s AND id = %s"
+            " AND status IN ('queued', 'running')"
+            " AND updated_at < now() - make_interval(secs => %s)",
+            (background.JOB_FAILED_MESSAGE, org_id, brand_id, brief["id"],
+             GENERATION_TIMEOUT_S),
+        )
+    if not cursor.rowcount:
+        return brief
+    conn.commit()
+    return get_brief(conn, org_id, brand_id, brief["id"]) or brief
+
+
 def run_part(conn: _AnyConn, org_id: str, brand_id: str, brief_id: str, part: str, *,
              count: int | None = None) -> None:
     """`POST .../parts/{part}/run`（票 03 §2）：`submit_brief()` 排隊那一半的重跑版——
@@ -761,15 +822,15 @@ def run_part(conn: _AnyConn, org_id: str, brand_id: str, brief_id: str, part: st
     `count_out_of_range`（routes.py 逐一對照成 HTTP 狀態碼）。這裡不改
     `request_json.parts`——它記的是「當初請求了什麼」，不是「現在跑過什麼」。
 
-    `round_running` 只看 brief 這一欄 `status`（不是「這個 part 有沒有活躍的鎖」）——
-    一張 brief 只有一個 status 欄，這裡老實照它判斷；一個 job 卡在 running 沒有寫回
-    failed（例如 process 被殺）會讓這張 brief 再也跑不了下一輪，是已知、未在這張票修的
-    缺口（票面 contradiction check 第一條，日後才加逾時）。"""
+    `round_running` reads the brief's `status` after `_reconcile_running()` (F50 Contract J,
+    intake #11): a `queued`／`running` round whose job died is marked `failed` first, so a
+    killed worker never leaves a set that can never be regenerated; a live job still refuses."""
     from app.background import enqueue as background_enqueue
 
     brief = get_brief(conn, org_id, brand_id, brief_id)
     if brief is None:
         raise ValueError("brief_unknown")
+    brief = _reconcile_running(conn, org_id, brand_id, brief)
     if part not in _PART_NAMES:
         raise ValueError("part_unknown")
     if brief["closed_at"] is not None:
@@ -1526,6 +1587,8 @@ def set_detail(conn: _AnyConn, org_id: str, brand_id: str, set_id: str) -> dict 
     pack_row = _get_pack_row(conn, org_id, brand_id, brief["pack_id"])
     if pack_row is None:
         return None
+    # F50 Contract J: 「生成中」 only while a job is behind it (`_reconcile_running`).
+    brief = _reconcile_running(conn, org_id, brand_id, brief)
     required_outputs = brief["required_outputs_json"] or {}
     versions_by_part = _versions_by_part(conn, org_id, brand_id, set_id)
     coordinates = brief["coordinates_snapshot_json"] or {}

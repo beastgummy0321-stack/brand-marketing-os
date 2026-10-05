@@ -79,8 +79,12 @@ def prepare(conn, org, brand, pack):
         return pack_id
 
 
-def start(conn, org, brand, pack_id):
-    """One explicit enqueue only; queued/running/finished sets are never restarted here."""
+def start(conn, org, brand, pack_id) -> str:
+    """One explicit enqueue on this pack's set; returns the set status it found.
+
+    `idle` (never started) and `failed` (its last round failed; F50 Contract J, intake #22) are
+    started on this same pack -- a new round beside the saved versions, never a second pack and
+    never touching what was selected; `queued`／`running`／`done` are left untouched."""
     _brand(conn, org, brand)
     with _lock(conn, org, brand, {"pack": pack_id}):
         row = conn.execute(
@@ -90,19 +94,22 @@ def start(conn, org, brand, pack_id):
         ).fetchone()
         if not row:
             raise ValueError("找不到這個品牌的素材任務包。")
-        if row["status"] != "idle":
-            return
+        found = row["status"]
+        if found not in ("idle", "failed"):
+            return found
         try:
             repository.run_product(
                 conn, org, brand, row["id"], next(iter(row["required_outputs_json"]))
             )
         except Exception:
             # `run_part` marks the set queued (committed) before it enqueues; a failed enqueue
-            # left nothing queued, so the set goes back to idle and the upstream's retry starts
-            # this same pack once (F49 Contract T) instead of finding it "already queued".
+            # left nothing queued, so the set goes back to the status it had (idle／failed, its
+            # `last_error` kept) and the upstream's retry starts this same pack once (F49
+            # Contract T) instead of finding it "already queued".
             conn.rollback()
-            repository.mark_brief_status(conn, org, brand, row["id"], "idle")
+            repository.mark_brief_status(conn, org, brand, row["id"], found)
             raise
+        return found
 
 
 def options(conn, org, brand, *, part=None, product_id=None):
