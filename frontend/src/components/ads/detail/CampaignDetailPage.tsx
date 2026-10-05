@@ -1,3 +1,4 @@
+import { campaignPath } from "@/lib/adsRoutes";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
@@ -158,7 +159,7 @@ export function CampaignDetailPage({ brandId, campaignId }: { brandId: string; c
   const campaigns = useApiRead(() => listCampaigns(brandId), [brandId]);
   const triage = useApiRead((signal) => getTriage(brandId, campaignId, signal), [brandId, campaignId]);
   const homeHref = `/brands/${brandId}/ads`;
-  const workspaceHref = `/brands/${brandId}/ads/campaigns/${campaignId}`;
+  const workspaceHref = campaignPath(brandId, campaignId);
 
   if (campaigns.status !== "ready") {
     return (
@@ -273,14 +274,14 @@ export function CampaignPerfBody({ brandId, campaignId, origin, advanced, triage
     scrolledToRef.current = highlightId;
   }, [highlightId, openGroups]);
 
-  const workspaceHref = `/brands/${brandId}/ads/campaigns/${campaignId}`;
-  const strategyHref = `${workspaceHref}?tab=strategy`;
-  const assetsHref = `${workspaceHref}?tab=assets`;
+  const workspaceHref = campaignPath(brandId, campaignId);
+  const strategyHref = campaignPath(brandId, campaignId, {tab: "strategy"});
+  const assetsHref = campaignPath(brandId, campaignId, {tab: "assets"});
 
   const queueItems = queue.status === "ready" ? queue.data : null;
   const actions = useMemo(
-    () => adActions(brandId, campaignId, workspaceHref, items ?? [], queueItems ?? []),
-    [brandId, campaignId, workspaceHref, items, queueItems],
+    () => adActions(brandId, campaignId, items ?? [], queueItems ?? []),
+    [brandId, campaignId, items, queueItems],
   );
   const cleanup = queueItems ? openCleanup(brandId, campaignId, queueItems) : null;
 
@@ -335,7 +336,7 @@ export function CampaignPerfBody({ brandId, campaignId, origin, advanced, triage
               menu: (
                 <AdRowMenu
                   name={item.name ?? "（未命名廣告）"} entityId={item.entity_id}
-                  recordHref={recordHref(workspaceHref, item.entity_id)} requests={requests}
+                  recordHref={recordHref(brandId, campaignId, item.entity_id)} requests={requests}
                 />
               ),
               requestOpen: Boolean(requests.requestOf(item.entity_id)),

@@ -33,7 +33,7 @@ export function AuthAssetMedia({ brandId, assetId, filename, mime, duration, aut
     } catch (e) { if (!controller.signal.aborted) setError(e instanceof Error ? e.message : "下載失敗。"); }
     finally { if (!controller.signal.aborted) setDownloading(false); }
   }
-  return <div className="flex flex-col gap-2"><div className="flex gap-2"><Button variant="outline" size="sm" onClick={() => setShow(v => !v)}>{show ? "收起預覽" : "查看預覽"}</Button><Button variant="outline" size="sm" disabled={downloading} onClick={() => void download()}>{downloading ? "取得原檔中…" : "下載原檔"}</Button></div>
+  return <div className="flex flex-col gap-2"><div className="flex gap-2"><Button variant="outline" size="sm" onClick={() => setShow(v => !v)}>{show ? "收起預覽" : "查看預覽"}</Button><Button variant="outline" size="sm" busy={downloading} onClick={() => void download()}>{downloading ? "取得原檔中…" : "下載原檔"}</Button></div>
     {show && <div>{!url && !error && <p role="status">預覽讀取中…</p>}{url && (mime.startsWith("video/") ? <><video className="max-h-64 w-full rounded" src={url} controls preload="metadata" /><p className="text-xs text-muted-foreground">預覽片段（最多前 15 秒）；原始時長 {duration == null ? "未知" : `${duration} 秒`}。下載原檔保留完整內容。</p></> : <img className="max-h-64 max-w-full rounded object-contain" src={url} alt={filename} />)}</div>}
     {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
   </div>;

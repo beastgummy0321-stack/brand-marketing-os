@@ -614,10 +614,10 @@ describe("PerformanceTab `?ad=` 深連結（F27-I22）", () => {
   });
 });
 
-it("CPA goes through the one per-sale rule: 971.54 prints NT$ 972 like home (F47-I06)", async () => {
+it("CPA goes through the one per-sale rule: 971.54 prints 972 TWD like home (F47-I06)", async () => {
   vi.mocked(getPerformance).mockResolvedValue({ ...performance(), totals: { ...performance().totals, spend: 9715.4, purchases: 10, cpa: 971.54 } });
   renderTab(campaign({ status: "live" }));
-  expect((await screen.findAllByText("NT$ 972")).length).toBeGreaterThan(0);
+  expect((await screen.findAllByText("972 TWD")).length).toBeGreaterThan(0);
   expect(screen.queryByText(/971\.54/)).toBeNull();
 });
 
@@ -762,4 +762,31 @@ describe("F46 結案對話框：結果與兩個出口", () => {
     expect(within(result).getByRole("link", { name: "看學到什麼 →" })).toBeTruthy();
     expect(within(result).getByRole("link", { name: "用這些學習排下一期 →" }).getAttribute("href")).toBe("/brands/brd_1/ads/new?sell_way=prd_box");
   });
+});
+
+vi.mock("@/lib/figures", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/lib/figures")>(),
+  useFigureBases: () => ({
+    roas_all_spend: {label: "保守", formula: "營收 ÷ 全部花費", unit: "ratio"},
+    roas_tracked_spend: {label: "樂觀", formula: "營收 ÷ 有追到營收的那部分花費", unit: "ratio"},
+    roas_platform: {label: "平台回報", formula: "平台回報營收 ÷ 花費", unit: "ratio"},
+  }),
+}));
+
+
+it("prints the served closeout sentence verbatim without rebuilding verdict arithmetic", async () => {
+  vi.mocked(getPerformance).mockResolvedValue(performance());
+  renderTab(campaign({status: "closed", lifecycle: {state: "closed", label: "已結案", can_close: false}, verdict: "達成", learning_sentence: "這是後端保存的結案原句；不使用前端重新計算。"}));
+  expect(await screen.findByText("這是後端保存的結案原句；不使用前端重新計算。")).toBeTruthy();
+});
+
+it("prints both served ROAS bases for the KPI, daily and group rows", async () => {
+  const data = performance();
+  data.totals.roas_all_spend = 2.25; data.totals.roas_tracked_spend = 3.75;
+  vi.mocked(getPerformance).mockResolvedValue(data);
+  renderTab(campaign({status: "live"}));
+  expect(await screen.findByText("2.25x")).toBeTruthy();
+  expect(screen.getByText("3.75x")).toBeTruthy();
+  expect(screen.getAllByRole("button", {name: "保守怎麼算：營收 ÷ 全部花費"}).length).toBeGreaterThan(0);
+  expect(screen.getAllByRole("button", {name: "樂觀怎麼算：營收 ÷ 有追到營收的那部分花費"}).length).toBeGreaterThan(0);
 });

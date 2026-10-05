@@ -343,3 +343,12 @@ describe("F50 Contract I (decision 11): the served limits", () => {
     } finally { seedAdsRules(RULES_FIXTURE); }
   });
 });
+
+vi.mock("@/lib/figures", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/lib/figures")>(),
+  useFigureBases: () => ({
+    roas_all_spend: {label: "保守", formula: "營收 ÷ 全部花費", unit: "ratio"},
+    roas_tracked_spend: {label: "樂觀", formula: "營收 ÷ 有追到營收的那部分花費", unit: "ratio"},
+    roas_platform: {label: "平台回報", formula: "平台回報營收 ÷ 花費", unit: "ratio"},
+  }),
+}));

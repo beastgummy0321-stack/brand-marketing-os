@@ -56,7 +56,7 @@ function Assignments({ brandId, campaignId, refreshKey = 0, onSaved }: Props) {
     finally { if (!active.signal.aborted) setBusy(false); }
   }
   return <section className="surface" aria-label="指派首次投放素材">
-    <div className="surface-header flex flex-wrap items-center justify-between gap-3"><div><h2>將成品指派給計畫中的廣告</h2><p className="mt-1 text-sm text-muted-foreground">選擇已確認的素材版本與對應廣告。保存後才會納入首次上架清單，不會在平台建立或更改廣告。</p></div><Button variant="outline" disabled={busy} onClick={() => { setNotice(""); setReload(value => value + 1); }}>重新讀取素材指派</Button></div>
+    <div className="surface-header flex flex-wrap items-center justify-between gap-3"><div><h2>將成品指派給計畫中的廣告</h2><p className="mt-1 text-sm text-muted-foreground">選擇已確認的素材版本與對應廣告。保存後才會納入首次上架清單，不會在平台建立或更改廣告。</p></div><Button variant="outline" busy={busy} onClick={() => { setNotice(""); setReload(value => value + 1); }}>重新讀取素材指派</Button></div>
     <div className="surface-body space-y-4">
       {busy && !data && <p role="status">讀取計畫廣告與已確認成品…</p>}
       {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
@@ -69,7 +69,7 @@ function Assignments({ brandId, campaignId, refreshKey = 0, onSaved }: Props) {
           </div>
           {!data.ready_placements.length && <p className="text-sm text-warning">尚無可用的已確認成品。請先在素材安排確認文案與版本，再重新讀取。</p>}
           {placement && <div className="rounded-lg border border-border bg-muted/30 p-3 text-sm"><p className="font-medium">{placement.filename} · 版本 {placement.revision}</p><p className="mt-2 whitespace-pre-wrap break-words">{placement.copy_fields.headline || "尚未提供標題"}</p><p className="mt-1 whitespace-pre-wrap break-words text-muted-foreground">{placement.copy_fields.body || "尚未提供內文"}</p></div>}
-          <div className="flex flex-wrap gap-2"><Button disabled={busy || !ad || !placement} onClick={() => void save()}>保存素材指派</Button>{ad?.placement_id && <Button variant="outline" disabled={busy} onClick={() => void save(true)}>解除此廣告的素材指派</Button>}</div>
+          <div className="flex flex-wrap gap-2"><Button busy={busy} disabledReason={!ad ? "先選擇計畫中的廣告" : !placement ? "先選擇已確認的成品版本" : undefined} onClick={() => void save()}>保存素材指派</Button>{ad?.placement_id && <Button variant="outline" busy={busy} onClick={() => void save(true)}>解除此廣告的素材指派</Button>}</div>
           <div className="divide-y divide-border rounded-lg border border-border">{data.planned_ads.map(row => <div key={row.id} className="space-y-1 p-3 text-sm"><p className="font-medium">{row.group_name} · {row.name}</p><p className={row.assignment_status === "stale" ? "text-warning" : "text-muted-foreground"}>{statusLabel[row.assignment_status]}{row.filename ? ` · ${row.filename} · 版本 ${row.placement_revision}` : ""}</p>{row.reason && <p className="text-muted-foreground">{row.reason}</p>}</div>)}</div>
           <p className="text-xs text-muted-foreground">更換素材或版本後，原上架清單需要重新確認；未指派的廣告不會自動套用其他成品。</p>
         </>}

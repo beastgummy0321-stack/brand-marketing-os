@@ -1,3 +1,4 @@
+import { campaignPath } from "@/lib/adsRoutes";
 import { useEffect, useState, type ReactNode } from "react";
 import { Image as ImageIcon } from "lucide-react";
 import { Link } from "react-router-dom";
@@ -66,8 +67,8 @@ export function trendNote(item: TriageItem): string {
  * A row whose proposal is already done no longer counts as open. */
 export interface RowAction { label: "在清理提議" | "去處理" | "看紀錄"; href: string }
 
-export function recordHref(workspaceHref: string, entityId: string) {
-  return `${workspaceHref}?tab=performance&ad=${entityId}`;
+export function recordHref(brandId: string, campaignId: string, entityId: string) {
+  return campaignPath(brandId, campaignId, {tab: "perf", ad: entityId});
 }
 
 /** The open cleanup decision of this campaign (its step href and ads), or null once it is done. */
@@ -79,7 +80,7 @@ export function openCleanup(brandId: string, campaignId: string, queue: QueueIte
 }
 
 export function adActions(
-  brandId: string, campaignId: string, workspaceHref: string, items: TriageItem[], queue: QueueItem[],
+  brandId: string, campaignId: string, items: TriageItem[], queue: QueueItem[],
 ): Map<string, RowAction> {
   const actions = new Map<string, RowAction>();
   const cleanup = openCleanup(brandId, campaignId, queue);
@@ -95,7 +96,7 @@ export function adActions(
       : null;
     actions.set(id, step && !step.done
       ? { label: "去處理", href: step.href }
-      : { label: "看紀錄", href: recordHref(workspaceHref, id) });
+      : { label: "看紀錄", href: recordHref(brandId, campaignId, id) });
   }
   return actions;
 }
@@ -198,7 +199,9 @@ function AdRow({ item, action, breakEven, extras, highlighted, rowRef, pauseHref
 function byCost(a: TriageItem, b: TriageItem) {
   const ca = a.current.cost_per_result, cb = b.current.cost_per_result;
   if (ca !== cb) return (cb ?? -1) - (ca ?? -1);
-  return (b.current.spend ?? 0) - (a.current.spend ?? 0);
+  if (a.current.spend == null) return b.current.spend == null ? 0 : 1;
+  if (b.current.spend == null) return -1;
+  return b.current.spend - a.current.spend;
 }
 
 /** One `<details>` shell for a grade group and the closed group (prototype `.grp`): swatch, title, count chip, hint. */

@@ -44,7 +44,7 @@ export function OverviewTab({
   // F48 Contract M: the period total is the server's `budget_total` (after adoption it equals the chosen total); the
   // overview computes no money of its own.
   const total = c.budget_total;
-  const hasOutcome = (c.outcome.spend ?? 0) > 0 || (c.outcome.purchases ?? 0) > 0 || (c.outcome.revenue ?? 0) > 0;
+  const hasOutcome = [c.outcome.spend, c.outcome.purchases, c.outcome.revenue].some(value => value != null && value > 0);
 
   const budgetCaption = total !== null
     ? "投放組每日預算 × 投放天數"
@@ -116,7 +116,7 @@ export function OverviewTab({
               {Object.entries(c.external_view?.sync ?? {}).filter(([, value]) => value.error || value.error_code).map(([section, value]) => <span className="text-warning" key={section}> · {section}：{value.error ?? value.error_code}</span>)}
             </p>
             {platformSync && (
-              <Button size="sm" variant="outline" disabled={platformSync.syncing} onClick={platformSync.onSync}>
+              <Button size="sm" variant="outline" busy={platformSync.syncing} onClick={platformSync.onSync}>
                 {platformSync.syncing ? "同步中…" : "重新讀取平台"}
               </Button>
             )}

@@ -204,7 +204,7 @@ function LegacyAssetsTab({
         </div>
       </div>
 
-      {imported ? <StepButton onClick={() => onChangeTab("performance")}>查看成效 →</StepButton> : step.id === "make_assets" ? (
+      {imported ? <StepButton onClick={() => onChangeTab("perf")}>查看成效 →</StepButton> : step.id === "make_assets" ? (
         <StepButton asChild>
           <Link to={`/brands/${brandId}/workbench/packs/${c.asset_readiness.pack_id}`}>前往素材工作檯 →</Link>
         </StepButton>
@@ -221,10 +221,10 @@ function LegacyAssetsTab({
               : `取消「${confirmAd?.name}」的素材已就位標記。`}
           </DialogDescription>
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setConfirmAd(null)} disabled={confirmBusy}>
+            <Button type="button" variant="outline" onClick={() => setConfirmAd(null)} busy={confirmBusy}>
               取消
             </Button>
-            <Button type="button" onClick={() => void handleConfirmReady()} disabled={confirmBusy}>
+            <Button type="button" onClick={() => void handleConfirmReady()} busy={confirmBusy}>
               <RefreshCw size={14} className={confirmBusy ? "animate-spin" : "hidden"} />
               確認
             </Button>

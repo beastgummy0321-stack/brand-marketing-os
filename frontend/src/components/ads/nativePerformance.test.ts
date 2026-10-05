@@ -20,3 +20,13 @@ describe("native performance", () => {
     const p = nativePerformance(v); expect(p.ads[0].name).toBe("原生廣告名稱"); expect(p.ads[0].spend_share).toBe(0.25); expect(p.groups).toEqual([]);
   });
 });
+
+
+it("keeps all-spend ROAS unknown when one revenue is untracked but every spend is known", () => {
+  const p = nativePerformance(view([row(), row({day: "2026-09-02", revenue: null})]));
+  expect(p.totals.spend).toBe(20);
+  expect(p.totals.revenue).toBeNull();
+  expect(p.totals.roas_all_spend).toBeNull();
+  expect(p.daily[0].roas_all_spend).toBe(3);
+  expect(p.daily[1].roas_all_spend).toBeNull();
+});

@@ -275,7 +275,15 @@ describe("placement and evidence UI", () => {
     vi.mocked(existingCampaigns).mockResolvedValue({ items: [], sources: [{ platform: "meta", label: "Meta", account_id: "act_1" }], next_cursor: null, job: null });
     vi.mocked(assetHandoff).mockResolvedValue({ original_copy: p.copy_fields, suggested_copy: {}, effective_copy: p.copy_fields, tracking_name: "MOS-p1-v1", notice: "內部確認不代表已上架", destination_entity_id: null, download_url: "/api/private", purpose: "產品介紹", start_date: null, end_date: null, bindings: [] });
     render(<AssetHandoffPanel brandId="b1" campaignId="c1" placement={p} readOnly={false} destinationsNote="這個活動還沒上架，平台上還沒有投放組；新廣告請到投放結構加" />);
-    await userEvent.setup().selectOptions(await screen.findByLabelText("核對平台帳號"), "0");
+    const source = await screen.findByLabelText("核對平台帳號");
+    const check = screen.getByRole("button", {name: "重新讀回並核對廣告"});
+    expect(check).toHaveProperty("disabled", true);
+    expect(document.getElementById(check.getAttribute("aria-describedby")!)?.textContent).toBe("先選擇要核對的廣告");
+    await userEvent.setup().clear(screen.getByLabelText("版本成效開始日"));
+    const metrics = screen.getByRole("button", {name: "讀取版本成效"});
+    expect(metrics).toHaveProperty("disabled", true);
+    expect(document.getElementById(metrics.getAttribute("aria-describedby")!)?.textContent).toBe("先填寫開始日與結束日");
+    await userEvent.setup().selectOptions(source, "0");
     expect(screen.getByText("尚無已載入候選；這個活動還沒上架，平台上還沒有投放組；新廣告請到投放結構加。")).toBeTruthy();
     expect(screen.queryByText(/請先同步本活動的原始結構/)).toBeNull();
   });

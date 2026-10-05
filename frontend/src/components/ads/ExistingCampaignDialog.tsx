@@ -1,3 +1,4 @@
+import { campaignPath } from "@/lib/adsRoutes";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/layout/ui/button";
@@ -104,7 +105,7 @@ function ExistingList({ brandId }: { brandId: string }) {
     const signal = lifetime.current.signal; setMutating(true); setError("");
     try {
       const { job } = await refreshExisting(brandId, platform, source_account);
-      if (!signal.aborted) setRead(prev => ({ account: `${platform}|${source_account}`, jobId: job.id, round: (prev?.round ?? 0) + 1 }));
+      if (!signal.aborted) setRead(prev => ({ account: `${platform}|${source_account}`, jobId: job.id, round: (prev?.round ?? 0) + 1 })); // ZERO_OK: Local read attempt counter starts at zero before the first attempt.
     }
     catch (e) { if (!signal.aborted) setError(String(e instanceof Error ? e.message : e)); }
     finally { if (!signal.aborted) setMutating(false); }
@@ -115,7 +116,7 @@ function ExistingList({ brandId }: { brandId: string }) {
     setMutating(true); setError("");
     try {
       const result = await importExisting(brandId, { platform: page.platform, source_account: page.source_account, native_kind: item.native_kind, native_id: item.native_id });
-      if (!signal.aborted) navigate(`/brands/${brandId}/ads/campaigns/${result.campaign.id}`);
+      if (!signal.aborted) navigate(campaignPath(brandId, result.campaign.id));
     } catch (e) { if (!signal.aborted) setError(String(e instanceof Error ? e.message : e)); }
     finally { if (!signal.aborted) setMutating(false); }
   }
@@ -127,9 +128,9 @@ function ExistingList({ brandId }: { brandId: string }) {
         request.current?.abort(); const [platform, source_account] = e.target.value.split("|");
         setPage(prev => prev ? { ...prev, platform, source_account, items: [], next_cursor: null, job: null, outcome: null } : null); setSource({ platform, source_account });
       }}>{page?.sources.map(s => <option key={`${s.platform}|${s.account_id}`} value={`${s.platform}|${s.account_id}`}>{s.label} · {s.name || s.account_id}</option>)}</select>
-      <Button variant="outline" disabled={busy || mutating || !page?.sources.length} onClick={() => void refresh()}>更新清單</Button></div>
+      <Button variant="outline" busy={busy || mutating} disabledReason={!page?.sources.length ? "品牌尚未綁定可讀取的帳號" : undefined} onClick={() => void refresh()}>更新清單</Button></div>
     {busy && <p role="status">讀取中…已快取的活動仍可查看。</p>}
-    {error && <p role="alert" className="text-destructive">{error} <Button variant="outline" disabled={mutating} onClick={() => void load()}>重試讀取</Button></p>}
+    {error && <p role="alert" className="text-destructive">{error} <Button variant="outline" busy={mutating} onClick={() => void load()}>重試讀取</Button></p>}
     {tracked
       ? <ListReadLine key={`${tracked.jobId}:${tracked.round}`} brandId={brandId} jobId={tracked.jobId} fallbackSuccess={page?.job?.last_success_at ?? null}
           onFinished={() => { const [platform, source_account] = tracked.account.split("|"); void reloadAfterRead(platform, source_account); }} />
@@ -140,8 +141,8 @@ function ExistingList({ brandId }: { brandId: string }) {
       {item.campaign_id
         // Already in a workspace: say so and open it — never offer to add the same platform campaign twice.
         ? <div className="flex shrink-0 items-center gap-2"><Chip>已在工作區</Chip>
-            <Button variant="outline" disabled={mutating} onClick={() => navigate(`/brands/${brandId}/ads/campaigns/${item.campaign_id}`)}>打開</Button></div>
-        : <Button disabled={busy || mutating} onClick={() => void include(item)}>納入並開啟</Button>}</div>)}</div>
-    {page?.next_cursor && <Button variant="outline" disabled={busy || mutating} onClick={() => void load(page.next_cursor!)}>載入更多活動</Button>}
+            <Button variant="outline" busy={mutating} onClick={() => navigate(campaignPath(brandId, item.campaign_id!))}>打開</Button></div>
+        : <Button busy={busy || mutating} onClick={() => void include(item)}>納入並開啟</Button>}</div>)}</div>
+    {page?.next_cursor && <Button variant="outline" busy={busy || mutating} onClick={() => void load(page.next_cursor!)}>載入更多活動</Button>}
   </div>;
 }

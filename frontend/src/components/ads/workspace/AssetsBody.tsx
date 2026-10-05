@@ -1,3 +1,4 @@
+import { campaignFlowPath, campaignPath } from "@/lib/adsRoutes";
 import { ApiResponseError, isRejected } from "@/lib/http";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
@@ -96,7 +97,7 @@ function RequestRow({ request, busy, error, onCancel }: {
             : <div className="text-muted-foreground">名稱讀不到（這則廣告可能已從平台刪除）</div>}
         </div>
         <Chip tone="accent">{request.state_label}・{monthDay(request.created_at, timezone)}</Chip>
-        <Button variant="ghost" size="sm" disabled={busy} onClick={onCancel}>{busy ? "取消中…" : "取消需求"}</Button>
+        <Button variant="ghost" size="sm" busy={busy} onClick={onCancel}>{busy ? "取消中…" : "取消需求"}</Button>
       </div>
       {error && <p role="alert" className="pb-2.5 pl-[54px] text-xs text-danger">沒有取消：{error}</p>}
     </div>
@@ -240,8 +241,8 @@ export function AssetsBody({ brandId, campaign: c, refreshKey, advanced, onPlace
   }, [data]);
   // One original backing several ads: a thumbnail that more than one slot in this response shows.
   const thumbnailCount = new Map<string, number>();
-  for (const s of slots) if (s.thumbnail_url) thumbnailCount.set(s.thumbnail_url, (thumbnailCount.get(s.thumbnail_url) ?? 0) + 1);
-  const isShared = (s: Slot) => !!s.thumbnail_url && (thumbnailCount.get(s.thumbnail_url) ?? 0) > 1;
+  for (const s of slots) if (s.thumbnail_url) thumbnailCount.set(s.thumbnail_url, (thumbnailCount.get(s.thumbnail_url) ?? 0) + 1); // ZERO_OK: Local count of matching thumbnails starts at zero before the first match.
+  const isShared = (s: Slot) => !!s.thumbnail_url && (thumbnailCount.get(s.thumbnail_url) ?? 0) > 1; // ZERO_OK: No matching thumbnails in this local map means zero matches.
 
   async function upload(slot: Slot, file: File) {
     if (!slot.ad_id || uploading) return;
@@ -424,7 +425,7 @@ export function AssetsBody({ brandId, campaign: c, refreshKey, advanced, onPlace
     );
   }
 
-  const publishHref = `/brands/${brandId}/ads/campaigns/${c.id}/publish`;
+  const publishHref = campaignFlowPath(brandId, c.id, ["publish"]);
   return (
     <div className="flex flex-col gap-4">
       {data && <RequestsCard brandId={brandId} campaignId={c.id} slots={data} onChanged={onRequestsChanged} />}
@@ -455,7 +456,7 @@ export function AssetsBody({ brandId, campaign: c, refreshKey, advanced, onPlace
           }} />
       )}
       {advanced}
-      <ActionBar back={{ label: "總覽", to: `/brands/${brandId}/ads/campaigns/${c.id}` }}
+      <ActionBar back={{ label: "總覽", to: campaignPath(brandId, c.id) }}
         hint={!draft ? undefined : left ? `${left}：好了才會進上架清單` : missing > 0 ? `缺圖的那 ${missing} 則先不建立，不會花到錢；補上圖後再加上去` : undefined}>
         {draft && (ready === null
           ? <Button asChild><Link to={publishHref}>確認上架清單 →</Link></Button>

@@ -80,7 +80,7 @@ function renderGroups(items: TriageItem[], opts: {
   cap?: number | null; breakEven?: number | null; dataReason?: string | null; open?: GroupKey[];
   actions?: Map<string, RowAction>; extras?: (item: TriageItem) => RowExtras; pauseHref?: (item: TriageItem) => string;
 } = {}) {
-  const actions = opts.actions ?? adActions("brd_1", "cmp_1", WS, items, []);
+  const actions = opts.actions ?? adActions("brd_1", "cmp_1", items, []);
   const onToggle = vi.fn();
   const view = render(
     <MemoryRouter>
@@ -228,7 +228,7 @@ describe("GradeGroups", () => {
   it("row extras: the page's menu sits after the decision button, an open request shows its chip, a failure its line", () => {
     const queue = [queueRow({ kind_key: "worse", triage: watch })];
     renderGroups([watch, ok], {
-      actions: adActions("brd_1", "cmp_1", WS, [watch, ok], queue), open: ["watch", "on_target"],
+      actions: adActions("brd_1", "cmp_1", [watch, ok], queue), open: ["watch", "on_target"],
       extras: (i) => ({
         menu: <button type="button">⋯ {i.entity_id}</button>,
         requestOpen: i.entity_id === "a2",
@@ -263,7 +263,7 @@ describe("GradeGroups", () => {
   it("F45-I06: every active row carries 「暫停」 to the pause page (from=perf), beside its decision and before its menu", () => {
     const queue = [queueRow({ kind_key: "worse", triage: watch })];
     renderGroups([watch, ok, wasted], {
-      actions: adActions("brd_1", "cmp_1", WS, [watch, ok, wasted], queue), open: ["wasted", "watch", "on_target"],
+      actions: adActions("brd_1", "cmp_1", [watch, ok, wasted], queue), open: ["wasted", "watch", "on_target"],
       extras: (i) => ({ menu: <button type="button">⋯ {i.entity_id}</button>, requestOpen: false, error: null }),
       pauseHref: (i) => `${WS}/propose/pause/${i.entity_id}?from=perf`,
     });
@@ -294,12 +294,12 @@ describe("adActions", () => {
       queueRow({ id: "q_clean", kind_key: "cleanup", triage: ok, cleanup: cleanupPayload(["a8", "a7"]), action_url: `${WS}/propose/cleanup/cmp_1` }),
       queueRow({ id: "q_worse", kind_key: "worse", triage: watch }),
     ];
-    const actions = adActions("brd_1", "cmp_1", WS, items, queue);
+    const actions = adActions("brd_1", "cmp_1", items, queue);
     expect(actions.get("a8")).toEqual({ label: "在清理提議", href: `${WS}/propose/cleanup/cmp_1` });
     expect(actions.get("a7")).toEqual({ label: "在清理提議", href: `${WS}/propose/cleanup/cmp_1` });
     expect(actions.get("a6")).toEqual({ label: "去處理", href: `${WS}/review/a6` });
     // The cleanup row's carrier ad (`triage`) is not its own row.
-    expect(actions.get("a2")).toEqual({ label: "看紀錄", href: `${WS}?tab=performance&ad=a2` });
+    expect(actions.get("a2")).toEqual({ label: "看紀錄", href: `${WS}?tab=perf&ad=a2` });
   });
 
   it("an ad in the cleanup AND with its own worse row points at the cleanup first", () => {
@@ -307,7 +307,7 @@ describe("adActions", () => {
       queueRow({ kind_key: "cleanup", triage: ok, cleanup: cleanupPayload(["a7"]), action_url: `${WS}/propose/cleanup/cmp_1` }),
       queueRow({ kind_key: "worse", triage: over }),
     ];
-    expect(adActions("brd_1", "cmp_1", WS, items, queue).get("a7")!.label).toBe("在清理提議");
+    expect(adActions("brd_1", "cmp_1", items, queue).get("a7")!.label).toBe("在清理提議");
   });
 
   it("a cleanup row of another campaign, or a done cleanup, never marks this campaign's ads", () => {
@@ -316,8 +316,8 @@ describe("adActions", () => {
       kind_key: "cleanup", triage: ok, cleanup: cleanupPayload(["a8"]),
       proposal: { kind: "cleanup", change_set_id: "s", campaign_id: "cmp_1", status: "approved", verification_state: "confirmed", reason: null, revisit_at: null, multi: true },
     });
-    expect(adActions("brd_1", "cmp_1", WS, items, [queueRow({ kind_key: "cleanup", triage: ok, cleanup: other, action_url: "/x" })]).get("a8")!.label).toBe("看紀錄");
-    expect(adActions("brd_1", "cmp_1", WS, items, [done]).get("a8")!.label).toBe("看紀錄");
+    expect(adActions("brd_1", "cmp_1", items, [queueRow({ kind_key: "cleanup", triage: ok, cleanup: other, action_url: "/x" })]).get("a8")!.label).toBe("看紀錄");
+    expect(adActions("brd_1", "cmp_1", items, [done]).get("a8")!.label).toBe("看紀錄");
   });
 
   it("an own row whose proposal is done falls back to 看紀錄; an open one routes to its current step", () => {
@@ -325,13 +325,13 @@ describe("adActions", () => {
       kind_key: "stop_loss", triage: wasted,
       proposal: { kind: "pause", change_set_id: "set_1", campaign_id: "cmp_1", status, verification_state: "pending", reason: null, revisit_at: null, multi: false },
     });
-    expect(adActions("brd_1", "cmp_1", WS, items, [pause("approved")]).get("a8")).toEqual({ label: "去處理", href: `${WS}/changes/set_1/handoff` });
-    expect(adActions("brd_1", "cmp_1", WS, items, [pause("rejected")]).get("a8")!.label).toBe("看紀錄");
+    expect(adActions("brd_1", "cmp_1", items, [pause("approved")]).get("a8")).toEqual({ label: "去處理", href: `${WS}/changes/set_1/handoff` });
+    expect(adActions("brd_1", "cmp_1", items, [pause("rejected")]).get("a8")!.label).toBe("看紀錄");
   });
 
   it("campaign-level rows (refresh_creative, scale_budget) never become an ad's own action", () => {
     const queue = [queueRow({ kind_key: "refresh_creative", triage: ok }), queueRow({ kind_key: "scale_budget", triage: ok })];
-    expect(adActions("brd_1", "cmp_1", WS, items, queue).get("a2")!.label).toBe("看紀錄");
+    expect(adActions("brd_1", "cmp_1", items, queue).get("a2")!.label).toBe("看紀錄");
   });
 
   it("renders 在清理提議／去處理 as outline buttons; a 看紀錄 row has no row button (看紀錄 is in its menu)", () => {
@@ -339,7 +339,7 @@ describe("adActions", () => {
       queueRow({ kind_key: "cleanup", triage: ok, cleanup: cleanupPayload(["a8"]), action_url: `${WS}/propose/cleanup/cmp_1` }),
       queueRow({ kind_key: "worse", triage: watch }),
     ];
-    renderGroups(items, { actions: adActions("brd_1", "cmp_1", WS, items, queue), open: ["wasted", "watch", "on_target"] });
+    renderGroups(items, { actions: adActions("brd_1", "cmp_1", items, queue), open: ["wasted", "watch", "on_target"] });
     const clean = within(screen.getByTestId("ad-row-a8")).getByRole("link", { name: "在清理提議" });
     expect(clean.getAttribute("data-variant")).toBe("outline");
     expect(within(screen.getByTestId("ad-row-a6")).getByRole("link", { name: "去處理" }).getAttribute("data-variant")).toBe("outline");
