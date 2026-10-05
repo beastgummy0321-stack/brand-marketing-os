@@ -134,7 +134,7 @@ function MoneyColumn({ home }: { home: HomeOverview }) {
   const cap = money?.cap ?? null;
   const prev = money?.previous_same_period ?? null;
 
-  const earn = money?.earn ?? null;
+  const earn = money?.earn_after_cost_and_ads ?? null;
   const rounded = earn === null ? null : Math.round(earn / 1000) * 1000;
   const gain = rounded === null || rounded >= 0;
   const missing = (money?.earn_missing ?? []).map((m) => EARN_MISSING[m]).filter(Boolean);

@@ -2,9 +2,15 @@
 place that shows or uses it (品牌智庫 「投放學到的」, the closeout dialog, the month review, the
 strategy basis, and the planners' 【上幾期的排名】 through `coordinate_learning.ranked_section`).
 
-Numbers come from the stored `v=2` scope rows (`learning_rank.parse_scope`) the closeout wrote,
-never recomputed from outcome rows; totals are sums of those stored numbers. Rows without `v=2`
-are not read. Ledger access only through `app.brand_intelligence.repository`'s public reads;
+A ranked row's numbers come from the stored `v=2` scope rows (`learning_rank.parse_scope`) the
+closeout wrote, never recomputed from outcome rows. A campaign's own `spend`／`sales`／
+`cost_per_sale`／`currency` are its closed-window totals over every ad, ranked or not
+(`outcome.window_totals`, F51 planning #16 -- 上一期花費 no longer skips unranked ads; the
+same ad-scope rows and rules the ranked rows were cut by). A customer
+group's totals are sums of its stored rows; it carries one `cap` only when every campaign it
+was listed in shares cap and currency, else `cap` null with `caps_differ` (never a cross-campaign
+每筆 against one campaign's cap). Rows without `v=2` are not read. Ledger access only through
+`app.brand_intelligence.repository`'s public reads;
 customer group names through `customer_groups.groups_by_id` (a group that no longer resolves
 reads 「已刪除的顧客群」).
 
@@ -13,7 +19,7 @@ Private to app/ads.
 
 from typing import cast
 
-from app.ads import customer_groups, learning_rank
+from app.ads import customer_groups, learning_rank, outcome
 from app.ads import repository as ads_repo
 from app.ads import sell_way as sell_way_mod
 from app.brand_intelligence import repository as bi_repo
@@ -97,11 +103,6 @@ def _coordinates(keys: dict, labels: dict) -> list[dict]:
     ]
 
 
-def _one_currency(rows: list[dict]):
-    currencies = {row["currency"] for row in rows}
-    return next(iter(currencies)) if len(currencies) == 1 else None
-
-
 def _campaign(conn, org_id, brand_id, campaign: dict, stored: list[dict], labels: dict, tz,
               group_cache: dict) -> dict:
     stored = sorted(stored, key=lambda row: row["rank"])
@@ -137,8 +138,8 @@ def _campaign(conn, org_id, brand_id, campaign: dict, stored: list[dict], labels
         })
 
     cap = stored[0]["cap"] if stored else None
-    spend = sum(row["spend"] or 0 for row in stored) if stored else None
-    sales = sum(row["sales"] for row in stored) if stored else None
+    totals = outcome.window_totals(conn, org_id, brand_id, campaign)
+    spend, sales = totals["spend"], totals["results"]
     closed_at = campaign.get("closed_at")
     return {
         "campaign_id": campaign["id"], "campaign_name": campaign["name"],
@@ -146,7 +147,7 @@ def _campaign(conn, org_id, brand_id, campaign: dict, stored: list[dict], labels
         "start_date": campaign["start_date"].isoformat() if campaign.get("start_date") else None,
         "end_date": campaign["end_date"].isoformat() if campaign.get("end_date") else None,
         "closed_on": closed_at.astimezone(tz).date().isoformat() if closed_at else None,
-        "cap": cap, "currency": _one_currency(stored) if stored else None,
+        "cap": cap, "currency": totals["currency"],
         "spend": spend, "sales": sales,
         "cost_per_sale": spend / sales if spend is not None and sales else None,
         "counts": {
@@ -160,8 +161,10 @@ def _campaign(conn, org_id, brand_id, campaign: dict, stored: list[dict], labels
 
 
 def _groups(campaigns: list[dict]) -> list[dict]:
-    """Per customer group over the listed rows; `cap` = the newest listed campaign's with it."""
+    """Per customer group over the listed rows. `cap` only when every campaign the group was
+    listed in shares one cap and one currency; else `cap` null and `caps_differ` true."""
     by_id: dict = {}
+    terms: dict = {}
     for campaign in campaigns:  # newest first
         for row in campaign["rows"]:
             group = row["customer_group"]
@@ -169,13 +172,17 @@ def _groups(campaigns: list[dict]) -> list[dict]:
                 continue
             entry = by_id.setdefault(group["id"], {
                 "customer_group_id": group["id"], "who": group["who"], "ads": 0,
-                "spend": 0, "sales": 0, "cap": campaign["cap"],
+                "spend": 0, "sales": 0,
             })
             entry["ads"] += 1
             entry["spend"] += row["spend"] or 0
             entry["sales"] += row["sales"]
+            terms.setdefault(group["id"], set()).add((campaign["cap"], campaign["currency"]))
     out = []
-    for entry in by_id.values():
+    for group_id, entry in by_id.items():
+        shared = terms[group_id]
+        entry["caps_differ"] = len(shared) > 1
+        entry["cap"] = next(iter(shared))[0] if len(shared) == 1 else None
         entry["cost_per_sale"] = entry["spend"] / entry["sales"] if entry["sales"] else None
         out.append(entry)
     out.sort(key=lambda e: (e["cost_per_sale"] is None, e["cost_per_sale"] or 0, e["who"]))

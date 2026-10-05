@@ -146,7 +146,10 @@ def aggregate(rows, start, end):
             ("ctr", "clicks", "impressions", 100),
             ("cpc", "spend", "clicks", 1),
             ("cpa", "spend", "purchases", 1),
-            ("roas", "revenue", "spend", 1),
+            # F51 Contract F: `revenue` here is the platform-attributed purchase value, so the
+            # ratio is named by its basis (`roas_platform`). Snapshots stored before F51 keep
+            # `roas` and the screen prints it as unknown.
+            ("roas_platform", "revenue", "spend", 1),
         ):
             a, b = metrics[numerator], metrics[denominator]
             metrics[name] = (
@@ -311,6 +314,11 @@ def snapshot(
             "actions": [review_monitor_source.action_summary(dict(a)) for a in actions],
         }
         prior["evidence"] = {key: value["evidence_json"][key] for key in ("current", "conditions")}
+        # F51: `ad_spend`／`ad_result_view` are read-time figures of the round read, not evidence.
+        prior["evidence"]["current"] = {
+            k: v for k, v in prior["evidence"]["current"].items()
+            if k not in ("ad_spend", "ad_result_view")
+        }
     text, knowledge, version, _ = context_compiler.compile(conn, brand, include_personas=False)
     sources = policy.source_rows(conn, brand, knowledge)
     product_ids = (campaign.get("context_json") or {}).get("product_ids") or []

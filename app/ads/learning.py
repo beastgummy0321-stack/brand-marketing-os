@@ -1,5 +1,6 @@
 """app/ads/learning.py — F03-I12: the one sentence the next campaign's strategy reads (§0 the
-"learning" link). Private to app/ads (container contract §1): only `closeout.py` imports this.
+"learning" link). Private to app/ads (container contract §1): `closeout.py` writes through it;
+`routes.py` reads `closed_sentence` for the campaign read.
 
 No model call in F03 (§0 "one sentence built by the program from the campaign's own facts") —
 the sentence is assembled from `verdict`/`verdict_json`, which `closeout._judge` already built
@@ -7,6 +8,9 @@ from real numbers. Persisted through `ads_learnings.write` (F48 Contract W, over
 reviewed for F03-I02, §0) with `source_cycle_id = campaign_id` and `product_id` = the campaign's
 sell-way; never a `brand_fact`
 or a `rule` row (ruling 15/16 — only the user's own typed feedback becomes a rule).
+
+F51 Contract F: the campaign read serves the same sentence as `learning_sentence`
+(`closed_sentence`, pure -- no write), so the browser never rebuilds it.
 """
 
 from typing import cast
@@ -34,6 +38,24 @@ def _sentence(campaign: dict, verdict: str, verdict_json: dict) -> str:
     target = _number(verdict_json.get("target"))
     actual = _number(verdict_json.get("actual"))
     return f"「{name}」{label}上限 {target}，實際 {actual}，結果{verdict}（樣本{sample}）。"
+
+
+def _ledger_text(campaign: dict, verdict: str, verdict_json: dict) -> str:
+    """The ledger row's text: `_sentence`, prefixed when the verdict came from an isolated
+    simulation."""
+    text = _sentence(campaign, verdict, verdict_json)
+    if verdict_json.get("data_source") == "isolated_simulation":
+        text = "【隔離模擬，非市場實證】" + text
+    return text
+
+
+def closed_sentence(campaign: dict) -> str | None:
+    """F51 Contract F: the closeout sentence of a closed campaign, from its stored
+    `verdict`／`verdict_json` -- the text `write_learning` stored (no read, no write). `None`
+    before closeout."""
+    if campaign.get("status") != "closed" or not campaign.get("verdict"):
+        return None
+    return _ledger_text(campaign, campaign["verdict"], campaign.get("verdict_json") or {})
 
 
 def _bucket(verdict_json: dict):
@@ -131,9 +153,7 @@ def write_learning(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str,
     # F31-I05 Contract O: the scope names the coordinates the creatives were made for.
     detail = live_creative.with_learning_coordinates(conn, org_id, brand_id, detail)
 
-    text = _sentence(detail, verdict, verdict_json)
-    if verdict_json.get("data_source") == "isolated_simulation":
-        text = "【隔離模擬，非市場實證】" + text
+    text = _ledger_text(detail, verdict, verdict_json)
     confidence = _confidence(conn, org_id, brand_id, detail, verdict, verdict_json)
     needs_revalidation = _needs_revalidation(conn, brand_id, detail)
 

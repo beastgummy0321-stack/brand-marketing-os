@@ -114,6 +114,26 @@ class BeatTargetClosesAchievedTest(CloseoutTestBase):
         self.assertIn("每筆成本上限 300", learnings[0]["learning_text"])
         self._facts_and_rules_untouched()
 
+    def test_campaign_read_serves_the_ledger_sentence_after_closeout_only(self):
+        """F51 Contract F: `learning_sentence` is the closeout sentence the ledger stored (the
+        browser never rebuilds it); null before closeout."""
+        start = self.today - timedelta(days=2)
+        campaign = self._campaign(cap=300, start_date=start, end_date=self.today)
+        self._three_days(campaign, spend=1000.0, purchases=5, revenue=2500.0)
+        client = TestClient(main.app)
+        url = f"/api/ads/brands/{self.brand_id}/campaigns/{campaign['id']}"
+
+        before = client.get(url)
+        self.assertEqual(before.status_code, 200, before.text)
+        self.assertIsNone(before.json()["campaign"]["learning_sentence"])
+
+        closeout.close(self.conn, self.org_id, self.brand_id, campaign["id"], actor=ACTOR)
+        ledger = bi_repo.list_learnings(self.conn, self.brand_id, source_track="ads")
+
+        after = client.get(url).json()["campaign"]
+        self.assertEqual(len(ledger), 1)
+        self.assertEqual(after["learning_sentence"], ledger[0]["learning_text"])
+
 
 class CloseResolvesTheQueueRowsTest(CloseoutTestBase):
     def test_closing_resolves_every_queue_row_of_the_campaign(self):

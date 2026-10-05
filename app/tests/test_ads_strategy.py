@@ -1507,6 +1507,37 @@ class StartingPointFreshBrandTest(StrategyTestBase):
         roles = [row["role"] for row in detail["budget_basis_json"]["strategy"]["allocation"]]
         self.assertEqual(roles, ["new", "retarget", "explore"])
 
+    def _closed_loop(self, purchases) -> None:
+        tag = uuid4().hex[:8]
+        today = coresettings.today_for_org(web.conn, org_id=self.org_id)
+        closed = self._create_campaign(status="closed")
+        group = web.conn.execute(
+            "INSERT INTO ads_delivery_group (id, org_id, brand_id, campaign_id, channel_key,"
+            " name, role, daily_budget) VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
+            (f"adg_{tag}", self.org_id, self.brand_id, closed["id"], "meta", "新客組", "new",
+             400),
+        ).fetchone()
+        outcome_seed.seed_day(web.conn, self.org_id, self.brand_id, closed["id"], "group",
+                              group["id"], today - timedelta(days=2), spend=400,
+                              purchases=purchases, source="simulated")
+        web.conn.commit()
+
+    def test_untracked_loop_purchases_read_untracked_never_none(self):
+        """F51 (planning #15): a closed loop whose purchases were never tracked is 未追蹤 --
+        never 「沒有」 (which reads as a counted nothing)."""
+        self._closed_loop(None)
+
+        prompt, _ = self._prompt(_TWO_ROLE_REPLY)
+
+        self.assertIn("- 迴圈購買（已結案的活動）：未追蹤\n", prompt)
+
+    def test_a_counted_zero_loop_reads_zero(self):
+        self._closed_loop(0)
+
+        prompt, _ = self._prompt(_TWO_ROLE_REPLY)
+
+        self.assertIn("- 迴圈購買（已結案的活動）：0 筆\n", prompt)
+
 
 class StartingPointEligibleBrandTest(StrategyTestBase):
     """F33-I01：精靈答過「投放過」的品牌——三個角色都可用，三角色的回覆照存。"""

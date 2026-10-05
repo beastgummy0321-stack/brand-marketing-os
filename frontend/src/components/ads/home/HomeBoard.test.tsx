@@ -42,7 +42,7 @@ function home(overrides: Partial<HomeOverview> = {}): HomeOverview {
   return {
     month: "2026-09", day_of_month: 23, days_in_month: 30, currency: "TWD", spent: 22000,
     money: {
-      purchases: 158, cost_per_purchase: 139.24, cap: { value: 450, basis: "own", break_even: 520 }, earn: 60163.5, earn_missing: [], excluded: [],
+      purchases: 158, cost_per_purchase: 139.24, cap: { value: 450, basis: "own", break_even: 520 }, earn_after_cost_and_ads: 60163.5, earn_missing: [], excluded: [],
       previous_same_period: { days: 22, purchases: 118, cost_per_purchase: 221.37 },
     },
     pace: { budget_amount: 60000, available: 23600, daily: [{ day: "2026-09-22", cumulative: 22000 }], projected_month_end: 28695.65 },
@@ -81,7 +81,7 @@ describe("MonthMoney", () => {
 
   it("unknowns: earn names what is missing, no purchase yet, no comparison, break-even cap wording", () => {
     const h = home({
-      money: { purchases: 0, cost_per_purchase: null, cap: { value: 520, basis: "break_even", break_even: 520 }, earn: null, earn_missing: ["product_cost"], excluded: [], previous_same_period: null },
+      money: { purchases: 0, cost_per_purchase: null, cap: { value: 520, basis: "break_even", break_even: 520 }, earn_after_cost_and_ads: null, earn_missing: ["product_cost"], excluded: [], previous_same_period: null },
       pace: { budget_amount: null, available: null, daily: [], projected_month_end: null },
     });
     wrap(<MonthMoney brandId="b" state={ready(h)} onRetry={vi.fn()} scaleHref={null} onBudgetClosed={vi.fn()} />);
@@ -105,7 +105,7 @@ describe("MonthMoney", () => {
   });
 
   it("a loss prints 少賺 with the absolute amount; another currency keeps its code", () => {
-    wrap(<MonthMoney brandId="b" state={ready(home({ currency: "USD", money: { ...home().money!, earn: -1499.5 } }))} onRetry={vi.fn()} scaleHref={null} onBudgetClosed={vi.fn()} />);
+    wrap(<MonthMoney brandId="b" state={ready(home({ currency: "USD", money: { ...home().money!, earn_after_cost_and_ads: -1499.5 } }))} onRetry={vi.fn()} scaleHref={null} onBudgetClosed={vi.fn()} />);
     expect(screen.getByText("扣掉廣告費，這個月估計少賺")).toBeTruthy();
     expect(screen.getByText("約 USD 1,000")).toBeTruthy();
   });

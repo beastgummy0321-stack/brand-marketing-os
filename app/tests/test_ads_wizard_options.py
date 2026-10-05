@@ -19,7 +19,7 @@ from fastapi.testclient import TestClient
 
 import app.main as main
 import app.shared.web as web
-from app.ads import brief, objectives, wizard_options
+from app.ads import brief, external_repository, objectives, wizard_options
 from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi_repo
 from app.core import db as coredb
@@ -354,6 +354,22 @@ class PreviousAndLearnedTest(_OptionsBase):
             source_cycle_id=f"{campaign['id']}:{ad_id}", source_track="coordinate",
         )
 
+    def _spent(self, campaign, native_id, *, spend, results):
+        """One platform ad of `campaign` with one day's row inside its window."""
+        entity = external_repository.upsert_entity(
+            web.conn, self.org_id, self.brand_id, campaign["id"],
+            {"platform": "test", "source_account": "test", "native_kind": "ad",
+             "native_id": native_id},
+        )
+        external_repository.upsert_observation(
+            web.conn, self.org_id, self.brand_id, campaign["id"],
+            {"entity_id": entity["id"], "day": datetime.date(2026, 9, 6), "metric_scope": "ad",
+             "attribution_key": "a", "currency": "TWD", "source": "test", "spend": spend,
+             "impressions": 100, "purchases": results},
+            result_kind="purchase", result_count=results, result_action="omni_purchase",
+            result_attribution="7d_click",
+        )
+
     def _option(self, way):
         return next(p for p in wizard_options.options(web.conn, self.org_id, self.brand_id)
                     ["products"] if p["id"] == way["id"])
@@ -370,12 +386,16 @@ class PreviousAndLearnedTest(_OptionsBase):
                                 "2026-09-01T00:00:00Z", closed_at="2026-09-19T02:00:00Z")
         self._row(closed, "ad_a", verdict="keep", rank=1, of=2, sales=5, spend=2000)
         self._row(closed, "ad_b", verdict="replace", rank=2, of=2, sales=0, spend=775)
+        self._spent(closed, "ad_a", spend=2000, results=5)
+        self._spent(closed, "ad_b", spend=775, results=0)
+        # F51 (planning #16): an ad the ranking left out still spent this period's money.
+        self._spent(closed, "ad_unranked", spend=300, results=0)
 
         option = self._option(self.cup_single)
 
         self.assertEqual(option["previous"], {
             "campaign_id": closed["id"], "campaign_name": "單品・09/05～09/18",
-            "platform": "meta", "cap": 450.0, "budget": 10000.0, "spend": 2775,
+            "platform": "meta", "cap": 450.0, "budget": 10000.0, "spend": 3075,
         })
         self.assertEqual(option["learned"], {
             "campaigns": [{"id": closed["id"], "name": "單品・09/05～09/18"}],

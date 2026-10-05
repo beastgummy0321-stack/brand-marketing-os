@@ -89,6 +89,7 @@ core_config.settings()  # ADR 0062：環境變數在這裡驗一次、開機就�
 # 打進來的 request 才發現設定錯了。
 
 from app.core import db as coredb
+from app.core import figures as core_figures
 from app.core import input_rules
 from app.core import retention as core_retention
 from app.core import settings as coresettings
@@ -342,6 +343,14 @@ def api_settings_get(request: Request):
         "data": _settings_json_data(org_id=actor.org_id, is_owner=actor.role == "owner"),
         "generated_at": coredb.now_iso(),
     }
+
+
+@app.get("/api/figures")
+def api_figures_get(request: Request):
+    """F51 Contract F: the basis table (`app/core/figures.py::BASES`) every figure caption and
+    tooltip reads; signed-in like every other `/api` read."""
+    web.require_actor(request)
+    return {"bases": core_figures.BASES}
 
 
 @app.post("/api/settings/api-key")

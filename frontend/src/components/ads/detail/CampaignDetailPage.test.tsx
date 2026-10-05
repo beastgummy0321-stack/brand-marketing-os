@@ -745,7 +745,7 @@ describe("這期狀態列 (F40-I06, prototype #/perf)", () => {
   /** `getPerformance` as the backend answers for the same period: 10,081 spent, 19 bought, the period graded 偏貴. */
   function perf(o: Partial<CampaignPerformance["coverage"]> = {}, totals: Partial<CampaignPerformance["totals"]> = {}): CampaignPerformance {
     return {
-      totals: { spend: 10081, impressions: 90000, clicks: 1200, purchases: 19, revenue: 18962, cpa: 530.58, ctr: 0.0133, roas: 1.88, roas_conservative: 1.88, grade: { grade: "watch", label: "偏貴" }, ...totals },
+      totals: { spend: 10081, impressions: 90000, clicks: 1200, purchases: 19, revenue: 18962, cpa: 530.58, ctr: 0.0133, roas_tracked_spend: 1.88, roas_all_spend: 1.88, grade: { grade: "watch", label: "偏貴" }, ...totals },
       daily: [], groups: [], ads: [],
       coverage: { start: "2026-09-26", end: "2026-10-02", expected: 7, missing: 0, missing_days: [], never_synced: false, ...o },
       last_data_at: "2026-10-02T13:00:00Z",

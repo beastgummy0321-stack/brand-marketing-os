@@ -134,7 +134,7 @@ export function PeriodStatusRow({ brandId, campaign: c, lastSuccessAt = null, on
   const spend = totals ? `${formatAmount(totals.spend) ?? "—"} 元` : dash;
   const purchases = totals ? (totals.purchases === null ? "未追蹤" : `${formatAmount(totals.purchases)} 筆`) : dash;
   const cpa = totals ? (totals.cpa === null ? "算不出來" : `${perSaleAmount(totals.cpa)} 元`) : dash;
-  const roasValue = totals ? (imported ? totals.roas : totals.roas_conservative) : null;
+  const roasValue = totals ? totals.roas_all_spend : null;
   const roas = totals ? (roasValue === null ? "未追蹤" : roasValue.toFixed(2)) : dash;
 
   const closeCaption = imported

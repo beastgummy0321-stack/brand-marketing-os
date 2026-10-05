@@ -6,8 +6,8 @@
  *   (spend on a closed ad, or on any ad triage did not grade, is in `ungraded`).
  * - `null` means unknown — never read it as 0. `spent` is null when nothing is synced yet, a day's
  *   spend is unknown, or the rows mix currencies. A block that failed to read is `null` as a whole.
- * - `money` covers purchase campaigns only; the rest are listed in `money.excluded`. `earn` is null
- *   whenever an input is missing, and `earn_missing` says which (`product`, `product_cost`,
+ * - `money` covers purchase campaigns only; the rest are listed in `money.excluded`.
+ *   `earn_after_cost_and_ads` (F51 Contract F: the key is its basis) is null whenever an input is missing, and `earn_missing` says which (`product`, `product_cost`,
  *   `spend`, `purchases`, `no_purchase_campaign`).
  * - The month's data stops at yesterday (org timezone): `pace.daily` ends yesterday, and
  *   `previous_same_period.days` is that many days at the start of the previous month. */
@@ -43,7 +43,7 @@ export interface HomeMoney {
   cost_per_purchase: number | null;
   /** The one cap every included purchase campaign shares; null when they differ or none has one. */
   cap: HomeCap | null;
-  earn: number | null;
+  earn_after_cost_and_ads: number | null;
   earn_missing: HomeEarnMissing[];
   excluded: HomeExcludedCampaign[];
   previous_same_period: HomePreviousSamePeriod | null;
@@ -52,6 +52,8 @@ export interface HomeMoney {
 export interface HomePace {
   budget_amount: number | null;
   available: number | null;
+  /** F51 Contract F `budget_to_date`: month budget × day of month ÷ days in month, whole, half up; null without a budget. */
+  budget_to_date?: number | null;
   daily: { day: string; cumulative: number | null }[];
   projected_month_end: number | null;
 }

@@ -126,7 +126,7 @@ function home(overrides: Partial<HomeOverview> = {}): HomeOverview {
   return {
     month: THIS, day_of_month: 24, days_in_month: 30, currency: "TWD", spent: 22000,
     money: {
-      purchases: 158, cost_per_purchase: 139, cap: null, earn: null, earn_missing: [], excluded: [],
+      purchases: 158, cost_per_purchase: 139, cap: null, earn_after_cost_and_ads: null, earn_missing: [], excluded: [],
       previous_same_period: { days: 23, purchases: 118, cost_per_purchase: 221 },
     },
     pace: {

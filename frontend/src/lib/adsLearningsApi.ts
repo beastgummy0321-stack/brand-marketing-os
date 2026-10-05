@@ -74,7 +74,8 @@ export interface LearningCampaign {
   /** `null` = no cap was stored: print no cap line or chip. */
   cap: number | null;
   currency: string | null;
-  /** Totals of the stored rows; `null` when the campaign has no rows. */
+  /** F51 (planning #16): the campaign's closed-window platform totals over every ad, ranked or not; `null` when
+   * unknown (no row, an unknown day, two currencies) -- never 0. */
   spend: number | null;
   sales: number | null;
   cost_per_sale: number | null;
@@ -85,7 +86,8 @@ export interface LearningCampaign {
   rows: LearningRow[];
 }
 
-/** One customer group over the listed rows; `cap` = the newest listed campaign's with that group. */
+/** One customer group over the listed rows; `cap` only when every listed campaign with that group shares one cap and
+ * currency, else `null` with `caps_differ` (F51 planning #16). */
 export interface LearningGroup {
   customer_group_id: string;
   who: string;
@@ -93,6 +95,8 @@ export interface LearningGroup {
   spend: number;
   sales: number;
   cap: number | null;
+  /** Always served; optional only for hand-written fixtures. */
+  caps_differ?: boolean;
   cost_per_sale: number | null;
 }
 

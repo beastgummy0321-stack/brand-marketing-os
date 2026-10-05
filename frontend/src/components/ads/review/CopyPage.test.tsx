@@ -39,7 +39,7 @@ function period(overrides: Partial<ReviewPeriod> = {}): ReviewPeriod {
     series: [{
       metric_scope: "ad", attribution_key: "7d_click:omni_purchase", currency: "TWD", source: "graph",
       row_count: 14, days_present: 14,
-      metrics: { spend: 3000, impressions: 100, clicks: 10, purchases: 5, revenue: 4000, ctr: 1, cpc: 1, cpa: 600, roas: 1.3 },
+      metrics: { spend: 3000, impressions: 100, clicks: 10, purchases: 5, revenue: 4000, ctr: 1, cpc: 1, cpa: 600, roas_platform: 1.3 },
       known_counts: {},
     }],
     result_views: [{

@@ -16,8 +16,11 @@ Invariants (issue Done #2):
   rows, nulls `spent` (same rule as `month_summary._ad_spend_and_currency`); a campaign's own
   numbers are null when its own rows are unknown or the brand's rows mix currencies.
 - `money` covers purchase campaigns only (the cap view's `result_kind`); every other campaign
-  with spend this month is listed in `excluded`. `earn` = Σ (purchases × break-even − spend) and
-  is null with `earn_missing` naming why when any input is unknown.
+  with spend this month is listed in `excluded`. `earn_after_cost_and_ads` (F51 Contract F: the
+  key is its basis) = Σ (purchases × break-even − spend) -- break-even already deducts the product
+  cost -- and is null with `earn_missing` naming why when any input is unknown.
+- `pace.budget_to_date` (F51 Contract F) = `budget.whole(month budget × day_of_month ÷
+  days_in_month)`, null without a month budget -- the browser no longer rebuilds it.
 - Each block is read on its own: a read that fails inside one block nulls that block only.
 """
 
@@ -28,6 +31,7 @@ from datetime import datetime, time, timedelta
 from decimal import Decimal
 
 from app.ads import (
+    budget,
     change_control_launch,
     coverage,
     handoff_assignment,
@@ -234,9 +238,9 @@ def _money_totals(rows_by_campaign, campaigns, caps, start, end, brand_currency_
             reasons = [m for m in cap["missing"] if m in ("product", "product_cost")]
             earn_missing.extend(reasons or ["product_cost"])
     earn_missing = list(dict.fromkeys(earn_missing))
-    earn = None
+    earn_after_cost_and_ads = None
     if not earn_missing:
-        earn = sum(
+        earn_after_cost_and_ads = sum(
             (m["purchases"] * Decimal(str(cap["break_even"])) - m["spend"] for cap, m in included),
             Decimal(0),
         )
@@ -254,7 +258,8 @@ def _money_totals(rows_by_campaign, campaigns, caps, start, end, brand_currency_
             }
     return {
         "purchases": purchases, "cost_per_purchase": cost_per_purchase, "cap": one_cap,
-        "earn": earn, "earn_missing": earn_missing, "excluded": excluded,
+        "earn_after_cost_and_ads": earn_after_cost_and_ads, "earn_missing": earn_missing,
+        "excluded": excluded,
     }
 
 
@@ -292,7 +297,8 @@ def _money_block(conn, org_id, brand_id, win, rows_by_campaign, campaigns, caps,
     return {
         "purchases": _count_out(totals["purchases"]),
         "cost_per_purchase": _money_out(totals["cost_per_purchase"]),
-        "cap": totals["cap"], "earn": _money_out(totals["earn"]),
+        "cap": totals["cap"],
+        "earn_after_cost_and_ads": _money_out(totals["earn_after_cost_and_ads"]),
         "earn_missing": totals["earn_missing"], "excluded": totals["excluded"],
         "previous_same_period": previous,
     }
@@ -304,7 +310,7 @@ def _money_block(conn, org_id, brand_id, win, rows_by_campaign, campaigns, caps,
 
 
 def _pace_block(conn, org_id, brand_id, month, win, rows, spent) -> dict:
-    budget = month_budget.view(conn, org_id, brand_id, month)
+    month_plan = month_budget.view(conn, org_id, brand_id, month)
     by_day = defaultdict(lambda: Decimal(0))
     for row in rows:
         if spent is not None:
@@ -321,8 +327,12 @@ def _pace_block(conn, org_id, brand_id, month, win, rows, spent) -> dict:
     projected = None
     if spent is not None and win["data_days"] > 0:
         projected = spent / win["data_days"] * win["days_in_month"]
+    amount = month_plan["amount"]
     return {
-        "budget_amount": budget["amount"], "available": budget["available"],
+        "budget_amount": amount, "available": month_plan["available"],
+        "budget_to_date": None if amount is None else budget.whole(
+            amount * win["day_of_month"] / win["days_in_month"]
+        ),
         "daily": daily, "projected_month_end": _money_out(projected),
     }
 

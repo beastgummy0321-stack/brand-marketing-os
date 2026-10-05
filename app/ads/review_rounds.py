@@ -30,6 +30,31 @@ def model_input(evidence):
     return policy.encode({k: v for k, v in evidence.items() if k != "retry_of"})
 
 
+def _period_figures(period):
+    """F51 Contract F: one evidence period plus the ad's own window numbers the screen used to
+    rebuild -- `ad_spend {value, currency}` (`triage._ad_spend`: null on an unknown subgroup or
+    two currencies, never a sum across them; `currency` null across two) and `ad_result_view`
+    (`triage._ad_view`, the view `_ad_window` grades). Added at read time: the stored snapshot
+    is never rewritten, so its hash and anything approved on it stay put."""
+    if not isinstance(period, dict) or "series" not in period:
+        return period
+    from app.ads import triage  # lazy: triage reads modules that import this one
+
+    ad_series = [s for s in period["series"] if s.get("metric_scope") == "ad"]
+    currencies = {s.get("currency") for s in ad_series}
+    value = triage._ad_spend(period)  # noqa: SLF001 -- the one ad-spend rule
+    return {
+        **period,
+        "ad_spend": {
+            "value": value,
+            "currency": next(iter(currencies)) if len(currencies) == 1 else None,
+        },
+        "ad_result_view": (
+            triage._ad_view(period) if "result_views" in period else None  # noqa: SLF001
+        ),
+    }
+
+
 def get(conn, org, brand, campaign, review_id):
     changes.campaign(conn, org, brand, campaign)
     row = conn.execute(
@@ -50,6 +75,10 @@ def get(conn, org, brand, campaign, review_id):
         editable = {"ok": False, "mode": None, "reason": None}
     result["evidence_json"] = {
         **result["evidence_json"],
+        **{
+            period: _period_figures(result["evidence_json"][period])
+            for period in ("current", "previous") if period in result["evidence_json"]
+        },
         "conditions": {
             **result["evidence_json"].get("conditions", {}),
             "copy_editable": editable,
