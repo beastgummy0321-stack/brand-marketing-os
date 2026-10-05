@@ -91,7 +91,8 @@ class GuideCardLinksResolveTest(unittest.TestCase):
         for rule_id, facts in self._cases().items():
             card = guide_cards.RULES[rule_id](facts)
             self.assertIsNotNone(card, f"{rule_id} 的 facts 沒能觸發該規則，這組 facts 要修")
-            url = card["action_url"]
+            self.assertTrue(card["action_url"].startswith("/brands/"))
+            url = main.web.app_url(card["action_url"])
             status = self.client.get(url, follow_redirects=False).status_code
             if status == 404:
                 broken.append(f"{rule_id} → {url}（404）")
