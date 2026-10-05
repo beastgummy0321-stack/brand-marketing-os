@@ -213,7 +213,7 @@ function disabledLines(code: string): number[] {
 function hrefLines(code: string): number[] {
   const hits = new Set<number>();
   code.split("\n").forEach((line, i) => {
-    if (/\/ads\/campaigns\/\$\{|\binternalHref\b|tab=performance|onChangeTab\(["']performance["']|tab:\s*["']performance["']/.test(line)) hits.add(i + 1);
+    if (/\/ads\/campaigns\/\$\{|\binternalHref\b|tab=performance|onChangeTab\(["']performance["']|(?:tab|target):\s*["']performance["']/.test(line)) hits.add(i + 1);
   });
   for (const match of code.matchAll(/<a\s[\s\S]*?>/g)) {
     if (/href=\{/.test(match[0]) && !/target=["']_blank["']/.test(match[0])) {
@@ -413,6 +413,8 @@ describe("feedback guards (F51 Contract H／C／D ratchets)", () => {
 it("href detectors catch duplicate builders and internal raw anchors", () => {
   expect(hrefLines('const p = `/brands/${b}/ads/campaigns/${c}`')).toEqual([1]);
   expect(hrefLines('go("?tab=performance")')).toEqual([1]);
+  expect(hrefLines('const step = { target: "performance" }')).toEqual([1]);
+  expect(hrefLines('const widget = { id: "performance", target: "perf" }')).toEqual([]);
   expect(hrefLines('<a\n href={path}>open</a>')).toEqual([1]);
   expect(hrefLines('<a href={path} target="_blank">open</a>')).toEqual([]);
   expect(hrefLines('<Link to={path}>open</Link>')).toEqual([]);

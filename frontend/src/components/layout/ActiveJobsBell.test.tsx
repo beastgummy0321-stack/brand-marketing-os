@@ -1,4 +1,4 @@
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useLocation } from "react-router-dom";
 /** frontend/src/components/layout/ActiveJobsBell.test.tsx — F29-I05 (feature Contract G; prototype
  * v10 `topRight()`/`renderJobs()`, demos `jobs:ok` and `jobs:fail`): the top-bar pill says what
  * runs now and how many wait, the panel lists each job with its place in the whole queue and
@@ -169,4 +169,18 @@ describe("ActiveJobsBell", () => {
       vi.useRealTimers();
     }
   });
+});
+
+function LocationProbe() {
+  return <output aria-label="current path">{useLocation().pathname}</output>;
+}
+it("navigates inside the SPA with its basename exactly once", async () => {
+  vi.mocked(fetchActiveJobs).mockResolvedValue(QUEUE);
+  render(<MemoryRouter basename="/app" initialEntries={["/app/inbox"]}><ActiveJobsBell /><LocationProbe /></MemoryRouter>);
+  await userEvent.click(await screen.findByRole("button", { name: /正在同步成效/ }));
+  const link = screen.getByRole("link", { name: /同步成效・晨光隨行杯/ });
+  expect(link.getAttribute("href")).toBe("/app/brands/brd_bughunt/ads/connections");
+  await userEvent.click(link);
+  expect(screen.getByLabelText("current path").textContent).toBe("/brands/brd_bughunt/ads/connections");
+  expect(screen.queryByRole("dialog")).toBeNull();
 });
