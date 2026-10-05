@@ -54,7 +54,11 @@ def prepare_material_pack(conn, org_id, brand_id, pack):
     return prepare(conn, org_id, brand_id, pack)
 
 
-def start_material_pack(conn, org_id, brand_id, pack_id):
+def start_material_pack(conn, org_id, brand_id, pack_id) -> str:
+    """Start the pack's one set and return the status it was found in (F50 Contract J):
+    `idle` and `failed` are started on this same pack (a failed round is restarted, its saved
+    versions and selections kept); `queued`／`running`／`done` are returned untouched. A failed
+    enqueue raises and leaves the set in the status it had, so the caller may retry."""
     from app.workbench.material_handoff import start
     return start(conn, org_id, brand_id, pack_id)
 

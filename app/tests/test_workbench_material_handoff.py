@@ -167,8 +167,47 @@ def test_a_failed_enqueue_leaves_the_set_idle_so_the_same_pack_starts_on_retry(s
     (after,) = workbench.briefs_for_source(conn, org, brand, "schedule_node", brief["source_ref"])
     assert after["status"] == "idle"
     enqueue.side_effect = None
-    workbench.start_material_pack(conn, org, brand, pack)
-    workbench.start_material_pack(conn, org, brand, pack)  # queued now: never restarted
+    assert workbench.start_material_pack(conn, org, brand, pack) == "idle"
+    # queued now: never restarted
+    assert workbench.start_material_pack(conn, org, brand, pack) == "queued"
     (queued,) = workbench.briefs_for_source(conn, org, brand, "schedule_node", brief["source_ref"])
     assert queued["status"] == "queued"
     assert enqueue.call_count == 2
+
+
+def test_a_failed_set_is_restarted_once_on_the_same_pack_keeping_its_versions(setup):
+    """F50 Contract J (intake #22): `start` returns the status it found and restarts a failed
+    set on this same pack -- one enqueue, no second pack, saved versions and selections kept."""
+    conn, org, brand, enqueue = setup
+    pack, brief = prepare(setup, "copy")
+    saved = save(setup, brief, "copy", {"sets": [{"body": "上一輪的文案"}]})
+    repository.select_version_for_set(conn, org, brand, brief["id"], saved["id"])
+    repository.mark_brief_failed(conn, org, brand, brief["id"], "上一輪失敗了。")
+
+    assert workbench.start_material_pack(conn, org, brand, pack) == "failed"
+    assert enqueue.call_count == 1
+    assert enqueue.call_args.kwargs["lock"] == f"workbench:{brief['id']}:copy"
+    assert workbench.start_material_pack(conn, org, brand, pack) == "queued"
+    assert enqueue.call_count == 1
+    (after,) = workbench.briefs_for_source(conn, org, brand, "schedule_node", brief["source_ref"])
+    assert after["status"] == "queued"
+    assert after["pack_id"] == pack
+    adopted = workbench.adopted_output(conn, org, brand, brief["id"], "copy")
+    assert adopted is not None and adopted["is_adopted"]
+    assert adopted["id"] == saved["id"]
+    for status in ("running", "done"):
+        repository.mark_brief_status(conn, org, brand, brief["id"], status)
+        assert workbench.start_material_pack(conn, org, brand, pack) == status
+    assert enqueue.call_count == 1
+
+
+def test_a_failed_restart_whose_enqueue_fails_stays_failed_with_its_reason(setup):
+    conn, org, brand, enqueue = setup
+    pack, brief = prepare(setup, "copy")
+    repository.mark_brief_failed(conn, org, brand, brief["id"], "上一輪失敗了。")
+    enqueue.side_effect = RuntimeError("queue down")
+    with pytest.raises(RuntimeError):
+        workbench.start_material_pack(conn, org, brand, pack)
+    after = repository.get_brief(conn, org, brand, brief["id"])
+    assert after is not None
+    assert (after["status"], after["last_error"]) == ("failed", "上一輪失敗了。")

@@ -206,8 +206,15 @@ export interface FreeParseSpec {
   key_message: string | null;
 }
 
+/** F50 Contract J: why a parse fell back (`app/workbench/free_parse.py::REASONS`). */
+export type FreeParseReason = "llm_failed" | "reply_unreadable" | "reply_invalid";
+
 export interface FreeParseResult {
   parsed: boolean;
+  /** Present when `parsed` is false; `note` already names it in words. */
+  reason?: FreeParseReason;
+  /** The AI call's `llm_task.error_code` when `reason` is `llm_failed`. */
+  error_code?: string | null;
   note: string | null;
   spec: FreeParseSpec;
 }

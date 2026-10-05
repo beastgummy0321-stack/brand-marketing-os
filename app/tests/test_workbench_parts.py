@@ -8,6 +8,7 @@ image-prompt round may run before any copy is selected (ARCHITECTURE.md §5.8).
 """
 
 import unittest
+from unittest import mock
 
 from fastapi.testclient import TestClient
 
@@ -112,6 +113,108 @@ class RunImagePromptWithoutAdoptedCopyTest(_WorkbenchPartsTestBase):
             "SELECT request_json FROM workbench_brief WHERE id = %s", (set_id,)
         ).fetchone()
         self.assertEqual(row["request_json"]["parts"], ["copy", "image_prompt"])
+
+
+# -- 案例 4：F50 Contract J（intake #11）——job 死掉的一輪不再永遠「生成中」 ------------------
+
+class StuckRoundReconcileTest(_WorkbenchPartsTestBase):
+    """`run_part`／`set_detail` read a `queued`／`running` round against its job through
+    `_reconcile_running`: a dead round is marked failed and the next run proceeds; a live job
+    still refuses `round_running`."""
+
+    def _queued_set_without_job(self) -> str:
+        # The pack is written with the enqueue swallowed: the set reads `queued` while no
+        # procrastinate job ever carried its lock (a killed worker／a lost enqueue).
+        with mock.patch("app.background.enqueue", return_value=True):
+            pack_id = self._submit_pack([self._one_set("1", {"copy": 1})])
+        set_id = self._briefs(pack_id)[0]["id"]
+        self.assertIsNone(background_module.outcome(f"workbench:{set_id}:copy"))
+        return set_id
+
+    def _age(self, set_id: str, seconds: float) -> None:
+        web.conn.execute(
+            "UPDATE workbench_brief SET updated_at = now() - make_interval(secs => %s)"
+            " WHERE id = %s",
+            (seconds, set_id),
+        )
+        web.conn.commit()
+
+    def _brief(self, set_id: str) -> dict:
+        brief = workbench_repo.get_brief(web.conn, self.org_id, self.brand_id, set_id)
+        assert brief is not None
+        return brief
+
+    def test_queued_without_job_older_than_the_timeout_runs_again(self):
+        set_id = self._queued_set_without_job()
+        self._age(set_id, workbench_repo.GENERATION_TIMEOUT_S + 60)
+
+        detail = workbench_repo.set_detail(web.conn, self.org_id, self.brand_id, set_id)
+        assert detail is not None
+        self.assertEqual(detail["generation"]["status"], "failed")
+        self.assertEqual(detail["generation"]["error"], background_module.JOB_FAILED_MESSAGE)
+
+        self._age(set_id, workbench_repo.GENERATION_TIMEOUT_S + 60)
+        web.conn.execute(
+            "UPDATE workbench_brief SET status = 'queued' WHERE id = %s", (set_id,)
+        )
+        web.conn.commit()
+        workbench_repo.run_part(web.conn, self.org_id, self.brand_id, set_id, "copy")
+
+        brief = self._brief(set_id)
+        self.assertEqual(brief["status"], "queued")
+        # The old round reads failed: its reason stays until a round ends done.
+        self.assertEqual(brief["last_error"], background_module.JOB_FAILED_MESSAGE)
+        self.assertTrue(background_module.is_active(f"workbench:{set_id}:copy"))
+
+    def test_queued_without_job_inside_the_timeout_still_refuses(self):
+        set_id = self._queued_set_without_job()
+        with self.assertRaises(ValueError) as ctx:
+            workbench_repo.run_part(web.conn, self.org_id, self.brand_id, set_id, "copy")
+        self.assertEqual(str(ctx.exception), "round_running")
+        self.assertEqual(self._brief(set_id)["status"], "queued")
+
+    def test_a_live_job_still_refuses_however_long_it_waited(self):
+        pack_id = self._submit_pack([self._one_set("1", {"copy": 1})])
+        set_id = self._briefs(pack_id)[0]["id"]
+        live = background_module.outcome(f"workbench:{set_id}:copy")
+        assert live is not None
+        self.assertEqual(live["state"], "running")
+        self._age(set_id, workbench_repo.GENERATION_TIMEOUT_S * 10)
+
+        with self.assertRaises(ValueError) as ctx:
+            workbench_repo.run_part(web.conn, self.org_id, self.brand_id, set_id, "copy")
+        self.assertEqual(str(ctx.exception), "round_running")
+        # A live job on another part of the same set keeps the round live too.
+        with self.assertRaises(ValueError):
+            workbench_repo.run_part(
+                web.conn, self.org_id, self.brand_id, set_id, "video_script", count=1,
+            )
+        self.assertEqual(self._brief(set_id)["status"], "queued")
+
+    def test_a_failed_job_marks_the_round_failed_at_once_with_its_text(self):
+        set_id = self._queued_set_without_job()
+        failed = {"state": "failed", "code": "unexpected", "text": "工作中斷了。",
+                  "finished_at": None, "started_at": None}
+
+        def outcome(lock):
+            return failed if lock == f"workbench:{set_id}:copy" else None
+
+        with mock.patch("app.background.outcome", side_effect=outcome):
+            workbench_repo.run_part(web.conn, self.org_id, self.brand_id, set_id, "copy")
+
+        brief = self._brief(set_id)
+        self.assertEqual(brief["status"], "queued")
+        self.assertEqual(brief["last_error"], "工作中斷了。")
+
+    def test_a_finished_round_is_never_overwritten(self):
+        set_id = self._queued_set_without_job()
+        self._age(set_id, workbench_repo.GENERATION_TIMEOUT_S + 60)
+        web.conn.execute("UPDATE workbench_brief SET status = 'done' WHERE id = %s", (set_id,))
+        web.conn.commit()
+
+        detail = workbench_repo.set_detail(web.conn, self.org_id, self.brand_id, set_id)
+        assert detail is not None
+        self.assertEqual(detail["generation"], {"status": "done", "error": None})
 
 
 if __name__ == "__main__":
