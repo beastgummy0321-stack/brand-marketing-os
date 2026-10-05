@@ -175,6 +175,47 @@ class ProviderFailureTest(_BriefTestBase):
         self.assertEqual(detail["cap"]["missing"], ["product"])
         self.assertEqual(detail["status"], "draft")
         self.assertEqual(self._task_count(), 1)
+        # F50 Contract J: the draft says why the sentence was not read; the row keeps the
+        # provider's own error (never overwritten by the refusal).
+        self.assertEqual(detail["parse_refusal"],
+                         {"code": "llm_failed", "reason": "AI 這次沒有回覆（等太久沒有回應）"})
+        row = web.conn.execute(
+            "SELECT error, error_code FROM llm_task WHERE id = %s",
+            (detail["context_json"]["llm_task_id"],),
+        ).fetchone()
+        self.assertEqual((row["error"], row["error_code"]),
+                         ("AI 服務逾時未回應，請再試一次。", "timeout"))
+
+
+class ParseRefusalTest(_BriefTestBase):
+    """F50 Contract J: a parse reply the program does not use is named (`brief.REFUSALS`), written
+    on its task row and served as `parse_refusal`; the create still writes the fallback draft."""
+
+    def _row(self, detail: dict) -> dict:
+        return web.conn.execute(
+            "SELECT error, error_code FROM llm_task WHERE id = %s",
+            (detail["context_json"]["llm_task_id"],),
+        ).fetchone()
+
+    def test_each_unused_reply_names_its_rule(self):
+        for reply, code in (("沒有 JSON", "reply_unreadable"), ("[1, 2]", "reply_invalid"),
+                            (json.dumps({"objective": "爆紅"}), "objective_unknown")):
+            with self.subTest(code=code):
+                brief.PROVIDER = _fake(reply)
+                detail = self._create()
+                reason = brief.REFUSALS[code]
+                self.assertFalse(detail["parsed"])
+                self.assertEqual(detail["parse_refusal"], {"code": code, "reason": reason})
+                self.assertEqual(dict(self._row(detail)),
+                                 {"error": f"{code}: {reason}", "error_code": "program_refused"})
+                self.assertEqual(detail["objective"], "購買")  # the fallback draft
+
+    def test_a_used_reply_has_no_refusal(self):
+        brief.PROVIDER = _fake(json.dumps({"objective": "購買", "cap": None, "product_ids": []}))
+        detail = self._create()
+        self.assertTrue(detail["parsed"])
+        self.assertIsNone(detail["parse_refusal"])
+        self.assertEqual(dict(self._row(detail)), {"error": None, "error_code": None})
 
 
 class NullTargetSurvivesTest(_BriefTestBase):

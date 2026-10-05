@@ -22,7 +22,7 @@ from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi_repo
 from app.core import db as coredb
 from app.core import settings as coresettings
-from app.llm import providers
+from app.llm import gateway, providers
 from app.meta import repository as meta_repo
 from app.tests.fixtures.ads_external import outcome_seed
 
@@ -120,6 +120,17 @@ class StrategyTestBase(unittest.TestCase):
         return strategy.generate(
             web.conn, self.org_id, self.brand_id, self.campaign["id"], actor=ACTOR,
         )
+
+    def _assert_refusal(self, exc: Exception, code: str) -> None:
+        """F50 Contract J: the refusal names its rule, keeps `strategy_failed` as `str()`, and is
+        written on the judged task row."""
+        assert isinstance(exc, plan.PlannerRefused)
+        reason = strategy.REFUSALS[code]
+        self.assertEqual((str(exc), exc.code, exc.reason), ("strategy_failed", code, reason))
+        row = gateway.get_task(web.conn, exc.task_id)
+        assert row is not None
+        self.assertEqual((row["error_code"], row["error"]),
+                         ("program_refused", f"{code}: {reason}"))
 
 
 class AmountsSumToScenarioTotalTest(StrategyTestBase):
@@ -334,7 +345,7 @@ class BadPctSumTest(StrategyTestBase):
 
         with self.assertRaises(ValueError) as ctx:
             self._generate()
-        self.assertEqual(str(ctx.exception), "strategy_failed")
+        self._assert_refusal(ctx.exception, "pct_invalid")
 
 
 _DUPLICATE_ROLE_REPLY = json.dumps({
@@ -357,7 +368,7 @@ class DuplicateRoleTest(StrategyTestBase):
 
         with self.assertRaises(ValueError) as ctx:
             self._generate()
-        self.assertEqual(str(ctx.exception), "strategy_failed")
+        self._assert_refusal(ctx.exception, "role_repeated")
 
 
 class AlreadyAdoptedTest(StrategyTestBase):
@@ -572,6 +583,9 @@ class ProviderFailureTest(StrategyTestBase):
         with self.assertRaises(ValueError) as ctx:
             self._generate()
         self.assertEqual(str(ctx.exception), "strategy_failed")
+        assert isinstance(ctx.exception, plan.PlannerRefused)
+        self.assertEqual(ctx.exception.code, "llm_failed")
+        self.assertEqual(len(strategy.PROVIDER.calls), 1)  # a provider failure is not retried
 
         campaign = ads_repo.get_campaign(web.conn, self.org_id, self.brand_id, self.campaign["id"])
         self.assertEqual(campaign["status"], "draft")
@@ -1425,7 +1439,7 @@ class StartingPointFreshBrandTest(StrategyTestBase):
 
         with self.assertRaises(ValueError) as ctx:
             self._generate()
-        self.assertEqual(str(ctx.exception), "strategy_failed")
+        self._assert_refusal(ctx.exception, "role_unavailable")
 
         campaign = ads_repo.get_campaign(web.conn, self.org_id, self.brand_id, self.campaign["id"])
         self.assertEqual(campaign["status"], "draft")
@@ -1584,3 +1598,88 @@ class ValidateReplyAvailableSetTest(unittest.TestCase):
         assert validated is not None
         self.assertEqual([row["role"] for row in validated["allocation"]],
                          ["new", "retarget", "explore"])
+
+
+# -- F50 Contract J (R7 B3): refusal codes, and the one automatic retry (user ruling 2026-10-04) --
+
+
+class _Replies:
+    """A provider answering `texts` in order (the last one repeats)."""
+
+    name = "fake"
+
+    def __init__(self, *texts: str):
+        self.texts, self.calls = list(texts), []
+
+    def complete(self, *, model, system, messages, max_tokens, timeout_s=120.0, effort=None,
+                 tools=None, org_id=None):
+        self.calls.append({"messages": messages})
+        return providers.ProviderResponse(
+            output_text=self.texts[min(len(self.calls), len(self.texts)) - 1], structured=None,
+            usage=providers.Usage(input_tokens=100, output_tokens=50), stop_reason="end_turn",
+        )
+
+
+def _number_reply() -> str:
+    reply = json.loads(_VALID_REPLY)
+    reply["why"] = ["上一期每筆 392 最便宜"]
+    return json.dumps(reply, ensure_ascii=False)
+
+
+class StrategyRefusalTest(StrategyTestBase):
+    """Contract J: a strategy refused by a program rule is asked once more with the refusal in
+    the prompt (the retry's reply is used); a second refusal is raised with its code, stored on
+    its row and printed in the 502."""
+
+    def setUp(self):
+        super().setUp()
+        self.campaign = self._create_campaign()
+        web.conn.commit()  # the route reads it on its own connection
+
+    def _rows(self) -> list:
+        return gateway.find_tasks_for_scope(
+            web.conn, org_id=self.org_id, brand_id=self.brand_id, task_type="ads_strategy",
+            context_scope={"campaign_id": self.campaign["id"]},
+        )
+
+    def test_a_refused_strategy_is_asked_once_more_with_the_refusal_and_the_retry_is_used(self):
+        provider = _Replies(_number_reply(), _VALID_REPLY)
+        strategy.PROVIDER = provider
+        detail = self._generate()
+        self.assertEqual(len(provider.calls), 2)
+        retry = provider.calls[1]["messages"][0]["content"]
+        self.assertNotIn(plan.RETRY_HEADER, provider.calls[0]["messages"][0]["content"])
+        self.assertTrue(retry.endswith(
+            f"{plan.RETRY_HEADER}（這次請改掉下面的問題，其他規則照舊）\n"
+            f"- number_in_prose：{strategy.REFUSALS['number_in_prose']}"))
+        first, second = self._rows()
+        self.assertEqual(first["error"],
+                         f"number_in_prose: {strategy.REFUSALS['number_in_prose']}")
+        self.assertEqual(detail["budget_basis_json"]["basis"]["llm_task_id"], second["id"])
+
+    def test_a_second_refusal_is_raised_stored_and_printed_in_the_502(self):
+        strategy.PROVIDER = _Replies(_number_reply(), _BAD_SUM_REPLY)
+        response = TestClient(main.app).post(
+            f"/api/ads/brands/{self.brand_id}/campaigns/{self.campaign['id']}/strategy")
+        self.assertEqual(response.status_code, 502)
+        reason = strategy.REFUSALS["pct_invalid"]
+        self.assertEqual(response.json()["error"], {
+            "code": "strategy_failed",
+            "message": f"{strategy.STRATEGY_FAILED_MESSAGE}（{reason}）",
+            "details": {"refusal": "pct_invalid", "reason": reason},
+        })
+        self.assertEqual([row["error"].split(":")[0] for row in self._rows()],
+                         ["number_in_prose", "pct_invalid"])
+        campaign = ads_repo.get_campaign(web.conn, self.org_id, self.brand_id, self.campaign["id"])
+        self.assertEqual(campaign["budget_basis_json"], {})
+
+    def test_every_refusal_code_has_a_sentence(self):
+        self.assertEqual(set(strategy.REFUSALS), {
+            "llm_failed", "reply_unreadable", "reply_invalid", "number_in_prose",
+            "role_unavailable", "pct_invalid", "role_repeated",
+        })
+        for code in ("reply_invalid", "number_in_prose", "role_unavailable"):
+            self.assertEqual(strategy._check_reply(  # noqa: SLF001
+                {"allocation": "x"} if code == "reply_invalid" else
+                {**json.loads(_VALID_REPLY), "why": ["多 20%"]} if code == "number_in_prose"
+                else json.loads(_VALID_REPLY), frozenset({"new", "explore"}))[1], code)

@@ -20,6 +20,7 @@ from app.ads import (
     assets,
     brief,
     budget,
+    busy,
     change_control_data,
     change_control_launch,
     channels,
@@ -123,7 +124,18 @@ def _with_readiness(actor, brand_id: str, campaign: dict | None) -> dict | None:
     )
     # F48-I06: this period's coordinate menu and the capacity line (Contracts P, C).
     campaign.update(plan.served(web.conn, actor.org_id, brand_id, campaign))
+    # F50 Contract J (R7 B4): a planner call still running for this campaign survives a reload.
+    campaign["busy"] = busy.busy_state(web.conn, actor.org_id, brand_id, campaign["id"])
     return campaign
+
+
+def _refused(exc: plan.PlannerRefused, failed_message: str) -> web.ApiError:
+    """F50 Contract J (R7 B3): a planner refusal's 502 -- `code` stays the module's `…_failed`,
+    `message` = its failed sentence + 「（{reason}）」, `details` names the rule."""
+    return web.ApiError(
+        502, str(exc), f"{failed_message}（{exc.reason}）",
+        {"refusal": exc.code, "reason": exc.reason},
+    )
 
 
 @router.get("/brands/{brand_id}/readiness")
@@ -217,6 +229,7 @@ _CREATE_CAMPAIGN_ERRORS = {
     "landing_url_unknown": (400, LANDING_URL_UNKNOWN_MESSAGE),
     "landing_url_invalid": (400, LANDING_URL_INVALID_MESSAGE),
     "customer_group_unknown": (400, "受眾只能選這個賣法的顧客群。"),
+    "campaign_busy": (409, busy.BUSY_MESSAGE),
 }
 
 
@@ -236,11 +249,14 @@ def create_campaign(request: Request, brand_id: str, body: CreateCampaignRequest
         "landing_url": body.landing_url, "customer_group_ids": body.customer_group_ids,
     }
     try:
-        campaign = brief.create_draft(
-            web.conn, actor.org_id, brand_id, goal_text=body.goal_text or "",
-            start_date=body.start_date or "", end_date=body.end_date or "",
-            constraints=body.constraints, actor=str(actor.user_id), picks=picks,
-        )
+        # F50 Contract J: a second create while this brand's parse runs is refused (no campaign
+        # exists yet, so the lock is the brand's).
+        with busy.claim(web.conn, brand_id, "brief"):
+            campaign = brief.create_draft(
+                web.conn, actor.org_id, brand_id, goal_text=body.goal_text or "",
+                start_date=body.start_date or "", end_date=body.end_date or "",
+                constraints=body.constraints, actor=str(actor.user_id), picks=picks,
+            )
     except ValueError as exc:
         code = str(exc)
         status, message = _CREATE_CAMPAIGN_ERRORS.get(code, (400, code))
@@ -338,6 +354,7 @@ _STRATEGY_ERRORS = {
     "campaign_unknown": (404, CAMPAIGN_UNKNOWN_MESSAGE),
     "strategy_failed": (502, strategy.STRATEGY_FAILED_MESSAGE),
     "strategy_already_adopted": (400, "這個 Campaign 已經採用過策略，不能重新產生。"),
+    "campaign_busy": (409, busy.BUSY_MESSAGE),
 }
 
 
@@ -347,9 +364,12 @@ def generate_strategy(request: Request, brand_id: str, campaign_id: str):
     actor = web.require_actor(request)
     web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
     try:
-        campaign = strategy.generate(
-            web.conn, actor.org_id, brand_id, campaign_id, actor=str(actor.user_id),
-        )
+        with busy.claim(web.conn, campaign_id, "strategy"):
+            campaign = strategy.generate(
+                web.conn, actor.org_id, brand_id, campaign_id, actor=str(actor.user_id),
+            )
+    except plan.PlannerRefused as exc:
+        raise _refused(exc, strategy.STRATEGY_FAILED_MESSAGE) from exc
     except ValueError as exc:
         code = str(exc)
         status, message = _STRATEGY_ERRORS.get(code, (400, code))
@@ -494,6 +514,7 @@ _PLAN_ERRORS = {
     "dates_required": (400, brief.DATES_REQUIRED_MESSAGE),
     "budget_exceeds_approval": (400, plan.BUDGET_EXCEEDS_APPROVAL_MESSAGE),
     "delivery_plan_failed": (502, plan.PLAN_FAILED_MESSAGE),
+    "campaign_busy": (409, busy.BUSY_MESSAGE),
 }
 
 
@@ -503,9 +524,12 @@ def adopt_strategy(request: Request, brand_id: str, campaign_id: str):
     actor = web.require_actor(request)
     web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
     try:
-        campaign = plan.adopt_strategy(
-            web.conn, actor.org_id, brand_id, campaign_id, actor=str(actor.user_id),
-        )
+        with busy.claim(web.conn, campaign_id, "plan"):
+            campaign = plan.adopt_strategy(
+                web.conn, actor.org_id, brand_id, campaign_id, actor=str(actor.user_id),
+            )
+    except plan.PlannerRefused as exc:
+        raise _refused(exc, plan.PLAN_FAILED_MESSAGE) from exc
     except ValueError as exc:
         code = str(exc)
         status, message = _PLAN_ERRORS.get(code, (400, code))

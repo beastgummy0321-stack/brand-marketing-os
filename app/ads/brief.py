@@ -49,6 +49,7 @@ from app.ads import (
     external_models,
     manual_settings,
     objectives,
+    plan,
     planner_context,
     wizard_options,
 )
@@ -73,6 +74,19 @@ DATES_REQUIRED_MESSAGE = (
     "投放的開始與結束日期請一起填，或兩個都留空讓行銷駕駛艙從你的描述判斷。"
 )
 END_BEFORE_START_MESSAGE = "結束日期不能早於開始日期。"
+
+# The parse call's timeout; `busy.py` reads it (F50 Contract J).
+TIMEOUT_S = 60.0
+
+#: F50 Contract J (R7 B3): why a parse reply was not used, code -> reason. The create never dead-
+#: ends (module docstring): a refusal is written on the task row, logged and served beside
+#: `parsed: false` as `parse_refusal`, and the fallback draft is written.
+REFUSALS = {
+    "llm_failed": plan.REFUSALS["llm_failed"],
+    "reply_unreadable": "AI 的回覆不是看得懂的格式",
+    "reply_invalid": "AI 的回覆缺了欄位，或格式不對",
+    "objective_unknown": "AI 讀出的目標不在可選的清單裡",
+}
 
 _FALLBACK_PARSED = {
     "objective": "購買", "cap": None, "product_ids": [], "audience_hint": None, "notes": None,
@@ -225,6 +239,23 @@ def _validate_reply(data) -> dict | None:
         "audience_hint": audience_hint if isinstance(audience_hint, str) else None,
         "notes": notes if isinstance(notes, str) else None,
     }
+
+
+def _parse_refusal(task_row: dict) -> "plan.PlannerRefused | None":
+    """The rule that keeps this parse reply out (`REFUSALS`), else `None` (the reply is used)."""
+    if task_row["status"] != "succeeded":
+        return plan.PlannerRefused("brief_parse_failed", "llm_failed",
+                                   plan.llm_failed_reason(task_row), task_row["id"])
+    data = gateway.parse_json_reply(task_row.get("rendered_output") or "")
+    if data is None:
+        code = "reply_unreadable"
+    elif not isinstance(data, dict):
+        code = "reply_invalid"
+    elif _validate_reply(data) is None:
+        code = "objective_unknown"
+    else:
+        return None
+    return plan.PlannerRefused("brief_parse_failed", code, REFUSALS[code], task_row["id"])
 
 
 # A create with no dates runs from the org's today for this many days (both the structured and
@@ -552,17 +583,18 @@ def create_draft(conn, org_id: str, brand_id: str, *, goal_text: str, start_date
         conn, PROVIDER, brand_id=brand_id, task_type="ads_brief_parse",
         prompt_template_id="ads_brief_parse", prompt_template_version="v1",
         system=None, messages=[{"role": "user", "content": prompt}], context=context,
-        options=gateway.TaskOptions(max_tokens=2000, timeout_s=60.0, max_retries=0),
+        options=gateway.TaskOptions(max_tokens=2000, timeout_s=TIMEOUT_S, max_retries=0),
     )
 
     parsed_ok = False
     fields = dict(_FALLBACK_PARSED)
-    if task_row["status"] == "succeeded":
-        data = gateway.parse_json_reply(task_row.get("rendered_output") or "")
-        validated = _validate_reply(data) if data is not None else None
-        if validated is not None:
-            parsed_ok = True
-            fields = validated
+    refusal = _parse_refusal(task_row)
+    if refusal is None:
+        validated = _validate_reply(gateway.parse_json_reply(task_row.get("rendered_output") or ""))
+        assert validated is not None  # `_parse_refusal` judged this same reply
+        parsed_ok, fields = True, validated
+    else:
+        plan.note_refusal(conn, refusal, campaign_id=None, brand_id=brand_id, attempt=1)
 
     # 日期：呼叫端給了兩個就是「你說的」；兩個都沒給就看模型從句子解析出來的 `period`
     # 算不算數——F50：模型讀出來的是 `"parsed"`（猜的，請確認），不是「你說的」；解析不出來
@@ -706,4 +738,8 @@ def create_draft(conn, org_id: str, brand_id: str, *, goal_text: str, start_date
     detail = ads_repo.campaign_detail(conn, org_id, brand_id, row["id"])
     assert detail is not None  # 剛剛才插入的那一列，一定讀得到
     detail["parsed"] = parsed_ok
+    # F50 Contract J: why the sentence was not read (`null` when it was).
+    detail["parse_refusal"] = (
+        None if refusal is None else {"code": refusal.code, "reason": refusal.reason}
+    )
     return detail

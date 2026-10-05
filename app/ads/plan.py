@@ -19,6 +19,7 @@ Contract G gate is met by construction); hand edits obey the same menu and 「�
 Private to app/ads (container contract §1): only `routes.py` imports this module's functions.
 """
 
+import logging
 import re
 from collections.abc import Set as AbstractSet
 from datetime import date
@@ -43,6 +44,8 @@ from app.llm import gateway, providers
 
 DEPARTMENT_PATH = APP_DIR / "departments" / "ads" / "delivery_plan.md"
 
+logger = logging.getLogger(__name__)
+
 # 唯一的供應商實例，比照 app/ads/strategy.py：測試用
 # `mock.patch.object(plan, "PROVIDER", FakeProvider(...))` 換掉。
 PROVIDER = providers.AnthropicProvider()
@@ -60,6 +63,92 @@ _SCENE_MAX_CHARS = 60
 
 PLAN_FAILED_MESSAGE = "AI 沒能整理出可用的投放結構，請再試一次。"
 BUDGET_EXCEEDS_APPROVAL_MESSAGE = "這個金額超過目前核准的每日上限，請先重新核准這個品牌的投放預算。"
+
+# The delivery-plan call's timeout; `busy.py` reads it (a running row older than this + 30 s is
+# not busy, F50 Contract J).
+TIMEOUT_S = 60.0
+
+#: F50 Contract J (R7 B3): every rule that refuses a delivery-plan reply, code -> reason (a short
+#: plain sentence; the route prints it after `PLAN_FAILED_MESSAGE`). `llm_failed` gets the
+#: provider's kind appended (`llm_failed_reason`).
+REFUSALS = {
+    "llm_failed": "AI 這次沒有回覆",
+    "reply_unreadable": "AI 的回覆不是看得懂的格式",
+    "reply_invalid": "AI 的回覆缺了欄位、廣告名稱重複，或情境不合規定",
+    "menu_violation": "AI 排的角色或廣告則數超出這期給的範圍",
+    "offer_unused": "這期有優惠，AI 排的廣告都沒用上",
+    "name_forbidden": "AI 取的廣告名稱用了不能講的字",
+    "group_unbound": "AI 排的廣告沒有對上這期列出的顧客群",
+    "carried_changed": "AI 讓沿用廣告的投放組換了一群人",
+    "replace_rerun": "又排了上一期要換掉的組合",
+}
+
+#: `llm_task.error_code` (the gateway's kinds) in plain words, for `llm_failed`.
+LLM_ERROR_WORDS = {
+    "timeout": "等太久沒有回應",
+    "refused": "模型婉拒了這次請求",
+    "provider": "AI 服務出錯",
+    "truncated": "回覆太長被截斷",
+    "spend_cap": "這個月的 AI 用量已達上限",
+    "no_credentials": "還沒有可用的 AI 金鑰",
+}
+
+RETRY_HEADER = "【上一次的回覆被程式退回】"
+
+
+class PlannerRefused(ValueError):
+    """F50 Contract J: a planner reply (delivery plan or strategy) refused by one program rule.
+    `str()` stays the module's failed code (`delivery_plan_failed`／`strategy_failed`, the
+    routes' existing mappings); `code` names the rule (the module's `REFUSALS`), `reason` is its
+    sentence, `task_id` the `llm_task` row judged (`None` when no model was asked)."""
+
+    def __init__(self, failed: str, code: str, reason: str, task_id: str | None = None):
+        super().__init__(failed)
+        self.code, self.reason, self.task_id = code, reason, task_id
+
+
+def llm_failed_reason(task_row: dict) -> str:
+    """「AI 這次沒有回覆（{the provider's kind in plain words}）」 -- an unknown kind reads as a
+    provider error, never as a guessed cause."""
+    words = LLM_ERROR_WORDS.get(task_row.get("error_code") or "", LLM_ERROR_WORDS["provider"])
+    return f"{REFUSALS['llm_failed']}（{words}）"
+
+
+def refusal_section(refused: list[PlannerRefused]) -> str:
+    """The retry prompt's section: each refusal's code and sentence (user ruling 2026-10-04)."""
+    lines = [f"- {exc.code}：{exc.reason}" for exc in refused]
+    return (RETRY_HEADER + "（這次請改掉下面的問題，其他規則照舊）\n" + "\n".join(lines))
+
+
+def note_refusal(conn, exc: PlannerRefused, *, campaign_id: str | None, attempt: int,
+                 brand_id: str | None = None) -> None:
+    """Writes the refusal on its task row (`gateway.record_refusal`) and logs it at INFO with the
+    campaign (a brief parse has none yet: its brand). An `llm_failed` row already holds the
+    provider's own `error`／`error_code`, which is never overwritten."""
+    if exc.task_id is not None and exc.code != "llm_failed":
+        gateway.record_refusal(conn, exc.task_id, exc.code, exc.reason)
+    logger.info("ads planner refused: %s campaign=%s brand=%s code=%s attempt=%s task=%s",
+                str(exc), campaign_id, brand_id, exc.code, attempt, exc.task_id)
+
+
+def ask_with_one_retry(conn, ask, *, campaign_id: str):
+    """User ruling 2026-10-04 (F50 lead note): a reply refused by a program rule is asked once
+    more, the second prompt carrying the refusals (`ask(refused)` builds the prompt from them);
+    a second refusal is raised. A provider failure (`llm_failed`) is no rule's refusal and is
+    raised at once. At most one extra model call per press."""
+    refused: list[PlannerRefused] = []
+    while True:
+        try:
+            return ask(refused)
+        except PlannerRefused as exc:
+            note_refusal(conn, exc, campaign_id=campaign_id, attempt=len(refused) + 1)
+            if refused or exc.code == "llm_failed" or exc.task_id is None:
+                raise
+            refused.append(exc)
+
+
+def _refused(code: str, task_id: str | None) -> PlannerRefused:
+    return PlannerRefused("delivery_plan_failed", code, REFUSALS[code], task_id)
 
 
 def _days(start_date, end_date) -> int:
@@ -183,53 +272,69 @@ def _validate_reply(data, roles: set, *, covered: AbstractSet[str] = frozenset()
     them out), `room` = role -> how many ads the reply may still add there (default
     `_MAX_ADS_PER_GROUP`), `limit` = the most ads the reply may hold in all (`ceiling − carried`,
     refused above it like the scene rule), `taken` = carried ad names (a reply name may not
-    repeat one)."""
+    repeat one). F50 Contract J: `_check_reply` is the same judgement naming the rule."""
+    return _check_reply(data, roles, covered=covered, room=room, limit=limit, taken=taken)[0]
+
+
+def _check_reply(data, roles: AbstractSet[str], *, covered: AbstractSet[str] = frozenset(),
+                 room: dict | None = None, limit: int | None = None,
+                 taken: AbstractSet[str] = frozenset()) -> tuple[list | None, str | None]:
+    """`_validate_reply`'s rules, returning `(groups, None)` or `(None, code)` (F50 Contract J):
+    `menu_violation` = the reply left what the program gave it (a role outside the adopted
+    allocation, a role twice or missing, more ads than a group's room or the ceiling);
+    `reply_invalid` = every other rule (shape, names, the seven coordinates, the scene)."""
+    invalid = (None, "reply_invalid")
+    menu = (None, "menu_violation")
     if not isinstance(data, dict):
-        return None
+        return invalid
     groups = data.get("groups")
-    if not isinstance(groups, list) or not groups or len(groups) > _MAX_GROUPS:
-        return None
+    if not isinstance(groups, list) or not groups:
+        return invalid
+    if len(groups) > _MAX_GROUPS:
+        return menu
 
     validated_groups = []
     seen_roles = set()
     seen_ad_names = set(taken)
     for group in groups:
         if not isinstance(group, dict):
-            return None
+            return invalid
         role = group.get("role")
         if role not in roles or role in seen_roles:
-            return None
+            return menu
         seen_roles.add(role)
         name = group.get("name")
         if not isinstance(name, str) or not name.strip():
-            return None
+            return invalid
         ads = group.get("ads")
         most = _MAX_ADS_PER_GROUP if room is None else room.get(role, _MAX_ADS_PER_GROUP)
-        if not isinstance(ads, list) or not ads or len(ads) > most:
-            return None
+        if not isinstance(ads, list) or not ads:
+            return invalid
+        if len(ads) > most:
+            return menu
 
         validated_ads = []
         for ad in ads:
             if not isinstance(ad, dict):
-                return None
+                return invalid
             ad_name = ad.get("name")
             if not isinstance(ad_name, str) or not ad_name.strip():
-                return None
+                return invalid
             ad_name = ad_name.strip()
             if ad_name in seen_ad_names:  # §0「unique inside the campaign」
-                return None
+                return invalid
             coordinates = ad.get("coordinates")
             if not isinstance(coordinates, dict):
-                return None
+                return invalid
             coords = {}
             for dim in _COORDINATE_DIMENSIONS:
                 value = coordinates.get(dim)
                 if not isinstance(value, str) or not value.strip():
-                    return None
+                    return invalid
                 coords[dim] = value.strip()
             scene = _validate_scene(ad.get("scene"))
             if scene is None:
-                return None
+                return invalid
             seen_ad_names.add(ad_name)
             # F46 Contract A: the raw 第 N 群 number; `_bind_customer_groups` judges it against
             # the groups this prompt listed (it is ignored when none were listed).
@@ -241,12 +346,12 @@ def _validate_reply(data, roles: set, *, covered: AbstractSet[str] = frozenset()
 
     # 角色不能多；不能少——除非那個角色已經有沿用的廣告（department file 的規則）。
     if not set(roles) - set(covered) <= seen_roles:
-        return None
+        return menu
     if limit is not None and sum(len(g["ads"]) for g in validated_groups) > limit:
-        return None
+        return menu
     if not _scenes_differ_across_audiences(validated_groups):
-        return None
-    return validated_groups
+        return invalid
+    return validated_groups, None
 
 
 def _bind_customer_groups(groups: list, listed: list, menu_pain_keys: set) -> bool:
@@ -306,6 +411,32 @@ def _same_people_as_carried(groups: list, carried: list) -> bool:
             if ad.get("customer_group") is not None and ad["customer_group"]["id"] not in ids:
                 return False
     return True
+
+
+def _checked_groups(groups: list, task_id: str | None, *, vocabulary_rows: list, ctx: dict,
+                    carried: list, listed_groups: list, replace_pairs: set) -> list:
+    """The program's rules over a shape-valid reply (`groups`, `[]` when nothing was asked),
+    in this order; the first rule broken raises its `PlannerRefused` and nothing is written."""
+    _gate_reply(groups, _vocabulary_lookup(vocabulary_rows), _first_format(vocabulary_rows))
+    # F44 (outcome 1): the menu offered a real offer and no ad (carried or planned) took one ->
+    # the whole reply is refused, like the scene rule.
+    offer_keys = planner_context.menu_offer_keys(vocabulary_rows)
+    carried_offer = any(item["ad"].get("offer_key") in offer_keys for item in carried)
+    if offer_keys and not (carried_offer or _uses_an_offer(groups)):
+        raise _refused("offer_unused", task_id)
+    # F48 Contract P: an ad name carrying a 「不能講」 entry is refused like the scene rule.
+    if any(_forbidden_in(ad["name"], ctx["forbidden"]) for group in groups for ad in group["ads"]):
+        raise _refused("name_forbidden", task_id)
+    menu_pain_keys = {row["key"] for row in vocabulary_rows if row["dimension"] == "pain"}
+    if not _bind_customer_groups(groups, listed_groups, menu_pain_keys):
+        raise _refused("group_unbound", task_id)
+    if not _same_people_as_carried(groups, carried):
+        raise _refused("carried_changed", task_id)
+    # F46 Contract G: never re-run a 換掉 customer group + angle unchanged (the keep half is met
+    # by the carried ads).
+    if not _builds_on_learnings(groups, replace_pairs):
+        raise _refused("replace_rerun", task_id)
+    return groups
 
 
 MATERIALS_HEADER = "【手上的素材】"
@@ -592,7 +723,7 @@ def adopt_strategy(conn, org_id: str, brand_id: str, campaign_id: str, *, actor:
     # F33-I02（Contract Q）：行事曆接在角色分配那幾行之後——那幾行的格式是 Contract P，不動。
     # F48-I06：其後依序是這個賣法、不能講、顧客群、優惠、排名、手上的素材、撐得起幾則、
     # 已沿用的廣告；詞彙表永遠最後，模型答題前最後讀到的是可用的 key。
-    prompt = (
+    prompt_head = (
         department_text
         + "\n\n## 這次投放已採用的角色分配\n\n" + allocation_text
         + "\n\n" + calendar_tw.prompt_section(campaign["start_date"], campaign["end_date"])
@@ -604,11 +735,18 @@ def adopt_strategy(conn, org_id: str, brand_id: str, campaign_id: str, *, actor:
         + "\n\n" + _materials_text(conn, org_id, brand_id)
         + "\n\n" + _capacity_text(ctx["capacity"], ceiling)
         + "\n\n" + _carried_text(carried, listed_groups, remaining)
-        + "\n\n" + _vocabulary_text(vocabulary_rows)
     )
+    _, replace_pairs = coordinate_learning.gate_pairs(
+        ctx["learnings"]["ranked"], set(customer_group_ids),
+    )
+    checks = {"vocabulary_rows": vocabulary_rows, "ctx": ctx, "carried": carried,
+              "listed_groups": listed_groups, "replace_pairs": replace_pairs}
 
-    validated_groups: list = []
-    if remaining > 0:
+    def ask(refused: list[PlannerRefused]) -> list:
+        # F50 (user ruling 2026-10-04): a retry carries the refusal just before the vocabulary,
+        # which stays last.
+        prompt = (prompt_head + ("\n\n" + refusal_section(refused) if refused else "")
+                  + "\n\n" + _vocabulary_text(vocabulary_rows))
         context = gateway.TaskContext(
             context_scope={"brand_id": brand_id, "campaign_id": campaign_id},
             knowledge_item_ids=(
@@ -621,41 +759,30 @@ def adopt_strategy(conn, org_id: str, brand_id: str, campaign_id: str, *, actor:
             conn, PROVIDER, brand_id=brand_id, task_type="ads_delivery_plan",
             prompt_template_id="ads_delivery_plan", prompt_template_version="v1",
             system=None, messages=[{"role": "user", "content": prompt}], context=context,
-            options=gateway.TaskOptions(max_tokens=2000, timeout_s=60.0, max_retries=0),
+            options=gateway.TaskOptions(max_tokens=2000, timeout_s=TIMEOUT_S, max_retries=0),
         )
         if task_row["status"] != "succeeded":
-            raise ValueError("delivery_plan_failed")
+            raise PlannerRefused("delivery_plan_failed", "llm_failed",
+                                 llm_failed_reason(task_row), task_row["id"])
         data = gateway.parse_json_reply(task_row.get("rendered_output") or "")
-        validated = _validate_reply(
+        if data is None:
+            raise _refused("reply_unreadable", task_row["id"])
+        validated, code = _check_reply(
             data, roles, covered=covered, room=room, limit=remaining,
             taken={item["ad"]["name"] for item in carried},
-        ) if data is not None else None
+        )
         if validated is None:
-            raise ValueError("delivery_plan_failed")
-        validated_groups = validated
-    _gate_reply(validated_groups, vocab_lookup, _first_format(vocabulary_rows))
-    # F44 (outcome 1): the menu offered a real offer and no ad (carried or planned) took one ->
-    # the whole reply is refused, like the scene rule; nothing is written.
-    offer_keys = planner_context.menu_offer_keys(vocabulary_rows)
-    carried_offer = any(item["ad"].get("offer_key") in offer_keys for item in carried)
-    if offer_keys and not (carried_offer or _uses_an_offer(validated_groups)):
-        raise ValueError("delivery_plan_failed")
-    # F48 Contract P: an ad name carrying a 「不能講」 entry is refused like the scene rule.
-    if any(_forbidden_in(ad["name"], ctx["forbidden"])
-           for group in validated_groups for ad in group["ads"]):
-        raise ValueError("delivery_plan_failed")
-    menu_pain_keys = {row["key"] for row in vocabulary_rows if row["dimension"] == "pain"}
-    if not _bind_customer_groups(validated_groups, listed_groups, menu_pain_keys):
-        raise ValueError("delivery_plan_failed")
-    if not _same_people_as_carried(validated_groups, carried):
-        raise ValueError("delivery_plan_failed")
-    # F46 Contract G: never re-run a 換掉 customer group + angle unchanged (the keep half is met
-    # by the carried ads).
-    _, replace_pairs = coordinate_learning.gate_pairs(
-        ctx["learnings"]["ranked"], set(customer_group_ids),
-    )
-    if not _builds_on_learnings(validated_groups, replace_pairs):
-        raise ValueError("delivery_plan_failed")
+            raise _refused(code or "reply_invalid", task_row["id"])
+        return _checked_groups(validated, task_row["id"], **checks)
+
+    if remaining > 0:
+        validated_groups = ask_with_one_retry(conn, ask, campaign_id=campaign_id)
+    else:
+        try:  # nothing for the model to plan: the program's own rules still judge the carried ads
+            validated_groups = _checked_groups([], None, **checks)
+        except PlannerRefused as exc:
+            note_refusal(conn, exc, campaign_id=campaign_id, attempt=1)
+            raise
 
     # 金額只由程式算：`budget.split()` 是唯一分餘數的地方，總和精準等於 daily_total
     # （F03-I06「這個 issue 的第一件事」——split() 已經是 F03-I04 驗過的邏輯，這裡不重寫）。

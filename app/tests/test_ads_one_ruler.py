@@ -664,6 +664,8 @@ NOT_A_TASK_ERROR = {
         "an AI call's `llm_task.error_code` (F50 Contract J), not a sync task",
     ("angles.py", "run", "error_code"):
         "an AI call's `llm_task.error_code` (F50 Contract J), not a sync task",
+    ("plan.py", "llm_failed_reason", "error_code"):
+        "an llm_task row's provider kind (F50 Contract J `llm_task.error_code`), not a sync job",
 }
 
 

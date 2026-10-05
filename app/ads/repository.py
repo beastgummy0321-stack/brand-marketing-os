@@ -1462,3 +1462,22 @@ cleanup.register(
     delete_product=None,
     product_tables=frozenset(),
 )
+
+
+_RUNNING_PLANNER_CAP = 10
+
+
+def running_planner_tasks(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, *,
+                          task_types: list[str], started_after) -> list[dict]:
+    """F50 Contract J (R7 B4, `busy.busy_state`): this campaign's `running` llm_task rows of
+    `task_types` started after `started_after`, newest first (`task_type`, `started_at`; at most
+    `_RUNNING_PLANNER_CAP`). The planner rows carry `campaign_id` in their scope; the gateway has
+    no newest-first reader, so this read stays here, tenant-scoped."""
+    rows = conn.execute(
+        "SELECT task_type, started_at FROM llm_task"
+        " WHERE org_id = %s AND brand_id = %s AND status = 'running'"
+        " AND task_type = ANY(%s) AND context_scope_json->>'campaign_id' = %s"
+        " AND started_at > %s ORDER BY started_at DESC, id DESC LIMIT %s",
+        (org_id, brand_id, list(task_types), campaign_id, started_after, _RUNNING_PLANNER_CAP),
+    ).fetchall()
+    return [dict(row) for row in rows]
