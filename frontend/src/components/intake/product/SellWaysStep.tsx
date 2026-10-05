@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { Button } from "@/components/layout/ui/button";
+import { ApiResponseError } from "@/lib/http";
 import type { AssumptionField, ProductSellWays, SellWayInput, SellWayRow } from "@/lib/intakeProductApi";
 import { completeProductOnboarding, fetchProductSellWays, saveProductSellWays } from "@/lib/intakeProductApi";
 import { BarNext, OnboardingBar, OnboardingStepHead, type BarBack, type StepNav } from "../OnboardingStepHead";
-import { contentsError, qtyOf, SellWayContents, type ContentItem } from "./SellWayContents";
+import { SellWayContents, type ContentItem } from "./SellWayContents";
 import { SellWayEditor, SellWaySummary } from "./SellWayEditor";
-import { draftFromMoney, emptyDraft, moneyErrors, PriceBlock, stepMoneyInput, type MoneyDraft } from "./SellWayTable";
+import { adoptAssumedCost, draftFromMoney, emptyDraft, PriceBlock, stepMoneyInput, type MoneyDraft, type RowErrors } from "./SellWayTable";
 
 interface Row {
   key: string;
@@ -29,11 +30,13 @@ const fold = (s: string) => s.trim().toLowerCase();
  * time opens inline as the editor (`SellWayEditor`: 名稱, 商品 or 裡面有什麼, the shared `PriceBlock`). 「＋基本賣法」
  * 「＋組合賣法（例如 6 盒）」, the pointer to the bundle page and the reference-value fold sit under the list.
  *
- * Every save sends the whole list through `PUT …/onboarding/sell-ways` (raw inputs; composed rows name their bases;
- * no `qty`): when focus leaves an editor field, on 「完成」, on a contents / 免運 change and on delete. The page then
- * shows the server's numbers (derived 售價 / 原價 / 成本 labelled 推算, 打平, offer sentences, the bases a cost waits
- * for); nothing is computed here. A refused save shows the server's text as is. 完成商品建檔 saves what is left, then
- * `POST …/onboarding/complete`, and moves on only after both succeeded. */
+ * Every save sends the whole list through `PUT …/onboarding/sell-ways` (raw inputs as typed; composed rows name their
+ * bases; no `qty`): when focus leaves an editor field, on 「完成」, on a contents / 免運 change and on delete. Every row
+ * the user typed something into is sent; the page keeps no input rule of its own (F50 Contract I): the server refuses
+ * the whole list naming each field (`field_errors` `sell_ways.{i}.{field}`), and a row shows its sentences under its
+ * fields once 「完成」 / 完成商品建檔 was pressed for it. The page then shows the server's numbers (derived 售價 / 原價 /
+ * 成本 labelled 推算, 打平, offer sentences, the bases a cost waits for, an assumed cost); nothing is computed here.
+ * 完成商品建檔 saves what is left, then `POST …/onboarding/complete`, and moves on only after both succeeded. */
 export function SellWaysStep({ brandId, productId, nav, back, onNext }: {
   brandId: string;
   productId: string;
@@ -52,12 +55,17 @@ export function SellWaysStep({ brandId, productId, nav, back, onNext }: {
   const [focus, setFocus] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+  /** The last refusal's sentences by row key, field keys without the `sell_ways.{i}.` prefix. */
+  const [rowErrors, setRowErrors] = useState<Record<string, RowErrors>>({});
+  const rowErrorsRef = useRef<Record<string, RowErrors>>({});
   const [busy, setBusy] = useState(false);
   const uid = useRef(0);
   const rowsRef = useRef<Row[]>([]);
   rowsRef.current = rows;
   /** The last list the server confirmed (without ids): an unchanged list is not sent again. */
   const savedSig = useRef<string | null>(null);
+  /** The last list the server refused field by field: not sent again unchanged. */
+  const refusedSig = useRef<string | null>(null);
   const queue = useRef<Promise<unknown>>(Promise.resolve());
   const alive = useRef(true);
   const show = data?.show_close_rate ?? false;
@@ -114,55 +122,88 @@ export function SellWaysStep({ brandId, productId, nav, back, onNext }: {
       name: r.name.trim(),
       ...stepMoneyInput(r.draft, closeRate),
       free_shipping: r.free,
-      ...(r.shape === "composed" ? { components: r.items.map((it) => ({ base: names.get(it.base) ?? "", qty: qtyOf(it.qty) ?? 0 })) } : {}),
+      ...(r.shape === "composed" ? { components: r.items.map((it) => ({ base: names.get(it.base) ?? "", qty: it.qty })) } : {}),
     }));
   }
 
-  function rowValid(row: Row, list: Row[]): boolean {
-    if (!row.name.trim() || Object.keys(moneyErrors(row.draft, show, row.shape)).length > 0) return false;
-    return row.shape === "base" || contentsError(row.items, (k) => list.find((r) => r.key === k)?.name ?? "") === null;
-  }
+  /** A row the user has typed nothing into yet (added on this visit, never saved): not sent. */
+  const untouched = (r: Row) => r.id === null && r.server === null && !r.name.trim() && r.items.length === 0 && !r.draft.price.trim();
 
-  /** The rows a save sends: every saved row (it must be valid: a row left out is archived) and the new ones that are
-   * valid (a new row still being filled in stays on the page unsaved); a composed row goes only with its bases.
-   * null = nothing can be saved. */
+  /** The rows a save sends: every row except an untouched new one. null = nothing to send. */
   function sendable(list: Row[]): Row[] | null {
-    if (list.some((r) => r.id !== null && !rowValid(r, list))) return null;
-    let out = list.filter((r) => r.id !== null || rowValid(r, list));
-    out = out.filter((r) => r.shape === "base" || r.items.every((it) => out.some((b) => b.key === it.base)));
-    if (list.some((r) => r.id !== null && !out.includes(r))) return null;
+    const out = list.filter((r) => !untouched(r));
     return out.length > 0 ? out : null;
   }
 
-  /** Saves what can be saved when it changed; resolves the server's list (true = nothing changed), or null. */
+  /** The server's `field_errors` (`sell_ways.{i}.{field}`) by the key of the row sent at index i. */
+  function errorsByRow(sent: Row[], fieldErrors: Record<string, string>): Record<string, RowErrors> {
+    const out: Record<string, RowErrors> = {};
+    for (const [key, sentence] of Object.entries(fieldErrors)) {
+      const m = /^sell_ways\.(\d+)\.(.+)$/.exec(key);
+      const row = m ? sent[Number.parseInt(m[1], 10)] : undefined;
+      if (m && row) out[row.key] = { ...out[row.key], [m[2]]: sentence };
+    }
+    return out;
+  }
+
+  /** Saves the list when it changed; resolves the server's list (true = nothing changed), or null (refused / failed:
+   * the refusal's sentences are kept by row, shown once that row was tried). */
   function persist(): Promise<ProductSellWays | null | true> {
     const run = queue.current.then(async (): Promise<ProductSellWays | null | true> => {
       const current = sendable(rowsRef.current);
       if (current === null) return null;
       const signature = sig(current, show);
       if (signature === savedSig.current && current.every((r) => r.id)) return true;
+      // The same list the server just refused field by field: its answer stands (kept in `rowErrors`).
+      if (signature === refusedSig.current) return null;
       const sent = current.map((r) => ({ key: r.key, id: r.id, name: fold(r.name) }));
       try {
         const res = await saveProductSellWays(brandId, productId, toInput(current, show));
-        savedSig.current = signature;
         const byId = new Map(res.sell_ways.filter((w) => w.id).map((w) => [w.id as string, w]));
         const byName = new Map(res.sell_ways.map((w) => [fold(w.name), w]));
         const serverFor = new Map(sent.map((s) => [s.key, (s.id && byId.get(s.id)) || byName.get(s.name)]));
+        // The server's view joins each row; a cost it assumed becomes the input's value.
+        const next = rowsRef.current.map((r) => {
+          const w = serverFor.get(r.key);
+          return w ? { ...r, id: w.id, server: w, draft: adoptAssumedCost(r.draft, w) } : r;
+        });
+        const saved = sendable(next);
+        savedSig.current = saved ? sig(saved, show) : signature;
         if (alive.current) {
           setSaveError(null);
-          setRows((prev) => prev.map((r) => {
-            const w = serverFor.get(r.key);
-            return w ? { ...r, id: w.id, server: w } : r;
-          }));
+          rowErrorsRef.current = {};
+          refusedSig.current = null;
+          setRowErrors({});
+          rowsRef.current = next;
+          setRows(next);
         }
         return res;
       } catch (err) {
-        if (alive.current) setSaveError(errorText(err));
+        if (alive.current) {
+          const keyed = err instanceof ApiResponseError ? errorsByRow(current, err.fieldErrors) : {};
+          rowErrorsRef.current = keyed;
+          refusedSig.current = Object.keys(keyed).length > 0 ? signature : null;
+          setRowErrors(keyed);
+          setSaveError(Object.keys(keyed).length > 0 ? null : errorText(err));
+        }
         return null;
       }
     });
     queue.current = run.catch(() => undefined);
     return run;
+  }
+
+  /** After a refused save: the rows it names are shown as tried (their sentences under their fields); the first one
+   * opens. Returns false when the refusal named no row (its sentence is the page's `saveError`). */
+  function showRefusal(): boolean {
+    const named = rowsRef.current.filter((r) => rowErrorsRef.current[r.key]);
+    if (named.length === 0) return false;
+    setTried((prev) => new Set([...prev, ...named.map((r) => r.key)]));
+    setOpen(named[0].key);
+    setStatus(named.length > 1 || named[0].key !== open
+      ? `「${named[0].name.trim() || "還沒取名的賣法"}」還有欄位要改，紅字的地方`
+      : "還有欄位要改，紅字的地方");
+    return true;
   }
 
   /** Let the last keystroke settle, then save. */
@@ -187,18 +228,7 @@ export function SellWaysStep({ brandId, productId, nav, back, onNext }: {
     return list.filter((r) => r.key !== open || r.id !== null || r.server !== null || r.name.trim() || r.items.length || r.draft.price.trim());
   }
 
-  /** Another row may open only when the open one could be saved (a blank new one is dropped instead). */
-  function canLeave(): boolean {
-    const current = rowsRef.current.find((r) => r.key === open);
-    if (!current || rowValid(current, rowsRef.current)) return true;
-    if (dropAbandoned([current]).length === 0) return true;
-    markTried(current.key);
-    setStatus("還有欄位要改，紅字的地方");
-    return false;
-  }
-
   function openRow(key: string, field = "name", from: string | null = null) {
-    if (key !== open && !canLeave()) return;
     setRows((prev) => dropAbandoned(prev));
     const row = rowsRef.current.find((r) => r.key === key);
     setOpen(key);
@@ -212,24 +242,15 @@ export function SellWaysStep({ brandId, productId, nav, back, onNext }: {
   async function done(key: string) {
     markTried(key);
     const row = rowsRef.current.find((r) => r.key === key);
-    if (!row || !rowValid(row, rowsRef.current)) {
-      setStatus("還有欄位要改，紅字的地方");
-      return;
-    }
-    const blocker = rowsRef.current.find((r) => r.key !== key && r.id !== null && !rowValid(r, rowsRef.current));
-    if (blocker) {
-      markTried(blocker.key);
-      setStatus(`「${blocker.name.trim() || "還沒取名的賣法"}」還有欄位要改，改好才能一起存`);
-      return;
-    }
-    if (!sendable(rowsRef.current)?.includes(row)) {
-      setStatus("裡面有基本賣法還沒填好，先把它完成");
-      return;
-    }
+    if (!row) return;
     setBusy(true);
     const res = await persist();
     if (alive.current) setBusy(false);
-    if (!res || !alive.current) return;
+    if (!alive.current) return;
+    if (!res) {
+      showRefusal();
+      return;
+    }
     const back = ret;
     setRet(null);
     setPicking(null);
@@ -271,17 +292,12 @@ export function SellWaysStep({ brandId, productId, nav, back, onNext }: {
   }
 
   async function finish() {
-    const current = rowsRef.current;
-    const invalid = current.filter((r) => !rowValid(r, current));
-    if (invalid.length > 0) {
-      invalid.forEach((r) => markTried(r.key));
-      setOpen(invalid[0].key);
-      setStatus("還有欄位要改，紅字的地方");
-      return;
-    }
     setBusy(true);
     try {
-      if (!(await persist())) return;
+      if (!(await persist())) {
+        if (alive.current) showRefusal();
+        return;
+      }
       await completeProductOnboarding(brandId, productId);
       onNext();
     } catch (err) {
@@ -291,24 +307,23 @@ export function SellWaysStep({ brandId, productId, nav, back, onNext }: {
     }
   }
 
-  /** 「不知道？用同業參考值」 (F05 rule 3): fills the empty field of every row and flags it 假設. A composed row's cost
-   * comes from its bases; it is not filled. */
+  /** 「不知道？用同業參考值」 (F05 rule 3): flags the empty field of every row 假設. 運費 and 成交率 copy the served
+   * reference value (成交率 is a percent, as served); a base row's cost is left empty and the save returns the number the
+   * server derived from its price (whole(price × (100 − 45) / 100)) — the page never multiplies. A composed row's cost
+   * comes from its bases; it is not flagged. */
   function fillAssumed(field: AssumptionField) {
     if (!data) return;
     const bm = data.assumptions;
-    setRows((prev) => prev.map((r) => {
-      if (r.draft[field] !== "") return r;
-      let value: string | null = null;
-      if (field === "shipping") value = String(bm.shipping_cost.value);
-      if (field === "close_rate" && bm.close_rate) value = String(Number((bm.close_rate.value * 100).toFixed(2)));
-      if (field === "cost") {
-        const price = Number(r.draft.price);
-        if (r.shape === "composed" || !(price > 0)) return r;
-        value = String(Math.round(price * (1 - bm.gross_margin.value)));
-      }
-      if (value === null) return r;
+    const served = field === "shipping" ? bm.shipping_cost : field === "close_rate" ? bm.close_rate : undefined;
+    const next = rowsRef.current.map((r) => {
+      if (r.draft[field] !== "" || untouched(r)) return r;
+      if (field === "cost" && r.shape === "composed") return r;
+      if (field !== "cost" && !served) return r;
+      const value = field === "cost" ? "" : String(served!.value);
       return { ...r, draft: { ...r.draft, [field]: value, assumptions: [...r.draft.assumptions.filter((a) => a !== field), field] } };
-    }));
+    });
+    rowsRef.current = next;
+    setRows(next);
     later();
   }
 
@@ -331,8 +346,9 @@ export function SellWaysStep({ brandId, productId, nav, back, onNext }: {
   const baseOptions = bases.map((b) => ({
     key: b.key,
     name: b.name,
-    price: b.server?.price ?? (Number(b.draft.price) > 0 ? Number(b.draft.price) : null),
-    cost: b.server?.cost ?? (b.draft.cost.trim() !== "" && Number(b.draft.cost) >= 0 ? Number(b.draft.cost) : null),
+    // The server's numbers of the base (the last save); a base not saved yet has none.
+    price: b.server?.price ?? null,
+    cost: b.server ? b.server.cost : undefined,
   }));
   /** Composed rows (by name) that hold a base: the server's `used_by` plus the ones on the page. */
   const usersOf = (b: Row) => [...new Set([...(b.server?.used_by ?? []), ...combos.filter((c) => c.items.some((it) => it.base === b.key)).map((c) => c.name.trim())])];
@@ -340,7 +356,7 @@ export function SellWaysStep({ brandId, productId, nav, back, onNext }: {
   const waiting = bases.find((b) => baseNoCost(b) && combos.some((c) => c.items.some((it) => it.base === b.key)));
 
   const item = (r: Row) => {
-    const showErrors = tried.has(r.key);
+    const errors: RowErrors = tried.has(r.key) ? rowErrors[r.key] ?? {} : {};
     if (open !== r.key) {
       return (
         <SellWaySummary key={r.key} name={r.name} shape={r.shape} numbers={r.server} typedPrice={r.draft.price}
@@ -348,7 +364,7 @@ export function SellWaysStep({ brandId, productId, nav, back, onNext }: {
           costMissing={r.shape === "base" && baseNoCost(r)} onEdit={() => openRow(r.key)} />
       );
     }
-    const qtyBad = r.shape === "composed" && r.items.some((it) => qtyOf(it.qty) === null);
+    const qtyBad = r.shape === "composed" && r.items.some((it) => it.qty.trim() === "");
     const pending = r.shape === "composed" && r.items.length === 0 ? "先填售價或放進賣法" : qtyBad ? "先填數量" : null;
     const retRow = ret ? rows.find((x) => x.key === ret) : undefined;
     return (
@@ -360,7 +376,7 @@ export function SellWaysStep({ brandId, productId, nav, back, onNext }: {
           shape={r.shape}
           name={r.name}
           productName={productName}
-          showErrors={showErrors}
+          showErrors={tried.has(r.key)}
           returnTo={retRow ? retRow.name.trim() : null}
           usedBy={r.shape === "base" ? usersOf(r) : []}
           busy={busy}
@@ -373,7 +389,7 @@ export function SellWaysStep({ brandId, productId, nav, back, onNext }: {
               items={r.items}
               bases={baseOptions}
               picking={picking === r.key}
-              showErrors={showErrors}
+              errors={errors}
               onQty={(i, qty) => patchItems(r.key, (items) => items.map((it, j) => (j === i ? { ...it, qty } : it)))}
               onRemove={(i) => {
                 patchItems(r.key, (items) => items.filter((_, j) => j !== i));
@@ -397,7 +413,7 @@ export function SellWaysStep({ brandId, productId, nav, back, onNext }: {
               numbers={r.server}
               free={r.free}
               showCloseRate={show}
-              showErrors={showErrors}
+              errors={errors}
               pending={pending}
               landingPlaceholder={r.server?.landing_is_default ? r.server.landing_url : ""}
               onDraft={(patch) => patchRow(r.key, { draft: { ...r.draft, ...patch } })}
@@ -412,6 +428,7 @@ export function SellWaysStep({ brandId, productId, nav, back, onNext }: {
             />
           )}
         />
+        {errors.name && r.name.trim() && <p role="alert" className="mt-1 text-[11.5px] text-danger">{errors.name}</p>}
       </div>
     );
   };
@@ -436,8 +453,8 @@ export function SellWaysStep({ brandId, productId, nav, back, onNext }: {
               {combos.length > 0 ? combos.map(item) : <p className="py-2.5 text-[12.5px] text-muted-foreground">還沒有組合</p>}
             </div>
             <div className="mt-3.5 flex flex-wrap items-center gap-x-[18px] gap-y-2.5 border-t border-border pt-3">
-              <Button type="button" variant="link" className="h-auto p-0 text-[13px]" onClick={() => canLeave() && addRow("base")}>＋基本賣法</Button>
-              <Button type="button" variant="link" className="h-auto p-0 text-[13px]" onClick={() => canLeave() && addRow("composed")}>＋組合賣法（例如 6 盒）</Button>
+              <Button type="button" variant="link" className="h-auto p-0 text-[13px]" onClick={() => addRow("base")}>＋基本賣法</Button>
+              <Button type="button" variant="link" className="h-auto p-0 text-[13px]" onClick={() => addRow("composed")}>＋組合賣法（例如 6 盒）</Button>
               <span className="text-[11.5px] text-muted-foreground">
                 跟別的商品一起賣 →{" "}
                 <Link to={`/brands/${encodeURIComponent(brandId)}/products/bundles/new`} className="font-medium text-primary hover:underline">商品頁「新增組合」</Link>

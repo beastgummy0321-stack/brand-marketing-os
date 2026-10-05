@@ -43,9 +43,9 @@ export const RULES: Record<Rule, RegExp[]> = {
 
 interface Pending { file: string; rule: Rule; text: string; issue: string }
 
-/** Today's hits (file relative to `src/`, the trimmed line) with the issue that removes each: the sell-way editors,
- * the economics panel and the rule cards move to the server's percent scale and sentences in F50-I04; the product
- * done page reads the served checklist in F50-I15. */
+/** Today's hits (file relative to `src/`, the trimmed line) with the issue that removes each: the product done page
+ * reads the served checklist in F50-I15. The rule-card editor's `Number(` stays until `lib/settingsApi.ts`
+ * `saveRuleCard` takes the typed text (outside F50-I04's touch; reported to the lead). */
 const PENDING: Pending[] = [
   { file: "components/intake/product/ProductDoneStep.tsx", rule: "length_ready", issue: "F50-I15",
     text: '{ step: 1, ok: saved(1) && whatParts.length > 0, label: "商品是什麼", detail: whatParts.join("、") },' },
@@ -55,34 +55,6 @@ const PENDING: Pending[] = [
     text: "ok: saved(3) && proof.length + claims.length > 0," },
   { file: "components/intake/product/ProductDoneStep.tsx", rule: "length_ready", issue: "F50-I15",
     text: '{ step: 4, ok: saved(4) && ways.length > 0, label: `賣法 ${ways.length} 種`, detail: ways.map(sellWayText).join("・") },' },
-  { file: "components/intake/product/SellWayContents.tsx", rule: "number_cast", issue: "F50-I04",
-    text: "export const qtyOf = (raw: string): number | null => (/^\\d+$/.test(raw.trim()) && Number(raw) > 0 ? Number(raw) : null);" },
-  { file: "components/intake/product/SellWaysStep.tsx", rule: "rate_scale", issue: "F50-I04",
-    text: 'if (field === "close_rate" && bm.close_rate) value = String(Number((bm.close_rate.value * 100).toFixed(2)));' },
-  { file: "components/intake/product/SellWaysStep.tsx", rule: "number_cast", issue: "F50-I04",
-    text: 'if (field === "close_rate" && bm.close_rate) value = String(Number((bm.close_rate.value * 100).toFixed(2)));' },
-  { file: "components/intake/product/SellWaysStep.tsx", rule: "number_cast", issue: "F50-I04",
-    text: "const price = Number(r.draft.price);" },
-  { file: "components/intake/product/SellWaysStep.tsx", rule: "money_literal", issue: "F50-I04",
-    text: 'if (r.shape === "composed" || !(price > 0)) return r;' },
-  { file: "components/intake/product/SellWaysStep.tsx", rule: "number_cast", issue: "F50-I04",
-    text: "price: b.server?.price ?? (Number(b.draft.price) > 0 ? Number(b.draft.price) : null)," },
-  { file: "components/intake/product/SellWaysStep.tsx", rule: "number_cast", issue: "F50-I04",
-    text: 'cost: b.server?.cost ?? (b.draft.cost.trim() !== "" && Number(b.draft.cost) >= 0 ? Number(b.draft.cost) : null),' },
-  { file: "components/intake/product/SellWayTable.tsx", rule: "number_cast", issue: "F50-I04",
-    text: "const n = Number(t);" },
-  { file: "components/intake/product/SellWayTable.tsx", rule: "rate_scale", issue: "F50-I04",
-    text: 'rate == null ? "" : String(Number((rate * 100).toFixed(2)));' },
-  { file: "components/intake/product/SellWayTable.tsx", rule: "number_cast", issue: "F50-I04",
-    text: 'rate == null ? "" : String(Number((rate * 100).toFixed(2)));' },
-  { file: "components/intake/product/SellWayTable.tsx", rule: "money_literal", issue: "F50-I04",
-    text: '} else if (Number.isNaN(price) || price <= 0) out.price = "售價要大於 0";' },
-  { file: "components/intake/product/SellWayTable.tsx", rule: "rate_scale", issue: "F50-I04",
-    text: "if (showCloseRate) input.close_rate = rate === null ? null : Number((rate / 100).toFixed(4));" },
-  { file: "components/intake/product/SellWayTable.tsx", rule: "number_cast", issue: "F50-I04",
-    text: "if (showCloseRate) input.close_rate = rate === null ? null : Number((rate / 100).toFixed(4));" },
-  { file: "components/products/panels/EconomicsPanel.tsx", rule: "number_cast", issue: "F50-I04",
-    text: 'return raw.trim() === "" ? null : Number(raw);' },
   { file: "components/settings/RuleCardsSection.tsx", rule: "number_cast", issue: "F50-I04",
     text: 'for (const [key, raw] of Object.entries(values)) if (raw.trim() !== "") typed[key] = Number(raw);' },
 ];

@@ -145,3 +145,23 @@ describe("ProductDetailPage 封存 (F47-I05, drill-10 V9)", () => {
     expect((await screen.findByRole("alert")).textContent).toBe("已有同名產品");
   });
 });
+
+describe("ProductDetailPage 經濟數字 (F50-I04: percents stored 0–100)", () => {
+  it("prints the stored close rate as the percent it is (20 → 「20%」, never a bare 0.2)", async () => {
+    vi.mocked(fetchProductDetail).mockResolvedValue({
+      ...DETAIL,
+      economics: {
+        selling_price: 5000, fixed_cost: null, unit_variable_cost: 1000, shipping_cost: 0, currency: "TWD",
+        effective_from: null, status: "confirmed", confirmed_by: "owner@example.com", close_rate: 20,
+        assumptions: ["close_rate"],
+      },
+    });
+    render(
+      <MemoryRouter initialEntries={["/?tab=economics-view"]}>
+        <ProductDetailPage brandId="b1" productId="p1" />
+      </MemoryRouter>,
+    );
+    const label = await screen.findByText("成交率");
+    expect(label.nextElementSibling?.textContent).toContain("20%");
+  });
+});

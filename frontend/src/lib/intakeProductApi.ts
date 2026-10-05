@@ -10,10 +10,15 @@
  * (with `note`), `"none"` = nothing found. The product-page read (F43-I06) starts on its own when a
  * product is created with a page URL; `startProductScan` re-reads; `prefill_status` of the status
  * reports it. 「自訂」 (`proposeProductCustom`) returns a proposal only: the step's PUT saves it. A 400 / 404 carries a Chinese `error` message, thrown
- * here as an `Error`. Product photos are uploaded with the existing official-asset upload
+ * here as an `ApiResponseError` (`throwIfFailed`); a refusal that names its fields also carries `fieldErrors`
+ * (step 4: `sell_ways.{i}.{field}` / `sell_ways.{i}.components.{j}.qty`; the bundle: `{field}` /
+ * `components.{j}.qty`), so the page prints each sentence under its own field (F50 Contract I).
+ *
+ * Scale (F50 Contract I, decision 9): a rate is a percent 0–100 everywhere — `close_rate` 20 = 20%, the benchmarks'
+ * `value` too (gross margin 45, close rate 20). The page prints and sends it as is, never ×100 / ÷100. Product photos are uploaded with the existing official-asset upload
  * (`uploadAsset` in `libraryApi.ts`, `asset_kind: "product_photo"`, `product_id`). */
 
-import { apiFetch, errorMessageFromResponse } from "./http";
+import { apiFetch, throwIfFailed } from "./http";
 import type { OnboardingSource, PrefillStatus, ProofKind, SourcedText } from "./intakeOnboardingApi";
 
 export type PainKey = "cost" | "effort" | "uncertainty" | "availability" | "experience" | "identity";
@@ -232,9 +237,9 @@ export interface SellWayMoney {
   /** 「推算：單盒 50 × 12」; "" when typed. */
   cost_note: string;
   shipping: number | null;
-  /** Only for lead/booking brands (`show_close_rate`). */
+  /** Only for lead/booking brands (`show_close_rate`): a percent 0–100 (20 = 20%). */
   close_rate?: number | null;
-  /** (price − cost − shipping) × close rate; null = cost unknown. */
+  /** (price − cost − shipping) × close rate ÷ 100; null = cost unknown. */
   break_even: number | null;
   /** The sell-way's own cap, else the break-even (`cap_is_default`). */
   cap_per_sale: number | null;
@@ -294,6 +299,7 @@ export interface SellWayRow extends SellWayNumbers {
 }
 
 export interface BenchmarkValue {
+  /** A rate is a percent (gross margin 45, close rate 20); shipping is money (80). */
   value: number;
   /** 「毛利率假設 45% · 美國 2025 基準，起點用 · 來源：…」 */
   source_text: string;
@@ -313,28 +319,32 @@ export interface ProductSellWays {
   assumptions: Benchmarks;
 }
 
-/** Raw inputs of one sell-way / bundle; omit or null = derived (list price, cost) / break-even
- * (cap) / product page (landing). */
+/** What was typed into a number field, as typed (`typedValue`): the server parses and refuses with one sentence; null =
+ * nothing typed (blank = unknown, never 0). */
+export type TypedNumber = string | null;
+
+/** Raw inputs of one sell-way / bundle, as typed; null = derived (price of a composed one, list price, cost) /
+ * break-even (cap) / product page (landing). `close_rate` is the typed percent (20 = 20%). `assumptions: ["cost"]` with
+ * a null cost on a base asks the server for the assumed cost (whole(price × (100 − 45) / 100)), returned flagged. */
 export interface MoneyInput {
-  price: number;
-  list_price?: number | null;
-  cost?: number | null;
-  shipping?: number | null;
-  close_rate?: number | null;
-  cap_per_sale?: number | null;
+  price: TypedNumber;
+  list_price?: TypedNumber;
+  cost?: TypedNumber;
+  shipping?: TypedNumber;
+  close_rate?: TypedNumber;
+  cap_per_sale?: TypedNumber;
   landing_url?: string | null;
   assumptions?: AssumptionField[];
 }
 
 /** One step-4 PUT row. No `components` = a base (price required); with `components` = composed (its empty price /
  * list price / cost are derived). Components name a base row of the same body; a `qty` key on the row is refused. */
-export interface SellWayInput extends Omit<MoneyInput, "price"> {
+export interface SellWayInput extends MoneyInput {
   /** Omit for a new sell-way. A sell-way left out of the list is archived (refused while a kept composed one uses it). */
   id?: string | null;
   name: string;
-  /** null only on a composed row (= derived). */
-  price: number | null;
-  components?: { base: string; qty: number }[];
+  /** `qty` as typed (the server's `count`, at least 1). */
+  components?: { base: string; qty: string }[];
   free_shipping?: boolean;
 }
 
@@ -369,12 +379,10 @@ export interface Bundle extends SellWayNumbers {
 /** `POST …/bundles/preview`: a bundle not created yet, as `GET …/bundles/{id}` would show it. */
 export type BundlePreview = Omit<Bundle, "id"> & { id: null };
 
-export interface BundleInput extends Omit<MoneyInput, "price"> {
+export interface BundleInput extends MoneyInput {
   name: string;
-  /** Base sell-ways of finished products, from ≥2 different products (the server refuses fewer, 400). */
-  components: { sell_way_id: string; qty: number }[];
-  /** null = derived from the bases. */
-  price: number | null;
+  /** Base sell-ways of finished products, from ≥2 different products (the server refuses fewer, 400); `qty` as typed. */
+  components: { sell_way_id: string; qty: string }[];
   free_shipping: boolean;
 }
 
@@ -387,10 +395,7 @@ interface Envelope<T> {
 
 async function send<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await apiFetch(path, init);
-  if (!res.ok) {
-    const fallback = res.status === 404 ? "找不到這筆資料。" : `處理失敗（狀態碼 ${res.status}）`;
-    throw new Error(await errorMessageFromResponse(res, fallback));
-  }
+  await throwIfFailed(res, res.status === 404 ? "找不到這筆資料。" : `處理失敗（狀態碼 ${res.status}）`);
   const body: Envelope<T> = await res.json();
   return body.data;
 }

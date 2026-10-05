@@ -2,13 +2,14 @@ import { useEffect, useRef, useState, type FocusEvent, type ReactNode } from "re
 import { Link, useNavigate } from "react-router-dom";
 import { Skeleton } from "@/components/layout/Skeleton";
 import { Button } from "@/components/layout/ui/button";
+import { ApiResponseError } from "@/lib/http";
 import type { Bundle, BundleInput, BundlePreview, ProductCardData, SellWayNumbers } from "@/lib/intakeProductApi";
 import { createBundle, fetchBundle, fetchProductsPage, previewBundle, saveBundle } from "@/lib/intakeProductApi";
 import { cn } from "@/lib/utils";
 import { BarNext, OnboardingBar } from "../OnboardingStepHead";
 import { EvidenceCard, INPUT } from "../steps/PolicyCard";
-import { qtyOf, SellWayContents, type BaseOption } from "./SellWayContents";
-import { draftFromMoney, emptyDraft, moneyErrors, PriceBlock, stepMoneyInput, type MoneyDraft } from "./SellWayTable";
+import { SellWayContents, type BaseOption } from "./SellWayContents";
+import { adoptAssumedCost, draftFromMoney, emptyDraft, PriceBlock, stepMoneyInput, type MoneyDraft, type RowErrors } from "./SellWayTable";
 
 /** 新增組合 / 編輯組合 (F45), prototype `.harness/scratch/prototype/f45-sell-way-components/variant-bundle.html`: 組合名稱,
  * 裡面有什麼 (base sell-ways of any finished product × qty, each row with that base's own 售價・成本; the picker groups
@@ -18,9 +19,12 @@ import { draftFromMoney, emptyDraft, moneyErrors, PriceBlock, stepMoneyInput, ty
  *
  * Nothing is computed on the page: every number (each base's 售價・成本, the derived ones with their 「推算：…」 notes,
  * 打平, the default 每筆上限, the offer sentences) is the server's view. An existing bundle saves (PUT, raw inputs only)
- * whenever focus leaves a field or the contents change and the form is valid, and shows the recomputed numbers; a new
- * bundle asks `POST …/bundles/preview` (nothing written) at the same moments; 「建立組合」 posts it. The server's
- * refusals (fewer than two products, a taken name …) are shown as it words them. */
+ * whenever focus leaves a field or the contents change, and shows the recomputed numbers; a new bundle asks
+ * `POST …/bundles/preview` (nothing written) at the same moments; 「建立組合」 posts it. The page keeps no money or
+ * quantity rule of its own (F50 Contract I): numbers and quantities go as typed and the server's refusals are shown as
+ * it words them — a field's sentence (`field_errors`: `price`, `close_rate`, `components.{i}.qty`, …) under that field
+ * once the form was touched, the rest (fewer than two products, a taken name …) under the form. The UI itself only
+ * asks for a name, a quantity and a landing page before sending. */
 
 interface Comp {
   sell_way_id: string;
@@ -31,20 +35,21 @@ interface Comp {
 const productsPath = (brandId: string) => `/brands/${encodeURIComponent(brandId)}/products`;
 const errorText = (err: unknown, fallback: string) => (err instanceof Error ? err.message : fallback);
 
-/** Why the form cannot be sent (the server checks the rest — the product count — and says why). */
-function formErrors(name: string, comps: Comp[], draft: MoneyDraft, showCloseRate: boolean) {
+/** What the form still lacks before it is sent (the server checks every number, quantity and the product count, and
+ * says why). */
+function formErrors(name: string, comps: Comp[], draft: MoneyDraft) {
   return {
     name: name.trim() ? null : "請填組合名稱",
     comps: comps.length === 0,
-    qty: comps.some((c) => qtyOf(c.qty) === null),
-    money: Object.keys(moneyErrors(draft, showCloseRate, "composed")).length > 0,
+    /** A quantity not typed yet: nothing to send for it (a typed one goes as typed). */
+    qty: comps.some((c) => c.qty.trim() === ""),
     landing: draft.landing_url.trim() ? null : "落地頁要填",
   };
 }
 
 /** What the server needs to compute the numbers (everything but the landing page the UI requires). */
 function canPreview(errors: ReturnType<typeof formErrors>): boolean {
-  return !errors.name && !errors.comps && !errors.qty && !errors.money;
+  return !errors.name && !errors.comps && !errors.qty;
 }
 
 function isValid(errors: ReturnType<typeof formErrors>): boolean {
@@ -54,11 +59,14 @@ function isValid(errors: ReturnType<typeof formErrors>): boolean {
 function toInput(name: string, comps: Comp[], draft: MoneyDraft, free: boolean, showCloseRate: boolean): BundleInput {
   return {
     name: name.trim(),
-    components: comps.map((c) => ({ sell_way_id: c.sell_way_id, qty: qtyOf(c.qty) ?? 1 })),
+    components: comps.map((c) => ({ sell_way_id: c.sell_way_id, qty: c.qty.trim() })),
     ...stepMoneyInput(draft, showCloseRate),
     free_shipping: free,
   };
 }
+
+/** The server's per-field sentences of a refusal (`ApiResponseError.fieldErrors`), else none. */
+const fieldErrorsOf = (err: unknown): RowErrors => (err instanceof ApiResponseError ? err.fieldErrors : {});
 
 /** A base the page knows: from the products page (picker) and, once the server has seen it, its own numbers. */
 interface KnownBase {
@@ -90,6 +98,8 @@ export function BundlePage({ brandId, bundleId }: { brandId: string; bundleId: s
   const [saveError, setSaveError] = useState<string | null>(null);
   /** Why the last preview failed (kept apart from `saveError`: a late preview must not hide a failed create). */
   const [previewError, setPreviewError] = useState<string | null>(null);
+  /** The last refusal's sentences by field (`price`, `close_rate`, `components.0.qty`, …). */
+  const [fieldErrors, setFieldErrors] = useState<RowErrors>({});
   const [busy, setBusy] = useState(false);
   const state = useRef({ name, comps, draft, free });
   state.current = { name, comps, draft, free };
@@ -175,7 +185,7 @@ export function BundlePage({ brandId, bundleId }: { brandId: string; bundleId: s
     const run = queue.current.then(async () => {
       if (bundleId === null) return false;
       const { name: n, comps: c, draft: d, free: f } = state.current;
-      if (!isValid(formErrors(n, c, d, show))) return false;
+      if (!isValid(formErrors(n, c, d))) return false;
       const body = toInput(n, c, d, f, show);
       const signature = JSON.stringify(body);
       if (signature === savedSig.current) return true;
@@ -184,11 +194,17 @@ export function BundlePage({ brandId, bundleId }: { brandId: string; bundleId: s
         savedSig.current = signature;
         if (alive.current) {
           adopt(res);
+          setDraft((prev) => adoptAssumedCost(prev, res));
           setSaveError(null);
+          setFieldErrors({});
         }
         return true;
       } catch (err) {
-        if (alive.current) setSaveError(errorText(err, "儲存失敗，請稍後再試。"));
+        if (alive.current) {
+          const keyed = fieldErrorsOf(err);
+          setFieldErrors(keyed);
+          setSaveError(Object.keys(keyed).length > 0 ? null : errorText(err, "儲存失敗，請稍後再試。"));
+        }
         return false;
       }
     });
@@ -202,7 +218,7 @@ export function BundlePage({ brandId, bundleId }: { brandId: string; bundleId: s
     const run = queue.current.then(async () => {
       if (bundleId !== null) return;
       const { name: n, comps: c, draft: d, free: f } = state.current;
-      if (!canPreview(formErrors(n, c, d, show))) return;
+      if (!canPreview(formErrors(n, c, d))) return;
       const body = toInput(n, c, d, f, show);
       const signature = JSON.stringify(body);
       if (signature === savedSig.current) return;
@@ -212,12 +228,15 @@ export function BundlePage({ brandId, bundleId }: { brandId: string; bundleId: s
         if (alive.current) {
           adopt(res);
           setPreviewError(null);
+          setFieldErrors({});
         }
       } catch (err) {
         savedSig.current = null;
         if (alive.current) {
+          const keyed = fieldErrorsOf(err);
           setServer(null);
-          setPreviewError(errorText(err, "算不出這個組合的數字，請稍後再試。"));
+          setFieldErrors(keyed);
+          setPreviewError(Object.keys(keyed).length > 0 ? null : errorText(err, "算不出這個組合的數字，請稍後再試。"));
         }
       }
     });
@@ -241,7 +260,7 @@ export function BundlePage({ brandId, bundleId }: { brandId: string; bundleId: s
   async function submit() {
     setTouched(true);
     const { name: n, comps: c, draft: d, free: f } = state.current;
-    if (!isValid(formErrors(n, c, d, show))) return;
+    if (!isValid(formErrors(n, c, d))) return;
     setBusy(true);
     try {
       if (bundleId === null) {
@@ -251,7 +270,11 @@ export function BundlePage({ brandId, bundleId }: { brandId: string; bundleId: s
       }
       navigate(productsPath(brandId));
     } catch (err) {
-      if (alive.current) setSaveError(errorText(err, "建立組合失敗，請再試一次。"));
+      if (alive.current) {
+        const keyed = fieldErrorsOf(err);
+        setFieldErrors(keyed);
+        setSaveError(Object.keys(keyed).length > 0 ? null : errorText(err, "建立組合失敗，請再試一次。"));
+      }
     } finally {
       if (alive.current) setBusy(false);
     }
@@ -296,7 +319,11 @@ export function BundlePage({ brandId, bundleId }: { brandId: string; bundleId: s
     );
   }
 
-  const errors = formErrors(name, comps, draft, show);
+  const errors = formErrors(name, comps, draft);
+  /** The server's sentences of the last save / preview (sent when focus left a field), under their fields. */
+  const shown: RowErrors = fieldErrors;
+  const nameError = (touched ? errors.name : null) ?? shown.name;
+  const landingError = (touched ? errors.landing : null) ?? shown.landing_url;
   /** The picker: every finished product's bases, then the bases already in (they may belong to a product not listed). */
   const options: BaseOption[] = [
     ...(products ?? []).flatMap((p) => p.sell_ways.filter((w) => w.shape === "base").map((w) => w.id)),
@@ -316,7 +343,9 @@ export function BundlePage({ brandId, bundleId }: { brandId: string; bundleId: s
   let pending: string | null = null;
   if (comps.length === 0) pending = "先放進賣法";
   else if (errors.qty) pending = "先填數量";
-  else if (!server) pending = errors.name ? "先填組合名稱" : previewError ? "先改好下面的紅字" : "填好名稱和內容就算";
+  else if (!server) {
+    pending = errors.name ? "先填組合名稱" : previewError || Object.keys(fieldErrors).length > 0 ? "先改好下面的紅字" : "填好名稱和內容就算";
+  }
 
   return (
     <Page>
@@ -324,7 +353,7 @@ export function BundlePage({ brandId, bundleId }: { brandId: string; bundleId: s
       <section aria-label="組合內容" className="rounded-xl border border-border bg-card px-[22px] py-5" onBlur={onFieldBlur}>
         <Row label={<label htmlFor="bundle-name">組合名稱</label>}>
           <input id="bundle-name" className={INPUT} value={name} placeholder="例如：雙效組" onChange={(e) => setName(e.target.value)} />
-          {touched && errors.name && <FieldError>{errors.name}</FieldError>}
+          {nameError && <FieldError>{nameError}</FieldError>}
         </Row>
 
         <Row label="裡面有什麼">
@@ -334,7 +363,7 @@ export function BundlePage({ brandId, bundleId }: { brandId: string; bundleId: s
             items={comps.map((c) => ({ base: c.sell_way_id, qty: c.qty }))}
             bases={options}
             picking={picking}
-            showErrors={touched}
+            errors={shown}
             empty={<PickerEmpty brandId={brandId} products={products} error={productsError} onRetry={loadProducts} />}
             onQty={(i, qty) => setComps((prev) => prev.map((c, j) => (j === i ? { ...c, qty } : c)))}
             onRemove={(i) => {
@@ -359,7 +388,7 @@ export function BundlePage({ brandId, bundleId }: { brandId: string; bundleId: s
             numbers={numbers}
             free={free}
             showCloseRate={show}
-            showErrors={touched}
+            errors={shown}
             pending={pending}
             onDraft={(patch) => setDraft((prev) => ({ ...prev, ...patch }))}
             onFree={(on) => {
@@ -378,13 +407,13 @@ export function BundlePage({ brandId, bundleId }: { brandId: string; bundleId: s
           <input
             id="bundle-landing"
             type="url"
-            className={cn(INPUT, touched && errors.landing && "border-danger")}
-            aria-invalid={touched && errors.landing ? true : undefined}
+            className={cn(INPUT, landingError && "border-danger")}
+            aria-invalid={landingError ? true : undefined}
             value={draft.landing_url}
             placeholder="https://"
             onChange={(e) => setDraft((prev) => ({ ...prev, landing_url: e.target.value }))}
           />
-          {touched && errors.landing && <FieldError>{errors.landing}</FieldError>}
+          {landingError && <FieldError>{landingError}</FieldError>}
         </Row>
         {previewError && <p role="alert" className="mt-2 text-sm text-danger">{previewError}</p>}
         {saveError && saveError !== previewError && <p role="alert" className="mt-2 text-sm text-danger">{saveError}</p>}

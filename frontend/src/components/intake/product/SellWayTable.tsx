@@ -2,17 +2,20 @@ import type { ReactNode } from "react";
 import { Button } from "@/components/layout/ui/button";
 import { formatCount } from "@/lib/format";
 import type { AssumptionField, MoneyInput, SellWayMoney, SellWayNumbers } from "@/lib/intakeProductApi";
+import { typedValue } from "@/lib/typedNumber";
 import { cn } from "@/lib/utils";
 
 /** The money pieces shared by product onboarding step 4 (`SellWaysStep`) and the bundle page (`BundlePage`): the
  * raw-input draft helpers and F45's `PriceBlock` (prototype `.harness/scratch/prototype/f45-sell-way-components`).
  *
- * Nothing here computes a money value: 打平, a derived 售價 / 原價 / 成本 (「推算：單盒 180 × 12」), the default 每筆上限
- * and the offer sentences all come from the server's view after the last save / preview (null = none yet). A derived
- * value sits as the input's placeholder with its source line under it, so a left-empty input sends null (= derived)
- * and a derived number is never sent back as the user's value. */
+ * Nothing here computes a money value or keeps an input rule (F50 Contract I, decision 11): 打平, a derived 售價 / 原價
+ * / 成本 (「推算：單盒 180 × 12」), the default 每筆上限, the assumed cost and the offer sentences all come from the
+ * server's view after the last save / preview (null = none yet), and a refused field shows the server's sentence (its
+ * `field_errors`) under it. A derived value sits as the input's placeholder with its source line under it, so a
+ * left-empty input sends null (= derived) and a derived number is never sent back as the user's value. Every number is
+ * sent as typed (`typedValue`; blank = null, never 0). */
 
-/** What the user typed, as typed ("" = empty). `close_rate` is a percentage (20 = 20%). */
+/** What the user typed, as typed ("" = empty). `close_rate` is a percent (20 = 20%), the server's scale too. */
 export interface MoneyDraft {
   price: string;
   list_price: string;
@@ -28,17 +31,12 @@ export interface MoneyDraft {
 
 export type MoneyField = "price" | "list_price" | "cost" | "shipping" | "close_rate" | "cap_per_sale";
 
-const num = (raw: string): number | null => {
-  const t = raw.trim();
-  if (t === "") return null;
-  const n = Number(t);
-  return Number.isFinite(n) ? n : NaN;
-};
+/** The server's refusals of one row, keyed by field as the PUT names them without the row prefix (`price`,
+ * `close_rate`, `landing_url`, `components`, `components.0.qty`, …). */
+export type RowErrors = Partial<Record<string, string>>;
 
-/** Server numbers as input text (399 → "399"; 0.2 close rate → "20"). */
+/** Server numbers as input text (399 → "399"; a 20 % close rate → "20": the same scale both ways). */
 export const inputText = (value: number | null | undefined): string => (value == null ? "" : String(value));
-export const percentText = (rate: number | null | undefined): string =>
-  rate == null ? "" : String(Number((rate * 100).toFixed(2)));
 
 /** A saved row's inputs: only the values the user typed; a derived 售價 / 原價 / 成本 and a default 每筆上限 / 落地頁
  * stay empty (an empty input sends null = derived, so a derived number is never saved back as typed). */
@@ -48,7 +46,7 @@ export function draftFromMoney(money: SellWayMoney | SellWayNumbers): MoneyDraft
     list_price: money.list_price_derived ? "" : inputText(money.list_price),
     cost: money.cost_derived ? "" : inputText(money.cost),
     shipping: inputText(money.shipping),
-    close_rate: percentText(money.close_rate),
+    close_rate: inputText(money.close_rate),
     cap_per_sale: money.cap_is_default ? "" : inputText(money.cap_per_sale),
     landing_url: money.landing_is_default ? "" : money.landing_url,
     assumptions: [...money.assumptions],
@@ -59,46 +57,30 @@ export const emptyDraft = (): MoneyDraft => ({
   price: "", list_price: "", cost: "", shipping: "", close_rate: "", cap_per_sale: "", landing_url: "", assumptions: [],
 });
 
-/** Why a row cannot be saved, per field (the server refuses the same: price > 0, no negatives, 成交率 in (0, 100%]).
- * `shape` (step 4, F45): a base needs its price (「售價要填」); a composed sell-way may leave it empty (= derived from
- * its bases). Without it (the bundle page) an empty price reads 「售價要大於 0」. */
-export function moneyErrors(draft: MoneyDraft, showCloseRate: boolean, shape?: "base" | "composed"): Partial<Record<MoneyField, string>> {
-  const out: Partial<Record<MoneyField, string>> = {};
-  const price = num(draft.price);
-  if (price === null) {
-    if (shape !== "composed") out.price = shape === "base" ? "售價要填" : "售價要大於 0";
-  } else if (Number.isNaN(price) || price <= 0) out.price = "售價要大於 0";
-  for (const field of ["list_price", "cost", "shipping", "cap_per_sale"] as const) {
-    const n = num(draft[field]);
-    if (Number.isNaN(n)) out[field] = "請填數字";
-    else if (n !== null && n < 0) out[field] = "不能是負數";
-  }
-  if (showCloseRate) {
-    const rate = num(draft.close_rate);
-    if (Number.isNaN(rate) || (rate !== null && (rate <= 0 || rate > 100))) out.close_rate = "要在 0～100% 之間";
-  }
-  return out;
-}
-
-/** The PUT body's money part: raw inputs only; an empty field is null (= derived / break-even / product page). */
-export function moneyInput(draft: MoneyDraft, showCloseRate: boolean): MoneyInput {
-  const rate = num(draft.close_rate);
+/** The PUT body's money part, as typed: an empty field is null (= derived / break-even / product page; a base's empty
+ * price is the server's to refuse). 成交率 goes as the typed percent. */
+export function stepMoneyInput(draft: MoneyDraft, showCloseRate: boolean): MoneyInput {
   const input: MoneyInput = {
-    price: num(draft.price) ?? 0,
-    list_price: num(draft.list_price),
-    cost: num(draft.cost),
-    shipping: num(draft.shipping),
-    cap_per_sale: num(draft.cap_per_sale),
+    price: typedValue(draft.price),
+    list_price: typedValue(draft.list_price),
+    cost: typedValue(draft.cost),
+    shipping: typedValue(draft.shipping),
+    cap_per_sale: typedValue(draft.cap_per_sale),
     landing_url: draft.landing_url.trim() || null,
     assumptions: draft.assumptions,
   };
-  if (showCloseRate) input.close_rate = rate === null ? null : Number((rate / 100).toFixed(4));
+  if (showCloseRate) input.close_rate = typedValue(draft.close_rate);
   return input;
 }
 
-/** Step 4's money part (F45): as `moneyInput`, but an empty price stays null (a composed sell-way's derived price). */
-export function stepMoneyInput(draft: MoneyDraft, showCloseRate: boolean): Omit<MoneyInput, "price"> & { price: number | null } {
-  return { ...moneyInput(draft, showCloseRate), price: num(draft.price) };
+/** After a save: a cost the server assumed (「空著的成本填參考值」, flagged `cost` with an empty input) becomes the
+ * input's value; a flag the server dropped (nothing to assume from) goes. Any other draft is kept as typed. */
+export function adoptAssumedCost(draft: MoneyDraft, money: SellWayMoney | SellWayNumbers): MoneyDraft {
+  if (draft.cost !== "" || !draft.assumptions.includes("cost")) return draft;
+  if (money.assumptions.includes("cost") && money.cost != null && !money.cost_derived) {
+    return { ...draft, cost: inputText(money.cost) };
+  }
+  return { ...draft, assumptions: draft.assumptions.filter((a) => a !== "cost") };
 }
 
 const amount = (value: number) => formatCount(Math.round(value));
@@ -136,17 +118,18 @@ export const EstChip = ({ className }: { className?: string }) => <SwChip tone="
 /** A server amount as the prototype prints it (`fmt`). */
 export const swAmount = (value: number) => amount(value);
 
-/** The editor's 售價／原價／成本／運費成本 (+ 成交率), 「這個賣法免運」, 打平 with the offers, and the folded 每筆上限 /
+/** The editor's 售價／原價／成本／運費成本 (+ 成交率 in %), 「這個賣法免運」, 打平 with the offers, and the folded 每筆上限 /
  * 落地頁. Every number shown here is the server's (`numbers`, the last save; null = not saved yet): a derived value is
- * the placeholder of its empty input with its 「推算：…」 line; nothing is computed on the page. */
-export function PriceBlock({ idPrefix, shape, draft, numbers, free, showCloseRate, showErrors, pending, landingPlaceholder, onDraft, onFree, onFillCost, fillCostWhere }: {
+ * the placeholder of its empty input with its 「推算：…」 line; nothing is computed on the page. `errors` are the
+ * server's refusals of this row (shown under each field; the parent decides when to pass them). */
+export function PriceBlock({ idPrefix, shape, draft, numbers, free, showCloseRate, errors, pending, landingPlaceholder, onDraft, onFree, onFillCost, fillCostWhere }: {
   idPrefix: string;
   shape: "base" | "composed";
   draft: MoneyDraft;
   numbers: SellWayNumbers | null;
   free: boolean;
   showCloseRate: boolean;
-  showErrors: boolean;
+  errors: RowErrors;
   /** Why 打平 cannot be computed yet, from the form itself (「先填數量」); null = ask the server's numbers. */
   pending: string | null;
   /** The folded 落地頁 field's placeholder (the product page); omit = no landing field in the fold. */
@@ -158,7 +141,6 @@ export function PriceBlock({ idPrefix, shape, draft, numbers, free, showCloseRat
   /** Without a jump (the base belongs to another product, bundle page): where to fill it, 「到「〈商品〉」的賣法填」. */
   fillCostWhere?: (part: { sell_way_id: string; name: string }) => string;
 }) {
-  const errors = showErrors ? moneyErrors(draft, showCloseRate, shape) : {};
   const n = numbers;
   const missing = draft.cost === "" && shape === "composed" ? n?.cost_missing ?? [] : [];
   const edit = (field: MoneyField, value: string) => {
@@ -185,7 +167,7 @@ export function PriceBlock({ idPrefix, shape, draft, numbers, free, showCloseRat
       placeholder = "—";
       warn = true;
       note = <Note tone="warn">{missing.map((m) => m.name).join("、")}還沒填成本，推算不出來</Note>;
-    } else if (f === "cost" && !empty && n?.cost_estimate != null && n.cost_estimate !== num(draft.cost)) {
+    } else if (f === "cost" && !empty && n?.cost_estimate != null && n.cost != null && !n.cost_derived && n.cost_estimate !== n.cost) {
       note = <Note>照內容推算是 {amount(n.cost_estimate)}</Note>;
     } else if (f === "cost" && empty && shape === "base") {
       placeholder = "還沒填";
@@ -206,11 +188,14 @@ export function PriceBlock({ idPrefix, shape, draft, numbers, free, showCloseRat
       </div>
     );
   };
-  const cap = num(draft.cap_per_sale);
-  const capOk = cap !== null && !Number.isNaN(cap);
-  const capOver = capOk && n?.break_even != null && cap > n.break_even;
+  /** The saved cap of this row (the server's number; the typed text until the next save). */
+  const ownCap = n && !n.cap_is_default ? n.cap_per_sale : null;
+  const capTyped = draft.cap_per_sale.trim();
+  const capOver = capTyped !== "" && ownCap != null && n?.break_even != null && ownCap > n.break_even;
   const capDefault = n?.break_even != null ? amount(Math.max(n.break_even, 0)) : null;
-  const capSum = capOk ? `每筆上限 ${amount(cap)}` : capDefault !== null ? `每筆上限＝打平 ${capDefault}` : "每筆上限＝打平";
+  const capSum = capTyped !== ""
+    ? `每筆上限 ${ownCap != null ? amount(ownCap) : capTyped}`
+    : capDefault !== null ? `每筆上限＝打平 ${capDefault}` : "每筆上限＝打平";
   const landSum = landingPlaceholder !== undefined ? `・落地頁：${draft.landing_url.trim() ? "自訂" : "商品頁"}` : "";
   return (
     <div data-slot="price-block">
@@ -226,7 +211,7 @@ export function PriceBlock({ idPrefix, shape, draft, numbers, free, showCloseRat
         這個賣法免運
       </label>
       <Result numbers={n} shape={shape} pending={pending} missing={missing} showCloseRate={showCloseRate} onFillCost={onFillCost} fillCostWhere={fillCostWhere} />
-      <details className="group mt-3 rounded-[10px] border border-border bg-card">
+      <details className="group mt-3 rounded-[10px] border border-border bg-card" open={errors.cap_per_sale || errors.landing_url ? true : undefined}>
         <summary className="flex cursor-pointer list-none flex-wrap items-center gap-2 px-4 py-[11px] font-medium text-muted-foreground [&::-webkit-details-marker]:hidden">
           <span aria-hidden="true" className="inline-block text-base leading-none transition-transform group-open:rotate-90">›</span>
           進階：每筆上限{landingPlaceholder !== undefined ? "、落地頁" : ""}
@@ -242,8 +227,10 @@ export function PriceBlock({ idPrefix, shape, draft, numbers, free, showCloseRat
           {landingPlaceholder !== undefined && (
             <div>
               <label htmlFor={`${idPrefix}-landing`} className="mb-1 block text-xs text-muted-foreground">落地頁（空著＝商品頁）</label>
-              <input id={`${idPrefix}-landing`} type="url" className={INPUT_LG} value={draft.landing_url} placeholder={landingPlaceholder}
+              <input id={`${idPrefix}-landing`} type="url" className={cn(INPUT_LG, errors.landing_url && "border-danger")} value={draft.landing_url}
+                placeholder={landingPlaceholder} aria-invalid={errors.landing_url ? true : undefined}
                 onChange={(e) => onDraft({ landing_url: e.target.value })} />
+              {errors.landing_url && <Note tone="error">{errors.landing_url}</Note>}
             </div>
           )}
         </div>
@@ -310,7 +297,7 @@ function Result({ numbers: n, shape, pending, missing, showCloseRate, onFillCost
   } else if (n?.break_even != null) {
     const priceEst = n.price_derived ? "（推算）" : "";
     const costEst = n.cost_derived ? "（推算）" : "";
-    const rate = showCloseRate && n.close_rate != null ? ` × 成交率 ${percentText(n.close_rate)}%` : "";
+    const rate = showCloseRate && n.close_rate != null ? ` × 成交率 ${n.close_rate}%` : "";
     be = (
       <>
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
