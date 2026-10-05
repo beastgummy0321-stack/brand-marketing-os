@@ -5,7 +5,8 @@
  * product whose server checklist says groups missing shows 建到一半 and a red 「誰會買：還沒有」 row (drill-11 b-07)
  * however many groups the step GET lists; a product still missing its sell-ways shows a red row whose 「去補」 opens
  * step 4, and no campaign link; four steps saved but 完成 not recorded completes once on entering, and not while a
- * required item is missing. Fixtures are shaped like `app/intake/product_onboarding.py` (`status`, `get_who`,
+ * required item is missing. F50-I18: the title is 「〈商品〉建好了」 only when the served `ready` is true, else it names the
+ * products page's first served `missing` label. Fixtures are shaped like `app/intake/product_onboarding.py` (`status`, `get_who`,
  * `get_evidence`, `get_sell_ways`). No server. */
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -20,6 +21,7 @@ vi.mock("@/lib/intakeProductApi", async () => {
     fetchProductWho: vi.fn(),
     fetchProductEvidence: vi.fn(),
     fetchProductSellWays: vi.fn(),
+    fetchProductsPage: vi.fn(),
     completeProductOnboarding: vi.fn(),
   };
 });
@@ -30,7 +32,9 @@ import type {
   ProductSellWays,
   ProductWhat,
   ProductWho,
+  ProductsPage,
   ReadinessCheck,
+  ReadinessMissing,
   SellWayRow,
 } from "@/lib/intakeProductApi";
 import {
@@ -38,6 +42,7 @@ import {
   fetchProductEvidence,
   fetchProductOnboarding,
   fetchProductSellWays,
+  fetchProductsPage,
   fetchProductWho,
 } from "@/lib/intakeProductApi";
 import type { StepNav } from "../OnboardingStepHead";
@@ -128,8 +133,25 @@ function status(step: number, completed: boolean, missing: ReadinessCheck["key"]
   return { step, completed, ready, checklist, prefill_status: "done", prefill_error: null };
 }
 
-function renderDone({ completed = true, sellWays = SELL_WAYS, onboarding = status(5, true), whoError = "" } = {}) {
+/** `list_page()` as served, this product only: its `missing` is `product_readiness` (F50-I18 reads the title there). */
+function page(missing: ReadinessMissing[]): ProductsPage {
+  return {
+    products: [{
+      id: P, name: WHAT.name, thumbnail_url: null, state: missing.length ? "draft" : "ready", missing, step: null,
+      summary: "2 群顧客・證據 2・說法 3", sell_ways: [],
+    }],
+    bundles: [],
+    suggestions: [],
+  };
+}
+
+function renderDone({
+  completed = true, sellWays = SELL_WAYS, onboarding = status(5, true), whoError = "",
+  missing = [] as ReadinessMissing[], pageError = false,
+} = {}) {
   vi.mocked(fetchProductOnboarding).mockResolvedValue(onboarding);
+  if (pageError) vi.mocked(fetchProductsPage).mockRejectedValue(new Error("讀取失敗（狀態碼 500）"));
+  else vi.mocked(fetchProductsPage).mockResolvedValue(page(missing));
   if (whoError) vi.mocked(fetchProductWho).mockRejectedValueOnce(new Error(whoError)).mockResolvedValue(WHO);
   else vi.mocked(fetchProductWho).mockResolvedValue(WHO);
   vi.mocked(fetchProductEvidence).mockResolvedValue(EVIDENCE);
@@ -166,8 +188,14 @@ describe("ProductDoneStep", () => {
   });
 
   it("伺服器說還沒有顧客群：建到一半、誰會買列紅色（不看步驟讀到幾群），不能拿它建活動", async () => {
-    const { onGoStep } = renderDone({ onboarding: status(5, true, ["groups"]) });
+    const { onGoStep } = renderDone({
+      onboarding: status(5, true, ["groups"]), missing: [{ key: "groups", label: "還沒有顧客群" }],
+    });
     await waitFor(() => expect(rows()).toHaveLength(3));
+    // F50-I18: the title says what is missing (the served label), never 「建好了」.
+    expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("綜合維他命軟糖還沒有顧客群");
+    expect(screen.queryByText("可以拿它建活動了")).toBeNull();
+    expect(screen.getByText("還不能拿它建活動")).toBeTruthy();
     expect(chip().textContent).toBe("建到一半");
     expect(rows().map((r) => r.dataset.state)).toEqual(["red", "green", "green"]);
     expect(rows()[0].textContent).toBe("!誰會買：還沒有去補");
@@ -217,11 +245,26 @@ describe("ProductDoneStep", () => {
   });
 
   it("四步都存了但伺服器說還沒有顧客群：不送完成，紅列說缺什麼", async () => {
-    renderDone({ completed: false, onboarding: status(5, false, ["groups"]) });
+    renderDone({
+      completed: false, onboarding: status(5, false, ["groups"]),
+      missing: [{ key: "steps", label: "建檔還沒走完" }, { key: "groups", label: "還沒有顧客群" }],
+    });
     await waitFor(() => expect(rows()).toHaveLength(3));
+    // This page records 完成, so the title names the concrete item after 「建檔還沒走完」.
+    expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("綜合維他命軟糖還沒有顧客群");
     expect(chip().textContent).toBe("建到一半");
     expect(rows()[0].dataset.state).toBe("red");
     expect(completeProductOnboarding).not.toHaveBeenCalled();
+  });
+
+  it("沒有賣法：標題說還沒有賣法；清單讀不到時標題退回「建到一半」，頁面照常", async () => {
+    renderDone({ onboarding: status(5, true, ["sell_ways"]), missing: [{ key: "sell_ways", label: "還沒有賣法" }] });
+    await waitFor(() => expect(rows()).toHaveLength(3));
+    expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("綜合維他命軟糖還沒有賣法");
+    cleanup();
+    renderDone({ onboarding: status(5, true, ["sell_ways"]), pageError: true });
+    await waitFor(() => expect(rows()).toHaveLength(3));
+    expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("綜合維他命軟糖建到一半");
   });
 
   it("讀取失敗：顯示原因與重新載入", async () => {

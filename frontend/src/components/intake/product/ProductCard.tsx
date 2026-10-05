@@ -1,7 +1,14 @@
 import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { Button } from "@/components/layout/ui/button";
-import type { BundleCardData, ProductCardData, ProductSuggestion, SellWayBrief } from "@/lib/intakeProductApi";
+import type {
+  BundleCardData,
+  ProductCardData,
+  ProductSuggestion,
+  ReadinessCheck,
+  ReadinessMissing,
+  SellWayBrief,
+} from "@/lib/intakeProductApi";
 import { useAuthedImage } from "@/lib/useAuthedImage";
 import { cn } from "@/lib/utils";
 
@@ -16,6 +23,25 @@ const brandPath = (brandId: string) => `/brands/${encodeURIComponent(brandId)}`;
 export const productOnboardingPath = (brandId: string, productId: string, step?: number | null) =>
   `${brandPath(brandId)}/products/${encodeURIComponent(productId)}/onboarding${step ? `?step=${step}` : ""}`;
 export const newProductPath = (brandId: string) => `${brandPath(brandId)}/products/new`;
+
+/** The onboarding step that holds each readiness item (F50 Contract R): the done page's 「去補」 and a finished-but-not-
+ * ready card's 「繼續建檔 →」 open it. `archived` and `steps` have no step of their own. */
+export const READINESS_STEP: Partial<Record<ReadinessCheck["key"] | ReadinessMissing["key"], number>> = {
+  groups: 2,
+  proof: 3,
+  sell_ways: 4,
+};
+
+/** Where 「繼續建檔」 opens a draft: the step it stopped at, else (finished but not ready, F50-I18) the step of its first
+ * served `missing` item that has one; null = no step (a finished product opens its last step). */
+export function continueStep(product: Pick<ProductCardData, "step" | "missing">): number | null {
+  if (product.step) return product.step;
+  for (const item of product.missing ?? []) {
+    const step = READINESS_STEP[item.key];
+    if (step) return step;
+  }
+  return null;
+}
 /** The bundle page (F43-I13). */
 export const newBundlePath = (brandId: string) => `${brandPath(brandId)}/products/bundles/new`;
 export const bundlePath = (brandId: string, bundleId: string) =>
@@ -118,7 +144,7 @@ export function ProductCard(props: ProductCardProps) {
   if (props.product) {
     const p = props.product;
     const draft = p.state === "draft";
-    const next = productOnboardingPath(brandId, p.id, draft ? (p.step ?? 1) : null);
+    const next = productOnboardingPath(brandId, p.id, draft ? continueStep(p) : null);
     // F50 Contract R: a draft's sub-line names the first thing the server says keeps it from ready.
     const firstMissing = draft ? p.missing?.[0]?.label : undefined;
     let line = p.summary;

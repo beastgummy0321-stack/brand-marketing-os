@@ -2,7 +2,8 @@
  * fixture shaped like `app/intake/product_onboarding.py::list_page()` (a ready product with two sell-ways, a draft, a
  * brand-scan suggestion, a bundle); 「繼續建檔 →」 on a suggestion posts the create and opens step 1; an empty brand gets
  * one empty state; a failed read keeps the actions and retries. F50-I15 (Contract R): the chip is the served `state` and a
- * draft's sub-line names its first served `missing` label. No server: the API calls are fakes. */
+ * draft's sub-line names its first served `missing` label; F50-I18: a finished draft's 「繼續建檔 →」 opens the step of its
+ * first missing item. No server: the API calls are fakes. */
 import type { ReactNode } from "react";
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -171,6 +172,25 @@ describe("ProductsPage", () => {
     expect(within(card).getByText("還沒有顧客群")).toBeTruthy();
     expect(within(card).queryByText("可以投放")).toBeNull();
     expect(within(card).queryByText("0 群顧客・證據 0・說法 4")).toBeNull();
+    // F50-I18: 「繼續建檔 →」 opens the step of the first missing item (誰會買 = step 2), never step 1.
+    expect(within(card).getByRole("link", { name: "繼續建檔 →" }).getAttribute("href")).toBe(
+      `/brands/${B}/products/prd_cof/onboarding?step=2`,
+    );
+  });
+
+  it("a finished product with no sell-way: 「繼續建檔 →」 opens step 4 (F50-I18)", async () => {
+    const noWays = {
+      ...fixture.products[0], id: "prd_cof", name: "咖啡因機能軟糖", state: "draft" as const, step: null,
+      missing: [{ key: "sell_ways" as const, label: "還沒有賣法" }, { key: "groups" as const, label: "還沒有顧客群" }],
+      sell_ways: [],
+    };
+    mockFetch.mockResolvedValue({ ...fixture, products: [noWays] });
+    renderPage();
+
+    const card = (await screen.findByRole("link", { name: "咖啡因機能軟糖" })).closest("[data-slot=product-card]") as HTMLElement;
+    expect(within(card).getByRole("link", { name: "繼續建檔 →" }).getAttribute("href")).toBe(
+      `/brands/${B}/products/prd_cof/onboarding?step=4`,
+    );
   });
 
   it("「繼續建檔」 on a suggestion creates the product with its page URL, then opens step 1", async () => {

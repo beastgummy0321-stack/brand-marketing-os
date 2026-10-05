@@ -8,6 +8,7 @@ import type {
   ProductWhat,
   ProductWho,
   ReadinessCheck,
+  ReadinessMissing,
   SellWayRow,
 } from "@/lib/intakeProductApi";
 import {
@@ -15,17 +16,20 @@ import {
   fetchProductEvidence,
   fetchProductOnboarding,
   fetchProductSellWays,
+  fetchProductsPage,
   fetchProductWho,
 } from "@/lib/intakeProductApi";
 import { cn } from "@/lib/utils";
 import { OnboardingStepHead, type StepNav } from "../OnboardingStepHead";
-import { newBundlePath, newProductPath } from "./ProductCard";
+import { READINESS_STEP, newBundlePath, newProductPath } from "./ProductCard";
 
 interface Loaded {
   /** The server's verdict (`product_readiness`): the chip says 可以投放 only when true. */
   ready: boolean;
   /** The server's checklist, printed as served (F50 Contract R). */
   checklist: ReadinessCheck[];
+  /** The products page's served `missing` of this product (`product_readiness`, in order); [] when not listed. */
+  missing: ReadinessMissing[];
   who: ProductWho;
   evidence: ProductEvidence;
   sellWays: ProductSellWays;
@@ -43,9 +47,6 @@ interface Row {
   label: string;
   detail: string;
 }
-
-/** The onboarding step that holds each served checklist item (「去補」 opens it). */
-const ITEM_STEP: Record<ReadinessCheck["key"], number> = { groups: 2, proof: 3, sell_ways: 4 };
 
 const errorText = (err: unknown) => (err instanceof Error ? err.message : "讀取失敗，請稍後再試。");
 const amount = (value: number) => Math.round(value).toLocaleString("zh-TW");
@@ -84,11 +85,22 @@ function checklist(data: Loaded): Row[] {
   };
   return data.checklist.map((item) => ({
     key: item.key,
-    step: ITEM_STEP[item.key],
+    step: READINESS_STEP[item.key] ?? 1,
     ok: item.ok,
     required: item.required,
     ...(item.ok ? met[item.key] : { label: `${item.label}：還沒有`, detail: "" }),
   }));
+}
+
+/** The page title (F50-I18): 「〈商品〉建好了／可以拿它建活動了」 only when the server says `ready`; otherwise the title
+ * names what is missing — the first served `missing` label (「〈商品〉還沒有顧客群」), skipping `steps` 「建檔還沒走完」
+ * when a concrete item follows (this page is the step that records 完成) — else 〈商品〉建到一半. While loading, the name
+ * alone. */
+function heading(name: string, data: Loaded | null): { title: string; purpose?: string } {
+  if (!data) return { title: name };
+  if (data.ready) return { title: `${name}建好了`, purpose: "可以拿它建活動了" };
+  const first = data.missing.find((m) => m.key !== "steps") ?? data.missing[0];
+  return { title: `${name}${first ? first.label : "建到一半"}`, purpose: "還不能拿它建活動" };
 }
 
 /** Product onboarding `#/p5` 〈商品〉建好了 (prototype `R.p5` of `.harness/scratch/prototype/f41-onboarding/index.html`):
@@ -114,16 +126,19 @@ export function ProductDoneStep({ brandId, productId, nav, what, completed, onGo
   async function read() {
     setLoad({ status: "loading" });
     try {
-      const [status, who, evidence, sellWays] = await Promise.all([
+      const [status, who, evidence, sellWays, page] = await Promise.all([
         fetchProductOnboarding(brandId, productId),
         fetchProductWho(brandId, productId),
         fetchProductEvidence(brandId, productId),
         fetchProductSellWays(brandId, productId),
+        // Only the title's words (F50-I18): a failed read leaves the title 〈商品〉建到一半, never the page broken.
+        fetchProductsPage(brandId).catch(() => null),
       ]);
+      const missing = page?.products.find((p) => p.id === productId)?.missing ?? [];
       let verdict = status;
       const requiredMet = (status.checklist ?? []).every((item) => item.ok || !item.required);
       if (!status.completed && status.step >= 5 && requiredMet) verdict = await completeProductOnboarding(brandId, productId);
-      const data = { ready: verdict.ready === true, checklist: verdict.checklist ?? [], who, evidence, sellWays };
+      const data = { ready: verdict.ready === true, checklist: verdict.checklist ?? [], missing, who, evidence, sellWays };
       if (alive.current) setLoad({ status: "ready", data });
     } catch (err) {
       if (alive.current) setLoad({ status: "error", message: errorText(err) });
@@ -144,7 +159,7 @@ export function ProductDoneStep({ brandId, productId, nav, what, completed, onGo
 
   return (
     <div className="flex flex-col gap-4">
-      <OnboardingStepHead {...nav} title={`${what.name}建好了`} purpose="可以拿它建活動了" />
+      <OnboardingStepHead {...nav} {...heading(what.name, data)} />
       <section data-slot="product-checklist" aria-labelledby="product-done-title" className="rounded-xl border border-border bg-card px-[22px] py-5">
         <div className="mb-3.5 flex flex-wrap items-center justify-between gap-3">
           <h2 id="product-done-title" className="text-[15px] font-semibold">這個商品</h2>
