@@ -131,6 +131,9 @@ class ResolveTargetTest(unittest.TestCase):
     def test_knowledge_product_id_is_the_sell_ways_first_product(self):
         gummy = bi_repo.create_product(web.conn, self.brand_id, name="軟糖", actor="測試員")["id"]
         tea = bi_repo.create_product(web.conn, self.brand_id, name="濾掛", actor="測試員")["id"]
+        for product_id in (gummy, tea):  # F50 Contract R: a bundle takes ready products
+            bi_repo.save_customer_groups(web.conn, self.brand_id, product_id,
+                                         [{"who": "測試客群", "pain_keys": ["cost"]}], actor="測試員")
         single = bi_repo.save_sell_way(
             web.conn, self.brand_id, name="單盒", actor="測試員",
             product_id=gummy, economics={"selling_price": 399},

@@ -257,7 +257,9 @@ def library_bundle(request: Request, brand_id: str):
              + repo.list_brand_facts(web.conn, brand_id, status="pending"))
     data = {
         "brand": _brand_profile_shape(brand_id, brand),
-        "products": [{"id": p["id"], "name": p["name"]} for p in web.list_products(brand_id)],
+        # F50 Contract R: the scope pickers list the brand's active knowledge products.
+        "products": [{"id": p["id"], "name": p["name"]}
+                     for p in repo.knowledge_products(web.conn, brand_id)],
         "facts": [_fact_shape(brand_id, f, brand["org_id"]) for f in facts],
         "rules": [_rule_shape(brand_id, r) for r in repo.list_rules_for_brand(web.conn, brand_id)],
         "claims": [_claim_shape(brand_id, c) for c in repo.list_claims_for_brand(web.conn, brand_id)],

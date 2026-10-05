@@ -39,15 +39,18 @@ class BrandDeleteTest(unittest.TestCase):
                                      confirmed_by="測試員", actor="測試員")
         # F43-I01: a bundle (product_component rows), a customer group and a product prefill.
         other = repo.create_product(self.conn, bid, name=f"{name}-另一個產品", actor="測試員")["id"]
+        # F50 Contract R: a bundle takes ready products (one customer group each).
+        repo.save_customer_groups(self.conn, bid, other, [{"who": "測試客群", "pain_keys": ["cost"]}],
+                                  actor="測試員")
         bases = [repo.save_sell_way(self.conn, bid, name="單件", product_id=product,
                                     economics={"selling_price": 90}, actor="測試員")["id"]
                  for product in (pid, other)]  # F45: a bundle lists base sell-ways
+        repo.save_customer_groups(self.conn, bid, pid, [{"who": "測試客群", "pain_keys": ["cost"]}],
+                                  actor="測試員")
         repo.save_sell_way(self.conn, bid, name=f"{name}-組合",
                            components=[{"sell_way_id": bases[0], "qty": 1},
                                        {"sell_way_id": bases[1], "qty": 1}],
                            economics={"selling_price": 180}, actor="測試員")
-        repo.save_customer_groups(self.conn, bid, pid, [{"who": "測試客群", "pain_keys": ["cost"]}],
-                                  actor="測試員")
         intake_repo.save_product_prefill(self.conn, bid, pid, status="done", prefill_json={})
         repo.create_source_reference(self.conn, bid, title="測試來源", source_type="web",
                                       captured_date="2026-01-01", actor="測試員")

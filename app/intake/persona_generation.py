@@ -57,9 +57,7 @@ def _generation_material(conn, brand_id: str) -> tuple:
         conn, brand_id, include_personas=False,
     )
     product_sections = []
-    for product in repo.list_products(conn, brand_id):
-        if product["status"] != "active":
-            continue
+    for product in repo.knowledge_products(conn, brand_id):
         product_text, product_ids, _brand_version, _version = context_compiler.compile(
             conn, brand_id, product["id"], include_personas=False,
         )

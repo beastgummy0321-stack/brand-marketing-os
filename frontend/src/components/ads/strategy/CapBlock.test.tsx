@@ -209,13 +209,16 @@ describe("CapBlock", () => {
       result_kinds: [{ kind: "purchase", label: "購買" }, { kind: "lead", label: "名單" }], cost: null,
     });
     vi.mocked(fetchProductList).mockResolvedValue([
-      { id: "prd_9", name: "晨光隨行杯 500ml 通勤款", status: "active", fact_count: 0, pending_fact_count: 0, economics_status: "confirmed" },
+      { id: "prd_1", name: "晨光隨行杯", status: "active", kind: "knowledge", fact_count: 0, pending_fact_count: 0, economics_status: "none" },
+      { id: "prd_9", name: "晨光隨行杯 500ml 通勤款", status: "active", kind: "sell_way", fact_count: 0, pending_fact_count: 0, economics_status: "confirmed" },
     ]);
     vi.mocked(putTarget).mockResolvedValue({} as CampaignTarget);
     vi.mocked(getCampaign).mockResolvedValue(campaign(BE));
     renderBlock(campaign(cap({ missing: ["product"], product_id: null }), { status: "draft" }));
     await user.click(await screen.findByRole("button", { name: "選商品與成果（算打平要用）" }));
     expect((await screen.findByRole("button", { name: "購買" })).getAttribute("aria-pressed")).toBe("true");
+    // F50 Contract R: only sell-ways are offered (money lives there); the knowledge product is not.
+    expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["請選擇商品", "晨光隨行杯 500ml 通勤款"]);
     await user.selectOptions(screen.getByRole("combobox"), "prd_9");
     await user.click(screen.getByRole("button", { name: "儲存" }));
     expect(putTarget).toHaveBeenCalledWith("brd_1", "cmp_1", { expected_revision: 4, product_id: "prd_9" });

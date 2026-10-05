@@ -106,6 +106,10 @@ async function createCampaignInUi(page: Page, headers: ApiHeaders, brandId: stri
   await api(page, headers, "PUT", `${intake}/${onboarded.data.product_id}/onboarding/sell-ways`, {
     sell_ways: [{ name: "單品", price: 1580 }],
   });
+  // F50 Contract R: a product with zero customer groups is not ready (not pickable, 完成 refused) — one group first.
+  await api(page, headers, "PUT", `${intake}/${onboarded.data.product_id}/onboarding/who`, {
+    groups: [{ who: "通勤上班族", pain_keys: ["effort"] }],
+  });
   await api(page, headers, "POST", `${intake}/${onboarded.data.product_id}/onboarding/complete`);
   await page.goto(`/app/brands/${brandId}/ads/new`);
   // F43-I15: 要推什麼 lists the product as a section and its sell-way as the card (「單品 NT$1,580」).

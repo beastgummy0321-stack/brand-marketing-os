@@ -80,19 +80,6 @@ class JSONResponse(_FastAPIJSONResponse):
 # 資料存取的小包裝：補上「畫面需要、但 repository 沒有」的顯示邏輯
 # ---------------------------------------------------------------------------
 
-def _sorted_by_id(rows: list) -> list:
-    """依 id 排序＝依建立時間排序（id 是可排序的 ULID 風格 id，見 core/db.py new_id）。
-
-    repository 的清單查詢多半依 created_at／name 排序；品牌與產品清單這裡改回
-    建立順序，貼近這個 UI 原本（Mock 資料）的呈現順序。
-    """
-    return sorted(rows, key=lambda r: r["id"])
-
-
-def list_products(brand_id: str) -> list:
-    return _sorted_by_id(repo.list_products(conn, brand_id))
-
-
 def _color_index(brand_id: str, org_id: str) -> int:
     ids = sorted(b["id"] for b in repo.list_brands(conn, org_id))
     return ids.index(brand_id) % len(md.BRAND_COLOR_PALETTE)

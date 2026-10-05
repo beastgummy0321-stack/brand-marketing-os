@@ -252,7 +252,7 @@ class SameNameGuardTest(unittest.TestCase):
         )["id"]
 
     def _active_parents(self) -> list:
-        return [p for p in bi_repo.list_products(web.conn, self.brand_id)
+        return [p for p in bi_repo.all_product_rows(web.conn, self.brand_id)
                 if p["parent_id"] is None and p["status"] == "active"]
 
     def test_same_parent_name_twice_returns_one_row(self):
@@ -297,7 +297,7 @@ class SameNameGuardTest(unittest.TestCase):
         second = bi_repo.create_product(
             web.conn, self.brand_id, name=" 薑黃錠 · 單瓶 ", actor=ACTOR, parent_id=mother["id"])
         self.assertEqual(second["id"], first["id"])
-        children = [p for p in bi_repo.list_products(web.conn, self.brand_id)
+        children = [p for p in bi_repo.all_product_rows(web.conn, self.brand_id)
                     if p["parent_id"] == mother["id"]]
         self.assertEqual(len(children), 1)
 

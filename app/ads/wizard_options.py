@@ -10,13 +10,12 @@ thumbnail_url|null}`. Pure read, no
 model call, no write. Sell-ways, their economics, groups, offers and photos come only through the
 `app.brand_intelligence.repository` facade.
 
-Pickable rule (F43 「only sell-ways are pickable」, `sellable_products`):
-- a sell-way of `list_sell_ways` (a row with components, or an F05 sell-way under its product);
-  a knowledge product itself is never offered;
-- the sell-way is active and every one of its knowledge products (`knowledge_product_ids`) is
-  active and finished (`onboarding_step` NULL) -- a 建到一半 product's sell-ways are left out;
-- order: single sell-ways grouped by knowledge product (its name order; the `#/new` section
-  header), each group in creation order; then bundles in creation order.
+Pickable rule (F43 「only sell-ways are pickable」; F50 Contract R: `sellable_products` of the
+`app.brand_intelligence.repository` facade, re-exported here): an active sell-way whose every
+knowledge product is ready (active, onboarding finished, an active sell-way, at least one
+customer group); a knowledge product itself is never offered; order: single sell-ways grouped by
+knowledge product (its name order; the `#/new` section header), each group in creation order;
+then bundles in creation order.
 
 Numbers:
 - `price`/`currency`/`has_cost`/`break_even` come from the sell-way's *current* effective economics
@@ -102,28 +101,9 @@ def _thumbnails(conn, brand_id: str) -> dict:
     return urls
 
 
-def sellable_products(conn, brand_id: str) -> list[dict]:
-    """The finished sell-ways the wizard offers, in the wizard's order (module docstring) -- also
-    the only ids a structured create accepts (`brief._check_picks`), so the list and the create
-    can never disagree. Each item is the `list_sell_ways` item plus `knowledge_products` (the
-    product rows of `knowledge_product_ids`, in order)."""
-    products = {p["id"]: p for p in bi_repo.list_products(conn, brand_id)}
-    out = []
-    for way in bi_repo.list_sell_ways(conn, brand_id):
-        if way.get("status") != "active" or way.get("onboarding_step") is not None:
-            continue
-        knowledge = [products.get(pid)
-                     for pid in bi_repo.knowledge_product_ids(conn, brand_id, way["id"])]
-        if not knowledge or any(
-            p is None or p.get("status") != "active" or p.get("onboarding_step") is not None
-            for p in knowledge
-        ):
-            continue
-        out.append({**way, "knowledge_products": knowledge})
-    # Stable sort: creation order is kept inside each group.
-    return sorted(out, key=lambda w: (w["kind"] == "bundle",
-                                      "" if w["kind"] == "bundle"
-                                      else w["knowledge_products"][0]["name"]))
+# F50 Contract R: the pickable rule lives in the brand-intelligence facade (one readiness);
+# re-exported here for this module's callers (`brief`, `readiness`, `options`).
+sellable_products = bi_repo.sellable_products
 
 
 def customer_groups(conn, brand_id: str, sell_way: dict) -> list[dict]:

@@ -108,7 +108,7 @@ class ProductScanTest(_BaseProductScanTest):
         product_ai.PROVIDER = FakeProvider(response=_fake_response(_GOOD_FACTS))
         product_id, state = self._post()
         self.assertEqual(state["status"], "done")
-        products = bi_repo.list_products(web.conn, self.brand["id"])
+        products = bi_repo.all_product_rows(web.conn, self.brand["id"])
         self.assertEqual(len(products), 1)
         self.assertEqual(products[0]["id"], product_id)
         self.assertEqual(products[0]["name"], "虛構回甘烏龍")
@@ -152,7 +152,7 @@ class ProductScanTest(_BaseProductScanTest):
         resp = self.client.post(f"/api/products/brands/{self.brand['id']}",
                                 json={"name": "虛構純手動產品"})
         self.assertEqual(resp.status_code, 200)
-        products = bi_repo.list_products(web.conn, self.brand["id"])
+        products = bi_repo.all_product_rows(web.conn, self.brand["id"])
         self.assertEqual(len(products), 1)
         self.assertEqual(bi_repo.list_product_facts(web.conn, self.brand["id"], products[0]["id"]), [])
 

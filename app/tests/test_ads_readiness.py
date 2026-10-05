@@ -84,6 +84,9 @@ class ReadinessTestBase(unittest.TestCase):
                 web.conn, self.brand_id, name="單品", actor=ACTOR, economics=economics,
                 product_id=product_id,
             )
+            # F50 Contract R: a product with zero customer groups is not ready (not offered).
+            bi_repo.save_customer_groups(web.conn, self.brand_id, product_id,
+                                         [{"who": "測試客群", "pain_keys": ["cost"]}], actor=ACTOR)
         web.conn.commit()
         return product_id
 

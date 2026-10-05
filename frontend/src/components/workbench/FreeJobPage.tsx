@@ -161,7 +161,8 @@ export function FreeJobPage({ brandId }: { brandId: string }) {
   const [productId, setProductId] = useState<string | null>(null);
   // Contract K: a failed product read says so (error line + 重試), never an empty product list.
   const productsRead = useApiRead(() => fetchProductList(brandId), [brandId]);
-  const products = productsRead.data ?? [];
+  // F50 Contract R: a free job draws creative context (facts, photos) from knowledge products only.
+  const products = (productsRead.data ?? []).filter((p) => p.kind === "knowledge");
   const [file, setFile] = useState<File | null>(null);
   const [fileError, setFileError] = useState<string | null>(null);
   const [precise, setPrecise] = useState(false);

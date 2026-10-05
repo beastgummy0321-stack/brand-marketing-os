@@ -113,11 +113,9 @@ class HandoffPasteDirectParseTest(_BaseHandoffTest):
             src = bi_repo.get_source_reference(web.conn, self.brand["id"], f["source_reference_id"])
             self.assertIn("外部深研交接包", src["title"])
 
-        economics = bi_repo.get_product_economics(web.conn, self.brand["id"], self.product_id)
-        self.assertIsNotNone(economics)
-        self.assertEqual(economics["status"], "pending")
-        self.assertEqual(economics["selling_price"], 690.0)
-        self.assertEqual(economics["currency"], "TWD")
+        # F50 Contract R (R6 A3): a knowledge product holds no money -- a pasted price is not
+        # written on it (prices live on its sell-ways, product onboarding step 4).
+        self.assertIsNone(bi_repo.get_product_economics(web.conn, self.brand["id"], self.product_id))
 
     def test_same_label_deduped_against_existing_fact(self):
         bi_repo.create_product_fact(web.conn, self.brand["id"], self.product_id, actor=ACTOR,

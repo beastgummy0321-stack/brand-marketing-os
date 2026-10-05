@@ -101,6 +101,10 @@ class _Base(unittest.TestCase):
     def _sell_ways(self, bid: str, pid: str, rows: list) -> dict:
         return self._ok_put(bid, self._step(pid, "/sell-ways"), {"sell_ways": rows})
 
+    def _group(self, bid: str, pid: str, who: str = "上班族") -> dict:
+        return self._ok_put(bid, self._step(pid, "/who"),
+                            {"groups": [{"who": who, "pain_keys": ["effort"]}]})
+
     def _finished(self, bid: str, name: str, *, price=399, cost=90, shipping=60) -> str:
         pid = self._new_product(bid, name)
         self._sell_ways(
@@ -108,6 +112,7 @@ class _Base(unittest.TestCase):
             pid,
             [{"name": "單盒", "price": price, "cost": cost, "shipping": shipping}],
         )
+        self._group(bid, pid)  # F50 Contract R: zero customer groups is not ready
         resp = self.client.post(self._url(bid, self._step(pid, "/complete")))
         self.assertEqual(resp.status_code, 200, resp.text)
         return pid
@@ -868,11 +873,30 @@ class CompleteBundleTenancyTest(_Base):
         self.assertEqual(resp.status_code, 400)
         self.assertIn("商品是什麼", resp.json()["error"])
         self._sell_ways(bid, pid, [{"name": "單盒", "price": 399}])
+        # F50 Contract R: zero customer groups is not ready -> 完成 is refused with its sentence
+        resp = self.client.post(self._url(bid, self._step(pid, "/complete")))
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.json()["error"], "至少要有一群顧客才能完成商品建檔。")
+        status = self._get(bid, self._step(pid))
+        self.assertFalse(status["ready"])
+        self.assertEqual(status["checklist"], [
+            {"key": "groups", "label": "誰會買", "ok": False, "required": True},
+            {"key": "proof", "label": "證據與說法", "ok": False, "required": False},
+            {"key": "sell_ways", "label": "賣法與價格", "ok": True, "required": True},
+        ])
+        self._group(bid, pid)
         data = self.client.post(self._url(bid, self._step(pid, "/complete"))).json()["data"]
-        self.assertEqual((data["step"], data["completed"]), (5, True))
+        self.assertEqual((data["step"], data["completed"], data["ready"]), (5, True, True))
+        self.assertTrue(all(c["ok"] for c in data["checklist"] if c["required"]))
         # re-entry edits in place: a step PUT does not reopen the product
-        self._ok_put(bid, self._step(pid, "/who"), {"groups": []})
+        self._group(bid, pid, "運動族")
         self.assertTrue(self._get(bid, self._step(pid))["completed"])
+        # a finished product keeps at least one group
+        resp = self._put(bid, self._step(pid, "/who"), {"groups": []})
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.json()["error"], "至少留一群顧客；不賣給任何人就先封存這個商品。")
+        self.assertEqual([g["who"] for g in self._get(bid, self._step(pid, "/who"))["groups"]],
+                         ["運動族"])
 
     def test_complete_refused_when_every_sell_way_is_gone(self):
         bid = self._brand()
@@ -962,7 +986,7 @@ class CompleteBundleTenancyTest(_Base):
     def _stored(self, bid: str) -> tuple:
         """Everything a bundle save writes, as the facade reads it: product rows, sell-ways with
         their components, and each row's economics."""
-        products = sorted(p["id"] for p in bi_repo.list_products(web.conn, bid))
+        products = sorted(p["id"] for p in bi_repo.all_product_rows(web.conn, bid))
         ways = [(w["id"], w["components"]) for w in bi_repo.list_sell_ways(web.conn, bid)]
         econ = {
             pid: (e or {}).get("id")

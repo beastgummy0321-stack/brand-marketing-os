@@ -71,6 +71,9 @@ class ProductDeleteTest(unittest.TestCase):
                                  actor="測試員", org_id=db.DEV_ORG_ID)["id"]
         a = repo.create_product(self.conn, bid, name="皂 A", actor="測試員")["id"]
         b = repo.create_product(self.conn, bid, name="皂 B", actor="測試員")["id"]
+        for p in (a, b):  # F50 Contract R: a bundle takes ready products (one group each)
+            repo.save_customer_groups(self.conn, bid, p, [{"who": "測試客群", "pain_keys": ["cost"]}],
+                                      actor="測試員")
         bases = [repo.save_sell_way(self.conn, bid, name="單塊", product_id=p,
                                     economics={"selling_price": 150}, actor="測試員")["id"]
                  for p in (a, b)]

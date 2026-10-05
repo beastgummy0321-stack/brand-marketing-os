@@ -66,7 +66,7 @@ class BrandIsolationTest(unittest.TestCase):
         b_id = b["brand"]["id"]
 
         checks = [
-            (a["product"]["id"], [p["id"] for p in repo.list_products(self.conn, b_id)]),
+            (a["product"]["id"], [p["id"] for p in repo.all_product_rows(self.conn, b_id)]),
             (a["fact"]["id"], [x["id"] for x in repo.list_brand_facts(self.conn, b_id)]),
             (a["rule"]["id"], [x["id"] for x in repo.list_rules_for_brand(self.conn, b_id)]),
             (a["claim"]["id"], [x["id"] for x in repo.list_claims_for_brand(self.conn, b_id)]),
@@ -87,7 +87,7 @@ class BrandIsolationTest(unittest.TestCase):
 
         # 品牌 B 自己的資料應該還在（過濾邏輯不是「全部擋掉」）
         self.assertEqual(len(repo.list_brand_facts(self.conn, b_id)), 1)
-        self.assertEqual(len(repo.list_products(self.conn, b_id)), 1)
+        self.assertEqual(len(repo.all_product_rows(self.conn, b_id)), 1)
 
     def test_cross_brand_direct_lookup_returns_none(self):
         a = self._seed_brand("品牌A（直接存取測試）")

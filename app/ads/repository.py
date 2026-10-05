@@ -220,9 +220,8 @@ def update_campaign(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str
     context_json_changed = False
     if "product_ids" in updates:
         product_ids = updates["product_ids"] or []
-        # `bi_repo.list_products` is typed `Conn`-only; `ads` routes are handed the `ConnProxy`
-        # the rest of this module already treats as interchangeable (`_AnyConn`).
-        brand_product_ids = {p["id"] for p in bi_repo.list_products(cast(Conn, conn), brand_id)}
+        # Identity only (F50 Contract R): any product row of the brand is a known id.
+        brand_product_ids = {p["id"] for p in bi_repo.all_product_rows(conn, brand_id)}
         for product_id in product_ids:
             if product_id not in brand_product_ids:
                 raise ValueError("product_unknown")
@@ -368,7 +367,7 @@ def save_campaign_target(
 
     context_json = dict(campaign.get("context_json") or {})
     if product_id is not None:
-        brand_product_ids = {p["id"] for p in bi_repo.list_products(cast(Conn, conn), brand_id)}
+        brand_product_ids = {p["id"] for p in bi_repo.all_product_rows(conn, brand_id)}
         if product_id not in brand_product_ids:
             raise ValueError("product_unknown")
         context_json["product_ids"] = [product_id]

@@ -70,6 +70,9 @@ class ProductEconomicsVersionTest(unittest.TestCase):
         import app.main as main
 
         other = repo.create_product(self.conn, self.bid, name="測試濾掛", actor="測試員")["id"]
+        for product_id in (self.pid, other):  # F50 Contract R: a bundle takes ready products
+            repo.save_customer_groups(self.conn, self.bid, product_id,
+                                      [{"who": "測試客群", "pain_keys": ["cost"]}], actor="測試員")
         bases = [
             repo.save_sell_way(self.conn, self.bid, name=name, actor="測試員",
                                product_id=product_id,

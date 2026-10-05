@@ -414,33 +414,36 @@ def _sell_way_brief(conn: Conn, brand_id: str, sell_way: dict) -> dict:
     }
 
 
+def sell_way_briefs(conn: Conn, brand_id: str, product_id: str) -> list:
+    """F50 Contract R (R6 A3): the products-page briefs (`{id, name, shape, price, break_even,
+    offer_labels}`) of a knowledge product's active single sell-ways, creation order -- where its
+    money lives. Reader: `GET /api/products/brands/{b}/products/{p}` (`sell_ways`)."""
+    return [_sell_way_brief(conn, brand_id, s) for s in _active_singles(conn, brand_id, product_id)]
+
+
 def list_page(conn: Conn, brand_id: str) -> dict:
     """`GET …/products`: knowledge products (creation order) with their sell-ways, bundles, and the
-    brand scan's products not created yet (F42 prefill, 「AI 讀到了，還沒確認」)."""
-    products = sorted(
-        bi_repo.list_products(conn, brand_id), key=lambda p: (p["created_at"], p["id"])
-    )
-    sell_ways = bi_repo.list_sell_ways(conn, brand_id)
-    sell_way_ids = {s["id"] for s in sell_ways}
-    active_ways = [s for s in sell_ways if s["status"] == "active"]
-    by_id = {p["id"]: p for p in products}
+    brand scan's products not created yet (F42 prefill, 「AI 讀到了，還沒確認」). F50 Contract R:
+    each product's `state` (`ready` / `draft`) and `missing` are its `product_readiness`; a
+    bundle's `state` is whether it is in `sellable_products`, and a bundle holding an archived
+    product is not listed (restoring the product lists it again)."""
+    products = bi_repo.knowledge_products(conn, brand_id)
+    archived = {p["id"] for p in bi_repo.knowledge_products(conn, brand_id, include_archived=True)
+                if p["status"] != "active"}
+    active_ways = [s for s in bi_repo.list_sell_ways(conn, brand_id) if s["status"] == "active"]
+    sellable = {s["id"] for s in bi_repo.sellable_products(conn, brand_id)}
     thumbs = _thumbnails(conn, brand_id)
     items = []
     for product in products:
-        if (
-            product["status"] != "active"
-            or product["parent_id"] is not None
-            or product["id"] in sell_way_ids
-        ):
-            continue
-        step = product.get("onboarding_step")
+        verdict = bi_repo.product_readiness(conn, brand_id, product["id"])
         items.append(
             {
                 "id": product["id"],
                 "name": product["name"],
                 "thumbnail_url": thumbs.get(product["id"]),
-                "state": "ready" if step is None else "draft",
-                "step": step,
+                "state": "ready" if verdict["ready"] else "draft",
+                "missing": verdict["missing"],
+                "step": product.get("onboarding_step"),
                 "summary": _summary(conn, brand_id, product),
                 "sell_ways": [
                     _sell_way_brief(conn, brand_id, s)
@@ -452,13 +455,14 @@ def list_page(conn: Conn, brand_id: str) -> dict:
     bundles = []
     for bundle in (s for s in active_ways if s["kind"] == "bundle"):
         ids = bi_repo.knowledge_product_ids(conn, brand_id, bundle["id"])
+        if archived & set(ids):
+            continue
         brief = _sell_way_brief(conn, brand_id, bundle)
-        ready = all(by_id.get(i, {}).get("onboarding_step") is None for i in ids)
         bundles.append(
             {
                 **brief,
                 "thumbnails": [thumbs[i] for i in ids if i in thumbs],
-                "state": "ready" if ready else "draft",
+                "state": "ready" if bundle["id"] in sellable else "draft",
                 "components": [
                     {k: c[k] for k in ("sell_way_id", "product_id", "product_name", "name", "qty")}
                     for c in bundle["components"]
@@ -468,7 +472,7 @@ def list_page(conn: Conn, brand_id: str) -> dict:
     return {
         "products": items,
         "bundles": bundles,
-        "suggestions": _suggestions(conn, brand_id, products),
+        "suggestions": _suggestions(conn, brand_id, bi_repo.all_product_rows(conn, brand_id)),
     }
 
 
@@ -527,7 +531,7 @@ def create(conn: Conn, brand_id: str, body: dict, *, actor: str) -> dict:
     same = next(
         (
             p
-            for p in bi_repo.list_products(conn, brand_id)
+            for p in bi_repo.all_product_rows(conn, brand_id)  # identity: name uniqueness
             if p["status"] == "active"
             and p["parent_id"] is None
             and p["name"].strip().casefold() == name.casefold()
@@ -573,15 +577,46 @@ def _prefill_status(conn: Conn, brand_id: str, product_id: str) -> tuple[str, st
     return "failed", str(error) if error else _PREFILL_FAILED
 
 
+# F50 Contract R: the done page's checklist, in order -- (key, label, required).
+_CHECKLIST = (
+    ("groups", "誰會買", True),
+    ("proof", "證據與說法", False),
+    ("sell_ways", "賣法與價格", True),
+)
+# The sentence `complete()` refuses with, by the first missing readiness item (`steps` has its
+# own sentence: the step that is not saved yet).
+_COMPLETE_REFUSALS = {
+    "archived": "這個商品已經封存，先還原才能完成商品建檔。",
+    "sell_ways": "至少要有一種賣法才能完成商品建檔。",
+    "groups": "至少要有一群顧客才能完成商品建檔。",
+}
+LAST_GROUP_REFUSAL = "至少留一群顧客；不賣給任何人就先封存這個商品。"
+
+
+def _checklist(conn: Conn, brand_id: str, product_id: str, missing: set) -> list:
+    proof = (_confirmed_facts(conn, brand_id, product_id, "proof")
+             or _product_claims(conn, brand_id, product_id))
+    ok = {"groups": "groups" not in missing, "proof": bool(proof),
+          "sell_ways": "sell_ways" not in missing}
+    return [{"key": key, "label": label, "ok": ok[key], "required": required}
+            for key, label, required in _CHECKLIST]
+
+
 def status(conn: Conn, brand_id: str, product_id: str) -> dict:
     """`GET …/products/{p}/onboarding`: 1–5 while being built (5 = 賣法 saved, 完成 not pressed);
-    a finished product reads step 5, completed."""
+    a finished product reads step 5, completed. F50 Contract R: `ready` (`product_readiness`) and
+    `checklist [{key, label, ok, required}]` -- groups required, proof optional, sell-ways
+    required -- are the server's verdict the done page prints."""
     product = knowledge_product(conn, brand_id, product_id)
     step = product.get("onboarding_step")
     prefill_status, prefill_error = _prefill_status(conn, brand_id, product_id)
+    verdict = bi_repo.product_readiness(conn, brand_id, product_id)
+    missing = {m["key"] for m in verdict["missing"]}
     return {
         "step": step or STEP_DONE,
         "completed": step is None,
+        "ready": verdict["ready"],
+        "checklist": _checklist(conn, brand_id, product_id, missing),
         "prefill_status": prefill_status,
         "prefill_error": prefill_error,
     }
@@ -597,14 +632,17 @@ def _active_singles(conn: Conn, brand_id: str, product_id: str) -> list:
 
 def complete(conn: Conn, brand_id: str, product_id: str, *, actor: str) -> dict:
     """`POST …/onboarding/complete`: idempotent on a finished product; refused while a step is not
-    saved yet (the step stopped before 賣法 was saved) or the product has no sell-way."""
+    saved yet (the step stopped before 賣法 was saved), else with the first missing readiness item
+    (`product_readiness`: archived, no sell-way, no customer group)."""
     product = knowledge_product(conn, brand_id, product_id)
     step = product.get("onboarding_step")
     if step is not None:
         if step < STEP_DONE:
             raise ValueError(f"「{STEP_LABELS[step]}」還沒存，先存好這一步再完成。")
-        if not _active_singles(conn, brand_id, product_id):
-            raise ValueError("至少要有一種賣法才能完成商品建檔。")
+        verdict = bi_repo.product_readiness(conn, brand_id, product_id)
+        missing = [m["key"] for m in verdict["missing"] if m["key"] != "steps"]
+        if missing:
+            raise ValueError(_COMPLETE_REFUSALS[missing[0]])
         bi_repo.set_product_onboarding_step(conn, brand_id, product_id, None, actor=actor)
     return status(conn, brand_id, product_id)
 
@@ -825,6 +863,9 @@ def put_who(conn: Conn, brand_id: str, product_id: str, body: dict, *, actor: st
         raise ValueError(f"顧客最多 {MAX_GROUPS} 群。")
     existing = {g["id"]: g for g in bi_repo.list_customer_groups(conn, brand_id, product_id)}
     checked = [_check_group(item, n, existing) for n, item in enumerate(groups, start=1)]
+    step = product.get("onboarding_step")
+    if not checked and step is None:  # a finished product keeps at least one group (Contract R)
+        raise ValueError(LAST_GROUP_REFUSAL)
     bi_repo.save_customer_groups(conn, brand_id, product_id, checked, actor=actor)
     _advance(conn, brand_id, product, STEP_WHO, actor=actor)
     return get_who(conn, brand_id, product_id)
@@ -1440,7 +1481,7 @@ def _check_components(conn: Conn, brand_id: str, value, errors: dict) -> list:
             raise ValueError("組合裡有找不到的賣法，請重新整理後再試。")
         product = bi_repo.get_product(conn, brand_id, way["parent_id"]) or {}
         label = f"{product.get('name', '')}・{way['display_name']}"
-        if product.get("status") != "active" or product.get("onboarding_step") is not None:
+        if not bi_repo.product_readiness(conn, brand_id, way["parent_id"])["ready"]:
             raise ValueError(f"「{product.get('name', '')}」還沒建完，建完才能放進組合。")
         qty = _kept(errors, f"components.{j}.qty", lambda it=item, lb=label: input_rules.count(
             it.get("qty", 1), f"「{lb}」的數量", minimum=1))
@@ -1484,7 +1525,7 @@ def save_bundle(
         p["status"] == "active"
         and p["parent_id"] is None
         and p["name"].strip().casefold() == name.casefold()
-        for p in bi_repo.list_products(conn, brand_id)
+        for p in bi_repo.all_product_rows(conn, brand_id)  # identity: name uniqueness
     ):
         raise ValueError(f"已經有叫「{name}」的商品或組合了，換個名字。")
     saved = bi_repo.save_sell_way(

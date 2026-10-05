@@ -41,11 +41,29 @@ export interface SellWayBrief {
   offer_labels: string[];
 }
 
+/** One missing readiness item (F50 Contract R, `product_readiness`), in the server's order. */
+export interface ReadinessMissing {
+  key: "archived" | "steps" | "sell_ways" | "groups";
+  /** 「已封存」「建檔還沒走完」「還沒有賣法」「還沒有顧客群」. */
+  label: string;
+}
+
+/** One row of the done page's checklist (F50 Contract R): groups and sell-ways required, proof optional. */
+export interface ReadinessCheck {
+  key: "groups" | "proof" | "sell_ways";
+  label: string;
+  ok: boolean;
+  required: boolean;
+}
+
 export interface ProductCardData {
   id: string;
   name: string;
   thumbnail_url: string | null;
+  /** The server's verdict (`product_readiness`): ready = nothing missing. */
   state: "ready" | "draft";
+  /** What keeps it from ready, in order; [] when ready. Optional only for fixtures written before F50. */
+  missing?: ReadinessMissing[];
   /** 1–5 while being built (5 = 賣法 saved, 完成 not pressed); null when ready. */
   step: number | null;
   /** 「2 群顧客・證據 2・說法 3」 or 「建到一半：還沒確認顧客」. */
@@ -96,6 +114,10 @@ export interface ProductOnboardingStatus {
   /** 1 商品是什麼 · 2 誰會買 · 3 證據與說法 · 4 賣法與價格 · 5 完成 (a finished product reads 5). */
   step: number;
   completed: boolean;
+  /** F50 Contract R: the server's readiness verdict (`product_readiness`). Optional only for older fixtures. */
+  ready?: boolean;
+  /** F50 Contract R: the done page's checklist, printed as served. Optional only for older fixtures. */
+  checklist?: ReadinessCheck[];
   /** The product-page read: none (never started) · running · done · failed. */
   prefill_status: PrefillStatus;
   /** Why it failed (the AI's own error, 「AI 有回覆，但格式讀不成…」, 「讀不到商品頁…」, or the AI

@@ -301,7 +301,7 @@ class ManyProductsCappedTest(_BriefTestBase):
         detail = self._create()
 
         sent_prompt = provider.calls[0]["messages"][0]["content"]
-        # `list_products` 依名稱排序（app/brand_intelligence/repository.py）；補零讓字串排序
+        # `sellable_products` 依商品名稱排序（app/brand_intelligence/repository.py）；補零讓字串排序
         # 等於數字排序，前 20 個是「商品00」~「商品19」，其餘 11 個（「商品20」~「商品29」
         # 加上 setUp 建的「夜跑背心」）都被截掉。
         self.assertIn("（這個品牌另有 11 個商品沒有列出）", sent_prompt)

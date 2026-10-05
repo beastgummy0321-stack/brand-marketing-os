@@ -279,7 +279,7 @@ def registered_names(conn, brand_id: str) -> list[str]:
     """The active product and sell-way names of the brand (both are `product` rows), longest
     first, so a name holding an offer word (「超能特惠組」) is stripped before any scan. A sell-way
     under a product is stored 「〈商品〉 · 〈賣法〉」; both that and its sell-way part count."""
-    rows = bi_repo.list_products(conn, brand_id)
+    rows = bi_repo.all_product_rows(conn, brand_id)  # identity: every name to strip
     by_id = {r["id"]: r for r in rows}
     names: set[str] = set()
     for row in rows:
