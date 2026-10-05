@@ -201,7 +201,7 @@ describe("MonthReviewPage — current month", () => {
   it("uses the flow verbs on suggestions, and 先不要 dismisses one for the month", async () => {
     const user = userEvent.setup();
     renderPage();
-    expect(await screen.findByRole("heading", { name: `${NEXT} 月建議` })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: `依 ${N} 月結果，給 ${NEXT} 月的建議` })).toBeTruthy();
     const card = screen.getByRole("region", { name: "補 2 則新素材" });
     expect(within(card).getByRole("link", { name: "看提議（核准或拒絕）→" }).getAttribute("href")).toBe("/brands/brd_bughunt/ads/campaigns/cmp_daily/materials");
     await user.click(within(card).getByRole("button", { name: "先不要" }));

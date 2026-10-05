@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useId, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
 /** Kit pieces of the v7 repair-flow steps 1–3 (F23, prototype `review()`/`prepare()`/`copy()`).
@@ -14,7 +14,7 @@ export function EvidenceRow({ label, previous, current, unknownLabel = "待確�
   label: string; previous: number | null; current: number | null; unknownLabel?: string;
   format?: (v: number | null) => string | null;
 }) {
-  const max = Math.max(previous ?? 0, current ?? 0) || 1;
+  const max = Math.max(1, ...[previous, current].filter((v): v is number => v !== null));
   const pct = (v: number | null) => (v === null ? 0 : (v / max) * 100);
   let delta = "";
   if (previous !== null && current !== null && previous !== 0) {
@@ -59,18 +59,21 @@ export function Ladder({ steps, current }: { steps: string[]; current?: number }
  * clickable); `disabledNote` says why (default 接上後開放 — never a refusal wording).
  * `recommendedLabel`/`recommendedTone` word the recommended chip: default 建議 in accent (prototype `chip v`);
  * F30 ai-blocked: 照順序先試 in neutral (prototype `chip`) when the pick comes from the ladder, not from an AI. */
-export function OptionCard({ icon, title, note, picked = false, recommended = false, recommendedLabel = "建議", recommendedTone = "accent", disabled = false, disabledNote = "接上後開放", onClick }: {
+export function OptionCard({ icon, title, note, picked = false, recommended = false, recommendedLabel = "建議", recommendedTone = "accent", disabled = false, disabledNote = "接上後開放", disabledReason, busy = false, onClick }: {
   icon: ReactNode; title: string; note: string; picked?: boolean; recommended?: boolean;
-  recommendedLabel?: string; recommendedTone?: "accent" | "neutral"; disabled?: boolean; disabledNote?: string; onClick?: () => void;
+  recommendedLabel?: string; recommendedTone?: "accent" | "neutral"; disabled?: boolean; disabledNote?: string; disabledReason?: string | null; busy?: boolean; onClick?: () => void;
 }) {
+  const reasonId = useId();
+  const reason = disabledReason || (disabled ? disabledNote : null);
+  const unavailable = Boolean(busy || reason);
   return (
-    <button type="button" data-slot="option-card" data-variant={disabled ? "reserved" : picked ? "picked" : "open"}
-      aria-pressed={disabled ? undefined : picked} disabled={disabled} onClick={onClick}
+    <button type="button" data-slot="option-card" data-variant={unavailable ? "reserved" : picked ? "picked" : "open"}
+      aria-pressed={unavailable ? undefined : picked} disabled={unavailable} aria-busy={busy || undefined} aria-describedby={reason ? reasonId : undefined} onClick={onClick}
       className={cn("rounded-xl border p-5 text-left transition-colors",
-        disabled ? "cursor-default border-border bg-muted text-muted-foreground" : picked ? "border-primary bg-accent shadow-[0_0_0_1px_var(--primary)]" : "border-border bg-card hover:border-primary")}>
+        unavailable ? "cursor-default border-border bg-muted text-muted-foreground" : picked ? "border-primary bg-accent shadow-[0_0_0_1px_var(--primary)]" : "border-border bg-card hover:border-primary")}>
       <div className="text-2xl" aria-hidden="true">{icon}</div>
       <b className="mt-2.5 mb-1 block text-[15px]">{title}{recommended && <span data-slot="chip" data-tone={recommendedTone} className={cn("ml-1.5 rounded-full px-2 py-0.5 text-xs font-medium", recommendedTone === "neutral" ? "bg-muted text-muted-foreground" : "bg-secondary text-secondary-foreground")}>{recommendedLabel}</span>}</b>
-      <span className="text-[13px] text-muted-foreground">{disabled ? disabledNote : note}</span>
+      <span id={reason ? reasonId : undefined} className="text-[13px] text-muted-foreground">{reason || note}</span>
     </button>
   );
 }

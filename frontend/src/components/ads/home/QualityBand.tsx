@@ -1,3 +1,4 @@
+import { campaignPath } from "@/lib/adsRoutes";
 import { Link, useParams } from "react-router-dom";
 import { Button } from "@/components/layout/ui/button";
 import { Skeleton } from "@/components/layout/Skeleton";
@@ -39,7 +40,7 @@ function Band({ home, onRetry }: { home: HomeOverview; onRetry: () => void }) {
       <div className="flex flex-wrap items-center gap-3">
         <p className="text-sm text-muted-foreground">{band.sentence}</p>
         <Button asChild variant="outline" size="sm">
-          <Link to={`/brands/${brandId ?? ""}/ads/campaigns/${band.campaign_id}?tab=performance`}>重新讀取平台</Link>
+          <Link to={campaignPath(brandId ?? "", band.campaign_id, {tab:"perf"})}>重新讀取平台</Link>
         </Button>
       </div>
     );

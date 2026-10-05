@@ -121,7 +121,7 @@ function AdsHome({ brandId }: { brandId: string }) {
   // Zero campaigns and nothing spent this month: the prototype draws no first-run board, so the page shows one honest
   // empty card whose clear action is ＋ 建立活動 — no money card, band or decisions that could only print zeros.
   // A brand whose campaigns all closed this month is not a first run (drill-11 N3): the rows say so instead.
-  const empty = home !== null && home.campaigns !== null && home.campaigns.length === 0 && !home.spent && !home.closed_this_month;
+  const empty = home !== null && home.campaigns !== null && home.campaigns.length === 0 && home.spent === 0 && home.closed_this_month === 0;
 
   return (
     <div className="flex max-w-[1260px] flex-col gap-5">

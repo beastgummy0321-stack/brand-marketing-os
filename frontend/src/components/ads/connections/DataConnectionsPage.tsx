@@ -84,7 +84,7 @@ function RereadSlot({ brandId, reread, read, onStarted, onFinished }: {
   }
 
   const button = (running: boolean) => reread ? (
-    <Button variant="outline" size="sm" disabled={posting || running} onClick={() => void run()}>
+    <Button variant="outline" size="sm" busy={posting || running} onClick={() => void run()}>
       {posting || running ? "讀取中…" : "重新讀取"}
     </Button>
   ) : null;
@@ -262,7 +262,7 @@ function DataConnections({ brandId }: { brandId: string }) {
         {state.status === "ready" && (
           <>
             <Sources brandId={brandId} sources={state.data.sources} reads={reads}
-              onStarted={(key, jobId) => setReads((prev) => ({ ...prev, [key]: { jobId, round: (prev[key]?.round ?? 0) + 1 } }))}
+              onStarted={(key, jobId) => setReads((prev) => ({ ...prev, [key]: { jobId, round: (prev[key]?.round ?? 0) + 1 /* ZERO_OK: a new local request has no previous polling round. */ } }))}
               onReread={() => setReloadKey((key) => key + 1)} />
             <Calendar calendar={state.data.calendar} />
           </>

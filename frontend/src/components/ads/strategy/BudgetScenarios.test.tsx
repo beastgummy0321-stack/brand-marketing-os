@@ -65,7 +65,7 @@ describe("BudgetScenarios", () => {
     const capRow = await screen.findByRole("radio", { name: /照預算上限/ });
     expect(capRow.textContent).toContain("推薦");
     expect(capRow.textContent).toContain("已儲存");
-    expect(capRow.textContent).toContain("約 66 筆購買");
+    expect(capRow.textContent).toContain("用滿你設的預算上限 NT$30000");
     expect(capRow.getAttribute("aria-checked")).toBe("true");
     expect(screen.getByRole("radio", { name: /穩定成長/ }).textContent).toContain("超出 39,750");
     expect(screen.getByText("你的預算上限 30,000")).toBeTruthy();

@@ -12,7 +12,7 @@ const X0 = 40, X1 = 540, Y0 = 190, Y1 = 20;
  * budget, today's marker and a dotted projection to month end. F47-I06: without a month budget above 0 (unset, or a
  * 0 stored before Contract A) there is no scale to draw on — the card says 「還沒設月預算」 and draws nothing (a 0
  * total used to divide by zero and paint NaN coordinates). */
-export function PaceChart({ month, dayOfMonth, daysInMonth, budget, spent, daily, projected, title = "預算用了多少" }: {
+export function PaceChart({ month, dayOfMonth, daysInMonth, budget, spent, daily, projected, budgetToDate = null, title = "預算用了多少" }: {
   /** Month number printed on the axis (9 → 9/1 … 9/30). */
   month: number;
   dayOfMonth: number;
@@ -22,6 +22,7 @@ export function PaceChart({ month, dayOfMonth, daysInMonth, budget, spent, daily
   /** Cumulative spend at the end of each day so far (home overview `pace.daily`). */
   daily: { day: number; cumulative: number }[];
   projected: number | null;
+  budgetToDate?: number | null;
   title?: string;
 }) {
   if (budget === null || !(budget > 0)) {
@@ -40,8 +41,8 @@ export function PaceChart({ month, dayOfMonth, daysInMonth, budget, spent, daily
   const points = [{ day: 0, cumulative: 0 }, ...daily.filter((d) => d.day <= dayOfMonth)].map((d) => `${x(d.day)},${y(d.cumulative)}`);
   const todayX = x(dayOfMonth);
   const todayY = spent === null ? null : y(spent);
-  const pace = Math.round((budget * dayOfMonth) / daysInMonth);
-  const label = `預算 ${formatAmount(budget)}，已花 ${formatAmount(spent) ?? "未知"}，照預算今天應花到 ${formatAmount(pace)}`;
+  const pace = budgetToDate;
+  const label = `預算 ${formatAmount(budget)}，已花 ${formatAmount(spent) ?? "未知"}，照預算今天應花到 ${pace === null ? "不明" : formatAmount(pace)}`;
   return (
     <div data-slot="pace-chart" className="min-w-0">
       <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
@@ -59,7 +60,7 @@ export function PaceChart({ month, dayOfMonth, daysInMonth, budget, spent, daily
         <line x1={X0} y1={Y0} x2={X1} y2={Y1} strokeWidth={2} strokeDasharray="5 5" className="stroke-chart-rest" data-part="pace-line" />
         {points.length > 1 && (
           <>
-            <polygon points={`${points.join(" ")} ${x(daily.filter((d) => d.day <= dayOfMonth).at(-1)?.day ?? 0)},${Y0}`} fillOpacity={0.08} className="fill-primary" />
+            <polygon points={`${points.join(" ")} ${x(daily.filter((d) => d.day <= dayOfMonth).at(-1)?.day ?? 0 /* ZERO_OK: no earlier plotted point starts the polygon at day zero. */)},${Y0}`} fillOpacity={0.08} className="fill-primary" />
             <polyline points={points.join(" ")} fill="none" strokeWidth={3} strokeLinejoin="round" className="stroke-primary" data-part="actual-line" />
           </>
         )}

@@ -53,7 +53,7 @@ export function RejectedCard({ brandId, month, card, objective, onDismissed }: {
       {error && <p role="alert" className="mb-2 text-xs text-danger">{error}</p>}
       <div className="flex flex-wrap gap-2">
         <Button size="sm" variant="outline" asChild><Link to={cleanupHref(brandId, card.campaign_id)}>看提議（核准或拒絕）→</Link></Button>
-        <Button size="sm" variant="ghost" disabled={busy} onClick={skip}>先不要</Button>
+        <Button size="sm" variant="ghost" busy={busy} onClick={skip}>先不要</Button>
       </div>
     </section>
   );

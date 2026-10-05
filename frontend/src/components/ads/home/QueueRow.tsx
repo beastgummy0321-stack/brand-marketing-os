@@ -29,10 +29,10 @@ export function homeAction(brandId: string, item: QueueItem, timezone?: string):
 /** The decision's own title, as the cards print it. */
 export function decisionTitle(item: QueueItem): string {
   if (item.kind_key === "cleanup") {
-    const n = item.cleanup?.ads.length ?? 0;
-    return n ? `關 ${n} 則、留 ${item.cleanup?.keep.length ?? 0} 則` : "預算放不下全部在投的廣告";
+    const n = item.cleanup?.ads.length ?? null;
+    return n === 0 ? "預算放不下全部在投的廣告" : `關 ${n ?? "不明"} 則、留 ${item.cleanup?.keep.length ?? "不明"} 則`;
   }
-  if (item.kind_key === "refresh_creative") return `能判讀的素材只剩 ${item.refresh?.readable_count ?? 0} 則`;
+  if (item.kind_key === "refresh_creative") return `能判讀的素材只剩 ${item.refresh?.readable_count ?? "不明"} 則`;
   return item.triage.name ?? "未命名廣告";
 }
 

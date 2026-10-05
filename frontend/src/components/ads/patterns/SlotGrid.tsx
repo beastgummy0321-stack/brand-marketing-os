@@ -106,12 +106,12 @@ export function SlotTile(props: SlotTileProps) {
     );
   }
   if (props.variant === "blocked") {
-    const more = props.reason.more ?? 0;
+    const more = props.reason.more ?? null;
     return (
       <Frame variant="blocked" className="border-danger/45 bg-card" picture={<SlotThumb url={props.thumbnailUrl} dim />} underSlot="slot-reason"
         under={<>
           <p className="text-[12.5px] leading-normal [overflow-wrap:anywhere]">{markTerms(props.reason.text, props.reason.terms)}</p>
-          {more > 0 && <span className="text-[11.5px] text-muted-foreground">另有 {more} 個原因</span>}
+          {more !== null && more > 0 && <span className="text-[11.5px] text-muted-foreground">另有 {more} 個原因</span>}
           {props.actions && <div className={ACTIONS}>{props.actions}</div>}
           {props.note}
         </>}>

@@ -153,7 +153,7 @@ export function LearningsTable({ campaign, compact = false, highlight = false, c
             {c.cap !== null && <Chip className="border border-border bg-transparent">上限 {learnMoney(c.cap)}</Chip>}
             {!compact && hasRows && (
               <Chip className="border border-border bg-transparent">
-                花 {learnMoney(c.spend)}・成交 {c.sales ?? 0}・{c.cost_per_sale === null ? "沒賣出" : `每筆 ${learnMoney(c.cost_per_sale)}`}
+                花 {learnMoney(c.spend)}・成交 {c.sales ?? "不明"}・{c.cost_per_sale === null ? (c.sales === 0 ? "沒賣出" : "每筆不明") : `每筆 ${learnMoney(c.cost_per_sale)}`}
               </Chip>
             )}
             {hasRows && <Chip tone="ok">留下 {c.counts.keep}</Chip>}

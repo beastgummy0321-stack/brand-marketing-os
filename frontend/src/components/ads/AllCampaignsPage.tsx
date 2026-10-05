@@ -1,3 +1,4 @@
+import { campaignPath } from "@/lib/adsRoutes";
 import { ExistingCampaignDialog } from "./ExistingCampaignDialog";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
@@ -188,7 +189,7 @@ export function AllCampaignsPage({ brandId }: { brandId: string }) {
                   const spent = c.budget_progress.spent;
                   const total = c.budget_progress.total;
                   const pct = c.budget_progress.pct;
-                  const percent = Math.min(100, Math.max(0, pct ?? 0));
+                  const percent = pct === null ? null : Math.min(100, Math.max(0, pct));
                   const percentText = pct !== null ? `${pct}%` : spent === null ? "未追蹤" : "未設定";
                   const amountText =
                     total === null
@@ -209,10 +210,10 @@ export function AllCampaignsPage({ brandId }: { brandId: string }) {
                             <span className="numeric whitespace-nowrap text-xs text-muted-foreground">{percentText}</span>
                           </div>
                           <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
-                            <div
+                            {percent !== null && <div
                               className="h-full rounded-full bg-primary"
                               style={{ width: `${percent}%` }}
-                            />
+                            />}
                           </div>
                         </div>
                       </td>
@@ -232,7 +233,7 @@ export function AllCampaignsPage({ brandId }: { brandId: string }) {
                         <Button
                           variant="outline"
                           size="sm"
-                          onClick={() => navigate(`/brands/${brandId}/ads/campaigns/${c.id}`)}
+                          onClick={() => navigate(campaignPath(brandId, c.id))}
                         >
                           查看這次投放
                         </Button>

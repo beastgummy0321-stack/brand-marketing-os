@@ -1,6 +1,7 @@
+import { Button } from "@/components/layout/ui/button";
 import { useEffect, useRef } from "react";
 
-export interface RowMenuItem { label: string; onSelect: () => void; disabled?: boolean }
+export interface RowMenuItem { label: string; onSelect: () => void; disabled?: boolean; busy?: boolean; disabledReason?: string | null }
 
 /** v10 `details.mn`: the 「⋯」 menu at the end of an ad row (換掉這一則／看紀錄). A native `<details>`, so it is
  * keyboard reachable without script; choosing an item, Escape or a click outside closes it.
@@ -22,11 +23,11 @@ export function RowMenu({ label, items }: { label: string; items: RowMenuItem[] 
       </summary>
       <div className="absolute top-[34px] right-0 z-[8] min-w-[190px] rounded-[10px] border border-border bg-card p-1.5 text-left shadow-lg">
         {items.map((item) => (
-          <button key={item.label} type="button" disabled={item.disabled}
+          <Button variant="ghost" key={item.label} type="button" disabled={item.disabled} busy={item.busy} disabledReason={item.disabledReason || (item.disabled ? "目前無法執行這個動作" : undefined)}
             onClick={() => { shut(); item.onSelect(); }}
-            className="block w-full rounded-[7px] px-2.5 py-2 text-left text-[13px] hover:bg-muted disabled:opacity-45">
+            className="block h-auto w-full rounded-[7px] px-2.5 py-2 text-left text-[13px] hover:bg-muted disabled:opacity-45">
             {item.label}
-          </button>
+          </Button>
         ))}
       </div>
     </details>
