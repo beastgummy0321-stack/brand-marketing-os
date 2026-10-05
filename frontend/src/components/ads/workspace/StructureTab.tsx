@@ -74,7 +74,7 @@ export function StructureTab({ brandId, campaign: c, planKey }: {
   const groups = data?.groups ?? [];
   // The campaign's daily total only when every group's daily budget is known; one unknown makes the total unknown.
   const total = groups.length && groups.every((g) => g.daily_budget !== null)
-    ? groups.reduce((sum, g) => sum + (g.daily_budget ?? 0), 0) : null;
+    ? groups.reduce((sum, g) => sum + (g.daily_budget as number), 0) : null;
   const perResult = c.cap.result_kind === "purchase" ? "每賣一筆" : `每一筆${c.cap.result_label}`;
 
   return (

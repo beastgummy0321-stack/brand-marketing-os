@@ -1,3 +1,6 @@
+import { Figure } from "@/components/layout/Figure";
+import { roasAtCap } from "@/lib/figures";
+import { formatMoney } from "@/lib/format";
 import { isRejected } from "@/lib/http";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
@@ -18,7 +21,7 @@ import { Chip, Disclosure, Segmented, TargetRuler, formatAmount, type RulerAd, t
 const TARGET_CONFLICT = "target_conflict";
 const fmt = (v: number | null | undefined) => formatAmount(v) ?? "未知";
 /** ROAS 參考 = price ÷ cap, two decimals at most (kit formatter). */
-const roas = (price: number, cap: number) => formatAmount(Math.round((price / cap) * 100) / 100);
+const roas = (price: number, cap: number) => <Figure basis="roas_at_cap" value={roasAtCap(price, cap)} />;
 const errorText = (err: unknown, fallback: string) => (err instanceof Error ? err.message : fallback);
 
 type Triage = { status: "idle" | "loading" } | { status: "error"; message: string } | { status: "ready"; items: TriageItem[] };
@@ -108,10 +111,10 @@ export function CapBlock({ brandId, campaign: c, onCampaignChange }: {
       ? <span className="text-muted-foreground">填一個整數金額</span>
       : typed === null
         ? <span className="text-danger">請填大於 0 的整數金額</span>
-        : <span className="text-muted-foreground">{[
-            breakEven !== null && (typed >= breakEven ? `比打平 ${fmt(breakEven)} 高 ${fmt(typed - breakEven)}` : `比打平 ${fmt(breakEven)} 低 ${fmt(breakEven - typed)}`),
-            price !== null && `ROAS 參考 ${roas(price, typed)}`,
-          ].filter(Boolean).join("・")}</span>;
+        : <span className="text-muted-foreground">
+            {breakEven !== null && (typed >= breakEven ? `比打平 ${fmt(breakEven)} 高 ${fmt(typed - breakEven)}` : `比打平 ${fmt(breakEven)} 低 ${fmt(breakEven - typed)}`)}
+            {price !== null && <>{breakEven !== null ? "・" : ""}ROAS {roas(price, typed)}</>}
+          </span>;
     const beFill = breakEven !== null ? Math.round(breakEven) : null;
     left = (
       <div>
@@ -129,8 +132,8 @@ export function CapBlock({ brandId, campaign: c, onCampaignChange }: {
             />
           </label>
           {beFill !== null && <Button variant="outline" size="sm" onClick={() => setValue(String(beFill))}>用打平 {fmt(beFill)}</Button>}
-          <Button variant="outline" disabled={typed === null || saving} onClick={() => typed !== null && saveOwn(typed)}>{saving ? "儲存中…" : "儲存上限"}</Button>
-          {editOpen && hasCap && <Button variant="ghost" size="sm" disabled={saving} onClick={() => { setEditOpen(false); setValue(""); setError(null); }}>取消</Button>}
+          <Button variant="outline" busy={saving} disabledReason={typed === null ? "請填大於 0 的整數上限" : undefined} onClick={() => typed !== null && saveOwn(typed)}>{saving ? "儲存中…" : "儲存上限"}</Button>
+          {editOpen && hasCap && <Button variant="ghost" size="sm" busy={saving} onClick={() => { setEditOpen(false); setValue(""); setError(null); }}>取消</Button>}
         </div>
         <div className="mt-2 min-h-5 text-sm" aria-live="polite">{preview}</div>
         {cap.missing.includes("product_cost") && (
@@ -151,11 +154,11 @@ export function CapBlock({ brandId, campaign: c, onCampaignChange }: {
         <div className="mt-1 flex flex-wrap items-center gap-2.5"><CapValue value={v} /><Chip tone="warn">暫用打平</Chip></div>
         <div className="numeric mt-1 text-xs text-muted-foreground">
           {`打平線 ${fmt(v)}`}
-          {price !== null && (cost !== null ? `：售價 ${fmt(price)} − 成本含運 ${fmt(cost)}・ROAS 參考 ${roas(price, v)}` : `・售價 ${fmt(price)}・ROAS 參考 ${roas(price, v)}`)}
+          {price !== null && <>{cost !== null ? `：售價 ${fmt(price)} − 成本含運 ${fmt(cost)}` : `・售價 ${fmt(price)}`}・ROAS {roas(price, v)}</>}
         </div>
         <div className="mt-3 flex flex-wrap gap-2">
-          <Button variant="outline" size="sm" disabled={saving} onClick={() => saveOwn(v)}>就用 {fmt(v)}</Button>
-          <Button variant="ghost" size="sm" disabled={saving} onClick={() => setEditOpen(true)}>設定自己的上限</Button>
+          <Button variant="outline" size="sm" busy={saving} onClick={() => saveOwn(v)}>就用 {fmt(v)}</Button>
+          <Button variant="ghost" size="sm" busy={saving} onClick={() => setEditOpen(true)}>設定自己的上限</Button>
         </div>
       </div>
     );
@@ -173,7 +176,7 @@ export function CapBlock({ brandId, campaign: c, onCampaignChange }: {
         <div className="mt-1 flex flex-wrap items-center gap-2.5"><CapValue value={v} /><Chip>{ownWord}</Chip></div>
         {(price !== null || breakEven !== null) && (
           <div className="numeric mt-1 text-xs text-muted-foreground">
-            {[price !== null && `ROAS 參考 ${roas(price, v)}`, breakEven !== null && `打平 ${fmt(breakEven)}`].filter(Boolean).join("・")}
+            {price !== null && <>ROAS {roas(price, v)}</>}{breakEven !== null && `・打平 ${fmt(breakEven)}`}
           </div>
         )}
         <div className="mt-3"><Button variant="outline" size="sm" onClick={() => setEditOpen(true)}>修改</Button></div>
@@ -237,7 +240,7 @@ export function CapBlock({ brandId, campaign: c, onCampaignChange }: {
 }
 
 function CapValue({ value }: { value: number }) {
-  return <span className="numeric text-[30px] leading-[1.1] font-[650] tracking-[-0.025em]">NT${fmt(value)}</span>;
+  return <span className="numeric text-[30px] leading-[1.1] font-[650] tracking-[-0.025em]">{formatMoney(value, "TWD")}</span>;
 }
 
 /** The fold for a campaign that has no product or no result kind yet: the product break-even needs one, grading
@@ -334,7 +337,7 @@ function CapSourceForm({ brandId, campaignId, onSaved }: {
           </select>
         </label>
       )}
-      <Button variant="outline" disabled={saving || (!kindChanged && !(productChanged && productId))} onClick={() => void save()}>
+      <Button variant="outline" busy={saving} disabledReason={!kindChanged && !(productChanged && productId) ? "先修改結果類型或選擇商品" : undefined} onClick={() => void save()}>
         {saving ? "儲存中…" : "儲存"}
       </Button>
       {error && <p role="alert" className="w-full text-sm text-danger">{error}</p>}

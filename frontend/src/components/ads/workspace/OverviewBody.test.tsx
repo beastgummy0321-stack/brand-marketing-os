@@ -1,3 +1,7 @@
+import { getPerformance } from "@/lib/adsApi";
+import { PeriodStatusRow } from "../detail/PeriodStatusRow";
+vi.mock("@/lib/adsApi", async (actual) => ({...await actual<typeof import("@/lib/adsApi")>(),getPerformance: vi.fn()}));
+vi.mock("@/lib/figures", async (actual) => ({ ...await actual<typeof import("@/lib/figures")>(), useFigureBases: () => ({roas_at_cap: {label: "花到上限時", formula: "售價 ÷ 每筆上限", unit: "ratio"}, roas_all_spend: {label: "保守", formula: "營收 ÷ 全部花費", unit: "ratio"}, roas_tracked_spend: {label: "樂觀", formula: "營收 ÷ 有追到營收的那部分花費", unit: "ratio"}}) }));
 /** F30-I07: the workspace overview in its three states (prototype v10 `tabOverview()`, `kvNumbers()`): draft checklist
  * with k／4 and the ruler preview; the data gap (per-ad distance to a judgeable sample, missing days, the reason chip);
  * live (the next open decision or 「沒有要決定的事」, the four 14-day numbers, the in-flight ruler). Every extra read
@@ -34,7 +38,7 @@ const DRAFT = { cap_set: false, budget_set: false, slots_ready: 7, slots_total: 
 function ws(o: Partial<CampaignWorkspace> = {}): CampaignWorkspace {
   return { stage: { key: "decide", done: ["plan", "assets", "launch", "read"] }, pending_count: 2, delivery: "live", daily_budget: 1200, active_ads: 8, can_support: 6,
     next_sync_at: "2026-09-23T04:40:00Z", missing_days: [],
-    totals: { start: "2026-09-10", end: "2026-09-23", window: LAST_14, currency: "TWD", spend: 15767, results: 121, cost_per_result: 130.31 }, draft: null, ...o };
+    totals: { start: "2026-09-10", end: "2026-09-23", window: LAST_14, currency: "TWD", spend: 15767, results: 121, cost_per_result: 130.31, roas_all_spend: 2.25, roas_tracked_spend: 3.75 }, draft: null, ...o };
 }
 /** `GET …/structure` serves `reason_code` and `sample` beside each grade (F48 Contract R). */
 function ad(id: string, name: string, spend: number, results: number, grade: StructureAd["grade"], o: Partial<StructureAd> = {}): StructureAd {
@@ -142,7 +146,7 @@ describe("draft (v10 camp/fall/overview)", () => {
     const { onGo } = renderBody(detail({ status: "draft" }), w, false);
     expect(screen.getByText("3／4 完成")).toBeTruthy();
     expect(screen.getByText("每賣一筆最多 450 元")).toBeTruthy();
-    expect(screen.getByText("NT$30,000")).toBeTruthy();
+    expect(screen.getByText("30,000 TWD")).toBeTruthy();
     expect(screen.getAllByRole("button", { name: "查看 →" })).toHaveLength(3);
     fireEvent.click(within(bar()).getByRole("button", { name: "確認上架清單 →" }));
     expect(onGo).toHaveBeenLastCalledWith("assets");
@@ -254,7 +258,10 @@ describe("live (v10 camp/daily/overview)", () => {
     expect(within(kv).getByText("121 筆")).toBeTruthy();
     expect(within(kv).getByText("130 元")).toBeTruthy();
     expect(plain(kv.querySelector("[data-slot=money-tag]")!)).toBe("・有賺（打平 520）");
-    expect(kv.textContent).toContain("ROAS 參考 12.13");
+    expect(within(kv).getByText("2.25x")).toBeTruthy();
+    expect(within(kv).getByText("3.75x")).toBeTruthy();
+    expect(within(kv).getByText("保守")).toBeTruthy();
+    expect(within(kv).getByText("樂觀")).toBeTruthy();
     expect(within(kv).getByText("8／6 則")).toBeTruthy();
     expect(await screen.findByText("在投 5 則對照上限")).toBeTruthy();
     expect(screen.getByRole("link", { name: "看成效 →" }).getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_daily?tab=perf");
@@ -429,4 +436,15 @@ describe("F49 Contract Q／L: the served decision queue and the closeout row", (
     renderBody(detail(), ws({ pending_count: 0 }));
     expect(await screen.findByText("這個活動沒有要決定的事")).toBeTruthy();
   });
+});
+
+
+it("overview and period row print the same served ROAS for the same fixture", async () => {
+  const c = detail();
+  const w = ws();
+  vi.mocked(getPerformance).mockResolvedValue({campaign_id: c.id, totals: {spend: 15767, impressions: 90000, clicks: 1200, purchases: 121, revenue: 35475.75, cpa: 130.31, ctr: 0.0133, roas_all_spend: w.totals!.roas_all_spend!, roas_tracked_spend: w.totals!.roas_tracked_spend!}, by_ad: [], daily: []} as unknown as Awaited<ReturnType<typeof getPerformance>>);
+  renderBody(c, w);
+  render(<MemoryRouter><PeriodStatusRow brandId="brd_1" campaign={c} onCampaignChange={vi.fn()} /></MemoryRouter>);
+  expect(within(screen.getByRole("region", {name: "近 14 天數字"})).getByText("2.25x")).toBeTruthy();
+  expect(await within(screen.getByTestId("period-status-row")).findByText(/^2\.25x?$/)).toBeTruthy();
 });

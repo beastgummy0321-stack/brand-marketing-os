@@ -1,3 +1,7 @@
+import { Figure } from "@/components/layout/Figure";
+import { roasAtCap } from "@/lib/figures";
+import { formatMoney } from "@/lib/format";
+import { campaignPath } from "@/lib/adsRoutes";
 import { useState, type KeyboardEvent, type ReactNode } from "react";
 import { Link2 } from "lucide-react";
 import { Link, Navigate, useNavigate } from "react-router-dom";
@@ -26,20 +30,18 @@ function periodText(start: string | null, end: string | null) {
 }
 /** A number cap prints as money; an older free-text cap prints as typed; anything else is unset (never NaN). */
 function budgetText(budget: unknown) {
-  if (typeof budget === "number") return formatAmount(budget) === null ? "" : `NT$${formatAmount(budget)}`;
+  if (typeof budget === "number") return formatAmount(budget) === null ? "" : formatMoney(budget, "TWD");
   return typeof budget === "string" ? budget.trim() : "";
 }
 const numericBudget = (budget: unknown) => (typeof budget === "number" && Number.isFinite(budget) && budget > 0 ? budget : null);
 
-/** F36-I04 cap chip helpers (wording copied from `strategy/CapBlock.tsx`, ROAS at one decimal per the F36 prototype). */
+/** Cap comparisons share the rounding and basis with the strategy editor. */
 const fmt = (v: number | null | undefined) => formatAmount(v) ?? "未知";
-const roas = (price: number, cap: number) => (price / cap).toFixed(1);
-/** 「比打平 N 高/低 M・ROAS 參考 R」 — each part only when its inputs are known; "" when neither is. */
 function capCompareText(value: number, breakEven: number | null, price: number | null) {
-  return [
-    breakEven !== null && (value >= breakEven ? `比打平 ${fmt(breakEven)} 高 ${fmt(value - breakEven)}` : `比打平 ${fmt(breakEven)} 低 ${fmt(breakEven - value)}`),
-    price !== null && `ROAS 參考 ${roas(price, value)}`,
-  ].filter(Boolean).join("・");
+  return <>
+    {breakEven !== null && (value >= breakEven ? `比打平 ${fmt(breakEven)} 高 ${fmt(value - breakEven)}` : `比打平 ${fmt(breakEven)} 低 ${fmt(breakEven - value)}`)}
+    {price !== null && <>{breakEven !== null ? "・" : ""}ROAS <Figure basis="roas_at_cap" value={roasAtCap(price, value)} /></>}
+  </>;
 }
 
 const CAP_LABEL = "每賣一筆最多花";
@@ -95,14 +97,14 @@ export function ConfirmBriefPage({ brandId, campaignId }: { brandId: string; cam
         <FlowHeader steps={steps} current={1} title="系統這樣理解" purpose="不對就點一下改" />
         {read.status === "error" ? <ReadFailed what={`這個活動讀不到（${read.error}）`} onRetry={read.reload} /> : <UnderstoodSkeleton />}
       </>,
-      <ActionBar back={{ label: "上一步", to: backHref }}><Button disabled>產生策略 →</Button></ActionBar>,
+      <ActionBar back={{ label: "上一步", to: backHref }}><Button disabledReason={read.status === "error" ? "活動讀取失敗，請先重新讀取" : "活動資料讀取完成後才能產生策略"}>產生策略 →</Button></ActionBar>,
     );
   }
 
   // F48-I07: once the plan is adopted the brief's fields are locked (409 `plan_already_adopted`); a stale URL or Back
   // lands on the campaign's strategy tab instead of an editable brief.
   if (campaign.status !== "draft") {
-    return <Navigate to={`/brands/${brandId}/ads/campaigns/${campaignId}?tab=strategy`} replace />;
+    return <Navigate to={campaignPath(brandId, campaignId, {tab: "strategy"})} replace />;
   }
 
   const context = campaign.context_json ?? {};
@@ -174,7 +176,7 @@ export function ConfirmBriefPage({ brandId, campaignId }: { brandId: string; cam
   }
 
   /** `source: null` = the cap: not a campaign field, never a guess; `hint` is its line under the value. */
-  const fields: { key: UnderstoodKey; source: keyof CampaignFieldSources | null; label: string; value: string; editable: boolean; editor: ReactNode; hint?: string }[] = [
+  const fields: { key: UnderstoodKey; source: keyof CampaignFieldSources | null; label: string; value: string; editable: boolean; editor: ReactNode; hint?: ReactNode }[] = [
     {
       key: "product", source: "product", label: "商品", value: productName, editable: products.length > 0,
       editor: <SelectEditor label="商品" initial={productId ?? ""} busy={saving} onCancel={cancel}
@@ -198,7 +200,7 @@ export function ConfirmBriefPage({ brandId, campaignId }: { brandId: string; cam
         onDone={(v) => done("budget", "budget", v !== constraints.budget, { constraints_json: { ...(campaign.constraints_json ?? {}), budget: v } })} />,
     },
     {
-      key: "platform", source: "platform", label: "平台", value: platformLabel, editable: (channels.data?.length ?? 0) > 0,
+      key: "platform", source: "platform", label: "平台", value: platformLabel, editable: channels.data !== null && channels.data.length > 0,
       editor: <SelectEditor label="平台" initial={platform ?? channels.data?.[0]?.key ?? ""} busy={saving} onCancel={cancel}
         options={(channels.data ?? []).map((c) => ({ key: c.key, label: c.label }))}
         onDone={(v) => done("platform", "platform", v !== platform, { constraints_json: { ...(campaign.constraints_json ?? {}), platform: v } })} />,
@@ -210,9 +212,9 @@ export function ConfirmBriefPage({ brandId, campaignId }: { brandId: string; cam
         onDone={(v) => done("audience", "audience", v !== groupPick, { customer_group_ids: v === ALL_GROUPS ? [] : [v] })} />,
     },
     {
-      key: "cap", source: null, label: CAP_LABEL, value: cap.own_value === null ? "" : `NT$${fmt(cap.own_value)}`, editable: true,
+      key: "cap", source: null, label: CAP_LABEL, value: cap.own_value === null ? "" : formatMoney(cap.own_value, "TWD"), editable: true,
       hint: cap.own_value === null
-        ? (cap.break_even !== null ? `先不填就用打平 NT$${fmt(cap.break_even)}：售價 ${fmt(cap.price)} 扣成本、運費後的一筆利潤` : "")
+        ? (cap.break_even !== null ? `先不填就用打平 ${formatMoney(cap.break_even, "TWD")}：售價 ${fmt(cap.price)} 扣成本、運費後的一筆利潤` : "")
         : capCompareText(cap.own_value, cap.break_even, cap.price),
       // An empty 完成 keeps whatever was there (no clear action here); an unchanged value just closes.
       editor: <CapEditor initial={cap.own_value} breakEven={cap.break_even} price={cap.price} busy={saving} onCancel={cancel}
@@ -232,7 +234,7 @@ export function ConfirmBriefPage({ brandId, campaignId }: { brandId: string; cam
     setGenerating(true); setGenerateError(null);
     try {
       await generateStrategy(brandId, campaignId);
-      navigate(`/brands/${brandId}/ads/campaigns/${campaignId}?tab=strategy`);
+      navigate(campaignPath(brandId, campaignId, {tab: "strategy"}));
     } catch (err) {
       setGenerateError(message(err, "產生策略失敗，請稍後再試。"));
       setGenerating(false);
@@ -258,11 +260,11 @@ export function ConfirmBriefPage({ brandId, campaignId }: { brandId: string; cam
       {channels.status === "error" && <ReadFailed what={`平台清單讀不到（${channels.error}）；平台先不能改，其他照常`} onRetry={channels.reload} />}
       {generateError && <p role="alert" className="text-sm text-destructive">{generateError}</p>}
       <Disclosure label="進階">
-        <Link className="text-sm text-primary underline-offset-4 hover:underline" to={`/brands/${brandId}/ads/campaigns/${campaignId}?tab=assets`}>先處理自帶素材與手動交接</Link>
+        <Link className="text-sm text-primary underline-offset-4 hover:underline" to={campaignPath(brandId, campaignId, {tab: "assets"})}>先處理自帶素材與手動交接</Link>
       </Disclosure>
     </>,
     <ActionBar back={{ label: "上一步", to: backHref }} hint={barHint}>
-      <Button onClick={() => void handleGenerate()} disabled={generating || saving || editing !== null}>
+      <Button onClick={() => void handleGenerate()} busy={generating || saving} disabledReason={editing !== null ? "先完成或取消正在修改的欄位" : undefined}>
         {generating ? "產生中…" : "產生策略 →"}
       </Button>
     </ActionBar>,
@@ -272,8 +274,8 @@ export function ConfirmBriefPage({ brandId, campaignId }: { brandId: string; cam
 const onEscape = (cancel: () => void) => (e: KeyboardEvent) => { if (e.key === "Escape") { e.preventDefault(); cancel(); } };
 const SELECT = "h-9 min-w-0 flex-1 rounded-md border border-input bg-card px-3 text-sm focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none";
 
-function DoneButton({ disabled, disabledReason, onClick }: { disabled?: boolean; disabledReason?: string; onClick: () => void }) {
-  return <Button size="sm" variant="outline" disabled={disabled} disabledReason={disabledReason} onClick={onClick}>完成</Button>;
+function DoneButton({ busy, disabledReason, onClick }: { busy?: boolean; disabledReason?: string; onClick: () => void }) {
+  return <Button size="sm" variant="outline" busy={busy} disabledReason={disabledReason} onClick={onClick}>完成</Button>;
 }
 
 function SelectEditor({ label, options, initial, busy, onDone, onCancel }: {
@@ -285,7 +287,7 @@ function SelectEditor({ label, options, initial, busy, onDone, onCancel }: {
       <select autoFocus aria-label={label} className={SELECT} value={value} onChange={(e) => setValue(e.target.value)} onKeyDown={onEscape(onCancel)}>
         {options.map((o) => <option key={o.key} value={o.key}>{o.label}</option>)}
       </select>
-      <DoneButton disabled={busy || !value} onClick={() => onDone(value)} />
+      <DoneButton busy={busy} disabledReason={!value ? "請先選擇一個選項" : undefined} onClick={() => onDone(value)} />
     </>
   );
 }
@@ -299,7 +301,7 @@ function DatesEditor({ start, end, busy, onDone, onCancel }: {
     <>
       <Input aria-label="開始日期" type="date" value={s} onChange={(ev) => setS(ev.target.value)} onKeyDown={onEscape(onCancel)} className="w-[150px]" />
       <Input aria-label="結束日期" type="date" value={e} onChange={(ev) => setE(ev.target.value)} onKeyDown={onEscape(onCancel)} className="w-[150px]" />
-      <DoneButton disabled={busy || !s || !e || e < s} onClick={() => onDone(s, e)}
+      <DoneButton busy={busy} onClick={() => onDone(s, e)}
         disabledReason={!s ? "開始日期還沒填" : !e ? "結束日期還沒填" : e < s ? "結束日不能早於開始日" : undefined} />
     </>
   );
@@ -315,7 +317,7 @@ function BudgetEditor({ initial, busy, onDone, onCancel }: {
       <div onKeyDown={onEscape(onCancel)} className="min-w-0 flex-1">
         <MoneyInput label="預算上限" value={value} onChange={setValue} invalid={value === 0} className="w-full" onEnter={() => { if (ok && !busy) onDone(value); }} />
       </div>
-      <DoneButton disabled={busy || !ok} onClick={() => { if (ok) onDone(value); }} />
+      <DoneButton busy={busy} disabledReason={!ok ? "預算上限必須大於 0" : undefined} onClick={() => { if (ok) onDone(value); }} />
     </>
   );
 }
@@ -340,12 +342,12 @@ function CapEditor({ initial, breakEven, price, busy, onDone, onCancel }: {
       <div onKeyDown={onEscape(onCancel)} className="flex min-w-0 flex-1 flex-col gap-1">
         <div className="flex flex-wrap items-center gap-2">
           <MoneyInput label={CAP_LABEL} value={value} onChange={setValue} invalid={invalid} onEnter={submit} />
-          {beFill !== null && <Button size="sm" variant="outline" disabled={busy} onClick={() => setValue(beFill)}>用打平 {fmt(beFill)}</Button>}
+          {beFill !== null && <Button size="sm" variant="outline" busy={busy} onClick={() => setValue(beFill)}>用打平 {fmt(beFill)}</Button>}
         </div>
         <div className="min-h-4 text-xs" aria-live="polite">{preview}</div>
       </div>
-      <DoneButton disabled={busy || invalid} onClick={submit} />
-      <Button size="sm" variant="ghost" disabled={busy} onClick={onCancel}>取消</Button>
+      <DoneButton busy={busy} disabledReason={invalid ? "請填大於 0 的整數上限" : undefined} onClick={submit} />
+      <Button size="sm" variant="ghost" busy={busy} onClick={onCancel}>取消</Button>
     </>
   );
 }
@@ -389,8 +391,8 @@ function UrlEditor({ initial, busy, onDone, onCancel }: {
     <>
       <Input autoFocus aria-label="落地頁" type="url" value={value} placeholder="https://" onChange={(e) => setValue(e.target.value)} className="min-w-0 flex-1"
         onKeyDown={(e) => { if (e.key === "Enter" && !busy) { e.preventDefault(); submit(); } else onEscape(onCancel)(e); }} />
-      <DoneButton disabled={busy} onClick={submit} />
-      <Button size="sm" variant="ghost" disabled={busy} onClick={onCancel}>取消</Button>
+      <DoneButton busy={busy} onClick={submit} />
+      <Button size="sm" variant="ghost" busy={busy} onClick={onCancel}>取消</Button>
     </>
   );
 }

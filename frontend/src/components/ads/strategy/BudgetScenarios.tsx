@@ -107,7 +107,7 @@ export function BudgetScenarios({ brandId, campaign: c, picked, onPick, pending,
     if (!row || row.total === null) return;
     setError(null);
     if (key === saved) { onPick(null); onPending(null); return; }
-    if ((row.over_cap ?? 0) > 0) {
+    if (row.over_cap !== null && row.over_cap > 0) {
       onPending({ key, label: row.label, total: row.total, over: row.over_cap as number, customTotal: null });
       return;
     }
@@ -194,8 +194,8 @@ export function BudgetScenarios({ brandId, campaign: c, picked, onPick, pending,
                   onKeyDown={(e) => { if (e.key === "Enter" && capValid && !capSaving) void saveCap(); if (e.key === "Escape") setCapEditing(false); }}
                 />
               </label>
-              <Button variant="outline" size="sm" disabled={!capValid || capSaving} onClick={() => void saveCap()}>{capSaving ? "儲存中…" : "儲存"}</Button>
-              <Button variant="ghost" size="sm" disabled={capSaving} onClick={() => { setCapEditing(false); setCapError(null); }}>取消</Button>
+              <Button variant="outline" size="sm" busy={capSaving} disabledReason={!capValid ? "請填大於 0 的整數預算上限" : undefined} onClick={() => void saveCap()}>{capSaving ? "儲存中…" : "儲存"}</Button>
+              <Button variant="ghost" size="sm" busy={capSaving} onClick={() => { setCapEditing(false); setCapError(null); }}>取消</Button>
             </span>
           ) : (
             <>
@@ -230,10 +230,10 @@ export function BudgetScenarios({ brandId, campaign: c, picked, onPick, pending,
           actions={(
             <>
               {/* Focus moves into the sheet once it opens (prototype `pickSc`), so a keyboard user lands on the safe choice. */}
-              <Button variant="outline" autoFocus disabled={confirming} onClick={() => { onPending(null); setError(null); }}>
+              <Button variant="outline" autoFocus busy={confirming} onClick={() => { onPending(null); setError(null); }}>
                 {keepTotal !== null ? `維持 ${fmt(keepTotal)}` : "先不選"}
               </Button>
-              <WarnButton disabled={confirming} onClick={() => void confirmOver()}>{confirming ? "儲存中…" : "超出預算上限也要用"}</WarnButton>
+              <WarnButton busy={confirming} onClick={() => void confirmOver()}>{confirming ? "儲存中…" : "超出預算上限也要用"}</WarnButton>
             </>
           )}
         />
@@ -258,7 +258,7 @@ export function BudgetScenarios({ brandId, campaign: c, picked, onPick, pending,
                 onChange={(e) => setCustomValue(e.target.value)}
               />
             </label>
-            <Button variant="outline" disabled={customSaving || confirming || !WHOLE.test(customValue.trim())} onClick={() => void applyCustom()}>
+            <Button variant="outline" busy={customSaving || confirming} disabledReason={!WHOLE.test(customValue.trim()) ? "請填大於 0 的整數預算" : undefined} onClick={() => void applyCustom()}>
               {customSaving ? "儲存中…" : "套用"}
             </Button>
             {customValue.trim() !== "" && !WHOLE.test(customValue.trim()) && <span className="text-xs text-danger">請填大於 0 的整數金額</span>}

@@ -115,7 +115,7 @@ async function createCampaignInUi(page: Page, headers: ApiHeaders, brandId: stri
   // F43-I15: 要推什麼 lists the product as a section and its sell-way as the card (「單品 NT$1,580」).
   const shelf = page.getByRole("radiogroup", { name: "要推什麼" });
   await expect(shelf.getByText(productName, { exact: true })).toBeVisible();
-  await shelf.getByRole("radio", { name: /^單品 NT\$1,580/ }).click();
+  await shelf.getByRole("radio", { name: /^單品 1,580 TWD/ }).click();
   await page.getByRole("radio", { name: /^購買/ }).click();
   await page.getByLabel("開始", { exact: true }).fill(dateOffset(-6));
   await page.getByLabel("結束", { exact: true }).fill(dateOffset(0));

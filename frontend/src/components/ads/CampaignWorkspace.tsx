@@ -1,3 +1,4 @@
+import { campaignPath, campaignFlowPath } from "@/lib/adsRoutes";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Navigate, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { EmptyState } from "@/components/layout/EmptyState";
@@ -136,7 +137,7 @@ function Workspace({ brandId, campaignId }: { brandId: string; campaignId: strin
   // §6.2 decision 15: a step target may be "publish" — the publish page at its own URL (F30-I13), which lands on the
   // step its launch reports; "performance" is the old perf key.
   function go(target: StepTarget) {
-    if (target === "publish") { if (canPublish) navigate(`/brands/${encodeURIComponent(brandId)}/ads/campaigns/${encodeURIComponent(campaignId)}/publish`); else changeTab("assets"); }
+    if (target === "publish") { if (canPublish) navigate(campaignFlowPath(brandId, campaignId, ["publish"])); else changeTab("assets"); }
     else changeTab(target === "performance" ? "perf" : target);
   }
 
@@ -173,7 +174,7 @@ function Workspace({ brandId, campaignId }: { brandId: string; campaignId: strin
   } else if (tab === "strategy") {
     body = (
       <StrategyTab {...slot}
-        launchApproved={ws ? ws.stage.key === "launch" || (ws.draft?.launch_total ?? 0) > 0 : null}
+        launchApproved={ws ? ws.stage.key === "launch" || (ws.draft?.launch_total != null && ws.draft.launch_total > 0) : null}
         onLaunchSettingsSaved={reloadWorkspace} />
     );
   } else if (tab === "perf") {
@@ -240,7 +241,7 @@ function DraftPerf({ brandId, campaign: c, onGo, advanced }: {
         <div className="mt-3"><TargetRuler ads={[]} cap={capOf(c)} breakEven={c.cap.break_even} size="full" /></div>
       </section>
       {advanced}
-      <ActionBar back={{ label: "總覽", to: `/brands/${brandId}/ads/campaigns/${c.id}` }}>
+      <ActionBar back={{ label: "總覽", to: campaignPath(brandId, c.id) }}>
         <Button onClick={() => onGo("publish")}>確認上架清單 →</Button>
       </ActionBar>
     </div>

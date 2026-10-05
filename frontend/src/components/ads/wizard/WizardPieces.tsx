@@ -1,3 +1,5 @@
+import { formatMoney } from "@/lib/format";
+import { newCampaignPath as campaignCreatePath } from "@/lib/adsRoutes";
 import type { ReactNode } from "react";
 import {
   Box, CalendarDays, DollarSign, Heart, Infinity as InfinityIcon, Mail, Megaphone, MousePointerClick,
@@ -14,7 +16,7 @@ import { Chip, FlowHeader, PickCard, ReadFailed, WaitLine, formatAmount, type Fl
  * `../patterns`. */
 
 export const newCampaignPath = (brandId: string, createdId?: string | null) =>
-  `/brands/${brandId}/ads/new${createdId ? `?created=${encodeURIComponent(createdId)}` : ""}`;
+  campaignCreatePath(brandId, {created: createdId});
 
 /** `newHead()` (F43-I15: the f41-onboarding `#/new` dots): 建立活動 → 系統理解 → 產生策略. Step 1 links back only once
  * a campaign exists (its picks reload from it; going back never creates a second campaign). */
@@ -39,7 +41,7 @@ export function ObjectiveIcon({ objective }: { objective: string }) {
 export function priceText(price: number | null, currency: string | null): string {
   const amount = price !== null && price > 0 ? formatAmount(price) : null;
   if (amount === null) return "價格未填";
-  return !currency || currency === "TWD" ? `NT$${amount}` : `${currency} ${amount}`;
+  return formatMoney(price, currency || "TWD");
 }
 
 /** F45 (ads §6.49 「Picker」): 「（推算）」 after a break-even built on a derived price or cost, "" otherwise. */
@@ -150,7 +152,10 @@ export function UnderstoodField({ field, label, value, guessed, editing, onEdit,
   );
   const box = cn(CHIP_BOX, guessed ? "border-dashed border-grade-watch/55" : empty ? "border-dashed border-border" : "border-border");
   return onEdit
-    ? <button type="button" data-field={field} aria-label={`改${label}`} onClick={onEdit} className={cn(box, "hover:border-primary")}>{body}</button>
+    ? <div data-field={field} className={cn(box, "relative hover:border-primary")}>
+        <button type="button" aria-label={`改${label}`} onClick={onEdit} className="absolute inset-0 rounded-xl focus-visible:outline-2 focus-visible:outline-ring" />
+        <span className="contents pointer-events-none [&_button]:pointer-events-auto [&_button]:relative [&_button]:z-10">{body}</span>
+      </div>
     : <div data-field={field} className={box}>{body}</div>;
 }
 

@@ -154,7 +154,7 @@ test("15 條路由（扣 /accept-invite）在 1280 寬不橫向溢出", async ({
   await assertNoOverflow("/brands/:brandId/ads/new");
   const shelf = page.getByRole("radiogroup", { name: "要推什麼" });
   await expect(shelf.getByText(`寬度測試產品 ${stamp}`, { exact: true })).toBeVisible();
-  await shelf.getByRole("radio", { name: /^單品 NT\$1,580/ }).click();
+  await shelf.getByRole("radio", { name: /^單品 1,580 TWD/ }).click();
   await page.getByRole("radio", { name: /^購買/ }).click();
   await page.getByLabel("這個活動最多花").fill("30000");
   // F46-I08: 平台／每筆上限 sit in 「期間、預算與平台」 (with source tags); the fold keeps 受眾 and 落地頁.

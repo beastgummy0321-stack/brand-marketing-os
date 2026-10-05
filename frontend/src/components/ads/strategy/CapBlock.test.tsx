@@ -1,3 +1,4 @@
+vi.mock("@/lib/figures", async (actual) => ({ ...await actual<typeof import("@/lib/figures")>(), useFigureBases: () => ({roas_at_cap: {label: "花到上限時", formula: "售價 ÷ 每筆上限", unit: "ratio"}, roas_all_spend: {label: "保守", formula: "營收 ÷ 全部花費", unit: "ratio"}, roas_tracked_spend: {label: "樂觀", formula: "營收 ÷ 有追到營收的那部分花費", unit: "ratio"}}) }));
 /** F28-I09: the strategy tab's 「一個上限」 card — own／暫用打平／沒設上限 states, the integer NT$ input saved through
  * `PUT .../target` with the revision guard, the 409 reload path, and the mid ruler fed by triage (none for drafts). */
 import { ApiResponseError } from "@/lib/http";
@@ -61,9 +62,9 @@ describe("CapBlock", () => {
   it("own cap: value, 自己填, ROAS 參考 = price ÷ cap and 打平; 修改 opens the input", async () => {
     const user = userEvent.setup();
     renderBlock(campaign(OWN));
-    expect(await screen.findByText("NT$450")).toBeTruthy();
+    expect(await screen.findByText("450 TWD")).toBeTruthy();
     expect(screen.getByText("自己填")).toBeTruthy();
-    expect(screen.getByText("ROAS 參考 3.51・打平 520")).toBeTruthy();
+    expect(screen.getByText(textIs("ROAS 3.51x 花到上限時・打平 520"))).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "修改" }));
     expect(screen.getByLabelText("每賣一筆最多花多少（上限）")).toBeTruthy();
     expect(screen.getByRole("button", { name: "取消" })).toBeTruthy();
@@ -102,7 +103,7 @@ describe("CapBlock", () => {
     const { onCampaignChange } = renderBlock(campaign(OWN));
     await user.click(await screen.findByRole("button", { name: "修改" }));
     await user.type(screen.getByLabelText("每賣一筆最多花多少（上限）"), "460");
-    expect(screen.getByText("比打平 520 低 60・ROAS 參考 3.43")).toBeTruthy();
+    expect(screen.getByText(textIs("比打平 520 低 60・ROAS 3.43x 花到上限時"))).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "儲存上限" }));
     expect(putTarget).toHaveBeenCalledWith("brd_1", "cmp_1", { basis: "own", value: 460, expected_revision: 4 });
     expect(onCampaignChange).toHaveBeenCalledWith(reread);
@@ -123,7 +124,7 @@ describe("CapBlock", () => {
     vi.mocked(getCampaign).mockResolvedValue(campaign(OWN));
     renderBlock(campaign(BE));
     expect(await screen.findByText("暫用打平")).toBeTruthy();
-    expect(await screen.findByText("打平線 520：售價 1,580 − 成本含運 1,060・ROAS 參考 3.04")).toBeTruthy();
+    expect(await screen.findByText(textIs("打平線 520：售價 1,580 − 成本含運 1,060・ROAS 3.04x 花到上限時"))).toBeTruthy();
     expect(getTarget).toHaveBeenCalledWith("brd_1", "cmp_1");
     expect(putTarget).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: "就用 520" }));
@@ -134,18 +135,18 @@ describe("CapBlock", () => {
     vi.mocked(getTarget).mockResolvedValue(target(BE, null));
     const { unmount } = render(<MemoryRouter><CapBlock brandId="brd_1" campaign={campaign(BE)} onCampaignChange={vi.fn()} /></MemoryRouter>);
     await waitFor(() => expect(getTarget).toHaveBeenCalled());
-    expect(screen.getByText("打平線 520・售價 1,580・ROAS 參考 3.04")).toBeTruthy();
+    expect(screen.getByText(textIs("打平線 520・售價 1,580・ROAS 3.04x 花到上限時"))).toBeTruthy();
     expect(screen.queryByText(/成本含運/)).toBeNull();
     unmount();
     vi.mocked(getTarget).mockRejectedValue(new Error("逾時"));
     renderBlock(campaign(BE));
     await waitFor(() => expect(getTarget).toHaveBeenCalledTimes(2));
-    expect(screen.getByText("打平線 520・售價 1,580・ROAS 參考 3.04")).toBeTruthy();
+    expect(screen.getByText(textIs("打平線 520・售價 1,580・ROAS 3.04x 花到上限時"))).toBeTruthy();
   });
 
   it("an own cap never reads the target for the 打平線 line", async () => {
     renderBlock(campaign(OWN));
-    expect(await screen.findByText("NT$450")).toBeTruthy();
+    expect(await screen.findByText("450 TWD")).toBeTruthy();
     expect(getTarget).not.toHaveBeenCalled();
   });
 
@@ -155,7 +156,7 @@ describe("CapBlock", () => {
     await user.click(await screen.findByRole("button", { name: "設定自己的上限" }));
     await user.click(screen.getByRole("button", { name: "用打平 520" }));
     expect((screen.getByLabelText("每賣一筆最多花多少（上限）") as HTMLInputElement).value).toBe("520");
-    expect(screen.getByText("比打平 520 高 0・ROAS 參考 3.04")).toBeTruthy();
+    expect(screen.getByText(textIs("比打平 520 高 0・ROAS 3.04x 花到上限時"))).toBeTruthy();
   });
 
   it("no cap and no product cost: the input is open, 沒有商品成本 links to the product's 賣法與價格 step, the ruler is empty", async () => {
@@ -231,3 +232,8 @@ describe("CapBlock", () => {
     expect(putTarget).toHaveBeenCalledWith("brd_1", "cmp_1", { expected_revision: 4, product_id: "prd_9" });
   });
 });
+
+function textIs(wanted: string) {
+  const plain = (el: Element) => {const copy = el.cloneNode(true) as Element; copy.querySelectorAll("button,[role=tooltip]").forEach(n => n.remove()); return (copy.textContent ?? "").replace(/\s+/g, "");};
+  return (_: string, el: Element | null) => !!el && plain(el) === wanted.replace(/\s+/g, "") && ![...el.children].some(c => plain(c) === wanted.replace(/\s+/g, ""));
+}

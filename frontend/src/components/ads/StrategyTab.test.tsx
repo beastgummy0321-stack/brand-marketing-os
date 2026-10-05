@@ -1,3 +1,4 @@
+vi.mock("@/lib/figures", async (actual) => ({ ...await actual<typeof import("@/lib/figures")>(), useFigureBases: () => ({roas_at_cap: {label: "花到上限時", formula: "售價 ÷ 每筆上限", unit: "ratio"}, roas_all_spend: {label: "保守", formula: "營收 ÷ 全部花費", unit: "ratio"}, roas_tracked_spend: {label: "樂觀", formula: "營收 ÷ 有追到營收的那部分花費", unit: "ratio"}}) }));
 /** frontend/src/components/ads/StrategyTab.test.tsx — F28-I09: the strategy tab is 一個上限 → 這一期的總預算 → 預算怎麼分
  * → two folds, with one bottom bar. These tests pin the bar's order of precedence (open over-cap sheet > unsaved pick >
  * adopt > the workspace's next step), that nothing is chosen or saved for the user, and the imported campaign's shape. */
@@ -483,7 +484,7 @@ describe("StrategyTab (F28-I09)", () => {
       const facts = Array.from(panel.querySelectorAll("[data-slot=basis-fact]")).map((li) => li.textContent);
       expect(facts).toEqual(["每顆含 50mg 咖啡因09/12 更新", "顧客原話「比排咖啡快」09/20 更新"]);
       const prices = Array.from(panel.querySelectorAll("[data-slot=basis-price]")).map((li) => li.textContent);
-      expect(prices).toEqual(["三盒組 NT$99909/01 起", "單盒 價格尚未設定起始日不明"]);
+      expect(prices).toEqual(["三盒組 999 TWD09/01 起", "單盒 價格尚未設定起始日不明"]);
       expect(panel.textContent).not.toMatch(/\d{4}-\d{2}-\d{2}/);
     });
   });

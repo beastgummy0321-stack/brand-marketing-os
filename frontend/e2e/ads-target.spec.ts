@@ -90,14 +90,14 @@ test("一個上限：選商品、沒有成本、暫用打平、自己的上限�
     selling_price: 1580, fixed_cost: 0, unit_variable_cost: 1000, shipping_cost: 60, currency: "TWD", confirmed_by: "e2e",
   });
   await page.reload();
-  await expect(page.getByText("NT$520", { exact: true })).toBeVisible();
+  await expect(page.getByText("520 TWD", { exact: true })).toBeVisible();
   await expect(page.getByText("暫用打平", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "就用 520", exact: true })).toBeVisible();
 
   // --- 設定自己的上限 120，存檔（PUT target，own，帶版本號）--------------------------------------------
   await page.getByRole("button", { name: "設定自己的上限", exact: true }).click();
   await capInput.fill("120");
-  await expect(page.getByText("比打平 520 低 400・ROAS 參考 13.17", { exact: true })).toBeVisible();
+  await expect(page.getByText("13.17x", { exact: true })).toBeVisible();
   const saved = page.waitForResponse((r) => r.url().endsWith(`/campaigns/${campaignId}/target`) && r.request().method() === "PUT");
   await page.getByRole("button", { name: "儲存上限", exact: true }).click();
   const savedResponse = await saved;
@@ -105,11 +105,11 @@ test("一個上限：選商品、沒有成本、暫用打平、自己的上限�
   const savedBody = savedResponse.request().postDataJSON();
   expect(savedBody).toMatchObject({ basis: "own", value: 120 });
   expect(typeof savedBody.expected_revision).toBe("number");
-  await expect(page.getByText("NT$120", { exact: true })).toBeVisible();
+  await expect(page.getByText("120 TWD", { exact: true })).toBeVisible();
   await expect(page.getByText("自己填", { exact: true })).toBeVisible();
 
   // --- 整頁重新整理（不是前端快取）也還在 ------------------------------------------------------------------
   await page.reload();
-  await expect(page.getByText("NT$120", { exact: true })).toBeVisible();
-  await expect(page.getByText("ROAS 參考 13.17・打平 520", { exact: true })).toBeVisible();
+  await expect(page.getByText("120 TWD", { exact: true })).toBeVisible();
+  await expect(page.getByText("花到上限時", { exact: true })).toBeVisible();
 });
