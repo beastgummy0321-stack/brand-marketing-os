@@ -4,7 +4,8 @@ The HTTP contract of the products page, the five product-onboarding steps and th
 (`#/plist`, `#/p1`–`#/p5`, `#/bundle`, the `#/home` product block). Logic lives in
 `app/intake/product_onboarding.py`; this file only authenticates (`require_brand` tenant check on
 every route), parses the body and maps errors: `ValueError` -> 400, `NotFound` (a product / bundle
-that is not this brand's) -> 404, both as `{"error": 〈Chinese message〉}`. Reads are wrapped in
+that is not this brand's) -> 404, both as `{"error": 〈Chinese message〉}`; a refusal that names its
+fields (`onboarding.FieldErrors`) adds `field_errors` {field key: sentence}. Reads are wrapped in
 the usual `{data, generated_at}` envelope; PUTs return the step's fresh GET shape the same way.
 
 Routes (all under `/api/intake/brands/{brand_id}`):
@@ -65,7 +66,12 @@ def _run(call: Callable[[], dict]):
     except po.NotFound as exc:
         return _error(404, str(exc))
     except ValueError as exc:
-        return _error(400, str(exc))
+        # F50 Contract I: a refusal naming its fields (`onboarding.FieldErrors`) also sends them
+        # keyed, so step 4 and the bundle page show each sentence under its own field.
+        payload: dict = {"error": str(exc)}
+        if field_errors := getattr(exc, "field_errors", None):
+            payload["field_errors"] = field_errors
+        return JSONResponse(payload, status_code=400)
 
 
 def _read(request: Request, brand_id: str, reader: Callable[..., dict], *args):

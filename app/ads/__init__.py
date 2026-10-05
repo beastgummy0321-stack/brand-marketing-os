@@ -18,6 +18,9 @@ Shapes other modules may use:
     breakeven_cpa(economics: dict | None) -> float | None
                                           # F43-I05: the one break-even formula (budget.py),
                                           # read by product onboarding.
+    whole(value) -> int | None            # F48 Contract M: the one money rounding (half up,
+                                          # budget.py), read by product onboarding's
+                                          # server-derived assumed cost (F50-I04).
 
 Everything else in this package (`repository.py`, `routes.py`) is private — nothing outside
 this package imports them. This module owns `ads_campaign`/`ads_delivery_group`/`ads_ad`/
@@ -136,3 +139,12 @@ def breakeven_cpa(economics: dict | None) -> float | None:
     from app.ads.budget import breakeven_cpa as _breakeven_cpa
 
     return _breakeven_cpa(economics)
+
+
+def whole(value):
+    """F48 Contract M's one money rounding (`app/ads/budget.py` `whole`, half up), exposed for
+    product onboarding's server-derived assumed cost (F50-I04), so intake never rounds money
+    itself."""
+    from app.ads.budget import whole as _whole
+
+    return _whole(value)

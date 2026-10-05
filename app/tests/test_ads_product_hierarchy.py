@@ -77,25 +77,28 @@ class ProductEconomicsCloseRateTest(unittest.TestCase):
         bi_repo.save_product_economics(
             web.conn, self.brand_id, self.product_id, selling_price=5000, currency="TWD",
             confirmed_by="測試員", actor="測試員", unit_variable_cost=1000, shipping_cost=0,
-            close_rate=0.2, assumptions=["close_rate"],
+            close_rate=20, assumptions=["close_rate"],
         )
         current = bi_repo.get_product_economics(web.conn, self.brand_id, self.product_id)
-        self.assertEqual(float(current["close_rate"]), 0.2)
+        self.assertEqual(float(current["close_rate"]), 20.0)
         self.assertEqual(current["assumptions_json"], ["close_rate"])
         latest_version = web.conn.execute(
             "SELECT * FROM product_economics_version WHERE product_id = %s"
             " ORDER BY version DESC LIMIT 1",
             (self.product_id,),
         ).fetchone()
-        self.assertEqual(float(latest_version["close_rate"]), 0.2)
+        self.assertEqual(float(latest_version["close_rate"]), 20.0)
         self.assertEqual(latest_version["assumptions_json"], ["close_rate"])
 
     def test_close_rate_out_of_range_is_rejected(self):
-        with self.assertRaises(ValueError):
-            bi_repo.save_product_economics(
-                web.conn, self.brand_id, self.product_id, selling_price=5000, currency="TWD",
-                confirmed_by="測試員", actor="測試員", close_rate=1.5,
-            )
+        # F50 Contract I: a percent 0 < x <= 100, refused with the one percent sentence.
+        for value in (0, 120):
+            with self.assertRaises(ValueError) as caught:
+                bi_repo.save_product_economics(
+                    web.conn, self.brand_id, self.product_id, selling_price=5000, currency="TWD",
+                    confirmed_by="測試員", actor="測試員", close_rate=value,
+                )
+            self.assertEqual(str(caught.exception), "成交率要大於 0、最多 100（填 20 代表 20%）。")
 
     def test_breakeven_cpa_unchanged_for_products_without_close_rate(self):
         economics = {"selling_price": 500, "unit_variable_cost": 150, "shipping_cost": 50}
@@ -104,8 +107,9 @@ class ProductEconomicsCloseRateTest(unittest.TestCase):
     def test_breakeven_cpa_multiplies_by_close_rate_for_services(self):
         economics = {
             "selling_price": 5000, "unit_variable_cost": 1000, "shipping_cost": 0,
-            "close_rate": 0.2,
+            "close_rate": 20,
         }
+        # value x rate_fraction(20) = 4000 x 0.2 (F50 Contract I: stored percent, one multiplier).
         self.assertAlmostEqual(budget.breakeven_cpa(economics), 800.0)
 
 

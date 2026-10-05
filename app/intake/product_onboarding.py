@@ -22,8 +22,9 @@ raises `NotFound` (router: 404). Entry points: the functions below, called only 
 `app/intake/routes_product_api.py`.
 """
 
+from collections.abc import Callable
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 from app import ads, workbench
 from app.brand_intelligence import benchmarks as bi_benchmarks
@@ -31,6 +32,7 @@ from app.brand_intelligence import repository as bi_repo
 from app.core import input_rules, vocab
 from app.core.db import Conn
 from app.intake import repository as ir
+from app.intake.onboarding import FieldErrors
 
 STEP_WHAT, STEP_WHO, STEP_EVIDENCE, STEP_SELL_WAYS, STEP_DONE = range(1, 6)
 STEP_LABELS = {
@@ -319,32 +321,65 @@ def _benchmarks(show_close_rate: bool) -> dict:
     }
 
 
-def _check_money(item: dict, owner: str, show_close_rate: bool, *, composed: bool) -> dict:
+def _kept(errors: dict, key: str, check: Callable[[], Any]) -> Any:
+    """Run one field check; a refusal is kept under `key` (F50 Contract I: step 4 and the bundle
+    page print each sentence under its own field) and the value reads None."""
+    try:
+        return check()
+    except ValueError as exc:
+        errors.setdefault(key, str(exc))
+        return None
+
+
+def _assumed_cost(price: float | None) -> int | None:
+    """「空著的成本填參考值」 (F05 rule 3, F50-I04): the cost a base sell-way assumes from its price
+    and the one assumed gross margin, the benchmark (user ruling 2026-10-04) --
+    `whole(price × (100 − margin) / 100)`, derived here at save so the browser never multiplies."""
+    if price is None:
+        return None
+    margin = bi_benchmarks.get("gross_margin")["value"]
+    return ads.whole(price * input_rules.rate_fraction(100 - margin))
+
+
+def _check_money(item: dict, owner: str, show_close_rate: bool, *, composed: bool,
+                 errors: dict, prefix: str = "") -> dict:
     """The raw money inputs of one sell-way / bundle -> `save_sell_way`'s `economics`, each
     through the one input-rule table (F50 Contract I) with the owner in the label (「「單盒」的售價
-    要大於 0。」). Empty list price / cost / cap = derived / break-even; a composed sell-way's empty
-    price = derived. Prices and the cap are > 0, costs >= 0, 售價 <= 原價."""
+    要大於 0。」); each refusal is kept in `errors` under `prefix + field`. Empty list price /
+    cost / cap = derived / break-even; a composed sell-way's empty price = derived. Prices and
+    the cap are > 0, costs >= 0, 售價 <= 原價, 成交率 a percent 0–100. A base sell-way flagged
+    `assumptions: ["cost"]` with an empty cost gets the server-derived assumed cost."""
     of = f"「{owner}」的"
-    price = input_rules.positive(item.get("price"), f"{of}售價", optional=composed)
-    list_price = input_rules.positive(item.get("list_price"), f"{of}原價", optional=True)
-    input_rules.ordered_pair(price, list_price, "售價", "原價")
+    price = _kept(errors, f"{prefix}price", lambda: input_rules.positive(
+        item.get("price"), f"{of}售價", optional=composed))
+    list_price = _kept(errors, f"{prefix}list_price", lambda: input_rules.positive(
+        item.get("list_price"), f"{of}原價", optional=True))
+    _kept(errors, f"{prefix}list_price",
+          lambda: input_rules.ordered_pair(price, list_price, "售價", "原價"))
     close_rate = (
-        input_rules.within(item.get("close_rate"), f"{of}成交率", bi_repo.CLOSE_RATE_BOUNDS,
-                           optional=True)
+        _kept(errors, f"{prefix}close_rate", lambda: input_rules.percent(
+            item.get("close_rate"), f"{of}成交率", optional=True))
         if show_close_rate else None
     )
+    cost = _kept(errors, f"{prefix}cost", lambda: input_rules.non_negative(
+        item.get("cost"), f"{of}成本", optional=True))
+    shipping = _kept(errors, f"{prefix}shipping", lambda: input_rules.non_negative(
+        item.get("shipping"), f"{of}運費成本", optional=True))
+    cap = _kept(errors, f"{prefix}cap_per_sale", lambda: input_rules.positive(
+        item.get("cap_per_sale"), f"{of}每筆上限", optional=True))
     assumptions = item.get("assumptions") or []
     if not isinstance(assumptions, list) or not all(a in _ASSUMPTION_FIELDS for a in assumptions):
         raise ValueError("「參考值」只能標在成本、運費或成交率。")
+    if "cost" in assumptions and cost is None and f"{prefix}cost" not in errors:
+        cost = None if composed else _assumed_cost(price)
+        if cost is None:  # nothing to assume from (a composed row's cost is its bases')
+            assumptions = [a for a in assumptions if a != "cost"]
     return {
         "selling_price": price,
         "list_price": list_price,
-        "unit_variable_cost": input_rules.non_negative(item.get("cost"), f"{of}成本",
-                                                       optional=True),
-        "shipping_cost": input_rules.non_negative(item.get("shipping"), f"{of}運費成本",
-                                                  optional=True),
-        "cap_per_sale": input_rules.positive(item.get("cap_per_sale"), f"{of}每筆上限",
-                                             optional=True),
+        "unit_variable_cost": cost,
+        "shipping_cost": shipping,
+        "cap_per_sale": cap,
         "close_rate": close_rate,
         "assumptions": [a for a in _ASSUMPTION_FIELDS if a in assumptions] or None,
     }
@@ -1137,26 +1172,32 @@ def get_sell_ways(conn: Conn, brand_id: str, product_id: str) -> dict:
     return {"sell_ways": rows, "show_close_rate": show, "assumptions": _benchmarks(show)}
 
 
-def _check_row_components(item: dict, name: str) -> list | None:
-    """A PUT row's `components` -> `[{base: name, qty}]`, None for a base row (no key)."""
+def _check_row_components(item: dict, name: str, errors: dict, prefix: str) -> list | None:
+    """A PUT row's `components` -> `[{base: name, qty}]`, None for a base row (no key). Each
+    refusal is kept in `errors` under `{prefix}components` (the contents as a whole) or
+    `{prefix}components.{j}.qty` (one quantity, as typed: `input_rules.count`)."""
     value = item.get("components")
     if value is None:
         return None
+    key = f"{prefix}components"
     if not isinstance(value, list) or not value:
-        raise ValueError(f"「{name}」的內容至少要放一種賣法。")
+        errors.setdefault(key, f"「{name}」的內容至少要放一種賣法。")
+        return []
     out, seen = [], set()
-    for comp in value:
+    for j, comp in enumerate(value):
         base = str(comp.get("base") or "").strip() if isinstance(comp, dict) else ""
-        qty = comp.get("qty") if isinstance(comp, dict) else None
         if not base:
-            raise ValueError(f"「{name}」的內容要選一種賣法。")
-        qty = input_rules.count(qty, f"「{name}」裡「{base}」的數量", minimum=1)
+            errors.setdefault(key, f"「{name}」的內容要選一種賣法。")
+            continue
+        qty = _kept(errors, f"{key}.{j}.qty", lambda c=comp, b=base: input_rules.count(
+            c.get("qty"), f"「{name}」裡「{b}」的數量", minimum=1))
         if base.casefold() in seen:
-            raise ValueError(f"「{name}」裡「{base}」重複了，改數量就好。")
+            errors.setdefault(key, f"「{name}」裡「{base}」重複了，改數量就好。")
+            continue
         seen.add(base.casefold())
         out.append({"base": base, "qty": qty})
-    if sum(c["qty"] for c in out) < 2:
-        raise ValueError(f"「{name}」只放 1 份就跟「{out[0]['base']}」一樣；數量至少 2。")
+    if out and all(c["qty"] is not None for c in out) and sum(c["qty"] for c in out) < 2:
+        errors.setdefault(key, f"「{name}」只放 1 份就跟「{out[0]['base']}」一樣；數量至少 2。")
     return out
 
 
@@ -1165,44 +1206,62 @@ def _check_sell_ways(value, existing: dict, show_close_rate: bool) -> list:
         raise ValueError("至少要有一種賣法。")
     by_name = {w["display_name"].casefold(): w["id"] for w in existing.values()}
     out, names = [], set()
-    for item in value:
+    # F50 Contract I: every row's refusals at once, keyed `sell_ways.{i}.{field}` (FieldErrors ->
+    # 400 with `field_errors`), so the step prints each sentence under its own field.
+    errors: dict = {}
+    for i, item in enumerate(value):
         if not isinstance(item, dict):
             raise ValueError("賣法清單格式不對。")
-        name = _check_name(item.get("name"), "賣法名稱")
-        if name.casefold() in names:
-            raise ValueError(f"賣法「{name}」重複了。")
-        names.add(name.casefold())
+        prefix = f"sell_ways.{i}."
+        name = _kept(errors, f"{prefix}name",
+                     lambda it=item: _check_name(it.get("name"), "賣法名稱"))
+        if name is not None and name.casefold() in names:
+            errors.setdefault(f"{prefix}name", f"賣法「{name}」重複了。")
+        if name is not None:
+            names.add(name.casefold())
+        shown = name or "還沒取名的賣法"
         if "qty" in item:
             raise ValueError(
-                f"「{name}」不用填數量：一份就是基本賣法；多份請在「內容」放基本賣法 × 數量。"
+                f"「{shown}」不用填數量：一份就是基本賣法；多份請在「內容」放基本賣法 × 數量。"
             )
         way_id = item.get("id") or None
         if way_id is not None and way_id not in existing:
             raise ValueError("找不到要修改的賣法，請重新整理後再試。")
-        components = _check_row_components(item, name)
+        components = _check_row_components(item, shown, errors, prefix)
         free = item.get("free_shipping") or False
         if not isinstance(free, bool):
-            raise ValueError(f"「{name}」的免運請選是或否。")
+            raise ValueError(f"「{shown}」的免運請選是或否。")
         out.append(
             {
+                "index": i,
                 "id": way_id,
-                "name": name,
+                "name": shown,
                 "components": components,
                 "free_shipping": free,
                 "economics": _check_money(
-                    item, name, show_close_rate, composed=components is not None
+                    item, shown, show_close_rate, composed=components is not None,
+                    errors=errors, prefix=prefix,
                 ),
-                "landing_url": _check_url(item.get("landing_url"), f"「{name}」的落地頁"),
+                "landing_url": _kept(
+                    errors, f"{prefix}landing_url",
+                    lambda it=item, n=shown: _check_url(it.get("landing_url"), f"「{n}」的落地頁"),
+                ),
             }
         )
     bases = {r["name"].casefold() for r in out if r["components"] is None}
     for row in out:
+        key = f"sell_ways.{row['index']}.components"
         for comp in row["components"] or []:
             if comp["base"].casefold() in bases:
                 continue
             if comp["base"].casefold() in by_name:  # a saved base this body leaves out
-                raise ValueError(f"「{comp['base']}」還在「{row['name']}」裡，先從組合拿掉。")
-            raise ValueError(f"「{row['name']}」裡的「{comp['base']}」不是這裡的基本賣法。")
+                errors.setdefault(
+                    key, f"「{comp['base']}」還在「{row['name']}」裡，先從組合拿掉。")
+            else:
+                errors.setdefault(
+                    key, f"「{row['name']}」裡的「{comp['base']}」不是這裡的基本賣法。")
+    if errors:
+        raise FieldErrors(errors)
     sent = {c["id"] for c in out if c["id"]}
     for row in out:  # a new row named like an existing sell-way not sent is that sell-way
         match = by_name.get(row["name"].casefold())
@@ -1361,10 +1420,11 @@ def get_bundle(conn: Conn, brand_id: str, bundle_id: str) -> dict:
     }
 
 
-def _check_components(conn: Conn, brand_id: str, value) -> list:
+def _check_components(conn: Conn, brand_id: str, value, errors: dict) -> list:
     """A bundle's `[{sell_way_id, qty}]`: active base sell-ways of finished products of this
     brand, each once, from at least two different products (one product's combinations live on
-    its 賣法 step)."""
+    its 賣法 step). A quantity is checked as typed (`input_rules.count`); its refusal is kept in
+    `errors` under `components.{j}.qty`."""
     if not isinstance(value, list):
         raise ValueError("組合裡的賣法格式不對。")
     bases = {
@@ -1373,7 +1433,7 @@ def _check_components(conn: Conn, brand_id: str, value) -> list:
         if w["shape"] == "base" and w["status"] == "active"
     }
     out, seen, products = [], set(), set()
-    for item in value:
+    for j, item in enumerate(value):
         way_id = item.get("sell_way_id") if isinstance(item, dict) else None
         way = bases.get(way_id) if isinstance(way_id, str) else None
         if way is None:
@@ -1382,7 +1442,8 @@ def _check_components(conn: Conn, brand_id: str, value) -> list:
         label = f"{product.get('name', '')}・{way['display_name']}"
         if product.get("status") != "active" or product.get("onboarding_step") is not None:
             raise ValueError(f"「{product.get('name', '')}」還沒建完，建完才能放進組合。")
-        qty = input_rules.count(item.get("qty", 1), f"「{label}」的數量", minimum=1)
+        qty = _kept(errors, f"components.{j}.qty", lambda it=item, lb=label: input_rules.count(
+            it.get("qty", 1), f"「{lb}」的數量", minimum=1))
         if way_id in seen:
             raise ValueError(f"「{label}」在組合裡重複了，改數量就好。")
         seen.add(way_id)
@@ -1404,15 +1465,21 @@ def save_bundle(
     finished products (at least two products); empty price / list price / cost = the bases' sums."""
     if bundle_id is not None:
         _require_bundle(conn, brand_id, bundle_id)
-    name = _check_name(body.get("name"), "組合名稱")
-    components = _check_components(conn, brand_id, body.get("components"))
+    errors: dict = {}  # F50 Contract I: refusals keyed by field (FieldErrors -> `field_errors`)
+    checked_name = _kept(errors, "name", lambda: _check_name(body.get("name"), "組合名稱"))
+    components = _check_components(conn, brand_id, body.get("components"), errors)
     economics = _check_money(
-        body, name, _show_close_rate(_brand(conn, brand_id)), composed=True
+        body, checked_name or "這個組合", _show_close_rate(_brand(conn, brand_id)), composed=True,
+        errors=errors,
     )
     free = body.get("free_shipping") or False
     if not isinstance(free, bool):
         raise ValueError("免運請選是或否。")
-    landing_url = _check_url(body.get("landing_url"), "落地頁")
+    landing_url = _kept(errors, "landing_url",
+                        lambda: _check_url(body.get("landing_url"), "落地頁"))
+    if errors or checked_name is None:
+        raise FieldErrors(errors)
+    name: str = checked_name
     if bundle_id is None and any(
         p["status"] == "active"
         and p["parent_id"] is None

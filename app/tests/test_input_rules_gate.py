@@ -52,9 +52,6 @@ PENDING: dict[tuple[str, str, str], str] = {
     # stores, close_rate included, moved in F50-I03).
     ("ads/plan.py", "money_refusal", "daily_budget <= 0"): "F50-I05",
     ("ads/strategy.py", "money_refusal", "budget_cap <= 0"): "F50-I05",
-    # rule "percent_bounds" — the margin card goes 0–100 and 每期調幅 gets its 100 cap in F50-I04.
-    (RULE_CARDS, "percent_bounds", "每期調幅"): "F50-I04",
-    (RULE_CARDS, "percent_bounds", "毛利率"): "F50-I04",
 }
 
 # (file relative to app/, rule, source text) -> why it is not a check of user／vendor input.

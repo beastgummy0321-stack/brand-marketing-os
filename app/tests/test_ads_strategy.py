@@ -292,7 +292,7 @@ class AssumptionNoteTest(StrategyTestBase):
         bi_repo.save_product_economics(
             web.conn, self.brand_id, self.product["id"], actor=ACTOR,
             selling_price=1000, currency="TWD", confirmed_by=ACTOR,
-            unit_variable_cost=300, shipping_cost=100, close_rate=0.2,
+            unit_variable_cost=300, shipping_cost=100, close_rate=20,
             assumptions=["close_rate"],
         )
         self.campaign = self._create_campaign()

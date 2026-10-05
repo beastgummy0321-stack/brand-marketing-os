@@ -91,19 +91,28 @@ class RuleCardsApiTest(unittest.TestCase):
         self.assertEqual(resp.status_code, 400)
 
     def test_each_field_keeps_its_declared_bounds(self):
-        """F47 Contract A (drill-10 V4): margin 7 (700%) and plan count min 6 > max 3 are refused
-        with one sentence naming the field(s); nothing is stored."""
+        """F47 Contract A (drill-10 V4) on the percent scale (F50 Contract I, decision 9): the
+        margin card refuses 0 and 100 (and 700) with its Bounds sentence and accepts 70; 每期調幅
+        is capped at 100; plan count min 6 > max 3 is refused with one sentence naming both
+        fields; nothing refused is stored."""
         before = rule_cards.get_value(web.conn, self.bid, "gross_margin", "gross_margin_rate")
-        resp = self.client.post(
-            f"/api/settings/rule-cards/brands/{self.bid}/gross_margin", json={"gross_margin_rate": 7})
-        self.assertEqual(resp.status_code, 400)
-        sentence = "毛利率要大於 0、小於 1（例如 0.7 代表毛利 70%）。"
-        self.assertEqual(resp.json(), {"error": sentence, "field_errors": {"gross_margin_rate": sentence}})
+        sentence = "毛利率要大於 0、小於 100（例如填 70 代表毛利 70%）。"
+        for value in (0, 100, 700):
+            resp = self.client.post(f"/api/settings/rule-cards/brands/{self.bid}/gross_margin",
+                                    json={"gross_margin_rate": value})
+            self.assertEqual((resp.status_code, resp.json()),
+                             (400, {"error": sentence, "field_errors": {"gross_margin_rate": sentence}}))
         self.assertEqual(
             rule_cards.get_value(web.conn, self.bid, "gross_margin", "gross_margin_rate"), before)
         ok = self.client.post(
-            f"/api/settings/rule-cards/brands/{self.bid}/gross_margin", json={"gross_margin_rate": 0.45})
+            f"/api/settings/rule-cards/brands/{self.bid}/gross_margin", json={"gross_margin_rate": "70"})
         self.assertEqual(ok.status_code, 200)
+        self.assertEqual(
+            rule_cards.get_value(web.conn, self.bid, "gross_margin", "gross_margin_rate"), 70.0)
+
+        resp = self.client.post(f"/api/settings/rule-cards/brands/{self.bid}/schedule_budget",
+                                json={"daily_budget": 1000, "step_rate": 120})
+        self.assertEqual(resp.json()["field_errors"], {"step_rate": "每期調幅要大於 0、最多 100。"})
 
         resp = self.client.post(
             f"/api/settings/rule-cards/brands/{self.bid}/schedule_plan_count",

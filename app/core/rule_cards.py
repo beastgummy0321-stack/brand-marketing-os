@@ -68,7 +68,7 @@ CARDS = {
             },
             "step_rate": {
                 "label": "每期調幅", "unit": "%", "default": 20.0,
-                "bounds": input_rules.Bounds(0, low_open=True),
+                "bounds": input_rules.Bounds(0, 100, low_open=True),
                 "help": "系統建議下一期日預算時，往上或往下調的幅度。Meta 沒有公布官方數字"
                         "（它只說「看幅度大小」）；20% 是業界慣例，可以改。",
             },
@@ -84,11 +84,14 @@ CARDS = {
         ),
         "fields": {
             "gross_margin_rate": {
-                "label": "毛利率", "unit": "%", "default": 0.70,
-                "bounds": input_rules.Bounds(0, 1, low_open=True, high_open=True,
-                                             hint="例如 0.7 代表毛利 70%"),
+                # Percent stored 0–100 (F50 Contract I, decision 9). The default is the one
+                # assumed margin, the benchmark 45 % (`brand_intelligence/benchmarks.py`; core
+                # cannot import it -- `app/tests/test_benchmarks.py` pins the two equal).
+                "label": "毛利率", "unit": "%", "default": 45.0,
+                "bounds": input_rules.Bounds(0, 100, low_open=True, high_open=True,
+                                             hint="例如填 70 代表毛利 70%"),
                 "help": "這個品牌大概的毛利率，登記 SKU 成本之前系統用這個值頂著。"
-                        "例如填 0.7 代表毛利 70%。",
+                        "例如填 70 代表毛利 70%；沒改過就是同業參考值 45%。",
             },
         },
     },
