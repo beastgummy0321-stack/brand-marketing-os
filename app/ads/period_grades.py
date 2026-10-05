@@ -168,7 +168,7 @@ def missing(conn, org_id, brand_id, start, end) -> list[dict]:
         if campaign is None:
             continue
         first = min(days_by_campaign[campaign_id])
-        last = min(end, triage._account_cutoff(conn, org_id, brand_id, campaign_id))
+        last = min(end, coverage.last_complete_day(conn, org_id, brand_id, campaign_id))
         gaps = (
             coverage.load(conn, org_id, brand_id, campaign, first, last).missing(
                 first, last, cap=None,

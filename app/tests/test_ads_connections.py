@@ -67,6 +67,11 @@ class ConnectionsTest(unittest.TestCase):
         self.today = patch.object(coresettings, "today_for_org", return_value=TODAY)
         self.today.start()
         self.addCleanup(self.today.stop)
+        # F50 Contract K: an account's last complete day reads the instant, so the instant is
+        # pinned to 10:00 of TODAY in the accounts' zone (Asia/Taipei) as well.
+        clock = patch.object(db, "now_utc", return_value=datetime(2026, 9, 19, 2, tzinfo=UTC))
+        clock.start()
+        self.addCleanup(clock.stop)
 
     # --- fixtures -------------------------------------------------------------------------
 
@@ -135,9 +140,10 @@ class ConnectionsTest(unittest.TestCase):
         return {d["date"]: d["state"] for d in row["days"]}
 
     def _three_accounts(self):
-        # act_main: read cleanly through today; 09/10 has no spend row at all (a zero-spend day).
+        # act_main: read cleanly this morning, so the writer recorded the range through yesterday
+        # (F50 Contract K); 09/10 has no spend row at all (a zero-spend day).
         main_id, main_entity = self._campaign("act_main", "c_main", "日常投放")
-        self._observed(main_id, "2026-08-21", "2026-09-19")
+        self._observed(main_id, "2026-08-21", "2026-09-18")
         self._spend(main_id, main_entity, "2026-09-09", 120)
         self._spend(main_id, main_entity, "2026-09-11", 80)
         self._job("act_main", {
@@ -145,12 +151,13 @@ class ConnectionsTest(unittest.TestCase):
                      "completed_at": "2026-09-19T01:00:00+00:00"},
             "monthly:2026-09": {"section": "monthly", "status": "succeeded",
                                 "start": "2026-09-01", "end": "2026-09-19",
+                                "covered": {"start": "2026-09-01", "end": "2026-09-18"},
                                 "completed_at": "2026-09-19T01:02:00+00:00"},
         })
-        # act_mid: last read on the morning of 09/17 (so 09/16 is its last whole day), then its
-        # authorization expired (09/17 and 09/18 unread).
+        # act_mid: last read on the morning of 09/17 (so the writer recorded through 09/16, its
+        # last whole day), then its authorization expired (09/17 and 09/18 unread).
         mid_id, _ = self._campaign("act_mid", "c_mid", "中秋限定活動")
-        self._observed(mid_id, "2026-08-18", "2026-09-17", at="2026-09-17T01:00:00+00:00")
+        self._observed(mid_id, "2026-08-18", "2026-09-16", at="2026-09-17T01:00:00+00:00")
         external.record_sync(
             self.conn, self.org, self.brand, mid_id, section="observations",
             state={"status": "error", "error": "沒有讀取權限", "error_code": "permission_denied"},
@@ -229,16 +236,17 @@ class ConnectionsTest(unittest.TestCase):
         self.assertEqual(days["2026-09-04"], "none")  # before the first read
         self.assertEqual(days["2026-09-05"], "ok")
 
-    def test_a_day_read_while_it_was_running_is_not_proven(self):
-        # Both reads cover up to 09/18. act_main finished at 09:00 on 09/18 (Taipei), so 09/18
-        # was not over yet; act_mid finished at 04:00 on 09/19 (Taipei), after 09/18 ended.
-        for account, finished in (("act_main", "2026-09-18T01:00:00+00:00"),
-                                  ("act_mid", "2026-09-18T20:00:00+00:00")):
+    def test_recorded_ranges_are_read_as_stored(self):
+        # F50 Contract K: the writer (`external_sync`) records a clean read cut to the account's
+        # last complete day when it finished (`test_ads_external_sync`); this page reads the
+        # ranges as stored. Both month reads asked for 09/01-09/18: act_main finished at 09:00
+        # on 09/18 (Taipei), so its proof ends 09/17; act_mid finished at 04:00 on 09/19.
+        for account, proven in (("act_main", "2026-09-17"), ("act_mid", "2026-09-18")):
             self._job(account, {"monthly:2026-09": {
                 "section": "monthly", "status": "succeeded", "start": "2026-09-01",
-                "end": "2026-09-18", "completed_at": finished}})
+                "end": "2026-09-18", "covered": {"start": "2026-09-01", "end": proven}}})
         campaign_id, _ = self._campaign("act_new", "c_new", "新活動")
-        self._observed(campaign_id, "2026-08-20", "2026-09-18", at="2026-09-18T01:00:00+00:00")
+        self._observed(campaign_id, "2026-08-20", "2026-09-17", at="2026-09-18T01:00:00+00:00")
         result = self._read()
         self.assertEqual(self._source(result, "meta:act_main")["missing_days"], ["2026-09-18"])
         self.assertEqual(self._days(result, "meta:act_main")["2026-09-17"], "ok")
@@ -285,7 +293,10 @@ class ConnectionsTest(unittest.TestCase):
                                 "end": "2026-09-30", "error_code": "permission_denied",
                                 "errors": ["沒有讀取權限"]},
         })
-        with patch.object(coresettings, "today_for_org", return_value=date(2026, 10, 1)):
+        with (
+            patch.object(coresettings, "today_for_org", return_value=date(2026, 10, 1)),
+            patch.object(db, "now_utc", return_value=datetime(2026, 10, 1, 2, tzinfo=UTC)),
+        ):
             source = self._source(self._read(), "meta:act_main")
         self.assertEqual(source["state"], "auth_expired")
 

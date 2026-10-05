@@ -9,7 +9,7 @@ from typing import Any
 from app.ads import ads_learnings, lifecycle
 from app.ads import asset_binding_repository as bindings
 from app.ads import repository as campaigns
-from app.core import db, settings
+from app.core import db, input_rules, settings
 
 _IDENTITY = (
     "id",
@@ -258,16 +258,21 @@ def premise(entity, kind, c):
     return result
 
 
+# Correction 7 (Meta's own per-type maximum): items per copy list; served as `GET …/rules`
+# `limits.copy_items_max` (F50 Contract I, decision 11).
+COPY_ITEMS_MAX = 5
+
+
 def _copy_variants_after(value):
-    """Correction 7: 0-5 items per list (Meta's own per-type maximum), at least one non-empty
-    item overall -- not the original 1-10-each-required shape."""
+    """Correction 7: 0-COPY_ITEMS_MAX items per list (Meta's own per-type maximum), at least one
+    non-empty item overall -- not the original 1-10-each-required shape."""
     if not isinstance(value, dict) or not value or set(value) - {"titles", "bodies"}:
         raise ValueError("變更內容包含不支援的欄位。")
     result, total = {}, 0
     for key in ("titles", "bodies"):
         items = value.get(key, [])
-        if not isinstance(items, list) or len(items) > 5:
-            raise ValueError("每組文案最多 5 則。")
+        if not isinstance(items, list) or len(items) > COPY_ITEMS_MAX:
+            raise ValueError(f"每組文案最多 {COPY_ITEMS_MAX} 則。")
         cleaned = []
         for text in items:
             if not isinstance(text, str) or not text.strip() or len(text) > 10000:
@@ -490,3 +495,20 @@ def get(conn, org, brand, campaign_id, set_id):
         ).fetchone():
             result["follow_up"] = {"kind": "pause_old", "entity_id": old_entity_id}
     return result
+
+
+# ---- F50 Contract K: a deferral is an org calendar date ----------------------------------
+
+DEFERRAL_DAY_REFUSAL = "暫緩請選明天或之後的日期。"
+
+
+def deferral_start(conn, org: str, revisit_on) -> datetime:
+    """`revisit_on` ("YYYY-MM-DD", a date on the org's calendar) as the stored `revisit_at`: the
+    UTC instant of that day's 00:00 in the org zone. Refused unless it is after the org's today."""
+    try:
+        day = input_rules.iso_date(revisit_on, "重看日期")
+    except input_rules.InputRuleError as exc:
+        raise ValueError(str(exc)) from None
+    if day is None or day <= settings.today_for_org(conn, org_id=org):
+        raise ValueError(DEFERRAL_DAY_REFUSAL)
+    return settings.org_day_start(conn, org_id=org, day=day)

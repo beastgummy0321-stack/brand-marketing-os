@@ -9,7 +9,7 @@ from datetime import timedelta
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
-from app.ads import channels, repository, result_kinds, tracked_zero, triage
+from app.ads import channels, coverage, repository, result_kinds, tracked_zero, triage
 from app.ads import external_repository as external
 from app.brand_intelligence import repository as brands
 from app.core import db
@@ -19,7 +19,7 @@ ACCOUNT_TZ = "Asia/Taipei"
 
 class _Reader:
     """Stand-in source capability (F18-I01/targets test pattern): reports one account carrying a
-    known timezone so `triage._account_cutoff` has a real, deterministic cutoff to resolve --
+    known timezone so `coverage.last_complete_day` has a real, deterministic cutoff to resolve --
     never `channels.external_reader`'s own platform branching."""
 
     def accounts(self, conn, org, brand):
@@ -424,7 +424,7 @@ class TriageTest(unittest.TestCase):
         self.assertIn(item["class"], {"worse", "better", "flat"})
         self.assertIsNone(item["current"]["reason"])
 
-    # -- _account_cutoff fail-closed fallback ------------------------------------------------------
+    # -- coverage.last_complete_day fail-closed fallback (F50 Contract K) --------------------------
 
     def test_unknown_account_timezone_falls_back_two_days_not_one(self):
         empty_campaign = external.create_imported_campaign(
@@ -434,7 +434,7 @@ class TriageTest(unittest.TestCase):
         from app.core import settings as coresettings
 
         today = coresettings.today_for_org(self.conn, org_id=self.org)
-        cutoff = triage._account_cutoff(self.conn, self.org, self.brand, empty_campaign)
+        cutoff = coverage.last_complete_day(self.conn, self.org, self.brand, empty_campaign)
         self.assertEqual(cutoff, today - timedelta(days=2))
 
     # -- _thumbnail_url ---------------------------------------------------------------------------

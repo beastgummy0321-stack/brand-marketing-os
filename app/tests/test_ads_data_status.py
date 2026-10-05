@@ -25,7 +25,7 @@ ACCOUNT_TZ = "Asia/Taipei"
 
 class _Reader:
     """One bound account `act_1` (so a campaign on it is not `disconnected`) with a known
-    timezone (so `triage._account_cutoff` resolves deterministically)."""
+    timezone (so `coverage.last_complete_day` resolves deterministically)."""
 
     def accounts(self, conn, org, brand):
         return [{"account_id": "act_1", "currency": "TWD", "name": "來源",
@@ -217,10 +217,16 @@ class _Home(_WithReader):
     def setUp(self):
         super().setUp()
         today = mock.patch.object(coresettings, "today_for_org", return_value=TODAY)
+        # F50 Contract K: the account's last complete day reads the instant, so the instant is
+        # pinned to noon of TODAY in the account's zone too.
+        noon = datetime(TODAY.year, TODAY.month, TODAY.day, 12, tzinfo=ZoneInfo(ACCOUNT_TZ))
+        clock = mock.patch.object(db, "now_utc", return_value=noon.astimezone(UTC))
         classify = mock.patch.object(triage, "classify", return_value={"items": []})
         today.start()
+        clock.start()
         classify.start()
         self.addCleanup(today.stop)
+        self.addCleanup(clock.stop)
         self.addCleanup(classify.stop)
 
     def rows(self, brand):

@@ -10,12 +10,13 @@ are exact; the retired manual ingest endpoint is gone; real purchases reach clos
 import unittest
 import uuid
 from datetime import date, timedelta
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
 import app.main as main
 import app.shared.web as web
-from app.ads import external_repository, outcome, plan
+from app.ads import channels, external_repository, outcome, plan
 from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi_repo
 from app.core import db as coredb
@@ -41,8 +42,28 @@ _VALID_PLAN_REPLY = (
 )
 
 
+class _SeedAccount:
+    """The seed's bound account (`outcome_seed.PLATFORM`／`SOURCE_ACCOUNT`) in `zone`."""
+
+    def __init__(self, zone):
+        self.zone = zone
+
+    def accounts(self, conn, org, brand):
+        return [{"account_id": outcome_seed.SOURCE_ACCOUNT, "timezone_name": self.zone}]
+
+
 class OutcomeTestBase(unittest.TestCase):
     def setUp(self):
+        # F50 Contract K: the seed account is bound in the org's zone, so a bound campaign's last
+        # complete day (`coverage.last_complete_day`) is the org's yesterday.
+        zone = _SeedAccount(str(coresettings.org_timezone(web.conn, org_id=coredb.DEV_ORG_ID)))
+        real = channels.external_reader
+        reader = patch.object(
+            channels, "external_reader",
+            side_effect=lambda p: zone if p == outcome_seed.PLATFORM else real(p),
+        )
+        reader.start()
+        self.addCleanup(reader.stop)
         self.client = TestClient(main.app)
         self.org_id = coredb.DEV_ORG_ID
         self.brand = bi_repo.create_brand(

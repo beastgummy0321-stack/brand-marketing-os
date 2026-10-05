@@ -187,7 +187,7 @@ def _reserve(conn, org, brand, batch_id, amount):
     conn.execute(
         "SELECT pg_advisory_xact_lock(hashtextextended(%s,0))", ("ads-suggestion-budget:" + org,)
     )
-    since = db.now_utc().strftime("%Y-%m-01T00:00:00")
+    since = settings.org_month_start(conn, org_id=org)  # F50 Contract K: the org's month
     spent = settings.org_ai_spent_this_month(conn, org_id=org, since=since)
     extra = conn.execute(
         "SELECT COALESCE(SUM(CASE WHEN settlement='held' THEN amount ELSE 0 END),"
@@ -365,7 +365,7 @@ def _result(conn, org, brand, data, item, answer):
         else:
             problems.append(policy.detail("wait", "原檔預覽尚未完成，請先完成媒體處理。"))
     if any(not str(effective.get(k) or "").strip() for k in policy.FIELDS):
-        problems.append(policy.detail("copy", "請补齊標題、內文與說明，或補充可用品牌事實。"))
+        problems.append(policy.detail("copy", "請補齊標題、內文與說明，或補充可用品牌事實。"))
     roots = [n for n in data["native"] if n["parent_native_id"] is None]
     root = roots[0] if len(roots) == 1 and not data["native_overflow"] else {}
     start = item["start_date"] or campaign["start_date"] or root.get("start_date")

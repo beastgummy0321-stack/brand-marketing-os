@@ -96,7 +96,11 @@ class ReviewMonitorTest(unittest.TestCase):
         self.assertEqual(self.fake.calls, [])
 
     def test_timezone_unknown_and_missing_dates_wait_without_paid_reservation(self):
+        self.account_zone = None  # the bound account has no stored zone
         self.fill_window()
+        # The unknown zone fails closed one more day back (F50 Contract K), so the frozen window
+        # and its prior period reach one day earlier than `fill_window`.
+        self.observation(self.end - timedelta(days=6))
         self.configure()
         self.tick()
         first = self.monitor()

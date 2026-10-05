@@ -17,7 +17,6 @@ Unknown is null, never zero: each sub-read runs through `home_overview._guarded`
 nulls only its own field (and rolls the read transaction back for the next one).
 """
 
-from datetime import timedelta
 
 from app.ads import (
     campaign_stage,
@@ -76,9 +75,20 @@ def _open_queue_count(conn, org_id, brand_id, campaign_id, items) -> int:
     )
 
 
+def _totals_window(start, end, cutoff) -> dict:
+    """`{start, end, days, label}` of the totals window (R3 N2)."""
+    days = max((end - start).days + 1, 0)
+    label = f"近 {days} 天" if end == cutoff else f"結束前 {days} 天"
+    return {"start": start.isoformat(), "end": end.isoformat(), "days": days, "label": label}
+
+
 def _totals(conn, org_id, brand_id, campaign) -> dict:
-    """The last 14 complete days in the org timezone (yesterday back), one window -- never the
-    triage 7/14/28 widening. A day of this window the platform read never covered has no row, and
+    """The last 14 complete days, one window -- never the triage 7/14/28 widening. F50 Contract
+    K: the window is `coverage.window(campaign, cutoff, TOTALS_DAYS)` with the campaign's last
+    complete platform day as `cutoff` (`coverage.last_complete_day`), so an ended campaign's
+    window is the 14 days before its end date; served as `window {start, end, days, label}` --
+    「近 {n} 天」 while it ends at the cutoff, 「結束前 {n} 天」 when the end date cut it.
+    A day of this window the platform read never covered has no row, and
     a missing row would otherwise read as zero spend: so the window's own unread days come from
     the one day-state rule the `data_status` missing days come from (`coverage.load`, F49
     Contract V -- clipped to the campaign's own dates), and any unread day -- or nothing read at
@@ -89,8 +99,9 @@ def _totals(conn, org_id, brand_id, campaign) -> dict:
     zero-spend row, or with no row at all, is a known zero; a window without any row is unknown,
     as on the home."""
     campaign_id = campaign["id"]
-    end = coresettings.today_for_org(conn, org_id=org_id) - timedelta(days=1)
-    start = end - timedelta(days=TOTALS_DAYS - 1)
+    cutoff = coverage.last_complete_day(conn, org_id, brand_id, campaign_id)
+    start, end = coverage.window(campaign, cutoff, TOTALS_DAYS)
+    window = _totals_window(start, end, cutoff)
     read = coverage.load(conn, org_id, brand_id, campaign, start, end)
     unread = read.never_read or not read.covered(start, end)
     rows = [
@@ -107,11 +118,13 @@ def _totals(conn, org_id, brand_id, campaign) -> dict:
     )
     if unread:
         return {
-            "start": start.isoformat(), "end": end.isoformat(), "currency": spend["currency"],
-            "spend": None, "results": None, "cost_per_result": None,
+            "start": start.isoformat(), "end": end.isoformat(), "window": window,
+            "currency": spend["currency"], "spend": None, "results": None,
+            "cost_per_result": None,
         }
     return {
-        "start": start.isoformat(), "end": end.isoformat(), "currency": spend["currency"],
+        "start": start.isoformat(), "end": end.isoformat(), "window": window,
+        "currency": spend["currency"],
         "spend": home_overview._money_out(spend["amount"]) if spend["known"] else None,
         "results": home_overview._count_out(results),
         "cost_per_result": None if cost_per_result is None else round(cost_per_result, 2),

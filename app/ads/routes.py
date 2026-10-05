@@ -527,6 +527,15 @@ _GROUP_EDIT_ERRORS = {
 }
 
 
+def _group_edit_error(exc: ValueError) -> web.ApiError:
+    """`_GROUP_EDIT_ERRORS`, plus F50-I05's ad-set dates refusal naming the campaign window."""
+    code = str(exc)
+    if isinstance(exc, plan.GroupDatesOutside):
+        return web.ApiError(400, code, exc.sentence)
+    status, message = _GROUP_EDIT_ERRORS.get(code, (400, code))
+    return web.ApiError(status, code, message)
+
+
 class CreateGroupRequest(BaseModel):
     name: str = ""
     role: str = ""
@@ -551,9 +560,7 @@ def create_group(
             daily_budget=body.daily_budget, start_date=body.start_date, end_date=body.end_date,
         )
     except ValueError as exc:
-        code = str(exc)
-        status, message = _GROUP_EDIT_ERRORS.get(code, (400, code))
-        raise web.ApiError(status, code, message) from exc
+        raise _group_edit_error(exc) from exc
     return {"group": group}
 
 
@@ -575,9 +582,7 @@ def patch_group(request: Request, brand_id: str, group_id: str, body: PatchGroup
             web.conn, actor.org_id, brand_id, group_id, updates, actor=str(actor.user_id),
         )
     except ValueError as exc:
-        code = str(exc)
-        status, message = _GROUP_EDIT_ERRORS.get(code, (400, code))
-        raise web.ApiError(status, code, message) from exc
+        raise _group_edit_error(exc) from exc
     return {"group": group}
 
 

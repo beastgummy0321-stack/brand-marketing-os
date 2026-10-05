@@ -371,7 +371,10 @@ class BriefBudgetTargetFromSentenceTest(_BriefTestBase):
         self.assertEqual(detail["start_date"], expected_start)
         self.assertEqual(detail["end_date"], expected_end)
         self.assertEqual(detail["context_json"]["field_sources"]["dates"], "user")
-        self.assertEqual(detail["context_json"]["field_sources"]["budget"], "user")
+        # F50 (planning #4／#12): the budget the model read from the sentence is `parsed`, never
+        # the user's own pick; so is the audience it guessed.
+        self.assertEqual(detail["context_json"]["field_sources"]["budget"], "parsed")
+        self.assertEqual(detail["context_json"]["field_sources"]["audience"], "parsed")
 
     def test_unparseable_period_falls_back_to_today_plus_30_and_is_system(self):
         reply = json.dumps({

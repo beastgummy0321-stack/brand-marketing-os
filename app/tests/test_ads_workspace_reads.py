@@ -489,7 +489,31 @@ class TotalsWindowTest(_WithReader):
         self.assertEqual(ws["totals"], {
             "start": "2026-09-10", "end": "2026-09-23", "currency": "TWD", "spend": 150,
             "results": 2, "cost_per_result": 75,
+            "window": {"start": "2026-09-10", "end": "2026-09-23", "days": 14,
+                       "label": "近 14 天"},
         })
+
+    def test_an_ended_campaign_shows_the_fourteen_days_before_its_end(self):
+        """R3 N2: a campaign that ended 9/18 shows 9/05–9/18 with its numbers, not 「近 14 天」
+        anchored to today (when nothing ran)."""
+        brand = _brand(self.conn, self.org, "工作區：結束前 14 天")
+        campaign = _imported(self.conn, self.org, brand, "已結束", "c_end", cap=100)
+        self.conn.execute(
+            "UPDATE ads_campaign SET start_date=%s, end_date=%s WHERE id=%s",
+            (date(2026, 8, 1), date(2026, 9, 18), campaign),
+        )
+        ad = _ad(self.conn, self.org, brand, campaign, "a_end", ("campaign", "c_end"))
+        _obs(self.conn, self.org, brand, campaign, ad, date(2026, 9, 4), spend=999, count=9)
+        _obs(self.conn, self.org, brand, campaign, ad, date(2026, 9, 5), spend=100, count=1)
+        _obs(self.conn, self.org, brand, campaign, ad, date(2026, 9, 18), spend=60, count=2)
+        _synced(self.conn, self.org, brand, campaign, date(2026, 8, 1), date(2026, 9, 18))
+        with mock.patch.object(db, "now_utc", return_value=_Clock.now_utc):
+            totals = self.workspace(brand, campaign)["totals"]
+        self.assertEqual(totals["window"], {
+            "start": "2026-09-05", "end": "2026-09-18", "days": 14, "label": "結束前 14 天",
+        })
+        self.assertEqual((totals["spend"], totals["results"]), (160, 3))
+
 
     def test_an_unread_day_in_the_window_nulls_every_number(self):
         # Rows only on read days; the unread days have no row at all -- they must never read as
@@ -549,6 +573,69 @@ class TotalsWindowTest(_WithReader):
             totals = self.workspace(brand, campaign)["totals"]
         self.assertIsNone(totals["spend"])
         self.assertEqual(totals["currency"], "TWD")
+
+
+class _Account:
+    def __init__(self, zone):
+        self.zone = zone
+
+    def accounts(self, conn, org, brand):
+        return [{"account_id": "act_1", "currency": "TWD", "name": "來源",
+                 "timezone_name": self.zone}]
+
+
+class OneCutoffTest(unittest.TestCase):
+    """F50 Contract K: one "last complete day" for triage, the workspace totals, the home and
+    the connections page. At 01:00 on 9/24 in Taipei (the org) it is 10:00 on 9/23 in Los
+    Angeles (the ad account), so 9/22 is the last complete day everywhere -- not the org's
+    9/23; an account with no stored zone fails closed to 9/22 too (the org's yesterday - 1)."""
+
+    def setUp(self):
+        self.conn, self.org = db.current(), db.DEV_ORG_ID
+        clock = mock.patch.object(db, "now_utc", return_value=_Clock.now_utc)
+        clock.start()
+        self.addCleanup(clock.stop)
+
+    def _cutoffs(self, zone):
+        from app.ads import connections
+
+        brand = _brand(self.conn, self.org, f"一個截止日：{zone}")
+        campaign = _imported(self.conn, self.org, brand, "跨時區", "c_tz", cap=100)
+        ad = _ad(self.conn, self.org, brand, campaign, "a_tz", ("campaign", "c_tz"))
+        _obs(self.conn, self.org, brand, campaign, ad, date(2026, 9, 22), spend=50, count=1)
+        _synced(self.conn, self.org, brand, campaign, date(2026, 9, 1), date(2026, 9, 22))
+        with mock.patch.object(channels, "external_reader", return_value=_Account(zone)):
+            detail = repository.get_campaign(self.conn, self.org, brand, campaign)
+            triage_cutoff = triage._judged_cutoff(self.conn, self.org, brand, detail)
+            totals_end = workspace_reads.workspace(
+                self.conn, self.org, brand, campaign)["totals"]["window"]["end"]
+            home_cutoff = home_overview._window(self.conn, self.org, brand, "2026-09")["cutoff"]
+            source = next(s for s in connections.get_connections(self.conn, self.org, brand)
+                          ["sources"] if s["key"] == "meta:act_1")
+        return triage_cutoff, totals_end, home_cutoff, source
+
+    def test_an_account_in_los_angeles_gives_every_reader_one_cutoff(self):
+        triage_cutoff, totals_end, home_cutoff, source = self._cutoffs("America/Los_Angeles")
+        self.assertEqual(coresettings.today_for_org(self.conn, org_id=self.org),
+                         date(2026, 9, 24))
+        self.assertEqual((triage_cutoff, totals_end, home_cutoff),
+                         (date(2026, 9, 22), "2026-09-22", date(2026, 9, 22)))
+        # Connections: read through 9/22 is complete; 9/23 is not over in Los Angeles yet.
+        self.assertEqual((source["state"], source["missing_days"]), ("ok", []))
+
+    def test_a_bound_account_without_a_zone_falls_back_two_days(self):
+        triage_cutoff, totals_end, home_cutoff, source = self._cutoffs(None)
+        self.assertEqual((triage_cutoff, totals_end, home_cutoff),
+                         (date(2026, 9, 22), "2026-09-22", date(2026, 9, 22)))
+        self.assertEqual((source["state"], source["missing_days"]), ("ok", []))
+
+    def test_an_account_in_the_org_zone_reads_yesterday(self):
+        triage_cutoff, totals_end, home_cutoff, source = self._cutoffs("Asia/Taipei")
+        self.assertEqual((triage_cutoff, totals_end, home_cutoff),
+                         (date(2026, 9, 23), "2026-09-23", date(2026, 9, 23)))
+        # The read ends 9/22, so 9/23 -- complete in Taipei -- is missing.
+        self.assertEqual(source["missing_days"], ["2026-09-23"])
+
 
 
 class DeliveryTest(_WithReader):

@@ -41,7 +41,8 @@ def get_ad_pause_view(request: Request, brand_id: str, campaign_id: str, entity_
 def get_brand_rules(request: Request, brand_id: str):
     """F48 Contract R-API: the ruler's thresholds, labels and glossary sentences (`triage.rules`)
     -- the one source every screen reads them from. The body is the Contract R-API shape itself
-    (`{grade, ab, labels, glossary}`), not wrapped."""
+    (`{reasons, limits, grade, ab, labels, glossary}`; F50 `limits`: the limits the screens
+    quote, `triage.limits`), not wrapped."""
     actor = web.require_actor(request)
     web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
     return triage.rules()

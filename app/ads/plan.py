@@ -736,6 +736,40 @@ def _check_date_order(start, end) -> None:
         raise ValueError("dates_reversed") from None
 
 
+class GroupDatesOutside(ValueError):
+    """F50 Contract I (c1-08): an ad-set date outside its campaign's dates. `str()` is the code
+    `group_dates_outside`; `sentence` is `input_rules.date_within`'s refusal naming the window."""
+
+    def __init__(self, sentence: str):
+        super().__init__("group_dates_outside")
+        self.sentence = sentence
+
+
+def _check_group_window(campaign: dict, *days) -> None:
+    """Each given ad-set date lies inside the campaign's `start_date … end_date`
+    (`input_rules.date_within`); an unset date, or an unset campaign side, is no bound."""
+    for day in days:
+        if day is None:
+            continue
+        try:
+            input_rules.date_within(
+                day, campaign.get("start_date"), campaign.get("end_date"), "投放組日期", "活動期間",
+            )
+        except input_rules.InputRuleError as exc:
+            raise GroupDatesOutside(str(exc)) from None
+
+
+def _check_daily_budget(value) -> None:
+    """A group's daily budget: a number (never a bool or text) > 0 (`input_rules.positive`);
+    refused as `daily_budget_invalid`, which the route maps to its sentence."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError("daily_budget_invalid")
+    try:
+        input_rules.positive(value, "日預算")
+    except input_rules.InputRuleError:
+        raise ValueError("daily_budget_invalid") from None
+
+
 def update_group(conn, org_id: str, brand_id: str, group_id: str, updates: dict, *,
                   actor: str) -> dict:
     group = ads_repo.get_group(conn, org_id, brand_id, group_id)
@@ -748,8 +782,7 @@ def update_group(conn, org_id: str, brand_id: str, group_id: str, updates: dict,
         raise ValueError("role_unknown")
     if "daily_budget" in updates:
         value = updates["daily_budget"]
-        if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
-            raise ValueError("daily_budget_invalid")
+        _check_daily_budget(value)
         if value > float(group["daily_budget"]):  # 只有「加碼」才過核准煞車，降預算不擋
             other_total = (
                 ads_repo.group_budget_total(conn, org_id, brand_id, group["campaign_id"])
@@ -765,6 +798,8 @@ def update_group(conn, org_id: str, brand_id: str, group_id: str, updates: dict,
             updates.get("start_date", group.get("start_date")),
             updates.get("end_date", group.get("end_date")),
         )
+        campaign = ads_repo.get_campaign(conn, org_id, brand_id, group["campaign_id"]) or {}
+        _check_group_window(campaign, updates.get("start_date"), updates.get("end_date"))
 
     before = {k: group.get(k) for k in updates}
     updated = ads_repo.update_group_fields(conn, org_id, brand_id, group_id, updates)
@@ -788,13 +823,12 @@ def create_group(conn, org_id: str, brand_id: str, campaign_id: str, *, name: st
         raise ValueError("name_unknown")
     if role not in _ROLES:
         raise ValueError("role_unknown")
-    if isinstance(daily_budget, bool) or not isinstance(daily_budget, (int, float)) \
-            or daily_budget <= 0:
-        raise ValueError("daily_budget_invalid")
+    _check_daily_budget(daily_budget)
     _check_date_order(_parse_date(start_date), _parse_date(end_date))
     campaign = ads_repo.get_campaign(conn, org_id, brand_id, campaign_id)
     if campaign is None:
         raise ValueError("campaign_unknown")
+    _check_group_window(campaign, _parse_date(start_date), _parse_date(end_date))
     other_total = ads_repo.group_budget_total(conn, org_id, brand_id, campaign_id)
     _check_budget_ceiling(conn, org_id, brand_id, campaign_id, other_total + daily_budget)
     declared_platform = (campaign.get("constraints_json") or {}).get("platform")

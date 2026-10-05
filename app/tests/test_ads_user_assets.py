@@ -287,7 +287,7 @@ class UserAssetsTest(unittest.TestCase):
         self.assertEqual(
             refused["blocked"],
             {
-                "text": "請补齊標題、內文與說明，或補充可用品牌事實。", "terms": [],
+                "text": "請補齊標題、內文與說明，或補充可用品牌事實。", "terms": [],
                 "fix": "copy", "more": 0,
             },
         )

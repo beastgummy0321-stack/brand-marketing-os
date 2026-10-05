@@ -48,10 +48,6 @@ _ERROR_CALL = re.compile(r"bad_request|JSONResponse|error|refus", re.I)
 
 # (file relative to app/, rule, source text of the hit) -> the issue that removes it.
 PENDING: dict[tuple[str, str, str], str] = {
-    # rule "money_refusal" — ads stores adopt the table in F50-I05 (the intake／brand-intelligence
-    # stores, close_rate included, moved in F50-I03).
-    ("ads/plan.py", "money_refusal", "daily_budget <= 0"): "F50-I05",
-    ("ads/strategy.py", "money_refusal", "budget_cap <= 0"): "F50-I05",
 }
 
 # (file relative to app/, rule, source text) -> why it is not a check of user／vendor input.

@@ -1,8 +1,8 @@
 """Editable manual handoff; local records never bind or mutate platform entities."""
 
-from datetime import UTC, datetime
 from urllib.parse import urlparse
 
+from app.core import db
 from app.core.db import jsonb
 
 # F29 Contract I: optimisation event, bid strategy, placement, pixel and UTM are choice fields of
@@ -190,7 +190,7 @@ def save(
     records = dict(context.get("manual_delivery") or {})
     records[group_id] = {
         "values": values,
-        "saved_at": datetime.now(UTC).isoformat(),
+        "saved_at": db.now_utc().isoformat(),
         "saved_by": actor,
     }
     context["manual_delivery"] = records

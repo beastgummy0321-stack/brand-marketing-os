@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.ads import review_monitor
 from app.ads import review_rounds as service
+from app.ads.change_routes import revisit_instant
 from app.shared import web
 
 
@@ -33,6 +34,7 @@ class DecisionRequest(BaseModel):
     decision: str
     reason: str = Field(min_length=1, max_length=2000)
     revisit_at: str | None = None
+    revisit_on: str | None = None
 
 
 def _run(request, brand, campaign, function, *args):
@@ -106,6 +108,6 @@ def decide(
             review_id,
             body.decision,
             body.reason,
-            body.revisit_at,
+            revisit_instant(request, body.revisit_on, body.revisit_at),
         )
     }

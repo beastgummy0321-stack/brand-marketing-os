@@ -6,18 +6,22 @@ recomputed), earn over purchase campaigns only, unknown as null (never zero, nev
 currencies), the previous month's same elapsed days, and one failing read nulling only its block.
 
 Clock: every test pins "today" to 2026-09-23 through `app.core.settings.today_for_org` (the one
-seam `month_summary._month_window` and `month_budget.view` read), except the timezone test, which
-pins the wall clock instead so the org-timezone rule itself runs. `triage.classify` is replaced by
+seam `month_summary._month_window` and `month_budget.view` read) and `db.now_utc` to noon of that
+day (`_pinned`; the bound account `act_1`'s last complete day reads the instant, F50 Contract K),
+except the timezone test, which pins the wall clock only so the org-timezone rule itself runs. `triage.classify` is replaced by
 a stub that returns the grades a test chooses -- which is the point: the home must show whatever
 triage graded, not re-grade from its own numbers.
 """
 
+import contextlib
 import unittest
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from unittest import mock
+from zoneinfo import ZoneInfo
 
 from app.ads import (
     change_control_launch,
+    channels,
     handoff_assignment,
     home_overview,
     month_budget,
@@ -31,6 +35,35 @@ from app.core import settings as coresettings
 
 TODAY = date(2026, 9, 23)
 MONTH = "2026-09"
+
+
+class _TaipeiAccount:
+    """`act_1`, the fixtures' bound Meta account, in the org's zone (Asia/Taipei)."""
+
+    def accounts(self, conn, org, brand):
+        return [{"account_id": "act_1", "name": "主帳戶", "timezone_name": "Asia/Taipei"}]
+
+
+def _bound_meta():
+    """`act_1` is bound in Taipei, so the brand's last complete day (`coverage.last_complete_day`,
+    F50 Contract K) is the account's yesterday -- not the fail-closed fallback."""
+    real = channels.external_reader
+    return mock.patch.object(
+        channels, "external_reader",
+        side_effect=lambda platform: _TaipeiAccount() if platform == "meta" else real(platform),
+    )
+
+
+@contextlib.contextmanager
+def _pinned(day):
+    """The clock at noon of `day` in Taipei: `today_for_org` and `db.now_utc` agree (the
+    account's last complete day reads the instant, F50 Contract K)."""
+    noon = datetime.combine(day, time(12), tzinfo=ZoneInfo("Asia/Taipei")).astimezone(UTC)
+    with (
+        mock.patch.object(coresettings, "today_for_org", return_value=day),
+        mock.patch.object(db, "now_utc", return_value=noon),
+    ):
+        yield
 
 
 def _brand(conn, org, name):
@@ -116,12 +149,15 @@ class _Pinned(unittest.TestCase):
     def setUp(self):
         self.conn, self.org = db.current(), db.DEV_ORG_ID
         self.grades = {}
-        today = mock.patch.object(coresettings, "today_for_org", return_value=TODAY)
+        today = _pinned(TODAY)
         classify = mock.patch.object(triage, "classify", side_effect=self._classify)
-        today.start()
+        bound = _bound_meta()
+        today.__enter__()
         classify.start()
-        self.addCleanup(today.stop)
+        bound.start()
+        self.addCleanup(today.__exit__, None, None, None)
         self.addCleanup(classify.stop)
+        self.addCleanup(bound.stop)
 
     def _classify(self, *args):
         return _fake_classify(self.grades)(*args)
@@ -476,7 +512,7 @@ class CounterexampleTest(_Pinned):
         campaign = _imported(conn, org, brand, "月初", "c1", cap=100)
         ad = _ad(conn, org, brand, campaign, "d1", "c1")
         _obs(conn, org, brand, campaign, ad, date(2026, 9, 1), spend=70, count=1)  # today
-        with mock.patch.object(coresettings, "today_for_org", return_value=date(2026, 9, 1)):
+        with _pinned(date(2026, 9, 1)):
             home = self.overview(brand)
         self.assertEqual(home["day_of_month"], 1)
         self.assertIsNone(home["spent"])
@@ -505,10 +541,13 @@ class MonthEndTimezoneTest(unittest.TestCase):
              count=1)
         classify = mock.patch.object(triage, "classify", return_value={"items": []})
         clock = mock.patch.object(db, "now_utc", return_value=_Clock.now_utc)
+        bound = _bound_meta()
         classify.start()
         clock.start()
+        bound.start()
         self.addCleanup(classify.stop)
         self.addCleanup(clock.stop)
+        self.addCleanup(bound.stop)
 
     def test_route_defaults_to_the_org_month(self):
         from fastapi.testclient import TestClient
@@ -584,7 +623,7 @@ class RealTriageTest(unittest.TestCase):
         grade = {i["entity_id"]: i["grade"]
                  for i in triage.classify(conn, org, brand, campaign)["items"]}
         self.assertEqual(set(grade), {active})
-        with mock.patch.object(coresettings, "today_for_org", return_value=TODAY):
+        with _pinned(TODAY), _bound_meta():
             home = home_overview.get_overview(conn, org, brand, MONTH)
         buckets = {b["grade"]: b for b in home["quality"]["buckets"]}
         self.assertEqual(buckets[grade[active]]["ads"][0]["entity_id"], active)

@@ -12,7 +12,6 @@ approval never wait on a platform read. Nothing here writes to a platform (ads.m
 """
 
 import re
-from datetime import UTC, datetime
 
 from app.ads import channels, targets
 from app.ads.adapters.external import SourceReadError
@@ -421,7 +420,7 @@ def save(conn, org_id: str, brand_id: str, campaign_id: str, body, *, actor: str
     if row["status"] == "closed":
         raise ValueError("campaign_closed")
     _campaign(conn, org_id, brand_id, campaign_id)
-    record = {"values": values, "saved_at": datetime.now(UTC).isoformat(), "saved_by": actor}
+    record = {"values": values, "saved_at": db.now_utc().isoformat(), "saved_by": actor}
     _merge(conn, org_id, brand_id, campaign_id, record, touch=True)
     conn.commit()
     return view(conn, org_id, brand_id, campaign_id)

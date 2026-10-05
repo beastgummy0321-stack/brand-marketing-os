@@ -26,6 +26,7 @@ class DecisionRequest(BaseModel):
     decision: str
     reason: str = Field(min_length=1, max_length=2000)
     revisit_at: str | None = None
+    revisit_on: str | None = None
 
 
 class CreateRequest(BaseModel):
@@ -54,6 +55,20 @@ class ApproveRequest(BaseModel):
     content_hash: str
 
 
+def revisit_instant(request, revisit_on, revisit_at):
+    """F50 Contract K: a deferral date `revisit_on` ("YYYY-MM-DD", the org's calendar) as the
+    stored instant (`change_control_data.deferral_start`: that day's 00:00 in the org zone),
+    refused with 400 unless after the org's today. `revisit_at` (an instant) is still accepted
+    until the frontend senders move (F50-I12)."""
+    if revisit_on is None:
+        return revisit_at
+    actor = web.require_actor(request)
+    try:
+        return data.deferral_start(web.conn, actor.org_id, revisit_on).isoformat()
+    except ValueError as exc:
+        raise web.ApiError(400, "revisit_on_invalid", str(exc)) from None
+
+
 def _run(request, brand_id, campaign_id, function, *args):
     actor = web.require_actor(request)
     try:
@@ -75,6 +90,9 @@ def create(request: Request, brand_id: str, campaign_id: str, body: CreateReques
     # unaffected.
     payload = body.model_dump()
     decision = payload.pop("decide", None)
+    if decision is not None:
+        decision["revisit_at"] = revisit_instant(
+            request, decision.pop("revisit_on", None), decision.get("revisit_at"))
     for key in ("source", "declined_ids"):
         if payload.get(key) is None:
             payload.pop(key, None)
@@ -122,7 +140,7 @@ def decide(request: Request, brand_id: str, campaign_id: str, set_id: str, body:
             set_id,
             body.decision,
             body.reason,
-            body.revisit_at,
+            revisit_instant(request, body.revisit_on, body.revisit_at),
             str(web.require_actor(request).user_id),
         )
     }

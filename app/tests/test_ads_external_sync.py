@@ -671,15 +671,22 @@ class ExternalSyncTest(unittest.TestCase):
 
     def test_month_reset_carries_the_last_covered_range(self):
         """F30-I14: resetting a month task for the next read keeps the range the last good read
-        proved, while the new read is in flight and after it fails."""
-        month = "monthly:" + settings.today_for_org(self.conn, org_id=self.org).strftime("%Y-%m")
+        proved, while the new read is in flight and after it fails. F50 Contract K: that proof
+        is the range as recorded -- cut to the account's last complete day at the finish."""
+        # 10:00 on 09/15 in Taipei (the account's zone): 09/14 is the last complete day.
+        clock = patch.object(db, "now_utc", return_value=datetime(2026, 9, 15, 2, tzinfo=UTC))
+        clock.start()
+        self.addCleanup(clock.stop)
+        month = "monthly:2026-09"
         done = self.run_pages(
             sync.request_sync(self.conn, self.org, self.brand, "other", "account")
         )
         task = done["tasks"][month]
         self.assertEqual(task["status"], "succeeded")
         self.assertNotIn("last_covered", task)
-        proof = {"start": task["start"], "end": task["end"], "completed_at": task["completed_at"]}
+        self.assertEqual((task["start"], task["end"]), ("2026-09-01", "2026-09-15"))
+        self.assertEqual(task["covered"], {"start": "2026-09-01", "end": "2026-09-14"})
+        proof = {**task["covered"], "completed_at": task["completed_at"]}
 
         job = sync.request_sync(self.conn, self.org, self.brand, "other", "account")
         self.assertEqual(job["tasks"][month]["status"], "pending")
@@ -692,6 +699,55 @@ class ExternalSyncTest(unittest.TestCase):
         self.assertEqual(failed["last_covered"], proof)
         again = sync.request_sync(self.conn, self.org, self.brand, "other", "account")
         self.assertEqual(again["tasks"][month]["last_covered"], proof)
+
+    def test_a_clean_read_is_recorded_up_to_the_accounts_last_complete_day(self):
+        """F50 Contract K (triage #11): the writer clips a clean observations read to the day
+        before its finish in the account's zone, so every reader agrees whether a day was read
+        -- here an account in Los Angeles while the org is in Taipei."""
+        self.run_pages(sync.request_sync(self.conn, self.org, self.brand, "other", "account"))
+        campaign = repo.import_cached(
+            self.conn, self.org, self.brand, "other", "account", "portfolio", "root", "test"
+        )
+        self.conn.commit()
+        # 10:00 on 09/20 in Taipei = 19:00 on 09/19 in Los Angeles: 09/18 is complete there.
+        with (
+            self._accounts_with_timezone("America/Los_Angeles"),
+            patch.object(db, "now_utc", return_value=datetime(2026, 9, 20, 2, tzinfo=UTC)),
+        ):
+            job = self.run_pages(sync.request_sync(
+                self.conn, self.org, self.brand, "other", "account",
+                start=date(2026, 9, 10), end=date(2026, 9, 20), campaign_ids=(campaign["id"],),
+            ))
+        self.assertEqual(job["status"], "succeeded", job["tasks"])
+        stored = self.conn.execute(
+            "SELECT context_json FROM ads_campaign WHERE id=%s", (campaign["id"],)
+        ).fetchone()["context_json"]
+        self.assertEqual(
+            stored["external_sync"]["observations"]["ranges"],
+            [{"start": "2026-09-10", "end": "2026-09-18"}],
+        )
+        month = job["tasks"]["monthly:2026-09"]
+        self.assertEqual(month["covered"], {"start": "2026-09-01", "end": "2026-09-18"})
+
+    def test_a_read_of_only_unfinished_days_records_no_range(self):
+        self.run_pages(sync.request_sync(self.conn, self.org, self.brand, "other", "account"))
+        campaign = repo.import_cached(
+            self.conn, self.org, self.brand, "other", "account", "portfolio", "root", "test"
+        )
+        self.conn.commit()
+        with patch.object(db, "now_utc", return_value=datetime(2026, 9, 20, 2, tzinfo=UTC)):
+            job = self.run_pages(sync.request_sync(
+                self.conn, self.org, self.brand, "other", "account",
+                start=date(2026, 9, 20), end=date(2026, 9, 20), campaign_ids=(campaign["id"],),
+            ))
+        self.assertEqual(job["status"], "succeeded", job["tasks"])
+        stored = self.conn.execute(
+            "SELECT context_json FROM ads_campaign WHERE id=%s", (campaign["id"],)
+        ).fetchone()["context_json"]
+        self.assertNotIn("ranges", stored["external_sync"]["observations"])
+        # The month read of the same account proves the month's finished days only.
+        self.assertEqual(job["tasks"]["monthly:2026-09"]["covered"],
+                         {"start": "2026-09-01", "end": "2026-09-19"})
 
     def test_requests_merge_and_jobs_remain_brand_scoped(self):
         job = sync.request_sync(self.conn, self.org, self.brand, "other", "account")

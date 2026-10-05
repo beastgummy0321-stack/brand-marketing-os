@@ -6,6 +6,7 @@ import logging
 from app import background, storage
 from app.ads import media_probe
 from app.ads import user_assets_repository as repo
+from app.core import input_rules
 from app.core.db import connection, new_id, set_tenant_scope
 
 TASK = "background.ads_user_asset_preview"
@@ -35,8 +36,10 @@ def begin_upload(conn, org, brand, upload_id):
     upload = repo.get_upload(conn, org, brand, upload_id)
     if upload["status"] == "complete":
         raise ValueError("這個檔案已完成上傳，不需重傳。")
-    if not 0 < (upload["expected_size"] or 0) <= media_probe.MAX_BYTES:
-        raise ValueError("檔案超過 50 MiB 或沒有內容，請另建批次。")
+    try:  # F50 Contract I: empty and oversize each get their own sentence
+        input_rules.check_upload(upload["filename"], upload["expected_size"] or 0, path="ad_asset")
+    except input_rules.InputRuleError as exc:
+        raise ValueError(str(exc)) from None
     key = f"{org}/brands/{brand}/user-assets/uploads/{upload_id}/{new_id('attempt')}/original"
     orphans = list(upload["orphan_keys"])
     if upload["storage_key"] and upload["storage_key"] not in orphans:
@@ -103,12 +106,13 @@ def cleanup_upload(conn, org, brand, upload_id):
 
 def accept_upload(conn, org, brand, upload_id, content):
     upload = repo.get_upload(conn, org, brand, upload_id)
-    if (
-        not content
-        or len(content) > media_probe.MAX_BYTES
-        or len(content) != upload["expected_size"]
-    ):
-        fail_upload(conn, org, brand, upload_id, "檔案大小不符或超過 50 MiB，請重試。")
+    try:
+        input_rules.check_upload(upload["filename"], len(content or b""), path="ad_asset")
+    except input_rules.InputRuleError as exc:
+        fail_upload(conn, org, brand, upload_id, str(exc))
+        return repo.get_upload(conn, org, brand, upload_id)
+    if len(content) != upload["expected_size"]:
+        fail_upload(conn, org, brand, upload_id, "檔案大小與選擇時不符，請重試。")
         return repo.get_upload(conn, org, brand, upload_id)
     try:
         mime = media_probe.sniff(content)

@@ -90,7 +90,7 @@ def _reserve(conn, org, amount):
     conn.execute(
         "SELECT pg_advisory_xact_lock(hashtextextended(%s,0))", ("ads-review-budget:" + org,)
     )
-    since = db.now_utc().strftime("%Y-%m-01T00:00:00")
+    since = settings.org_month_start(conn, org_id=org)  # F50 Contract K: the org's month
     extra = conn.execute(
         "SELECT COALESCE(SUM(CASE WHEN reservation_state='held' THEN reserved_amount ELSE 0 END),0)"
         "+COALESCE(SUM(CASE WHEN created_at>=%s THEN failed_cost ELSE 0 END),0) AS n "
