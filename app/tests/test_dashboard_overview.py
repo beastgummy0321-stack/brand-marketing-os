@@ -148,8 +148,9 @@ class ArchivedBrandsApiTest(unittest.TestCase):
         suffix = abs(hash(self.id())) % 100000
         self.active = bi_repo.create_brand(main.conn, name=f"虛構營業中{suffix}", client_name=None,
                                            actor=ACTOR, org_id=coredb.DEV_ORG_ID)
-        self.archived = bi_repo.create_brand(main.conn, name=f"虛構收起來{suffix}", client_name="客戶",
-                                             actor=ACTOR, org_id=coredb.DEV_ORG_ID)
+        self.archived = bi_repo.create_brand(main.conn, name=f"虛構收起來{suffix}",
+                                             client_name="客戶", actor=ACTOR,
+                                             org_id=coredb.DEV_ORG_ID)
         bi_repo.update_brand(main.conn, self.archived["id"], name=self.archived["name"],
                              client_name="客戶", status="archived", actor=ACTOR)
         other_org = f"org_archived_test_{suffix}"
@@ -169,7 +170,8 @@ class ArchivedBrandsApiTest(unittest.TestCase):
         ids = {item["brand_id"] for item in data}
         self.assertNotIn(self.active["id"], ids)
         self.assertNotIn(self.foreign["id"], ids)
-        overview_ids = {c["brand_id"] for c in self.client.get("/api/dashboard/overview").json()["data"]}
+        overview = self.client.get("/api/dashboard/overview").json()["data"]
+        overview_ids = {c["brand_id"] for c in overview}
         self.assertNotIn(self.archived["id"], overview_ids)
 
 
