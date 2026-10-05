@@ -9,6 +9,7 @@ import { fetchChannels } from "@/lib/adsLaunchApi";
 import { createCampaignFromPicks, getWizardOptions, type WizardOptions } from "@/lib/adsWizardApi";
 import { useAuthedImage } from "@/lib/useAuthedImage";
 import { clearDraft, readDraft } from "./campaignDraft";
+import { RULES_FIXTURE, seedAdsRules } from "./patterns/rulesFixture";
 
 vi.mock("@/components/layout/WorkspaceContext", () => ({ useWorkspace: () => ({ scope: "u:o" }) }));
 vi.mock("@/lib/adsApi", async (original) => ({ ...await original<object>(), getCampaign: vi.fn(), listCampaigns: vi.fn(), patchCampaign: vi.fn(), createCampaign: vi.fn() }));
@@ -194,6 +195,23 @@ describe("new-campaign step 1, slimmed (F43-I15, prototype f41-onboarding #/new)
     expect(nameLine()).toBe("活動名稱會叫「綜合維他命軟糖 · 三盒組・10/10～10/16」");
     await user.click(radio("sw_duo"));
     expect(nameLine()).toBe(`活動名稱會叫「${LONG.slice(0, 30)}…・10/10～10/16」`);
+  });
+
+  it("the default period in the name line is the served one (F50 Contract I); without the rules it has no number", async () => {
+    const user = userEvent.setup();
+    seedAdsRules({ ...RULES_FIXTURE, limits: { ...RULES_FIXTURE.limits, campaign_default_days: 21 } });
+    try {
+      const { unmount } = view();
+      await screen.findByRole("radiogroup", { name: "要推什麼" });
+      await user.click(radio("sw_three"));
+      expect(nameLine()).toBe("活動名稱會叫「綜合維他命軟糖 · 三盒組」加上期間（沒填日期就從今天起算 21 天）");
+      unmount();
+      seedAdsRules(null);
+      view();
+      await screen.findByRole("radiogroup", { name: "要推什麼" });
+      await user.click(radio("sw_three"));
+      expect(nameLine()).toBe("活動名稱會叫「綜合維他命軟糖 · 三盒組」加上期間（沒填日期就用預設期間）");
+    } finally { seedAdsRules(RULES_FIXTURE); }
   });
 
   it("the period starts the day after the latest non-draft campaign ends, same length; nothing else is copied", async () => {

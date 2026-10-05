@@ -514,6 +514,21 @@ class TotalsWindowTest(_WithReader):
         })
         self.assertEqual((totals["spend"], totals["results"]), (160, 3))
 
+    def test_a_campaign_not_started_yet_has_no_window(self):
+        """Lead note F50-I12: a start after the last complete day (9/23) has no totals window,
+        never 10/01–9/23."""
+        brand = _brand(self.conn, self.org, "工作區：還沒開始")
+        campaign = _imported(self.conn, self.org, brand, "還沒開始", "c_future", cap=100)
+        self.conn.execute(
+            "UPDATE ads_campaign SET start_date=%s, end_date=%s WHERE id=%s",
+            (date(2026, 10, 1), date(2026, 10, 14), campaign),
+        )
+        with mock.patch.object(db, "now_utc", return_value=_Clock.now_utc):
+            totals = self.workspace(brand, campaign)["totals"]
+        self.assertIsNone(totals["window"])
+        self.assertEqual((totals["start"], totals["end"], totals["spend"], totals["results"]),
+                         (None, None, None, None))
+
 
     def test_an_unread_day_in_the_window_nulls_every_number(self):
         # Rows only on read days; the unread days have no row at all -- they must never read as

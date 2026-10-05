@@ -7,7 +7,7 @@ import { Badge } from "@/components/layout/ui/badge";
 import { getOrgId } from "@/lib/auth";
 import { formatInstant, useOrgClock } from "@/lib/orgClock";
 import { getRuntime, saveMonitor, type ReviewMonitor, type RuntimeData } from "@/lib/adsRuntimeApi";
-import { Disclosure } from "./patterns";
+import { Disclosure, useAdsRules } from "./patterns";
 import { useAssetDraftGuard } from "./useAssetDraftGuard";
 
 const states: Record<ReviewMonitor["state"], string> = { scheduled: "等待下次檢討", waiting: "等待資料與觀察期", queued: "已安排檢討", running: "正在整理建議", ready: "建議已備妥", needs_attention: "需要確認後續處理", paused: "自動檢討已暫停" };
@@ -15,6 +15,9 @@ const states: Record<ReviewMonitor["state"], string> = { scheduled: "等待下�
 const date = (value: string | null, timezone: string) => formatInstant(value, timezone, "md_hm") || "尚無紀錄";
 function Tracking({ brandId, campaignId, entityId, refreshKey }: { brandId: string; campaignId: string; entityId: string; refreshKey: string }) {
   const { timezone } = useOrgClock();
+  // F50 Contract I (decision 11): the day range is served (`limits.review_days`, the range `review_monitor` checks);
+  // before the rules load nothing is checked here and the server's own sentence comes back.
+  const days = useAdsRules()?.limits.review_days ?? null;
   const [data, setData] = useState<RuntimeData | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -34,7 +37,7 @@ function Tracking({ brandId, campaignId, entityId, refreshKey }: { brandId: stri
   async function save(enabled: boolean) {
     if (!monitor || busy) return;
     const windowDays = Number(edit?.window ?? monitor.window_days), cadenceDays = Number(edit?.cadence ?? monitor.cadence_days);
-    if (![windowDays, cadenceDays].every(n => Number.isInteger(n) && n >= 1 && n <= 31)) { setError("觀察期與檢討間隔請填 1 至 31 天。"); return; }
+    if (days && ![windowDays, cadenceDays].every(n => Number.isInteger(n) && n >= days.min && n <= days.max)) { setError(`觀察期與檢討間隔請填 ${days.min} 至 ${days.max} 天。`); return; }
     setBusy(true); setError(""); setSaved(false);
     const signal = lifetime.current.signal;
     try {
@@ -57,7 +60,7 @@ function Tracking({ brandId, campaignId, entityId, refreshKey }: { brandId: stri
         <div className="space-y-4 text-sm">
           <div className="space-y-2"><h4 className="font-medium">資料與服務</h4>{data?.sources.map(source => <div key={`${source.platform}:${source.source_account}`} className="rounded-md border border-border p-3"><p>{source.platform} · {source.source_account}</p><p className="mt-1 text-muted-foreground">{source.status === "pending" || source.status === "running" ? "同步排隊或進行中，保留原進度" : source.error ?? (source.status === "succeeded" ? "上次同步完成" : "同步狀態待確認")}</p><p className="mt-1 text-xs text-muted-foreground">最近成功：{date(source.last_success_at, timezone)}{source.coverage ? ` · 最近完成讀取範圍 ${source.coverage.start} — ${source.coverage.end}` : " · 涵蓋日期尚未確認"}</p></div>)}{!data?.sources.length && <p className="text-muted-foreground">尚無已對應的平台來源；先匯入或核對平台廣告。</p>}<p className="text-xs text-muted-foreground">最近背景啟動紀錄：{date(data?.last_bootstrap_at ?? null, timezone)}。這不能證明前次停機從何時開始。</p><p className="rounded-md bg-muted p-3">{data?.notice ?? "關閉網頁不影響背景工作；本機或服務停止時會中斷監測，平台仍可能花費。"}</p></div>
           {monitor && <div className="space-y-3 border-t border-border pt-3"><div className="flex flex-wrap items-center justify-between gap-3"><div><h4 className="font-medium">這則廣告的自動檢討</h4><p className="mt-1 text-xs text-muted-foreground">每 {monitor.cadence_days} 天檢查，觀察最近 {monitor.window_days} 個完整日期；缺資料時先補回，不反覆請 AI 產生相同報告。</p></div><Button variant="outline" size="sm" disabled={busy || Boolean(edit)} onClick={() => void save(!monitor.enabled)}>{monitor.enabled ? "暫停自動檢討" : "恢復自動檢討"}</Button></div>
-            {edit ? <><div className="grid grid-cols-2 gap-3"><label>觀察天數<Input type="number" min={1} max={31} value={edit.window} onChange={e => setEdit({ ...edit, window: e.target.value })} disabled={busy} /></label><label>檢討間隔（天）<Input type="number" min={1} max={31} value={edit.cadence} onChange={e => setEdit({ ...edit, cadence: e.target.value })} disabled={busy} /></label></div><p className="text-xs text-muted-foreground">目前未完成的觀察範圍仍保留，新條件用於後續檢討。</p><div className="flex gap-2"><Button size="sm" disabled={busy} onClick={() => void save(monitor.enabled)}>保存追蹤條件</Button><Button variant="outline" size="sm" disabled={busy} onClick={() => setEdit(null)}>取消修改</Button></div></> : <Button variant="outline" size="sm" disabled={busy} onClick={() => { setSaved(false); setEdit({ window: String(monitor.window_days), cadence: String(monitor.cadence_days) }); }}>調整觀察與檢討天數</Button>}
+            {edit ? <><div className="grid grid-cols-2 gap-3"><label>觀察天數<Input type="number" min={days?.min} max={days?.max} value={edit.window} onChange={e => setEdit({ ...edit, window: e.target.value })} disabled={busy} /></label><label>檢討間隔（天）<Input type="number" min={days?.min} max={days?.max} value={edit.cadence} onChange={e => setEdit({ ...edit, cadence: e.target.value })} disabled={busy} /></label></div><p className="text-xs text-muted-foreground">目前未完成的觀察範圍仍保留，新條件用於後續檢討。</p><div className="flex gap-2"><Button size="sm" disabled={busy} onClick={() => void save(monitor.enabled)}>保存追蹤條件</Button><Button variant="outline" size="sm" disabled={busy} onClick={() => setEdit(null)}>取消修改</Button></div></> : <Button variant="outline" size="sm" disabled={busy} onClick={() => { setSaved(false); setEdit({ window: String(monitor.window_days), cadence: String(monitor.cadence_days) }); }}>調整觀察與檢討天數</Button>}
           </div>}
         </div>
       </Disclosure>

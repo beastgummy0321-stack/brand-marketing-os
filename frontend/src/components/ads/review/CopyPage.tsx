@@ -17,7 +17,7 @@ import {
 import { changeStepPath, truncate } from "../flow/changeFlow";
 import { currentBudgetMonth } from "../MonthlyBudgetPanel";
 import { formatInstant, useOrgClock } from "@/lib/orgClock";
-import { ActionBar, Chip, CopyBlock, DecisionSheet, FlowHeader, ReadFailed } from "../patterns";
+import { ActionBar, Chip, CopyBlock, DecisionSheet, FlowHeader, ReadFailed, useAdsRules } from "../patterns";
 import { findReviewTriageItem, reviewPosition, reviewRoundPath } from "./reviewFlow";
 
 const STEPS = [
@@ -127,6 +127,9 @@ export function CopyPage({ brandId, campaignId, reviewId }: {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { timezone } = useOrgClock();
+  // F50 Contract I (decision 11): the per-list cap is served (`limits.copy_items_max`, the cap the change set checks);
+  // while the rules load the heading prints without it and the server's own refusal stands.
+  const itemsMax = useAdsRules()?.limits.copy_items_max ?? null;
   const homeHref = `/brands/${brandId}/ads`;
 
   const [review, setReview] = useState<ReviewRound | null>(null);
@@ -316,7 +319,7 @@ export function CopyPage({ brandId, campaignId, reviewId }: {
     (list === "titles" ? setVariantTitles : setVariantBodies)((v) => v.map((x, i) => (i === index ? value : x)));
   }
   function addVariant(list: "titles" | "bodies") {
-    (list === "titles" ? setVariantTitles : setVariantBodies)((v) => (v.length >= 5 ? v : [...v, ""]));
+    (list === "titles" ? setVariantTitles : setVariantBodies)((v) => (itemsMax !== null && v.length >= itemsMax ? v : [...v, ""]));
   }
   function removeVariant(list: "titles" | "bodies", index: number) {
     (list === "titles" ? setVariantTitles : setVariantBodies)((v) => v.filter((_, i) => i !== index));
@@ -420,9 +423,9 @@ export function CopyPage({ brandId, campaignId, reviewId }: {
                 return (
                   <div key={list}>
                     <div className="mb-1.5 flex items-center justify-between">
-                      <h3 className="text-xs font-medium text-muted-foreground">{label}（最多 5 則）</h3>
+                      <h3 className="text-xs font-medium text-muted-foreground">{label}{itemsMax !== null && `（最多 ${itemsMax} 則）`}</h3>
                       <Button
-                        type="button" variant="outline" size="sm" disabled={busy || values.length >= 5}
+                        type="button" variant="outline" size="sm" disabled={busy || (itemsMax !== null && values.length >= itemsMax)}
                         onClick={() => addVariant(list)}
                       >
                         + 新增{label}

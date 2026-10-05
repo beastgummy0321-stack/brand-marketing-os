@@ -28,11 +28,13 @@ function detail(o: Partial<CampaignDetail> = {}): CampaignDetail {
   return { id: "cmp_daily", name: "日常商品推廣・轉換", objective: "購買", origin: "internal", status: "live", lifecycle: LIVE, cap: CAP,
     budget_planned: 30000, labels: { conversion: "購買", count: "購買數", cpa: "每次購買成本" }, groups: [], ...o } as unknown as CampaignDetail;
 }
+/** `totals.window` as `workspace_reads._totals` serves it (F50 Contract K). */
+const LAST_14 = { start: "2026-09-10", end: "2026-09-23", days: 14, label: "近 14 天" };
 const DRAFT = { cap_set: false, budget_set: false, slots_ready: 7, slots_total: 8, launch_checked: 0, launch_total: 0 };
 function ws(o: Partial<CampaignWorkspace> = {}): CampaignWorkspace {
   return { stage: { key: "decide", done: ["plan", "assets", "launch", "read"] }, pending_count: 2, delivery: "live", daily_budget: 1200, active_ads: 8, can_support: 6,
     next_sync_at: "2026-09-23T04:40:00Z", missing_days: [],
-    totals: { start: "2026-09-10", end: "2026-09-23", currency: "TWD", spend: 15767, results: 121, cost_per_result: 130.31 }, draft: null, ...o };
+    totals: { start: "2026-09-10", end: "2026-09-23", window: LAST_14, currency: "TWD", spend: 15767, results: 121, cost_per_result: 130.31 }, draft: null, ...o };
 }
 /** `GET …/structure` serves `reason_code` and `sample` beside each grade (F48 Contract R). */
 function ad(id: string, name: string, spend: number, results: number, grade: StructureAd["grade"], o: Partial<StructureAd> = {}): StructureAd {
@@ -161,7 +163,7 @@ describe("data gap (v10 camp/mid/overview)", () => {
     ad("m2", "中秋限定・月光藍開箱", 120, 0, "insufficient"),
   ] }] };
   const gapWs = ws({ stage: { key: "read", done: ["plan", "assets", "launch"] }, pending_count: 0, missing_days: ["2026-09-18", "2026-09-17"],
-    totals: { start: "2026-09-10", end: "2026-09-23", currency: "TWD", spend: null, results: null, cost_per_result: null } });
+    totals: { start: "2026-09-10", end: "2026-09-23", window: LAST_14, currency: "TWD", spend: null, results: null, cost_per_result: null } });
 
   it("each ad's distance to a judgeable sample, the missing days dashed, the reason chip, 去資料連線補授權", async () => {
     vi.mocked(getCampaignStructure).mockResolvedValue(MID);
@@ -229,7 +231,7 @@ describe("data gap (v10 camp/mid/overview)", () => {
   });
 
   it("dayRange spans the missing days and the totals window", () => {
-    expect(dayRange(["2026-09-30"], { start: "2026-09-28", end: "2026-10-01" } as never)).toEqual(["2026-09-28", "2026-09-29", "2026-09-30", "2026-10-01"]);
+    expect(dayRange(["2026-09-30"], { window: { start: "2026-09-28", end: "2026-10-01", days: 4, label: "近 4 天" } } as never)).toEqual(["2026-09-28", "2026-09-29", "2026-09-30", "2026-10-01"]);
     expect(dayRange([], null)).toEqual([]);
   });
 });
@@ -268,7 +270,7 @@ describe("live (v10 camp/daily/overview)", () => {
 
   it("unknown numbers stay unknown (never 0); an unknown capacity shows only 在投", async () => {
     renderBody(detail(), ws({ can_support: null, daily_budget: null,
-      totals: { start: "2026-09-10", end: "2026-09-23", currency: "TWD", spend: null, results: null, cost_per_result: null } }));
+      totals: { start: "2026-09-10", end: "2026-09-23", window: LAST_14, currency: "TWD", spend: null, results: null, cost_per_result: null } }));
     const kv = screen.getByRole("region", { name: "近 14 天數字" });
     expect(within(kv).getAllByText("未知")).toHaveLength(3);
     expect(kv.textContent).not.toMatch(/\b0 元|0 筆/);
@@ -303,7 +305,7 @@ describe("live (v10 camp/daily/overview)", () => {
 });
 
 describe("F47-I08 delivery and closed (Contract E, drill-10 S3)", () => {
-  const unread = { start: "2026-09-19", end: "2026-10-02", currency: null, spend: null, results: null, cost_per_result: null };
+  const unread = { start: "2026-09-19", end: "2026-10-02", window: { start: "2026-09-19", end: "2026-10-02", days: 14, label: "近 14 天" }, currency: null, spend: null, results: null, cost_per_result: null };
 
   it("waiting (just launched, nothing spent): the ✓ card says 已上架，等平台開始投放 with the next sync, money cells 還沒開始花", async () => {
     vi.mocked(getQueue).mockResolvedValue(queue([]));
@@ -348,6 +350,35 @@ describe("F47-I08 delivery and closed (Contract E, drill-10 S3)", () => {
   it("a closed campaign with every platform ad closed reads 已結案", () => {
     renderBody(detail({ status: "closed", lifecycle: CLOSED }), ws({ delivery: null, pending_count: 0, active_ads: 0 }));
     expect(within(screen.getByRole("region", { name: "近 14 天數字" })).getByText("已結案")).toBeTruthy();
+  });
+});
+
+describe("F50 Contract K (R3 N2): the totals window prints as served", () => {
+  it("a closed campaign prints 結束前 14 天, the 14 days before its end and their numbers", () => {
+    const window = { start: "2026-09-05", end: "2026-09-18", days: 14, label: "結束前 14 天" };
+    renderBody(detail({ status: "closed", lifecycle: CLOSED }), ws({ delivery: null, pending_count: 0, active_ads: 0,
+      totals: { start: window.start, end: window.end, window, currency: "TWD", spend: 160, results: 3, cost_per_result: 53.33 } }));
+    const kv = screen.getByRole("region", { name: "結束前 14 天數字" });
+    expect(within(kv).getByText("結束前 14 天花費")).toBeTruthy();
+    expect(within(kv).getByText("09/05 – 09/18")).toBeTruthy();
+    expect(within(kv).getByText("160 元")).toBeTruthy();
+    expect(within(kv).getByText("3 筆")).toBeTruthy();
+    expect(document.body.textContent).not.toMatch(/近 14 天/);
+  });
+
+  it("the served label is printed as is (a backend change to it shows here)", () => {
+    const window = { start: "2026-09-17", end: "2026-09-23", days: 7, label: "近 7 天" };
+    renderBody(detail(), ws({ totals: { start: window.start, end: window.end, window, currency: "TWD", spend: 700, results: 7, cost_per_result: 100 } }));
+    expect(within(screen.getByRole("region", { name: "近 7 天數字" })).getByText("近 7 天花費")).toBeTruthy();
+  });
+
+  it("a campaign not started yet (window null) says 還沒開始, never a reversed range", () => {
+    renderBody(detail({ status: "live", start_date: "2026-10-24" }), ws({ delivery: "waiting", pending_count: 0,
+      totals: { start: null, end: null, window: null, currency: null, spend: null, results: null, cost_per_result: null } }));
+    const kv = screen.getByRole("region", { name: "活動數字" });
+    expect(within(kv).getByText("花費")).toBeTruthy();
+    expect(within(kv).getByText("還沒開始")).toBeTruthy();
+    expect(kv.textContent).not.toMatch(/近 \d+ 天|–/);
   });
 });
 

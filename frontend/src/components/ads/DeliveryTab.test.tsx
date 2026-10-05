@@ -4,7 +4,7 @@
  * is selected by default. F35 ruling 3: the material hand-off (「開始做素材 →」／「前往素材 →」) is the action bar's
  * primary with its hint, not a button in the fold. The tree itself is covered in `workspace/StructureTab.test.tsx`. */
 import type { ReactElement } from "react";
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
@@ -687,5 +687,26 @@ describe("DeliveryTab: one budget, the period's menu and carried ads (F48-I10)",
     const coords = await screen.findByText("這期不能用這個優惠：這個賣法沒有登記這種優惠");
     expect(coords.previousElementSibling?.querySelector("select")).toBeTruthy();
     expect(screen.queryByText("廣告名稱寫了「治療」，這是你標了不能講的話")).toBeNull();
+  });
+
+  it("F50 Contract I (c1-08): a group date outside the campaign prints the server's sentence under the dates", async () => {
+    const user = userEvent.setup();
+    const sentence = "投放組日期要在活動期間（2026-01-01～2026-01-15）內。";
+    vi.mocked(patchGroup).mockRejectedValueOnce(new AdsApiError(sentence, "group_dates_outside"));
+    renderTab(campaign());
+    await user.click(screen.getByRole("button", { name: "進階：編輯這一組（投放組）" }));
+    await user.click(screen.getByRole("button", { name: /^投放組/ }));
+    await user.click(screen.getByRole("button", { name: "自訂日期" }));
+    const [start, end] = Array.from(document.querySelectorAll<HTMLInputElement>('input[type="date"]'));
+    fireEvent.change(start, { target: { value: "2026-01-10" } });
+    fireEvent.change(end, { target: { value: "2026-01-31" } });
+    await user.click(screen.getByRole("button", { name: "儲存變更" }));
+    const alert = await screen.findByText(sentence);
+    expect(alert.getAttribute("role")).toBe("alert");
+    expect(alert.parentElement?.contains(end)).toBe(true); // under the dates, inside 投放期間
+    expect(screen.getAllByText(sentence)).toHaveLength(1); // not repeated under the form
+    expect(patchGroup).toHaveBeenCalledWith("brd_1", "grp_1", expect.objectContaining({ start_date: "2026-01-10", end_date: "2026-01-31" }));
+    fireEvent.change(end, { target: { value: "2026-01-14" } });
+    expect(screen.queryByText(sentence)).toBeNull(); // a changed date clears it
   });
 });

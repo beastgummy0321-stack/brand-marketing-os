@@ -32,6 +32,14 @@ export const RULES_FIXTURE: AdsRules = {
     notebook: "系統記住哪些主打有效；下次開新活動，AI 會先讀這些，避開沒效的主打",
     break_even: "賣一筆扣掉商品成本和運費後剩下的錢；每筆廣告費超過它，就是在虧",
   },
+  // F50 Contract I: `triage.limits()` as served today.
+  limits: {
+    review_days: { min: 1, max: 31 },
+    review_cadence_default: 7,
+    campaign_default_days: 30,
+    copy_items_max: 5,
+    upload_max_mb: 50,
+  },
   // F49 Contract Q: `triage.reasons()` as served today.
   reasons: {
     too_new: { title: "剛開始、數字還不夠", text: "這則廣告還沒賣出，也還沒花到上限 3 倍；再跑幾天數字才夠判斷", fix: "wait" },

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { ArrowRight } from "lucide-react";
 import { Button } from "@/components/layout/ui/button";
@@ -10,8 +10,10 @@ import { useWorkspace } from "@/components/layout/WorkspaceContext";
 import type { CoordinateLearnings } from "@/lib/adsLearningsApi";
 import { formatDay, orgDateOf, resolveOrgTimezone } from "@/lib/orgClock";
 import {
+  AdsApiError,
   adoptStrategy,
   generateStrategy,
+  getCampaign,
   patchCampaign,
   selectScenario,
   setAllocation,
@@ -36,6 +38,8 @@ import { LearningsTable } from "./learnings/LearningsTable";
 
 const ROLE_LABEL: Record<StrategyRole, string> = { new: "新客", retarget: "再行銷", explore: "探索" };
 const errorText = (err: unknown, fallback: string) => (err instanceof Error ? err.message : fallback);
+/** F50 Contract J (R7 B4): how often a running planner call is re-read. */
+const BUSY_POLL_MS = 3000;
 
 /** Prototype F41 ② `.lrn` (「用到的學習」): each ad of the last closed period the planner read — grade chip with its cost
  * per result, 「ad」（campaign）, then one chip per coordinate by its label (the API never sends a raw key here). */
@@ -175,6 +179,31 @@ export function StrategyTab({
   const [primaryError, setPrimaryError] = useState<string | null>(null);
   // F48 decision 8: the ad sets the last saved total re-split (an adopted, still unbound plan); null otherwise.
   const [resplit, setResplit] = useState<ResplitRow[] | null>(null);
+  // F50 Contract J (R7 B4): a planner call still running for this campaign (`c.busy`, served by the campaign read, or
+  // a 409 `campaign_busy` to a press) keeps the tab in its 產生中…／處理中… state; the campaign is re-read every 3 s
+  // until `busy` is null, and the fresh campaign reloads the tab. So a reload during 展開投放結構 never shows the
+  // empty state, and a second press is not sent while the first still runs.
+  const [busyRefused, setBusyRefused] = useState(false);
+  const [busyTick, setBusyTick] = useState(0);
+  const waiting = Boolean(c.busy) || busyRefused;
+  const changeRef = useRef(onCampaignChange);
+  useEffect(() => { changeRef.current = onCampaignChange; }, [onCampaignChange]);
+  useEffect(() => {
+    if (!waiting) return;
+    let alive = true;
+    const timer = setTimeout(() => {
+      getCampaign(brandId, c.id).then(
+        (fresh) => {
+          if (!alive) return;
+          if (!fresh.busy) { setBusyRefused(false); setGenerateError(null); setPrimaryError(null); }
+          changeRef.current(fresh);
+          setBusyTick((n) => n + 1);
+        },
+        () => { if (alive) setBusyTick((n) => n + 1); }, // a failed re-read tries again on the next tick
+      );
+    }, BUSY_POLL_MS);
+    return () => { alive = false; clearTimeout(timer); };
+  }, [waiting, brandId, c.id, busyTick]);
   const timezone = resolveOrgTimezone(useWorkspace().identity?.org?.timezone);
 
   const strategy = imported ? undefined : c.budget_basis_json.strategy;
@@ -188,7 +217,9 @@ export function StrategyTab({
     try {
       onCampaignChange(await generateStrategy(brandId, c.id));
     } catch (err) {
+      // A 502 carries the served sentence with the refusal reason; a 409 `campaign_busy` its served sentence.
       setGenerateError(errorText(err, "產生策略失敗，請稍後再試。"));
+      if (err instanceof AdsApiError && err.code === "campaign_busy") setBusyRefused(true);
     } finally {
       setGenerating(false);
     }
@@ -201,6 +232,7 @@ export function StrategyTab({
       await action();
     } catch (err) {
       setPrimaryError(errorText(err, fallback));
+      if (err instanceof AdsApiError && err.code === "campaign_busy") setBusyRefused(true);
     } finally {
       setPrimaryBusy(false);
     }
@@ -288,9 +320,9 @@ export function StrategyTab({
           <EmptyState
             title="這個活動還沒有策略建議"
             description={generateError ?? "讓行銷駕駛艙依商品與品牌資料規劃第一版策略。"}
-            actionLabel={generating ? "產生中…" : "產生策略"}
+            actionLabel={generating || waiting ? "產生中…" : "產生策略"}
             onAction={handleGenerate}
-            actionDisabled={generating}
+            actionDisabled={generating || waiting}
           />
         )}
 
@@ -448,8 +480,8 @@ export function StrategyTab({
         hint={primaryError ?? hint}
       >
         {primary && (
-          <Button disabled={primaryBusy || primary.disabled} onClick={primary.onClick}>
-            {primaryBusy ? "處理中…" : primary.label}
+          <Button disabled={primaryBusy || waiting || primary.disabled} onClick={primary.onClick}>
+            {primaryBusy || waiting ? "處理中…" : primary.label}
           </Button>
         )}
       </ActionBar>

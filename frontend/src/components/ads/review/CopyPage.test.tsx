@@ -15,6 +15,7 @@ import type { QueueItem, QueuePayload, TriageItem } from "@/lib/adsTriageApi";
 import * as changeApi from "@/lib/adsChangeApi";
 import type { ChangeItem, ChangeSet } from "@/lib/adsChangeApi";
 import { CopyPage } from "./CopyPage";
+import { RULES_FIXTURE, seedAdsRules } from "../patterns/rulesFixture";
 
 vi.mock("@/components/layout/WorkspaceContext", () => ({ useWorkspace: () => ({ scope: "u:o", identity: { user: { id: "u", email: "a@example.com" }, org: { id: "o", name: "測試", kind: "personal", role: "owner", timezone: "Asia/Taipei", today: "2026-09-28" }, orgs: [] } }) }));
 vi.mock("@/lib/adsReviewApi", async (importOriginal) => ({
@@ -378,7 +379,7 @@ describe("CopyPage（F27-I13）variants 模式：copy_editable.mode===\"variants
     expect(droppedLine2.tagName).toBe("MARK");
   });
 
-  it("新增／刪除標題列：滿 5 則停用新增，刪除後重新開放", async () => {
+  it("新增／刪除標題列：滿 5 則（served `limits.copy_items_max`）停用新增，刪除後重新開放", async () => {
     const user = userEvent.setup();
     vi.mocked(reviewApi.getReview).mockResolvedValue(variantsReview());
     renderAt(copyPath());
@@ -390,6 +391,33 @@ describe("CopyPage（F27-I13）variants 模式：copy_editable.mode===\"variants
     await user.click(screen.getByRole("button", { name: "刪除標題 5" }));
     expect(screen.queryByLabelText("新標題 5")).toBeNull();
     expect((addTitle as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("F50 Contract I: the per-list cap and 「（最多 N 則）」 are the served `limits.copy_items_max` (a changed fixture changes both)", async () => {
+    const user = userEvent.setup();
+    expect(RULES_FIXTURE.limits.copy_items_max).toBe(5);
+    seedAdsRules({ ...RULES_FIXTURE, limits: { ...RULES_FIXTURE.limits, copy_items_max: 3 } });
+    try {
+      vi.mocked(reviewApi.getReview).mockResolvedValue(variantsReview());
+      renderAt(copyPath());
+      expect(await screen.findByText("標題（最多 3 則）")).toBeTruthy();
+      expect(screen.getByText("內文（最多 3 則）")).toBeTruthy();
+      const addTitle = screen.getByRole("button", { name: "+ 新增標題" });
+      for (let i = 0; i < 2; i++) await user.click(addTitle);
+      expect(screen.getByLabelText("新標題 3")).toBeTruthy();
+      expect((addTitle as HTMLButtonElement).disabled).toBe(true);
+    } finally { seedAdsRules(RULES_FIXTURE); }
+  });
+
+  it("F50: while the rules load the headings print without a number", async () => {
+    seedAdsRules(null);
+    try {
+      vi.mocked(reviewApi.getReview).mockResolvedValue(variantsReview());
+      renderAt(copyPath());
+      await screen.findByLabelText("新標題 1");
+      expect(screen.queryByText(/最多 \d+ 則/)).toBeNull();
+      expect(screen.getAllByRole("heading", { name: "標題" }).length).toBeGreaterThan(0);
+    } finally { seedAdsRules(RULES_FIXTURE); }
   });
 
   it("保存：after 只送非空、去頭尾空白的 titles/bodies，附 review_id／recommendation_id", async () => {
