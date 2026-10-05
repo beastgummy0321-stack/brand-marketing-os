@@ -1,6 +1,6 @@
 /** 人物誌 API（圖書館 `PersonaSection` 讀它）。信封拆解與錯誤處理照 trackingApi.ts。
  * F42-I14 拆掉了這裡原本的真相卡呼叫。 */
-import { apiFetch, errorMessageFrom, throwIfFailed } from "./http";
+import { apiFetch, readJson, throwIfFailed } from "./http";
 
 export interface Persona {
   id: string;
@@ -33,9 +33,7 @@ interface Envelope<T> {
 
 async function getJson<T>(path: string): Promise<T> {
   const res = await apiFetch(path);
-  if (res.status === 404) throw new Error("找不到這筆資料。");
-  await throwIfFailed(res, `讀取失敗（狀態碼 ${res.status}）`);
-  const body: Envelope<T> = await res.json();
+  const body = await readJson<Envelope<T>>(res, `讀取失敗（狀態碼 ${res.status}）`);
   return body.data;
 }
 
@@ -45,18 +43,9 @@ async function postJson<T = void>(path: string, body?: unknown): Promise<T> {
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body ?? {}),
   });
-  if (!res.ok) {
-    let message = `處理失敗（狀態碼 ${res.status}）`;
-    try {
-      const data = (await res.json()) as { error?: string };
-      message = errorMessageFrom(data, message);
-    } catch {
-      // 非 JSON 回應就沿用白話預設錯誤。
-    }
-    throw new Error(message);
-  }
+  await throwIfFailed(res, `處理失敗（狀態碼 ${res.status}）`);
   if (res.status === 204) return undefined as T;
-  return (await res.json()) as T;
+  return readJson<T>(res, `處理失敗（狀態碼 ${res.status}）`);
 }
 
 async function putJson(path: string, body: unknown): Promise<void> {
@@ -65,16 +54,7 @@ async function putJson(path: string, body: unknown): Promise<void> {
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!res.ok) {
-    let message = `儲存失敗（狀態碼 ${res.status}）`;
-    try {
-      const data = (await res.json()) as { error?: string };
-      message = errorMessageFrom(data, message);
-    } catch {
-      // 非 JSON 回應就沿用白話預設錯誤。
-    }
-    throw new Error(message);
-  }
+  await throwIfFailed(res, `儲存失敗（狀態碼 ${res.status}）`);
 }
 
 const base = (brandId: string) => `/api/intake/brands/${encodeURIComponent(brandId)}`;

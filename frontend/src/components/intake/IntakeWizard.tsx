@@ -1,3 +1,4 @@
+import { ApiResponseError } from "@/lib/http";
 import { useEffect, useState, type ReactNode } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useWorkspace } from "@/components/layout/WorkspaceContext";
@@ -32,16 +33,22 @@ type LoadState =
 export function IntakeWizard({ brandId }: { brandId: string | null }) {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const { refreshBrands, brands, scope } = useWorkspace();
+  const { refreshBrands, brands } = useWorkspace();
   const [state, setState] = useState<LoadState>(brandId ? { status: "loading" } : { status: "notfound" });
-  // F47-I03 (faults F3): the step being viewed survives a reload, so a reload on step 3 lands on step 3
-  // (where its unsaved draft comes back) instead of falling back to the last confirmed step.
-  const viewKey = brandId ? `intake-view:${scope ?? ""}:${brandId}` : null;
-  const [viewStep, setViewStepState] = useState<number | null>(() => readViewStep(viewKey));
-  function setViewStep(step: number | null) {
-    setViewStepState(step);
-    writeViewStep(viewKey, step);
-  }
+  const [furthest, setFurthest] = useState(1);
+  const requested = parseStepParam(searchParams.get("step"));
+  const ready = state.status === "ready" ? state : null;
+  const scanSkipped = ready ? ready.onboarding.skipped_scan || ready.draft === null : false;
+  const scanCanContinue = ready && (scanSkipped || ready.draft?.scan_done || ["done", "failed"].includes(ready.onboarding.prefill_status));
+  const reachable = ready ? (ready.onboarding.completed ? LAST_STEP : Math.max(furthest, ready.onboarding.step, scanCanContinue ? 3 : 1)) : 1;
+  const fallback = ready ? (ready.onboarding.completed ? LAST_STEP : ready.onboarding.step) : 1;
+  const chosen = requested !== null && requested <= reachable ? requested : fallback;
+  const current = chosen === SCAN_STEP && scanSkipped ? SCAN_STEP + 1 : chosen;
+  useEffect(() => {
+    if (brandId && ready && searchParams.get("step") !== String(current)) {
+      navigate(`/brands/${encodeURIComponent(brandId)}/intake?step=${current}`, { replace: true });
+    }
+  }, [brandId, ready, current, searchParams, navigate]);
   const [flowError, setFlowError] = useState<string | null>(null);
 
   async function refresh(): Promise<OnboardingStatus | null> {
@@ -55,7 +62,7 @@ export function IntakeWizard({ brandId }: { brandId: string | null }) {
       setState({ status: "ready", onboarding, draft });
       return onboarding;
     } catch (err) {
-      if (err instanceof Error && err.message.includes("找不到")) setState({ status: "notfound" });
+      if (err instanceof ApiResponseError && err.status === 404) setState({ status: "notfound" });
       else setState({ status: "error", message: err instanceof Error ? err.message : "讀取失敗，請稍後再試。" });
       return null;
     }
@@ -74,7 +81,7 @@ export function IntakeWizard({ brandId }: { brandId: string | null }) {
           nav={{ crumb: brandCrumb(""), steps: BRAND_STEPS, current: 1 }}
           onSaved={({ brand_id }) => {
             refreshBrands();
-            navigate(`/brands/${encodeURIComponent(brand_id)}/intake`);
+            navigate(`/brands/${encodeURIComponent(brand_id)}/intake?step=2`, { replace: true });
           }}
         />
       </Page>
@@ -91,24 +98,22 @@ export function IntakeWizard({ brandId }: { brandId: string | null }) {
     return <EmptyState title="讀取失敗" description={state.message} onAction={() => void refresh()} actionLabel="重新載入" />;
   }
 
-  const { onboarding, draft } = state;
-  const scanSkipped = onboarding.skipped_scan || draft === null;
+  const { onboarding } = state;
   const brandName = (brands ?? []).find((b) => b.brand_id === brandId)?.brand_name ?? "";
   const intakePath = `/brands/${encodeURIComponent(brandId)}/intake`;
 
-  const settle = (step: number) => (step === SCAN_STEP && scanSkipped ? SCAN_STEP + 1 : step);
-  const current = settle(onboarding.completed ? (parseStepParam(searchParams.get("step")) ?? LAST_STEP) : (viewStep ?? onboarding.step));
-  const reachable = onboarding.completed ? LAST_STEP : Math.max(viewStep ?? 0, onboarding.step);
-
   function goTo(step: number) {
     setFlowError(null);
-    if (onboarding.completed) navigate(step === LAST_STEP ? intakePath : `${intakePath}?step=${step}`);
-    else setViewStep(step);
+    navigate(`${intakePath}?step=${step}`);
   }
   const nextOf = (step: number, skipped: boolean) => (step + 1 === SCAN_STEP && skipped ? SCAN_STEP + 1 : step + 1);
   const prevOf = (step: number) => (step - 1 === SCAN_STEP && scanSkipped ? SCAN_STEP - 1 : step - 1);
   const back: BarBack | undefined = current > 1 ? { label: BRAND_STEPS[prevOf(current) - 1], onClick: () => goTo(prevOf(current)) } : undefined;
-  const next = () => goTo(nextOf(current, scanSkipped));
+  const next = () => {
+    const step = nextOf(current, scanSkipped);
+    setFurthest((previous) => Math.max(previous, step));
+    goTo(step);
+  };
 
   const nav: StepNav = {
     crumb: brandCrumb(brandName),
@@ -122,9 +127,8 @@ export function IntakeWizard({ brandId }: { brandId: string | null }) {
     if (onboarding.completed) return goTo(LAST_STEP);
     try {
       await completeOnboarding(brandId as string);
-      writeViewStep(viewKey, null);
       await refresh();
-      navigate(intakePath);
+      navigate(`${intakePath}?step=${LAST_STEP}`);
     } catch (err) {
       setFlowError(err instanceof Error ? err.message : "處理失敗，請稍後再試。");
     }
@@ -166,7 +170,7 @@ export function IntakeWizard({ brandId }: { brandId: string | null }) {
   return (
     <Page>
       {flowError && <p role="alert" className="text-sm text-danger">{flowError}</p>}
-      {body}
+      <div key={current}>{body}</div>
     </Page>
   );
 }
@@ -176,29 +180,7 @@ function Page({ children }: { children: ReactNode }) {
   return <div className="flex max-w-[1180px] flex-col gap-4">{children}</div>;
 }
 
-/** The viewed step of an open draft, kept in `sessionStorage` per user scope and brand; anything but an
- * integer 1..7 reads as none. */
-function readViewStep(key: string | null): number | null {
-  if (!key) return null;
-  try {
-    return parseStepParam(sessionStorage.getItem(key));
-  } catch {
-    return null;
-  }
-}
-
-function writeViewStep(key: string | null, step: number | null): void {
-  if (!key) return;
-  try {
-    if (step === null) sessionStorage.removeItem(key);
-    else sessionStorage.setItem(key, String(step));
-  } catch {
-    /* Storage unavailable: a reload falls back to the confirmed step. */
-  }
-}
-
-/** `?step=N` of a completed brand: anything but an integer 1..7 reads as not given (F05-I14:
- * a broken parameter is not an error, it opens step 7). */
+/** Only explicit wizard steps are valid URL positions. */
 function parseStepParam(raw: string | null): number | null {
   if (raw === null) return null;
   const n = Number(raw);

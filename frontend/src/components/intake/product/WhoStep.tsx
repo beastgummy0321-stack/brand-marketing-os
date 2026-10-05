@@ -228,8 +228,8 @@ export function WhoStep({ brandId, productId, nav, back, onNext }: {
 
       {error && <p role="alert" className="text-sm text-danger">{error}</p>}
 
-      <OnboardingBar back={back} hint={reason ?? undefined}>
-        <BarNext type="submit" label="下一步" disabled={!loaded || !!reason || saving} />
+      <OnboardingBar back={back}>
+        <BarNext type="submit" label="下一步" busy={!loaded || saving} disabledReason={reason} />
       </OnboardingBar>
     </form>
   );

@@ -1,3 +1,5 @@
+import { useWorkspace } from "@/components/layout/WorkspaceContext";
+import { brandDraftKey, clearStepDraft, readStepDraft, useStepDraft } from "../shared/stepDraft";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import type { OnboardingEvidence, OnboardingEvidenceInput, OnboardingSource, PolicyParamValue, ProofKind } from "@/lib/intakeOnboardingApi";
@@ -36,6 +38,23 @@ interface ForbiddenRow {
   custom: boolean;
 }
 
+interface EvidenceDraft {
+  proof: ProofRow[];
+  slots: Partial<Record<ProofKind, string>>;
+  policies: ChosenPolicy[];
+  cooling: CoolingOff;
+  forbidden: ForbiddenRow[];
+}
+function isEvidenceDraft(value: unknown): value is EvidenceDraft {
+  if (!value || typeof value !== "object") return false;
+  const d = value as EvidenceDraft;
+  return Array.isArray(d.proof) && d.proof.every((p) => p && typeof p.uid === "number" && typeof p.text === "string" && typeof p.fact_key === "string")
+    && !!d.slots && typeof d.slots === "object" && Object.values(d.slots).every((v) => typeof v === "string")
+    && Array.isArray(d.policies) && d.policies.every((p) => p && typeof p.key === "string" && !!p.params && typeof p.params === "object")
+    && !!d.cooling && typeof d.cooling.applies === "boolean" && typeof d.cooling.disclosure === "string"
+    && Array.isArray(d.forbidden) && d.forbidden.every((f) => f && typeof f.uid === "number" && typeof f.text === "string");
+}
+
 /** Brand onboarding `#/b4` 品牌的證據與政策 (prototype `R.b4` of `.harness/scratch/prototype/f41-onboarding/index.html`):
  * brand-level proof (AI-found rows + empty 媒體報導／銷售數據 inputs), 全店政策 (`PolicyCard`) and the brand's own
  * 不能講的話, each block ending with 「自訂」. 下一步 sends every list in full through `PUT …/onboarding/evidence`
@@ -43,6 +62,9 @@ interface ForbiddenRow {
  * cooling-off without its text) blocks it with the reason in the bar. */
 export function EvidenceStep({ nav, back, onNext }: { nav: StepNav; back?: BarBack; onNext: () => void }) {
   const { brandId = "" } = useParams<{ brandId: string }>();
+  const { scope } = useWorkspace();
+  const draftKey = brandDraftKey(scope, brandId, "evidence");
+  const [baseline, setBaseline] = useState<EvidenceDraft | null>(null);
   const [loaded, setLoaded] = useState<OnboardingEvidence | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [proof, setProof] = useState<ProofRow[]>([]);
@@ -58,13 +80,20 @@ export function EvidenceStep({ nav, back, onNext }: { nav: StepNav; back?: BarBa
       .then((evidence) => {
         if (cancelled) return;
         setLoaded(evidence);
-        setProof(evidence.proof.map((p) => ({
-          uid: uid.current++, id: p.id, fact_key: p.fact_key, text: p.text, loadedText: p.text,
-          origin: p.source === "ai" ? "ai" : "saved", note: p.note, editing: false,
-        })));
-        setPolicies(evidence.policies.map(chosenFromItem));
-        setCooling({ applies: evidence.cooling_off.applies, disclosure: evidence.cooling_off.disclosure });
-        setForbidden(evidence.forbidden.map((f) => ({ uid: uid.current++, text: f.text, custom: false })));
+        const saved: EvidenceDraft = {
+          proof: evidence.proof.map((p) => ({
+            uid: uid.current++, id: p.id, fact_key: p.fact_key, text: p.text, loadedText: p.text,
+            origin: p.source === "ai" ? "ai" : "saved", note: p.note, editing: false,
+          })),
+          slots: {}, policies: evidence.policies.map(chosenFromItem),
+          cooling: { applies: evidence.cooling_off.applies, disclosure: evidence.cooling_off.disclosure },
+          forbidden: evidence.forbidden.map((f) => ({ uid: uid.current++, text: f.text, custom: false })),
+        };
+        setBaseline(saved);
+        const draft = readStepDraft(draftKey, isEvidenceDraft) ?? saved;
+        setProof(draft.proof); setSlots(draft.slots); setPolicies(draft.policies);
+        setCooling(draft.cooling); setForbidden(draft.forbidden);
+        uid.current = Math.max(uid.current, ...draft.proof.map((p) => p.uid + 1), ...draft.forbidden.map((f) => f.uid + 1));
       })
       .catch((err: unknown) => {
         if (!cancelled) setLoadError(err instanceof Error ? err.message : "讀取失敗，請稍後再試。");
@@ -73,6 +102,8 @@ export function EvidenceStep({ nav, back, onNext }: { nav: StepNav; back?: BarBa
       cancelled = true;
     };
   }, [brandId]);
+
+  useStepDraft(draftKey, loaded !== null, { proof, slots, policies, cooling, forbidden }, baseline);
 
   const prefilled = useMemo(
     () => new Map((loaded?.policies ?? []).filter((p) => p.key !== "custom").map((p) => [p.key, chosenFromItem(p)])),
@@ -95,6 +126,8 @@ export function EvidenceStep({ nav, back, onNext }: { nav: StepNav; back?: BarBa
       forbidden: forbidden.map((f) => f.text.trim()).filter(Boolean),
     };
     await saveOnboardingEvidence(brandId, input);
+    clearStepDraft(draftKey);
+    setBaseline({ proof, slots, policies, cooling, forbidden });
     onNext();
   });
 
@@ -132,7 +165,7 @@ export function EvidenceStep({ nav, back, onNext }: { nav: StepNav; back?: BarBa
                   <Chip tone="ok">{label}</Chip>
                   <div className="min-w-0 flex-1">
                     {row.editing ? (
-                      <input
+                      <input onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); editProof(row, { editing: false }); } }}
                         aria-label={label}
                         className={INPUT}
                         value={row.text}
@@ -226,8 +259,7 @@ export function EvidenceStep({ nav, back, onNext }: { nav: StepNav; back?: BarBa
       {error && <p role="alert" className="text-sm text-danger">{error}</p>}
 
       <OnboardingBar back={back}>
-        {reason && <span role="status" className="text-[12.5px] font-medium text-warning">{reason}</span>}
-        <BarNext type="submit" label="下一步" disabled={!loaded || saving || !!reason} />
+        <BarNext type="submit" label="下一步" busy={!loaded || saving} disabledReason={reason} />
       </OnboardingBar>
     </form>
   );

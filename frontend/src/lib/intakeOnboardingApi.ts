@@ -6,7 +6,7 @@
  * proposal (with `note`, e.g. 「about 頁」), `"none"` = nothing found. PUTs return the step's fresh
  * GET shape; a 400 carries a Chinese `error` message, thrown here as an `Error`. */
 
-import { apiFetch, errorMessageFromResponse } from "./http";
+import { apiFetch, readJson } from "./http";
 
 export type OnboardingSource = "saved" | "ai" | "none";
 export type PrefillStatus = "none" | "running" | "done" | "failed";
@@ -261,11 +261,7 @@ interface Envelope<T> {
 
 async function send<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await apiFetch(path, init);
-  if (!res.ok) {
-    const fallback = res.status === 404 ? "找不到這筆資料。" : `處理失敗（狀態碼 ${res.status}）`;
-    throw new Error(await errorMessageFromResponse(res, fallback));
-  }
-  const body: Envelope<T> = await res.json();
+  const body = await readJson<Envelope<T>>(res, `處理失敗（狀態碼 ${res.status}）`);
   return body.data;
 }
 

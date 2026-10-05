@@ -207,7 +207,7 @@ export function ArchivedProductCard({ name, busy, error, onRestore }: {
           <b className="font-semibold text-muted-foreground [overflow-wrap:anywhere]">{name}</b>
           <div className="text-[11.5px] text-muted-foreground">已封存</div>
         </div>
-        <Button type="button" variant="outline" size="sm" className="shrink-0 font-medium" disabled={busy} onClick={onRestore}>
+        <Button type="button" variant="outline" size="sm" className="shrink-0 font-medium" busy={busy} onClick={onRestore}>
           還原
         </Button>
       </div>
@@ -235,10 +235,10 @@ export function SuggestionCard({ suggestion, busy, error, onContinue, onDismiss 
         </div>
       </div>
       <div className="flex items-center gap-2">
-        <Button type="button" variant="outline" size="sm" className="font-medium" disabled={busy} onClick={onContinue}>
+        <Button type="button" variant="outline" size="sm" className="font-medium" busy={busy} onClick={onContinue}>
           繼續建檔 →
         </Button>
-        <Button type="button" variant="ghost" size="sm" className="font-medium text-muted-foreground" disabled={busy} onClick={onDismiss}>
+        <Button type="button" variant="ghost" size="sm" className="font-medium text-muted-foreground" busy={busy} onClick={onDismiss}>
           不用了
         </Button>
       </div>

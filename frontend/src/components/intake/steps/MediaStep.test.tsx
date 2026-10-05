@@ -1,3 +1,4 @@
+vi.mock("@/components/layout/WorkspaceContext", () => ({ useWorkspace: () => ({ scope: "test-org" }) }));
 /** frontend/src/components/intake/steps/MediaStep.test.tsx — brand onboarding `#/b5` 素材 (F42-I10): the saved
  * answer is shown, a never-answered brand shows 「只有照片」 picked but nothing is written until 下一步, 下一步 sends
  * `PUT …/onboarding/media` with the picked value and a failed save keeps the user on the step, and the cards follow
@@ -34,6 +35,7 @@ function renderStep(onNext = vi.fn(), back = { label: "證據與政策", onClick
 const card = (name: string) => screen.getByRole("radio", { name: new RegExp(name) });
 
 afterEach(() => {
+  sessionStorage.clear();
   cleanup();
   vi.clearAllMocks();
 });
@@ -106,4 +108,16 @@ describe("MediaStep", () => {
     expect(card("照片和影片都能交").getAttribute("aria-checked")).toBe("true");
     expect(mockSave).not.toHaveBeenCalled();
   });
+});
+
+
+it("restores an unsaved media choice after remount", async () => {
+  mockFetch.mockResolvedValue({media:"photo"});
+  renderStep();
+  await screen.findByRole("radio", {name:/照片和影片都能交/});
+  await userEvent.click(card("照片和影片都能交"));
+  cleanup();
+  renderStep();
+  await waitFor(() => expect(card("照片和影片都能交").getAttribute("aria-checked")).toBe("true"));
+  expect(mockSave).not.toHaveBeenCalled();
 });

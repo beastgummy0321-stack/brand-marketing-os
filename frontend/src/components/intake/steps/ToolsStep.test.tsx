@@ -1,7 +1,8 @@
+vi.mock("@/components/layout/WorkspaceContext", () => ({ useWorkspace: () => ({ scope: "test-org" }) }));
 /** frontend/src/components/intake/steps/ToolsStep.test.tsx — brand onboarding #/b6 接上工具 (F42-I11): connector rows and
  * states from a registry fixture shaped like `app/intake/connector_catalogue.json`, Meta's inline token → account → bind
  * panel, the conversion goal saved on change, and the bar. All API calls are fakes. */
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -67,6 +68,7 @@ function renderStep(onNext = vi.fn(), back = vi.fn()) {
 const connectorRow = (name: string) => screen.getByText(name).closest("[data-slot=connector]") as HTMLElement;
 
 beforeEach(() => {
+  sessionStorage.clear();
   vi.mocked(fetchOnboardingTools).mockReset().mockResolvedValue(tools());
   vi.mocked(saveConversionGoal).mockReset().mockResolvedValue(undefined);
   vi.mocked(fetchMetaAccounts).mockReset();
@@ -77,6 +79,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  sessionStorage.clear();
   vi.useRealTimers();
 });
 
@@ -225,10 +228,11 @@ it("saves the conversion goal on change", async () => {
   await userEvent.click(within(group).getByRole("radio", { name: "留資料" }));
 
   expect(saveConversionGoal).toHaveBeenCalledWith("brd_x", "lead");
+  expect(await screen.findByText("已儲存")).toBeTruthy();
   await waitFor(() => expect(within(group).getByRole("radio", { name: "留資料" }).getAttribute("aria-checked")).toBe("true"));
 });
 
-it("keeps the old goal and says so when saving fails", async () => {
+it("keeps the unsaved choice and says so when saving fails", async () => {
   vi.mocked(saveConversionGoal).mockRejectedValue(new Error("儲存失敗"));
   renderStep();
 
@@ -236,7 +240,8 @@ it("keeps the old goal and says so when saving fails", async () => {
   await userEvent.click(within(group).getByRole("radio", { name: "預約" }));
 
   expect(await screen.findByText("儲存失敗")).toBeTruthy();
-  expect(within(group).getByRole("radio", { name: "購買" }).getAttribute("aria-checked")).toBe("true");
+  expect(within(group).getByRole("radio", { name: "預約" }).getAttribute("aria-checked")).toBe("true");
+  expect(screen.getByText("尚未儲存，重新選取可再試")).toBeTruthy();
 });
 
 it("picks no goal when none is saved yet", async () => {
@@ -342,4 +347,17 @@ describe("MetaConnectPanel backfill outcome", () => {
     await vi.advanceTimersByTimeAsync(20000);
     expect(vi.mocked(fetchMetaBackfillStatus).mock.calls.length).toBe(calls);
   });
+});
+
+
+it("restores a failed goal choice without reporting it saved", async () => {
+  vi.mocked(saveConversionGoal).mockRejectedValue(new Error("儲存失敗"));
+  renderStep();
+  await userEvent.click(await screen.findByRole("radio", {name:"預約"}));
+  await screen.findByText("儲存失敗");
+  cleanup();
+  renderStep();
+  await waitFor(() => expect(screen.getByRole("radio", {name:"預約"}).getAttribute("aria-checked")).toBe("true"));
+  expect(screen.queryByText("已儲存")).toBeNull();
+  expect(screen.getByText("尚未儲存，重新選取可再試")).toBeTruthy();
 });

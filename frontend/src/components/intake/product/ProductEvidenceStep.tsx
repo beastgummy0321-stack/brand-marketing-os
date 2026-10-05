@@ -172,7 +172,7 @@ export function ProductEvidenceStep({ brandId, productId, nav, back, onNext }: {
                   <Chip tone="ok">{label}</Chip>
                   <div className="min-w-0 flex-1">
                     {row.editing ? (
-                      <input
+                      <input onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); editProof(row, { editing: false }); } }}
                         aria-label={label}
                         className={INPUT}
                         value={row.text}
@@ -253,7 +253,7 @@ export function ProductEvidenceStep({ brandId, productId, nav, back, onNext }: {
       {error && <p role="alert" className="text-sm text-danger">{error}</p>}
 
       <OnboardingBar back={back} hint={unset > 0 ? `還有 ${unset} 句沒選` : undefined}>
-        <BarNext type="submit" label="下一步" disabled={!loaded || saving || unset > 0} />
+        <BarNext type="submit" label="下一步" busy={!loaded || saving} disabledReason={unset > 0 ? "先確認每條說法是否要使用" : null} />
       </OnboardingBar>
     </form>
   );

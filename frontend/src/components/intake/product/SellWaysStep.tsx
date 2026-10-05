@@ -1,3 +1,4 @@
+import { formatCurrency } from "@/lib/format";
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { Button } from "@/components/layout/ui/button";
@@ -260,7 +261,7 @@ export function SellWaysStep({ brandId, productId, nav, back, onNext }: {
       setOpen(back);
       setFocus(`${back}-name`);
       setStatus(w?.break_even != null
-        ? `「${w.name}」的打平算出來了：每筆最多花 NT$${Math.max(w.break_even, 0).toLocaleString("en-US")}`
+        ? `「${w.name}」的打平算出來了：每筆最多花 ${formatCurrency(Math.max(w.break_even, 0))}`
         : `「${target?.name ?? ""}」還差：${(w?.cost_missing ?? []).map((m) => m.name).join("、")}還沒填成本`);
     } else {
       setOpen(null);
@@ -488,7 +489,7 @@ export function SellWaysStep({ brandId, productId, nav, back, onNext }: {
             ，用到它的組合打平算不出來
           </small>
         )}
-        <BarNext label="完成商品建檔" disabled={!data || busy} onClick={() => void finish()} />
+        <BarNext label="完成商品建檔" busy={!data || busy} onClick={() => void finish()} />
       </OnboardingBar>
     </div>
   );

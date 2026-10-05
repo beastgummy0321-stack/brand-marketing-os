@@ -121,7 +121,7 @@ export function ScanStep({ brandId, nav, back, onNext }: { brandId: string; nav:
         ) : done && !readSomething ? (
           <BarNext label="跳過，自己填" onClick={onNext} />
         ) : (
-          <BarNext label="開始確認" disabled={!done} onClick={onNext} />
+          <BarNext label="開始確認" busy={view.kind === "busy" || view.kind === "running"} onClick={onNext} />
         )}
       </OnboardingBar>
     </div>

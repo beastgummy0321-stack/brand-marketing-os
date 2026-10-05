@@ -18,7 +18,7 @@
  * `value` too (gross margin 45, close rate 20). The page prints and sends it as is, never ×100 / ÷100. Product photos are uploaded with the existing official-asset upload
  * (`uploadAsset` in `libraryApi.ts`, `asset_kind: "product_photo"`, `product_id`). */
 
-import { apiFetch, throwIfFailed } from "./http";
+import { apiFetch, readJson, throwIfFailed } from "./http";
 import type { OnboardingSource, PrefillStatus, ProofKind, SourcedText } from "./intakeOnboardingApi";
 
 export type PainKey = "cost" | "effort" | "uncertainty" | "availability" | "experience" | "identity";
@@ -420,8 +420,7 @@ interface Envelope<T> {
 
 async function send<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await apiFetch(path, init);
-  await throwIfFailed(res, res.status === 404 ? "找不到這筆資料。" : `處理失敗（狀態碼 ${res.status}）`);
-  const body: Envelope<T> = await res.json();
+  const body = await readJson<Envelope<T>>(res, res.status === 404 ? "找不到這筆資料。" : `處理失敗（狀態碼 ${res.status}）`);
   return body.data;
 }
 

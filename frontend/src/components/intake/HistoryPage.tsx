@@ -199,7 +199,7 @@ export function HistoryPage({ brandId }: { brandId: string }) {
               </p>
               {statusError && <p className="text-sm text-danger">{statusError}</p>}
               {startForm.error && <p className="text-sm text-danger">{startForm.error}</p>}
-              <Button type="button" disabled={startForm.saving} onClick={() => void startForm.submit()}>
+              <Button type="button" busy={startForm.saving} onClick={() => void startForm.submit()}>
                 {startForm.saving ? "啟動中…" : "開始拉 37 個月的數字"}
               </Button>
             </>
@@ -225,7 +225,7 @@ export function HistoryPage({ brandId }: { brandId: string }) {
           <Button
             type="button"
             variant="outline"
-            disabled={refetchForm.saving}
+            busy={refetchForm.saving}
             onClick={() => void refetchForm.submit()}
           >
             {refetchForm.saving ? "重新抓取中…" : "重新抓素材"}
@@ -348,7 +348,7 @@ export function BackfillOutcomeLine({
     return (
       <div className="flex flex-col items-start gap-2">
         <p role="alert" className={`${text} text-danger`}>{outcome.text ?? "這次沒拉到。"}</p>
-        <Button type="button" variant="outline" size={compact ? "sm" : "default"} disabled={retrying} onClick={onRetry}>
+        <Button type="button" variant="outline" size={compact ? "sm" : "default"} busy={retrying} onClick={onRetry}>
           {retrying ? "啟動中…" : "再試一次"}
         </Button>
       </div>
@@ -471,7 +471,7 @@ function HistoryCardItem({
             <p className="text-sm text-success">已記錄・{formatInstant(saved.tagged_at, clock.timezone, "md_hm")}</p>
           )}
           <div className="flex gap-2">
-            <Button type="button" disabled={saving} onClick={() => void submit()}>
+            <Button type="button" busy={saving} onClick={() => void submit()}>
               {saving ? "儲存中…" : "儲存"}
             </Button>
             <Button type="button" variant="outline" onClick={onSkip}>

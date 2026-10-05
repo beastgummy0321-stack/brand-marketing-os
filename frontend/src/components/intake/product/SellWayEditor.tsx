@@ -89,7 +89,7 @@ export function SellWayEditor({ rowKey, shape, name, productName, showErrors, re
       {returnTo !== null && (
         <div data-slot="return-bar" className="mb-3.5 flex flex-wrap items-center gap-x-4 gap-y-2.5 rounded-[10px] bg-zone-watch px-3.5 py-2.5 text-[13px]">
           <span>「{returnTo}」要用{title}的成本才算得出打平</span>
-          <Button type="button" variant="link" className="h-auto p-0 text-[13px]" disabled={busy} onClick={onDone}>填好了，回到「{returnTo}」 →</Button>
+          <Button type="button" variant="link" className="h-auto p-0 text-[13px]" busy={busy} onClick={onDone}>填好了，回到「{returnTo}」 →</Button>
         </div>
       )}
       <div className="mb-3.5 flex flex-wrap items-center gap-2.5">
@@ -119,12 +119,12 @@ export function SellWayEditor({ rowKey, shape, name, productName, showErrors, re
         {usedBy.length > 0 ? (
           <span className="text-[11.5px] text-muted-foreground">{usedBy.map((u) => `「${u}」`).join("")}用到它，先從組合拿掉才能刪</span>
         ) : (
-          <Button type="button" variant="ghost" size="sm" className="text-danger hover:bg-zone-over hover:text-danger" disabled={busy} onClick={onDelete}>
+          <Button type="button" variant="ghost" size="sm" className="text-danger hover:bg-zone-over hover:text-danger" busy={busy} onClick={onDelete}>
             刪除這個賣法
           </Button>
         )}
         <div className="ml-auto flex flex-wrap items-center gap-2.5 max-[480px]:ml-0 max-[480px]:w-full">
-          <Button type="button" variant="outline" className="border-primary text-primary hover:bg-accent max-[480px]:flex-1" disabled={busy} onClick={onDone}>
+          <Button type="button" variant="outline" className="border-primary text-primary hover:bg-accent max-[480px]:flex-1" busy={busy} onClick={onDone}>
             {returnTo !== null ? `填好了，回到「${returnTo}」` : "完成"}
           </Button>
         </div>

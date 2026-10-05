@@ -57,7 +57,7 @@ const C12 = way({
   price: 1980, list_price: 2160, list_price_derived: true, list_price_note: "推算：單盒 180 × 12",
   cost: 600, cost_derived: true, cost_note: "推算：單盒 50 × 12", cost_estimate: 600,
   free_shipping: true, break_even: 1320, break_even_derived: true, cap_per_sale: 1320,
-  offer_sentences: ["優惠價 NT$1,980（原價 NT$2,160）", "這組免運"], offer_labels: ["組合價 省 180", "這組免運"],
+  offer_sentences: ["優惠價 NT$ 1,980（原價 NT$ 2,160）", "這組免運"], offer_labels: ["組合價 省 180", "這組免運"],
 });
 const C52 = way({
   id: "sw_c52", name: "5 盒＋2 包", shape: "composed",
@@ -68,7 +68,7 @@ const C52 = way({
   price: 990, list_price: 1100, list_price_derived: true, list_price_note: "推算：單盒 180 × 5 ＋ 體驗包（3 顆） 100 × 2",
   cost: 300, cost_derived: true, cost_note: "推算：單盒 50 × 5 ＋ 體驗包（3 顆） 25 × 2", cost_estimate: 300,
   break_even: 630, break_even_derived: true, cap_per_sale: 630,
-  offer_sentences: ["優惠價 NT$990（原價 NT$1,100）"], offer_labels: ["組合價 省 110"],
+  offer_sentences: ["優惠價 NT$ 990（原價 NT$ 1,100）"], offer_labels: ["組合價 省 110"],
 });
 
 /** 單盒 without a cost: neither composed cost can be derived. */
@@ -84,7 +84,7 @@ function sellWays(list: SellWayRow[] = [TRIAL, BOX, C12, C52], over: Partial<Pro
     show_close_rate: false,
     assumptions: {
       gross_margin: { value: 65, source_text: "軟糖類同業毛利約 65%（假設值，之後拿到真成本再改）" },
-      shipping_cost: { value: 80, source_text: "運費假設 NT$80 · 台灣宅配均價" },
+      shipping_cost: { value: 80, source_text: "運費假設 NT$ 80 · 台灣宅配均價" },
     },
     ...over,
   };
@@ -164,11 +164,11 @@ describe("SellWaysStep", () => {
     expect(within(editor()).getByText("推算：單盒 180 × 12")).toBeTruthy();
     expect(field("售價").value).toBe("1980");
     const result = editor().querySelector('[data-slot="sell-way-result"]') as HTMLElement;
-    expect(within(result).getByText("每筆最多花 NT$1,320")).toBeTruthy();
+    expect(within(result).getByText("每筆最多花 NT$ 1,320")).toBeTruthy();
     expect(within(result).getByText("推算")).toBeTruthy();
     expect(within(result).getByText("售價 1,980 − 成本 600（推算） − 運費成本 60")).toBeTruthy();
     expect(within(result).getByText("「這組免運」")).toBeTruthy();
-    expect(within(result).getByText("「優惠價 NT$1,980（原價 NT$2,160）」")).toBeTruthy();
+    expect(within(result).getByText("「優惠價 NT$ 1,980（原價 NT$ 2,160）」")).toBeTruthy();
     expect((within(editor()).getByRole("checkbox", { name: "這個賣法免運" }) as HTMLInputElement).checked).toBe(true);
     // Contents: 〈base〉 × qty with the base's own numbers.
     expect((within(editor()).getByRole("textbox", { name: "單盒的數量" }) as HTMLInputElement).value).toBe("12");
@@ -176,7 +176,7 @@ describe("SellWaysStep", () => {
   });
 
   it("組合・成本自己填：沒有推算，旁邊寫「照內容推算是 600」", async () => {
-    const typed = way({ ...C12, cost: 560, cost_derived: false, cost_note: "", break_even: 1360, break_even_derived: false, free_shipping: false, offer_sentences: ["優惠價 NT$1,980（原價 NT$2,160）"] });
+    const typed = way({ ...C12, cost: 560, cost_derived: false, cost_note: "", break_even: 1360, break_even_derived: false, free_shipping: false, offer_sentences: ["優惠價 NT$ 1,980（原價 NT$ 2,160）"] });
     mockFetch.mockResolvedValue(sellWays([TRIAL, BOX, typed, C52]));
     renderStep();
     await edit("12 盒");
@@ -185,7 +185,7 @@ describe("SellWaysStep", () => {
     expect(within(editor()).getByText("照內容推算是 600")).toBeTruthy();
     expect(within(editor()).queryByText("推算：單盒 50 × 12")).toBeNull();
     const result = editor().querySelector('[data-slot="sell-way-result"]') as HTMLElement;
-    expect(within(result).getByText("每筆最多花 NT$1,360")).toBeTruthy();
+    expect(within(result).getByText("每筆最多花 NT$ 1,360")).toBeTruthy();
     expect(within(result).queryByText("推算")).toBeNull();
     expect(within(result).queryByText("「這組免運」")).toBeNull();
   });
@@ -210,8 +210,8 @@ describe("SellWaysStep", () => {
 
     await waitFor(() => expect(editor().getAttribute("data-sw-row")).toBe("5 盒＋2 包"));
     expect(lastBody().find((r) => r.name === "單盒")).toMatchObject({ id: "sw_box", cost: "50" });
-    expect(screen.getByRole("status").textContent).toBe("「5 盒＋2 包」的打平算出來了：每筆最多花 NT$630");
-    expect(within(editor()).getByText("每筆最多花 NT$630")).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toBe("「5 盒＋2 包」的打平算出來了：每筆最多花 NT$ 630");
+    expect(within(editor()).getByText("每筆最多花 NT$ 630")).toBeTruthy();
   });
 
   it("新增組合：只能挑這個商品的基本賣法；數量照打的送，伺服器的句子寫在數量／內容下面；都放進來了就給「＋新增基本賣法」", async () => {
@@ -344,7 +344,7 @@ describe("SellWaysStep", () => {
       show_close_rate: true,
       assumptions: {
         gross_margin: { value: 45, source_text: "毛利率假設 45%" },
-        shipping_cost: { value: 80, source_text: "運費 NT$80" },
+        shipping_cost: { value: 80, source_text: "運費 NT$ 80" },
         close_rate: { value: 20, source_text: "成交率假設 20%" },
       },
     }));

@@ -1,3 +1,4 @@
+import { ApiResponseError } from "@/lib/http";
 /** frontend/src/components/intake/product/ProductOnboarding.test.tsx — the product-onboarding shell (F43-I08):
  * `/products/new` creates the product and opens its onboarding; `?step=N` re-enters a step, a finished product
  * without it opens step 5, a product being built its current step; the crumb and the five dots; while the
@@ -255,7 +256,7 @@ describe("ProductOnboarding", () => {
   });
 
   it("找不到的商品顯示空狀態", async () => {
-    mockStatus.mockRejectedValue(new Error("找不到這筆資料。"));
+    mockStatus.mockRejectedValue(new ApiResponseError("任意文案", 404, {}));
     mockWhat.mockResolvedValue(blankWhat());
     renderAt(`/brands/${B}/products/prd_gone/onboarding`);
 

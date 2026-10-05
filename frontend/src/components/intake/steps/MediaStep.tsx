@@ -1,3 +1,5 @@
+import { useWorkspace } from "@/components/layout/WorkspaceContext";
+import { brandDraftKey, clearStepDraft, readStepDraft, useStepDraft } from "../shared/stepDraft";
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { useParams } from "react-router-dom";
 import { Button } from "@/components/layout/ui/button";
@@ -22,6 +24,9 @@ type LoadState = { status: "loading" } | { status: "error"; message: string } | 
  * route (`/brands/:brandId/intake`), the only place this step renders. */
 export function MediaStep({ nav, back, onNext }: { nav: StepNav; back?: BarBack; onNext: () => void }) {
   const { brandId = "" } = useParams<{ brandId: string }>();
+  const { scope } = useWorkspace();
+  const draftKey = brandDraftKey(scope, brandId, "media");
+  const [baseline, setBaseline] = useState<MediaCapability>(DEFAULT_MEDIA);
   const [load, setLoad] = useState<LoadState>({ status: "loading" });
   const [media, setMedia] = useState<MediaCapability>(DEFAULT_MEDIA);
   const [saving, setSaving] = useState(false);
@@ -31,7 +36,9 @@ export function MediaStep({ nav, back, onNext }: { nav: StepNav; back?: BarBack;
     setLoad({ status: "loading" });
     fetchOnboardingMedia(brandId)
       .then((data) => {
-        setMedia(data.media ?? DEFAULT_MEDIA);
+        const saved = data.media ?? DEFAULT_MEDIA;
+        setBaseline(saved);
+        setMedia(readStepDraft(draftKey, (v): v is MediaCapability => v === "photo" || v === "photo_video") ?? saved);
         setLoad({ status: "ready" });
       })
       .catch((err: unknown) => setLoad({ status: "error", message: err instanceof Error ? err.message : "讀取失敗，請稍後再試。" }));
@@ -39,11 +46,15 @@ export function MediaStep({ nav, back, onNext }: { nav: StepNav; back?: BarBack;
 
   useEffect(reload, [brandId]);
 
+  useStepDraft(draftKey, load.status === "ready", media, baseline);
+
   async function save() {
     setSaving(true);
     setError(null);
     try {
       await saveOnboardingMedia(brandId, media);
+      clearStepDraft(draftKey);
+      setBaseline(media);
       onNext();
     } catch (err) {
       setError(err instanceof Error ? err.message : "處理失敗，請稍後再試。");
@@ -62,13 +73,13 @@ export function MediaStep({ nav, back, onNext }: { nav: StepNav; back?: BarBack;
         </div>
       ) : (
         <section className="rounded-xl border border-border bg-card px-[22px] py-5">
-          <MediaPick value={media} disabled={load.status !== "ready"} onChange={setMedia} />
+          <MediaPick value={media} busy={load.status !== "ready"} onChange={setMedia} />
           <p className="mt-3 text-[11.5px] text-muted-foreground">之後拍得出影片了，回到「品牌資料」改就好。</p>
         </section>
       )}
       {error && <p role="alert" className="text-sm text-danger">{error}</p>}
       <OnboardingBar back={back}>
-        <BarNext label={saving ? "處理中…" : "下一步"} disabled={load.status !== "ready" || saving} onClick={() => void save()} />
+        <BarNext label={saving ? "處理中…" : "下一步"} busy={load.status === "loading" || saving} disabledReason={load.status === "error" ? "先重新載入素材資料" : null} onClick={() => void save()} />
       </OnboardingBar>
     </div>
   );
@@ -77,11 +88,11 @@ export function MediaStep({ nav, back, onNext }: { nav: StepNav; back?: BarBack;
 /** Prototype `.pick` + `.pk`: two single-choice cards, radio keyboard pattern (the picked card is the tab stop;
  * arrows and Home/End move to and pick a card). The kit's `PickCard` is not on `components/ads`' public entry, and
  * this prototype's card is the compact `.pk` (title + one note line, no icon tile). */
-function MediaPick({ value, disabled, onChange }: { value: MediaCapability; disabled: boolean; onChange: (v: MediaCapability) => void }) {
+function MediaPick({ value, busy, onChange }: { value: MediaCapability; busy: boolean; onChange: (v: MediaCapability) => void }) {
   const ref = useRef<HTMLDivElement>(null);
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     const keys = ["ArrowRight", "ArrowDown", "ArrowLeft", "ArrowUp", "Home", "End"];
-    if (disabled || !keys.includes(e.key) || !ref.current) return;
+    if (busy || !keys.includes(e.key) || !ref.current) return;
     e.preventDefault();
     const radios = Array.from(ref.current.querySelectorAll<HTMLButtonElement>("[role=radio]"));
     const at = radios.indexOf(document.activeElement as HTMLButtonElement);
@@ -97,7 +108,7 @@ function MediaPick({ value, disabled, onChange }: { value: MediaCapability; disa
       {OPTIONS.map(([key, title, note]) => {
         const checked = value === key;
         return (
-          <button
+          <Button
             key={key}
             type="button"
             role="radio"
@@ -105,7 +116,7 @@ function MediaPick({ value, disabled, onChange }: { value: MediaCapability; disa
             data-slot="pick-card"
             data-value={key}
             data-variant={checked ? "picked" : "open"}
-            disabled={disabled}
+            busy={busy}
             tabIndex={checked ? 0 : -1}
             onClick={() => onChange(key)}
             className={cn(
@@ -115,7 +126,7 @@ function MediaPick({ value, disabled, onChange }: { value: MediaCapability; disa
           >
             <b className="text-sm font-semibold">{title}</b>
             <span className="text-xs text-muted-foreground">{note}</span>
-          </button>
+          </Button>
         );
       })}
     </div>
