@@ -5,6 +5,7 @@ import {
   type ActiveJob,
   type ActiveJobsSnapshot,
 } from "@/lib/jobsApi";
+import { formatInstant, useOrgClock } from "@/lib/orgClock";
 import { cn } from "@/lib/utils";
 import { Button } from "./ui/button";
 import { WorkerStoppedNotice } from "./WorkerStoppedNotice";
@@ -49,14 +50,6 @@ function label(job: ActiveJob): string {
 function elapsed(seconds: number | null): string {
   if (seconds === null || seconds < 60) return "剛開始";
   return `約 ${Math.round(seconds / 60)} 分`;
-}
-
-/** `M/D HH:MM`, browser-local — the same short form the top bar's sync time uses. */
-function readAt(iso: string): string {
-  const d = new Date(iso);
-  const hh = String(d.getHours()).padStart(2, "0");
-  const mm = String(d.getMinutes()).padStart(2, "0");
-  return `${String(d.getMonth() + 1).padStart(2, "0")}/${String(d.getDate()).padStart(2, "0")} ${hh}:${mm}`;
 }
 
 /** What is happening right now (the first running job; the rest wait), not a bare count.
@@ -157,6 +150,7 @@ function ReadFailedBox({ onRetry }: { onRetry: () => void }) {
  * Read-only: rows only link to the screen the job belongs to. Layout primitives only (the
  * shell may not import the ads kit). */
 export function ActiveJobsBell() {
+  const clock = useOrgClock();
   const [state, setState] = useState<ReadState>({ status: "loading" });
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -260,7 +254,7 @@ export function ActiveJobsBell() {
                 </div>
               )}
               <p className="mb-1.5 mt-0.5 text-[11.5px] text-muted-foreground">
-                排隊 {state.snapshot.total} 件・讀取於 {readAt(state.snapshot.generated_at)}
+                排隊 {state.snapshot.total} 件・讀取於 {formatInstant(state.snapshot.generated_at, clock.timezone, "md_hm")}
                 {state.snapshot.other_count > 0 && `（其中 ${state.snapshot.other_count} 件是系統或其他帳號的工作）`}
               </p>
               {state.snapshot.data.length === 0 ? (

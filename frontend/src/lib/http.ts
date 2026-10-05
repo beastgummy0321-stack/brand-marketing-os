@@ -36,7 +36,7 @@ const PENDING_PATH_TTL_MS = 10 * 60 * 1000;
 function rememberPendingPath(): void {
   const path = window.location.pathname.replace(/^\/app\/?/, "/") + window.location.search;
   if (path && path !== "/login") {
-    sessionStorage.setItem(PENDING_PATH_KEY, JSON.stringify({ path, at: Date.now() }));
+    sessionStorage.setItem(PENDING_PATH_KEY, JSON.stringify({ path, at: Date.now() })); // ELAPSED_OK: stamp for the pending-path TTL, never printed
   }
 }
 
@@ -50,7 +50,7 @@ export function takePendingPath(): string | null {
   try {
     const { path, at } = JSON.parse(raw) as { path?: unknown; at?: unknown };
     if (typeof path !== "string" || typeof at !== "number") return null;
-    return Date.now() - at > PENDING_PATH_TTL_MS ? null : path;
+    return Date.now() - at > PENDING_PATH_TTL_MS ? null : path; // ELAPSED_OK: pending-path TTL (elapsed ms)
   } catch {
     return null;
   }

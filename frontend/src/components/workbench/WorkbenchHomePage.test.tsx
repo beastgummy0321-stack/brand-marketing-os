@@ -11,7 +11,11 @@ vi.mock("@/lib/workbenchApi", async () => {
   return { ...actual, listPacks: vi.fn(), closePack: vi.fn() };
 });
 vi.mock("@/components/layout/WorkspaceContext", () => ({
-  useWorkspace: () => ({ brands: [{ brand_id: "brd_1", brand_name: "測試品牌" }] }),
+  useWorkspace: () => ({
+    brands: [{ brand_id: "brd_1", brand_name: "測試品牌" }],
+    // F50-I14: the org is in Taipei whatever zone the test runner is in.
+    identity: { org: { id: "org_1", timezone: "Asia/Taipei", today: "2026-10-04" } },
+  }),
 }));
 
 import { closePack, listPacks, type PackCard } from "@/lib/workbenchApi";

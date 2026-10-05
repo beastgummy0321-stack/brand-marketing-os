@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/components/layout/WorkspaceContext", () => ({
   useWorkspace: () => ({
-    identity: { user: { id: "user-1" }, org: { id: "org-1" } },
+    identity: { user: { id: "user-1" }, org: { id: "org-1", timezone: "Asia/Taipei", today: "2026-10-04" } },
     scope: "user-1:org-1",
     brands: [{ brand_id: "brd_1", brand_name: "測試品牌" }],
     brandsLoading: false,
@@ -110,6 +110,11 @@ describe("CockpitPage 資料時間與歸因", () => {
   it("帳號拉取成功時寫更新時間", async () => {
     view(spend({ last_pull_at: hoursAgo(2) }));
     expect(await screen.findByText("更新於 2 小時前")).toBeTruthy();
+  });
+
+  it("past 24 hours the stamp is the org clock's MM/DD HH:mm (F50-I14): 00:30Z prints 08:30 in Taipei", async () => {
+    view(spend({ last_pull_at: "2026-01-01T00:30:00Z" }));
+    expect(await screen.findByText("更新於 01/01 08:30")).toBeTruthy();
   });
 
   it("兩個時間都沒有時才寫尚未成功拉取", async () => {

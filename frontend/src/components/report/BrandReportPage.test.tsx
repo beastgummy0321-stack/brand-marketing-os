@@ -5,6 +5,10 @@ import { fetchBrandReport, generateBrandReport, type BrandReportResponse } from 
 import { BrandReportPage } from "./BrandReportPage";
 
 vi.mock("@/lib/brandReportApi", () => ({ fetchBrandReport: vi.fn(), generateBrandReport: vi.fn() }));
+// F50-I14: the org is in Taipei whatever zone the test runner is in.
+vi.mock("@/components/layout/WorkspaceContext", () => ({
+  useWorkspace: () => ({ identity: { org: { id: "org_1", timezone: "Asia/Taipei", today: "2026-10-04" } } }),
+}));
 
 const READY: BrandReportResponse = {
   report: {
@@ -63,5 +67,13 @@ describe("BrandReportPage regenerate failure (F47-I03, drill-10 甲 報告 #4)",
     vi.mocked(fetchBrandReport).mockRejectedValue(new Error("伺服器忙碌中。"));
     renderPage();
     expect(await screen.findByText("讀取失敗")).toBeTruthy();
+  });
+});
+
+describe("BrandReportPage 生成日期 (F50-I14, Contract K)", () => {
+  it("prints the org's calendar day: generated at 2026-10-03T23:30Z is 2026/10/04 in Taipei", async () => {
+    vi.mocked(fetchBrandReport).mockResolvedValue({ ...READY, report: { ...READY.report!, generated_at: "2026-10-03T23:30:00Z" } });
+    renderPage();
+    expect(await screen.findByText(/生成日期 2026\/10\/04・/)).toBeTruthy();
   });
 });

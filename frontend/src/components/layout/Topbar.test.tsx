@@ -71,7 +71,7 @@ describe("Topbar sync status", () => {
     expect(screen.queryByText(/最近同步|尚未同步/)).toBeNull();
   });
 
-  it("有資料：綠點＋M/D HH:MM（瀏覽器本地時區）＋待處理晶片，連去 connections", async () => {
+  it("有資料：綠點＋M/D HH:MM（組織時區，F50-I14）＋待處理晶片，連去 connections", async () => {
     vi.mocked(getStatusSummary).mockResolvedValue({
       last_success_at: "2026-09-19T14:40:00Z",
       attention: { count: 0, note: null },
@@ -80,12 +80,19 @@ describe("Topbar sync status", () => {
     renderTopbar();
     const link = await screen.findByRole("link", { name: /最近同步/ });
     expect(link.getAttribute("href")).toBe("/brands/brd_bughunt/ads/connections");
-    const d = new Date("2026-09-19T14:40:00Z");
-    const expected = `最近同步 ${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-    expect(link.textContent).toContain(expected);
+    expect(link.textContent).toContain("最近同步 9/19 22:40");
     expect(link.textContent).toContain("3 項待處理");
     expect(link.querySelector(".bg-success")).toBeTruthy();
     expect(link.querySelector(".bg-warning")).toBeNull();
+  });
+
+  it("prints 08:30 for 00:30Z with the org in Taipei, whatever the runner's zone (F50-I14, Contract K)", async () => {
+    vi.mocked(getStatusSummary).mockResolvedValue({
+      last_success_at: "2026-10-03T00:30:00Z", attention: { count: 0, note: null }, open_items: 0,
+    });
+    renderTopbar();
+    const link = await screen.findByRole("link", { name: /最近同步/ });
+    expect(link.textContent).toContain("最近同步 10/3 08:30");
   });
 
   it("last_success_at 為 null：「尚未同步」", async () => {

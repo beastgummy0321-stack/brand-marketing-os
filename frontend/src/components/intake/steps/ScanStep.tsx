@@ -12,8 +12,9 @@ const POLL_MS = 1000;
 type View =
   /** A request is in flight (entry read, start, retry): the spinner row, no timer. */
   | { kind: "busy" }
-  /** The job runs: the spinner row, read again after `POLL_MS`. */
-  | { kind: "running"; at: number }
+  /** The job runs: the spinner row, read again after `POLL_MS`; `read` counts the reads so each one is a new
+   * view (it re-arms the poll timer) — a counter, not a clock (F50-I14). */
+  | { kind: "running"; read: number }
   | { kind: "failed"; message: string | null }
   | { kind: "done"; scan: OnboardingScan };
 
@@ -37,7 +38,7 @@ export function ScanStep({ brandId, nav, back, onNext }: { brandId: string; nav:
     if (scan.status === "done") setView({ kind: "done", scan });
     else if (scan.status === "failed") setView({ kind: "failed", message: scan.error });
     // "none" right after a start = the job is queued but not picked up yet: keep reading.
-    else setView({ kind: "running", at: Date.now() });
+    else setView((prev) => ({ kind: "running", read: prev.kind === "running" ? prev.read + 1 : 0 }));
   }
 
   function fail(err: unknown) {

@@ -13,6 +13,11 @@ import {
 } from "@/lib/productsApi";
 import { ProductDetailPage } from "./ProductDetailPage";
 
+// F50-I14: the org is in Taipei whatever zone the test runner is in.
+vi.mock("@/components/layout/WorkspaceContext", () => ({
+  useWorkspace: () => ({ identity: { org: { id: "org_1", timezone: "Asia/Taipei", today: "2026-10-04" } } }),
+}));
+
 vi.mock("@/lib/productsApi", async () => {
   const actual = await vi.importActual<typeof import("@/lib/productsApi")>("@/lib/productsApi");
   return {
@@ -52,7 +57,7 @@ const DETAIL: ProductDetailBundle = {
 beforeEach(() => {
   vi.mocked(fetchProductDetail).mockReset().mockResolvedValue(DETAIL);
   vi.mocked(fetchResearchStatus).mockReset().mockResolvedValue({
-    status: "done", stage: "", started_at: "", usual_range_text: "", error: null, added_count: null, price_created: false,
+    status: "done", stage: "", started_at: null, usual_range_text: "", error: null, added_count: null, price_created: false,
   });
   vi.mocked(startRescan).mockReset();
   vi.mocked(fetchProductHandoffPrompt).mockReset().mockResolvedValue({ prompt_text: "請幫我調研這個商品" });
@@ -163,5 +168,54 @@ describe("ProductDetailPage 經濟數字 (F50-I04: percents stored 0–100)", ()
     );
     const label = await screen.findByText("成交率");
     expect(label.nextElementSibling?.textContent).toContain("20%");
+  });
+});
+
+describe("ProductDetailPage on the org clock, no invented job start (F50-I14, Contract K; intake #10)", () => {
+  const job = (overrides: Record<string, unknown>) => ({
+    status: "running", stage: "讀取網址中", started_at: null, usual_range_text: "30 到 60 秒", error: null,
+    added_count: null, price_created: false, ...overrides,
+  }) as Awaited<ReturnType<typeof fetchResearchStatus>>;
+
+  it("a fact confirmed at 2026-10-03T23:30Z prints the Taipei day 2026/10/04", async () => {
+    vi.mocked(fetchProductDetail).mockResolvedValue({
+      ...DETAIL, facts: [{ ...DETAIL.facts[0], confirmed_at: "2026-10-03T23:30:00Z" }],
+    });
+    renderPage();
+    const details = (await screen.findByText(/詳細（確認人/)).closest("details")!;
+    expect(details.textContent).toContain("確認時間：2026/10/04");
+  });
+
+  it("a research job with status unknown shows no row and no elapsed counter", async () => {
+    vi.mocked(fetchResearchStatus).mockResolvedValue(job({ status: "unknown" }));
+    renderPage();
+    await screen.findByText(/詳細（確認人/);
+    await waitFor(() => expect(fetchResearchStatus).toHaveBeenCalled());
+    expect(screen.queryByText(/AI 正在調研中/)).toBeNull();
+    expect(screen.queryByText(/已等/)).toBeNull();
+  });
+
+  it("a running job with no real start says what runs without 「已等 X 秒」", async () => {
+    vi.mocked(fetchResearchStatus).mockResolvedValue(job({ started_at: null }));
+    renderPage();
+    expect(await screen.findByText(/AI 正在調研中：讀取網址中/)).toBeTruthy();
+    expect(screen.queryByText(/已等/)).toBeNull();
+  });
+
+  it("a running job with a real start counts from that start", async () => {
+    vi.mocked(fetchResearchStatus).mockResolvedValue(job({ started_at: "2026-01-01T00:00:00Z" }));
+    renderPage();
+    expect(await screen.findByText(/已等 \d+ 秒（通常範圍 30 到 60 秒）/)).toBeTruthy();
+  });
+
+  it("after 「AI 再次調研」 the row is the server's job state, read again at once — never a made-up start", async () => {
+    vi.mocked(startRescan).mockResolvedValue(undefined);
+    renderPage();
+    fireEvent.change(await screen.findByLabelText("再次調研網址"), { target: { value: "https://example.com/p" } });
+    vi.mocked(fetchResearchStatus).mockClear().mockResolvedValue(job({ stage: "伺服器說的階段", started_at: null }));
+    fireEvent.click(screen.getByRole("button", { name: /AI 再次調研/ }));
+    expect(await screen.findByText(/AI 正在調研中：伺服器說的階段/)).toBeTruthy();
+    expect(fetchResearchStatus).toHaveBeenCalled();
+    expect(screen.queryByText(/已等/)).toBeNull();
   });
 });

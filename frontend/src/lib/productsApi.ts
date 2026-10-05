@@ -98,18 +98,21 @@ export interface ProductDeleteImpact {
  * so the server does not claim done. `started_at` is the real start (or queue) time while
  * running／waiting; with `unknown` (and a done／failed job that made no AI call) the server sends
  * null rather than a made-up "now" — the page drops the job in those states and never reads it.
- * It stays typed `string` because `ResearchProgressRow` (outside F50-I07) reads it while running. */
+ * F50-I14: typed nullable, and the page never builds this state itself (it re-reads the server's). */
 export type ResearchJobStatus = "waiting" | "running" | "done" | "failed" | "unknown";
 
 export interface ResearchJobState {
   status: ResearchJobStatus;
   stage: string;
-  started_at: string;
+  started_at: string | null;
   usual_range_text: string;
   error: string | null;
   added_count: number | null;
   price_created: boolean;
 }
+
+/** A research job the progress row shows: only the running／waiting shape (`ResearchProgressRow`). */
+export type ActiveResearchJob = ResearchJobState & { status: "running" | "waiting" };
 
 /** 詳情整包（原型合併版，見檔頭說明）：`ProductDetail` 契約欄位＋四分頁內容一次帶回。 */
 export interface ProductDetailBundle {

@@ -3,6 +3,7 @@ import { EmptyState } from "@/components/layout/EmptyState";
 import { Pager } from "@/components/layout/Pager";
 import { VisualSpecWarnings } from "@/components/workbench";
 import { deleteFact, type LibraryBrandFact } from "@/lib/libraryApi";
+import { formatInstant, useOrgClock } from "@/lib/orgClock";
 import { usePagination } from "@/lib/usePagination";
 import { cn } from "@/lib/utils";
 import { Badge } from "../shared/Badge";
@@ -208,6 +209,8 @@ function FactCard({
   onConfirm?: () => void;
   onChanged: () => void;
 }) {
+  // F50-I14 (Contract K): the confirmation day is the org's calendar day, not the UTC date of the instant.
+  const clock = useOrgClock();
   return (
     <li className="flex flex-col gap-2 rounded-md border border-border bg-card p-4 shadow-[var(--shadow-card)]">
       <div className="flex items-start justify-between gap-3">
@@ -253,7 +256,7 @@ function FactCard({
             <span className="mx-1.5" aria-hidden="true">
               ・
             </span>
-            確認時間：{fact.confirmed_at ? fact.confirmed_at.slice(0, 10) : "—"}
+            確認時間：{formatInstant(fact.confirmed_at, clock.timezone, "ymd") || "—"}
             <span className="mx-1.5" aria-hidden="true">
               ・
             </span>

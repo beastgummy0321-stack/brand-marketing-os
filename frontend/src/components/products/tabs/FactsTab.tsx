@@ -1,13 +1,16 @@
 import { useState } from "react";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { Pager } from "@/components/layout/Pager";
-import { deleteProductFact, type ProductFact, type ResearchJobState } from "@/lib/productsApi";
+import { deleteProductFact, type ActiveResearchJob, type ProductFact, type ResearchJobState } from "@/lib/productsApi";
+import { formatInstant, useOrgClock } from "@/lib/orgClock";
 import { usePagination } from "@/lib/usePagination";
 import { Badge } from "../shared/Badge";
 import { InlineDeleteButton } from "../shared/InlineDeleteButton";
-import { ResearchProgressRow } from "../shared/ResearchProgressRow";
+import { ResearchFailedRow, ResearchProgressRow } from "../shared/ResearchProgressRow";
 import { FactConfirmPanel } from "../panels/FactConfirmPanel";
 import { FactPanel } from "../panels/FactPanel";
+
+const isActive = (job: ResearchJobState): job is ActiveResearchJob => job.status === "running" || job.status === "waiting";
 
 type PanelState =
   | { mode: "closed" }
@@ -42,7 +45,8 @@ export function FactsTab({
 
   return (
     <div className="flex flex-col gap-6">
-      {job && <ResearchProgressRow job={job} onDismissFailed={onDismissFailedJob} />}
+      {job && isActive(job) && <ResearchProgressRow job={job} />}
+      {job?.status === "failed" && <ResearchFailedRow error={job.error} onDismiss={onDismissFailedJob} />}
 
       <div className="flex items-center justify-between">
         <h2 className="font-display text-lg text-foreground">產品事實</h2>
@@ -167,6 +171,8 @@ function FactCard({
   onConfirm?: () => void;
   onChanged: () => void;
 }) {
+  // F50-I14 (Contract K): the confirmation day is the org's calendar day, not the UTC date of the instant.
+  const clock = useOrgClock();
   return (
     <li className="flex flex-col gap-2 rounded-md border border-border bg-card p-4 shadow-[var(--shadow-card)]">
       <div className="flex items-start justify-between gap-3">
@@ -205,7 +211,7 @@ function FactCard({
             <span className="mx-1.5" aria-hidden="true">
               ・
             </span>
-            確認時間：{fact.confirmed_at ? fact.confirmed_at.slice(0, 10) : "—"}
+            確認時間：{formatInstant(fact.confirmed_at, clock.timezone, "ymd") || "—"}
             <span className="mx-1.5" aria-hidden="true">
               ・
             </span>

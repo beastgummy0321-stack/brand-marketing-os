@@ -5,7 +5,8 @@ import { Textarea } from "@/components/layout/ui/textarea";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { Skeleton } from "@/components/layout/Skeleton";
 import { COORDINATE_DIMENSIONS, type Coordinate } from "@/lib/coordinatesApi";
-import { formatMetaRoas, formatMoney, formatPercent, formatSyncTime } from "@/lib/format";
+import { formatMetaRoas, formatMoney, formatPercent } from "@/lib/format";
+import { formatInstant, useOrgClock } from "@/lib/orgClock";
 import { fetchMetaBackfillStatus, startMetaBackfill } from "@/lib/metaApi";
 import {
   fetchHistory,
@@ -233,6 +234,7 @@ function HistoryCardItem({
   coordinates: Coordinate[];
   onSkip: () => void;
 }) {
+  const clock = useOrgClock();
   const [values, setValues] = useState<HistoryCoordinateKeys>(card.coordinates);
   const [note, setNote] = useState(card.owner_note ?? "");
   const [saved, setSaved] = useState<TagHistoryAdResult | null>(null);
@@ -330,7 +332,7 @@ function HistoryCardItem({
           </label>
           {error && <p className="text-sm text-danger">{error}</p>}
           {saved && (
-            <p className="text-sm text-success">已記錄・{formatSyncTime(saved.tagged_at)}</p>
+            <p className="text-sm text-success">已記錄・{formatInstant(saved.tagged_at, clock.timezone, "md_hm")}</p>
           )}
           <div className="flex gap-2">
             <Button type="button" disabled={saving} onClick={() => void submit()}>

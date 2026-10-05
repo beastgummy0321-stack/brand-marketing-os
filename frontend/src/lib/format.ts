@@ -1,5 +1,6 @@
 /** 共用數字格式化（票 02 起沿用，票 03 抽出給駕駛艙 KPI 卡共用）。
  * null 一律代表「沒得算」，不是 0（鐵則 16）——顯示「累積中」而不是 0 或空白。 */
+import { formatInstant } from "./orgClock";
 
 export function formatCurrency(value: number | null): string {
   if (value === null) return "累積中";
@@ -53,14 +54,29 @@ export function formatMomPct(value: number | null): string {
   return `（環比 ${sign}${value}%）`;
 }
 
-/** 最後同步時間（票 07-auto-sync）：ISO 時間字串 → `MM/DD HH:mm`（本機時區）。 */
-/** 同步時間的人話顯示（R6-2）：避免只給使用者一串 ISO 時間。 */
+/** F50-I14 (Contract K): seconds from an ISO instant to now, for elapsed counters only — the result is a
+ * duration, never printed as a date (dates go through `orgClock.formatInstant`). Also reads the
+ * `2026-10-01 15:10:33.055275+00:00` text Python prints. null when the instant is missing or unreadable, so a
+ * job with no real start (F50-I07 `unknown`, `started_at: null`) shows no counter instead of counting from now. */
+export function secondsSince(iso: string | null | undefined, now: number = Date.now()): number | null { // ELAPSED_OK: the default "now" of an elapsed-seconds count
+  if (!iso) return null;
+  const at = Date.parse(iso.trim().replace(" ", "T").replace(/(\.\d{3})\d+/, "$1")); // ELAPSED_OK: instant parsed only to subtract from now
+  return Number.isNaN(at) ? null : Math.max(0, Math.round((now - at) / 1000));
+}
+
+/** 同步時間的人話顯示（R6-2）：避免只給使用者一串 ISO 時間。An elapsed formatter (hours since `iso`);
+ * "" when the instant is unreadable. */
 export function formatRelativeHours(iso: string): string {
-  const elapsedHours = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 3_600_000));
+  const seconds = secondsSince(iso);
+  if (seconds === null) return "";
+  const elapsedHours = Math.floor(seconds / 3600);
   return elapsedHours === 0 ? "不到 1 小時前" : elapsedHours + " 小時前";
 }
-export function formatSyncTime(iso: string): string {
-  const d = new Date(iso);
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+
+/** 「更新於」 stamps (workbench packs, 經營概況 freshness): relative under 24 hours, else `MM/DD HH:mm` on the
+ * org's clock (`tz` = `useOrgClock().timezone`). "" when the instant is missing or unreadable. */
+export function formatUpdatedAt(iso: string | null | undefined, tz: string): string {
+  const seconds = secondsSince(iso);
+  if (seconds === null) return "";
+  return seconds < 24 * 3600 ? formatRelativeHours(iso as string) : formatInstant(iso, tz, "md_hm");
 }

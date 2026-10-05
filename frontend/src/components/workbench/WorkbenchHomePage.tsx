@@ -21,7 +21,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/layout/ui/dropdown-menu";
 import { useWorkspace } from "@/components/layout/WorkspaceContext";
-import { formatRelativeHours, formatSyncTime } from "@/lib/format";
+import { formatUpdatedAt } from "@/lib/format";
+import { useOrgClock } from "@/lib/orgClock";
 import { cn } from "@/lib/utils";
 import {
   closePack,
@@ -73,12 +74,6 @@ const QUICK_START: { part: ProductPart; label: string; hint: string }[] = [
   { part: "video_script", label: "腳本", hint: "短影音腳本、分鏡、拍攝企劃" },
 ];
 
-/** 相對時間（<24h）／絕對時間，工作檯入口與任務包頁共用一份規則（F02-I08 沿用，不重寫）。 */
-export function updatedLabel(iso: string): string {
-  const elapsedHours = (Date.now() - new Date(iso).getTime()) / 3_600_000;
-  return elapsedHours < 24 ? formatRelativeHours(iso) : formatSyncTime(iso);
-}
-
 type LoadState =
   | { status: "loading" }
   | { status: "error"; message: string }
@@ -89,6 +84,7 @@ type LoadState =
  * 等欄位全部照後端 `PackCard` 給的值顯示，這裡不重新計算。 */
 export function WorkbenchHomePage({ brandId }: { brandId: string }) {
   const { brands } = useWorkspace();
+  const clock = useOrgClock();
   const navigate = useNavigate();
   const brand = brands.find((b) => b.brand_id === brandId);
 
@@ -213,7 +209,7 @@ export function WorkbenchHomePage({ brandId }: { brandId: string }) {
                   {pack.sets_done} / {pack.sets_total}（{pack.progress_pct}%）
                 </td>
                 <td className="whitespace-nowrap px-3 py-2 text-muted-foreground">
-                  {updatedLabel(pack.updated_at)}
+                  {formatUpdatedAt(pack.updated_at, clock.timezone)}
                 </td>
                 <td className="whitespace-nowrap px-3 py-2 text-right">
                   <Button size="sm" onClick={() => navigate(`/brands/${brandId}/workbench/packs/${pack.id}`)}>
@@ -331,7 +327,7 @@ export function WorkbenchHomePage({ brandId }: { brandId: string }) {
                   <span className="min-w-0">
                     <span className="block truncate text-sm font-medium text-foreground">{pack.name}</span>
                     <span className="block text-xs text-muted-foreground">
-                      {pack.source_label} ・ 更新{updatedLabel(pack.updated_at)}
+                      {pack.source_label} ・ 更新{formatUpdatedAt(pack.updated_at, clock.timezone)}
                     </span>
                   </span>
                   <PackStatusBadge pack={pack} className="shrink-0" />
@@ -385,7 +381,10 @@ export function PackCardTile({
   onClose: () => Promise<unknown> | void;
 }) {
   const navigate = useNavigate();
+  const clock = useOrgClock();
   const [confirming, setConfirming] = useState(false);
+  // 相對時間（<24h）／組織時鐘的絕對時間（`formatUpdatedAt`）; "" for the free-job preview, which has no pack yet.
+  const updated = formatUpdatedAt(pack.updated_at, clock.timezone);
   const goto = () => navigate(`/brands/${brandId}/workbench/packs/${pack.id}`);
   const next = pack.next_step;
   // drill-10 乙 #16: 下一步 opens the set and the part that needs it, not the pack overview.
@@ -466,7 +465,7 @@ export function PackCardTile({
       </div>
 
       <div className="flex items-center justify-between pt-1">
-        <span className="text-xs text-muted-foreground">更新於 {updatedLabel(pack.updated_at)}</span>
+        <span className="text-xs text-muted-foreground">{updated ? `更新於 ${updated}` : ""}</span>
         <Button size="sm" onClick={goto}>
           繼續 →
         </Button>

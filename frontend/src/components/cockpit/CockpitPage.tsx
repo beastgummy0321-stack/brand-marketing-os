@@ -27,7 +27,8 @@ import {
   type WidgetId,
 } from "@/lib/dashboardLayout";
 import { fetchMetaSpend } from "@/lib/metaApi";
-import { formatMetaRoas, formatRelativeHours } from "@/lib/format";
+import { formatMetaRoas, formatUpdatedAt } from "@/lib/format";
+import { useOrgClock } from "@/lib/orgClock";
 import { LayoutEditor, metricLabels, widgetLabels } from "./LayoutEditor";
 import { ProductsBlock } from "./ProductsBlock";
 import {
@@ -58,6 +59,7 @@ const icons = {
 export function CockpitPage({ brandId }: { brandId: string }) {
   const { identity, scope, brands, brandsLoading, brandsError, refreshBrands } =
     useWorkspace();
+  const clock = useOrgClock();
   const brand = brands.find((b) => b.brand_id === brandId);
   const storageKey = layoutKey(identity.user.id, identity.org.id, brandId);
   const [layout, setLayout] = useState(() => {
@@ -137,12 +139,13 @@ export function CockpitPage({ brandId }: { brandId: string }) {
     );
   const total = meta.data?.total;
   // F31-I03: 「尚未成功拉取」 only when nothing was ever read; rows read by another account's
-  // pull or a backfill still say when they were read.
+  // pull or a backfill still say when they were read. F50-I14: past 24 hours the stamp is the org clock's
+  // `MM/DD HH:mm` (`formatUpdatedAt`), not a growing hour count.
   const freshnessText = meta.data
     ? meta.data.last_pull_at
-      ? `更新於 ${formatRelativeHours(meta.data.last_pull_at)}`
+      ? `更新於 ${formatUpdatedAt(meta.data.last_pull_at, clock.timezone)}`
       : meta.data.data_pulled_at
-        ? `資料讀取於 ${formatRelativeHours(meta.data.data_pulled_at)}`
+        ? `資料讀取於 ${formatUpdatedAt(meta.data.data_pulled_at, clock.timezone)}`
         : "尚未成功拉取"
     : meta.isError
       ? "讀取失敗"
