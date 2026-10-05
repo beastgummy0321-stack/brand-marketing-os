@@ -50,6 +50,10 @@ export interface WorkspaceTotals {
   spend: number | null;
   results: number | null;
   cost_per_result: number | null;
+  /** F51 Contract F: the two ROAS bases over the same window (`roas_all_spend` 保守, `roas_tracked_spend` 樂觀); null
+   * whenever `spend` is null or no revenue is tracked. */
+  roas_all_spend?: number | null;
+  roas_tracked_spend?: number | null;
 }
 
 /** The draft checklist: 上限、預算、素材 x／y、上架 n／N (`launch_*` are 0／0 before approval). */

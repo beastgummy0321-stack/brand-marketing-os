@@ -37,7 +37,7 @@ function home(overrides: Partial<HomeOverview> = {}): HomeOverview {
   return {
     month: "2026-09", day_of_month: 23, days_in_month: 30, currency: "TWD", spent: 22000,
     money: {
-      purchases: 158, cost_per_purchase: 139.24, cap: { value: 450, basis: "own", break_even: 520 }, earn: 60163.5, earn_missing: [], excluded: [],
+      purchases: 158, cost_per_purchase: 139.24, cap: { value: 450, basis: "own", break_even: 520 }, earn_after_cost_and_ads: 60163.5, earn_missing: [], excluded: [],
       previous_same_period: { days: 22, purchases: 118, cost_per_purchase: 221.37 },
     },
     pace: { budget_amount: 60000, available: 23600, daily: [{ day: "2026-09-01", cumulative: 900 }, { day: "2026-09-22", cumulative: 22000 }], projected_month_end: 28695.65 },
@@ -419,7 +419,7 @@ describe("AdsHomePage (F28-I08 board D)", () => {
   it("zero campaigns and nothing spent: one empty card whose primary action is 建立活動; no board that could only print zeros", async () => {
     vi.mocked(getHomeOverview).mockResolvedValue(home({
       spent: null, campaigns: [], quality: null, timeline: [{ date: "2026-09-23", kind: "today", campaign_id: null, name: null, ready: null }],
-      money: { purchases: null, cost_per_purchase: null, cap: null, earn: null, earn_missing: ["no_purchase_campaign"], excluded: [], previous_same_period: null },
+      money: { purchases: null, cost_per_purchase: null, cap: null, earn_after_cost_and_ads: null, earn_missing: ["no_purchase_campaign"], excluded: [], previous_same_period: null },
       pace: { budget_amount: null, available: null, daily: [], projected_month_end: null },
     }));
     renderPage();
@@ -438,7 +438,7 @@ describe("AdsHomePage (F28-I08 board D)", () => {
   it("no campaign in progress and nothing spent, but campaigns closed this month (drill-11 N3): never 「還沒有活動」 or a first-run card", async () => {
     vi.mocked(getHomeOverview).mockResolvedValue(home({
       spent: null, campaigns: [], quality: null, closed_this_month: 3,
-      money: { purchases: null, cost_per_purchase: null, cap: null, earn: null, earn_missing: ["no_purchase_campaign"], excluded: [], previous_same_period: null },
+      money: { purchases: null, cost_per_purchase: null, cap: null, earn_after_cost_and_ads: null, earn_missing: ["no_purchase_campaign"], excluded: [], previous_same_period: null },
     }));
     renderPage();
     const rows = await screen.findByTestId("campaign-grid");

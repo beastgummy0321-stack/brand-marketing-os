@@ -110,8 +110,8 @@ function performance(): CampaignPerformance {
       revenue: null,
       cpa: null,
       ctr: null,
-      roas: null,
-      roas_conservative: null,
+      roas_tracked_spend: null,
+      roas_all_spend: null,
     },
     daily: [],
     groups: [],
@@ -565,7 +565,7 @@ it("native reported zero spend is distinct from missing spend", () => {
 function outcomeAdRow(overrides: Partial<CampaignPerformance["ads"][number]> = {}): CampaignPerformance["ads"][number] {
   return {
     ad_id: "aex_1", name: "廣告一", spend: 500, impressions: 1000, clicks: 20,
-    purchases: 2, revenue: 1500, cpa: 250, ctr: 0.02, roas: 3, roas_conservative: 3,
+    purchases: 2, revenue: 1500, cpa: 250, ctr: 0.02, roas_tracked_spend: 3, roas_all_spend: 3,
     spend_share: 1,
     ...overrides,
   };

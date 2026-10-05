@@ -218,6 +218,8 @@ export interface CampaignDetail extends EntityBinding, ExternalCampaignFields {
   capacity?: PlanCapacity | null;
   /** F50 Contract J (`app/ads/busy.py`): the planner call still running for this campaign, else `null`. */
   busy?: CampaignBusy | null;
+  /** F51 Contract F: the closeout sentence the learning ledger stored (`learning.closed_sentence`); `null` before closeout. */
+  learning_sentence?: string | null;
 }
 
 /** F50 Contract J: `since` = the ISO instant the running call started. */
@@ -622,8 +624,8 @@ export async function publishCampaign(
 // -- F03-I11：成效 -----------------------------------------------------------------------------
 
 /** 一列聚合數字——campaign 層總計、每日序列、每投放組／每廣告都是同一個形狀。`purchases`／
- * `revenue`／`cpa`／`ctr`／`roas`／`roas_conservative` 全部可能是 `null`——代表未追蹤，不是
- * 0（§0「never a percentage / never 0」的同一條精神）。 */
+ * `revenue`／`cpa`／`ctr`／`roas_tracked_spend`／`roas_all_spend` 全部可能是 `null`——代表未追蹤，不是
+ * 0（§0「never a percentage / never 0」的同一條精神）。F51 Contract F：ROAS 的 key 就是它的口徑代碼。 */
 export interface OutcomeBucket {
   spend: number;
   impressions: number;
@@ -633,9 +635,9 @@ export interface OutcomeBucket {
   cpa: number | null;
   ctr: number | null;
   /** 樂觀值——分母只算有追蹤到營收的花費。 */
-  roas: number | null;
+  roas_tracked_spend: number | null;
   /** 保守值——分母是這一組全部花費。兩個都給，畫面自己決定怎麼放大小字。 */
-  roas_conservative: number | null;
+  roas_all_spend: number | null;
 }
 
 export interface OutcomeDailyPoint extends OutcomeBucket {

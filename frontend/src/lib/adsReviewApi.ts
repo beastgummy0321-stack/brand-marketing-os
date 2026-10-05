@@ -7,7 +7,8 @@ export type ReviewStatus = "waiting" | "queued" | "running" | "ready" | "complet
 export interface ReviewSeries {
   metric_scope: string; attribution_key: string; currency: string | null; source: string;
   row_count: number; days_present: number;
-  metrics: Record<"spend" | "impressions" | "clicks" | "purchases" | "revenue" | "ctr" | "cpc" | "cpa" | "roas", number | null>;
+  /** F51 Contract F: `roas_platform` (platform-reported purchase value ÷ spend); a snapshot stored before F51 has `roas` instead and reads as unknown. */
+  metrics: Record<"spend" | "impressions" | "clicks" | "purchases" | "revenue" | "ctr" | "cpc" | "cpa" | "roas_platform", number | null>;
   known_counts: Record<string, number>;
 }
 // This entity's own result, over every row of one (metric_scope, currency) regardless of
@@ -22,6 +23,10 @@ export interface ReviewResultView {
 export interface ReviewPeriod {
   row_count: number; days_present: number; days_expected: number; missing_days: number;
   series: ReviewSeries[]; result_views?: ReviewResultView[];
+  /** F51 Contract F, added by the round read (never stored): the ad's own window spend (null value on an unknown
+   * day or two currencies) and its one result view (`triage._ad_view`). */
+  ad_spend?: { value: number | null; currency: string | null };
+  ad_result_view?: (Omit<ReviewResultView, "reason"> & { reason: ReviewResultView["reason"] | "needs_resync" | "mixed_currency" }) | null;
 }
 export interface CommerceEvidence {
   scope: string; start: string; end: string;

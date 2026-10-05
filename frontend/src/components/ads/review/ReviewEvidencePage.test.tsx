@@ -29,7 +29,7 @@ function period(overrides: Partial<ReviewPeriod> = {}): ReviewPeriod {
     series: [{
       metric_scope: "ad", attribution_key: "7d_click:omni_purchase", currency: "TWD", source: "graph",
       row_count: 14, days_present: 14,
-      metrics: { spend: 3000, impressions: 100, clicks: 10, purchases: 5, revenue: 4000, ctr: 1, cpc: 1, cpa: 600, roas: 1.3 },
+      metrics: { spend: 3000, impressions: 100, clicks: 10, purchases: 5, revenue: 4000, ctr: 1, cpc: 1, cpa: 600, roas_platform: 1.3 },
       known_counts: {},
     }],
     result_views: [{
@@ -66,7 +66,7 @@ function review(overrides: Partial<ReviewRound> = {}): ReviewRound {
     evidence_json: {
       target: { id: "aex_1", name: "撞車1150724", platform: "meta", source_account: "acc_1", native_id: "native_1" },
       window: { start: "2026-09-08", end: "2026-09-21", previous_start: "2026-08-25", previous_end: "2026-09-07", timezone: "Asia/Taipei", missing_days: [] },
-      current: period(), previous: period({ series: [{ metric_scope: "ad", attribution_key: "7d_click:omni_purchase", currency: "TWD", source: "graph", row_count: 14, days_present: 14, metrics: { spend: 2000, impressions: 80, clicks: 8, purchases: 8, revenue: 5000, ctr: 1, cpc: 1, cpa: 250, roas: 2.5 }, known_counts: {} }], result_views: [{ metric_scope: "ad", currency: "TWD", result_kind: "purchase", result_action: "omni_purchase", result_attribution: "7d_click", result_count: 8, cost_per_result: 250, days_present: 14, days_known: 14, reason: null }] }),
+      current: period(), previous: period({ series: [{ metric_scope: "ad", attribution_key: "7d_click:omni_purchase", currency: "TWD", source: "graph", row_count: 14, days_present: 14, metrics: { spend: 2000, impressions: 80, clicks: 8, purchases: 8, revenue: 5000, ctr: 1, cpc: 1, cpa: 250, roas_platform: 2.5 }, known_counts: {} }], result_views: [{ metric_scope: "ad", currency: "TWD", result_kind: "purchase", result_action: "omni_purchase", result_attribution: "7d_click", result_count: 8, cost_per_result: 250, days_present: 14, days_known: 14, reason: null }] }),
       commerce: { current: commerce(), previous: commerce({ order_summary: { ...commerce().order_summary, count: 65, order_net_amount: 61700, paid_net_amount: 60645 } }) },
       conditions: { history: "unknown", creative_snapshot: { copy_fields: { title: "舊標題", body: "舊內文" } }, binding_count: 0 },
       previous_review: null, source_review: null,

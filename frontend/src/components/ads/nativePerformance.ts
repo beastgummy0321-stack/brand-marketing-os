@@ -29,7 +29,8 @@ function aggregate(rows: NativeObservation[]): PerformanceBucket {
     return !rows.length || rows.some(row => row[key] === null) ? null : rows.reduce((total, row) => total + row[key]!, 0);
   }
   const spend = sum("spend"), impressions = sum("impressions"), clicks = sum("clicks"), purchases = sum("purchases"), revenue = sum("revenue");
-  return { spend, impressions, clicks, purchases, revenue, cpa: ratio(spend, purchases), ctr: ratio(clicks, impressions), roas: ratio(revenue, spend), roas_conservative: null };
+  // F51 Contract F: imported rows are summed only when every row is known, so revenue ÷ spend is the all-spend basis.
+  return { spend, impressions, clicks, purchases, revenue, cpa: ratio(spend, purchases), ctr: ratio(clicks, impressions), roas_all_spend: ratio(revenue, spend), roas_tracked_spend: null };
 }
 /** A selected native scope is the only aggregation boundary: never add parent and child observations. */
 export function nativePerformance(view?: ExternalView | null, scopeKey?: string): PerformanceView {

@@ -125,7 +125,7 @@ function buildTrendOption(daily: PerformanceView["daily"], native = false, curre
         type: "line",
         yAxisIndex: 1,
         connectNulls: false,
-        data: daily.map((d) => native ? d.roas : d.roas_conservative),
+        data: daily.map((d) => d.roas_all_spend),
         itemStyle: { color: CHART_COLOR_REVENUE },
       },
     ],
@@ -407,7 +407,7 @@ function PerformanceReady({
         <Kpi label="花費" value={money(t.spend)} caption={`累計花費・${source}`} />
         <Kpi label={labels.count} value={count(t.purchases)} caption={`累計${labels.conversion}・${source}`} />
         <Kpi label="CPA" value={cpa(t.cpa)} caption={`花費 ÷ ${labels.conversion}`} />
-        <Kpi label="ROAS" value={roas(native ? t.roas : t.roas_conservative)} caption={native ? "同一資料範圍營收 ÷ 花費" : `保守值・樂觀 ${formatMetaRoas(t.roas)}`} />
+        <Kpi label="ROAS" value={roas(t.roas_all_spend)} caption={native ? "同一資料範圍營收 ÷ 花費" : `保守值・樂觀 ${formatMetaRoas(t.roas_tracked_spend)}`} />
       </div>
 
       {adNotFound && <p className="text-sm text-muted-foreground">這則廣告沒有成效資料</p>}
@@ -454,7 +454,7 @@ function PerformanceReady({
             <tbody>{data.daily.length ? data.daily.map((day) => <tr key={day.day} className="border-t border-border">
               <td className="px-3 py-2">{day.day}</td><td className="px-3 py-2">{money(day.spend)}</td>
               <td className="px-3 py-2">{count(day.purchases)}</td><td className="px-3 py-2">{cpa(day.cpa)}</td>
-              <td className="px-3 py-2">{native ? roas(day.roas) : `${formatMetaRoas(day.roas_conservative)} ／ ${formatMetaRoas(day.roas)}`}</td>
+              <td className="px-3 py-2">{native ? roas(day.roas_all_spend) : `${formatMetaRoas(day.roas_all_spend)} ／ ${formatMetaRoas(day.roas_tracked_spend)}`}</td>
             </tr>) : <tr><td colSpan={5} className="px-3 py-6 text-center text-muted-foreground">還沒有每日資料。</td></tr>}</tbody>
           </table>
         </div>
@@ -492,7 +492,7 @@ function PerformanceReady({
                     <td className="px-3 py-2">{count(g.purchases)}</td>
                     <td className="px-3 py-2">{cpa(g.cpa)}</td>
                     <td className="px-3 py-2">
-                      {native ? roas(g.roas) : `${formatMetaRoas(g.roas_conservative)} ／ ${formatMetaRoas(g.roas)}`}
+                      {native ? roas(g.roas_all_spend) : `${formatMetaRoas(g.roas_all_spend)} ／ ${formatMetaRoas(g.roas_tracked_spend)}`}
                     </td>
                     <td className="px-3 py-2">{percent(g.ctr)}</td>
                     <td className="px-3 py-2">{percent(g.spend_share)}</td>

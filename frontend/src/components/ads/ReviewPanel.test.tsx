@@ -69,7 +69,7 @@ function period(): reviews.ReviewPeriod {
     series: [{ metric_scope: "ad", attribution_key: "7d_click", currency: null, source: "platform",
       row_count: 6, days_present: 6, known_counts: { spend: 6, purchases: 0 },
       metrics: { spend: 1234, impressions: 4000, clicks: 20, purchases: null,
-        revenue: null, ctr: 0.5, cpc: 61.7, cpa: null, roas: null } }],
+        revenue: null, ctr: 0.5, cpc: 61.7, cpa: null, roas_platform: null } }],
   };
 }
 function round(status: reviews.ReviewStatus = "waiting"): reviews.ReviewRound {
