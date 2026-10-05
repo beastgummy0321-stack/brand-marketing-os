@@ -22,6 +22,7 @@ import { HistoryPage } from "@/components/intake/HistoryPage";
 import { IntakeWizard } from "@/components/intake/IntakeWizard";
 import { InboxPage } from "@/components/inbox/InboxPage";
 import { LibraryPage } from "@/components/library/LibraryPage";
+import { ArchivedBrands } from "@/components/overview/ArchivedBrands";
 import { BrandCard } from "@/components/overview/BrandCard";
 import { ProductDetailPage } from "@/components/products/ProductDetailPage";
 import { BundlePage, ProductOnboarding, ProductsPage } from "@/components/intake";
@@ -706,6 +707,8 @@ function Overview() {
         </Link>
       </div>
       {content}
+      {/* F50-I17: archived brands, folded under the cards (hidden at 0); a restore refreshes the workspace brands. */}
+      <ArchivedBrands onRestored={refreshBrands} />
     </div>
   );
 }
