@@ -419,7 +419,7 @@ describe("AdsHomePage (F28-I08 board D)", () => {
 
   it("zero campaigns and nothing spent: one empty card whose primary action is 建立活動; no board that could only print zeros", async () => {
     vi.mocked(getHomeOverview).mockResolvedValue(home({
-      spent: 0, campaigns: [], quality: null, timeline: [{ date: "2026-09-23", kind: "today", campaign_id: null, name: null, ready: null }],
+      spent: null, campaigns: [], quality: null, timeline: [{ date: "2026-09-23", kind: "today", campaign_id: null, name: null, ready: null }],
       money: { purchases: null, cost_per_purchase: null, cap: null, earn_after_cost_and_ads: null, earn_missing: ["no_purchase_campaign"], excluded: [], previous_same_period: null },
       pace: { budget_amount: null, available: null, daily: [], projected_month_end: null },
     }));
