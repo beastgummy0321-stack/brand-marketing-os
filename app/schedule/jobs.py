@@ -499,8 +499,30 @@ def schedule_plan(org_id: str, brand_id: str, product_ids: list, platform: str, 
         )
 
 
+#: F50 Contract J：活動樹展開成功、但交給工作檯的任務包沒建起來時，這次 job 存的 code
+#: （定義在 `state`，`_latest_task_row` 讀它決定樹照常顯示）。
+PACK_FAILED_CODE = state.PACK_FAILED_CODE
+PACK_FAILED_TEXT = "活動樹展開了，但素材任務包沒有交給工作檯，請重新展開活動樹再試一次"
+
+
+def _record_pack_error(conn, tree_task_id: str, code: str, text: str) -> None:
+    """把交棒失敗的原因寫在樹那一列的 `structured_output_json.pack_error {code, text}`。
+    樹的 `structured_output_json` 本來不落地（tree.py 每次從 `rendered_output` 重算），
+    所以既有內容是物件就併進去、否則只放這一格；`status`／`error` 不動（那是供應商呼叫的
+    結果，`error=` 只准 gateway 寫）。同 `schedule_diagnosis` 寫回同一欄的既有寫法。"""
+    conn.execute(
+        "UPDATE llm_task SET structured_output_json ="
+        " CASE WHEN jsonb_typeof(structured_output_json) = 'object'"
+        "      THEN structured_output_json ELSE '{}'::jsonb END"
+        " || jsonb_build_object('pack_error', %s::jsonb)"
+        " WHERE id = %s",
+        (jsonb({"code": code, "text": text}), tree_task_id),
+    )
+    conn.commit()
+
+
 def schedule_tree(org_id: str, brand_id: str, plan_index: int, plan_task_id: str,
-                   campaign_period_id: str | None = None) -> None:
+                   campaign_period_id: str | None = None) -> background.Failed | None:
     """procrastinate task body（`background.schedule_tree`）——見 `schedule_plan()` 檔頭。
 
     fix round 1：`plan_task_id` 是 `routes._run_tree()` enqueue 當下釘住的那一列 id，不能
@@ -575,7 +597,8 @@ def schedule_tree(org_id: str, brand_id: str, plan_index: int, plan_task_id: str
         # {"copy": 1, "image_prompt": 1}`（一個節點就是一則廣告，需要一份選定文案、一份
         # 選定圖片提示詞）。重建這棵樹、取文件順序的最深層節點兩步，跟票 05 過去
         # 產內容那一步用的是同一組讀法：`tree_with_bindings()`＋`_leaf_ad_nodes()`。整包
-        # 一次 try/except：一次失敗的交棒只記一行 log，不影響已經 commit 的樹（tree row 由
+        # 一次 try/except：一次失敗的交棒不影響已經 commit 的樹，原因寫回樹那一列、job 以
+        # `pack_failed` 失敗（F50 Contract J，見下方 except）（tree row 由
         # `run_task()` 自己落地，pack 是它的下游，不是它的一部分）——不逐節點各自
         # try/except，pack 本來就是一次性寫入（`submit_pack()` 檔頭）。
         if row["status"] == "succeeded":
@@ -642,10 +665,19 @@ def schedule_tree(org_id: str, brand_id: str, plan_index: int, plan_task_id: str
                             for leaf in leaves
                         ],
                     })
-                except Exception:
+                except Exception as exc:  # noqa: BLE001 — any submit failure is this job's outcome
+                    # F50 Contract J（slots #14）：交棒失敗不再只記一行 log——原因寫在樹那一列
+                    # （`structured_output_json.pack_error`，`state._briefs_for_tree` 讀它顯示在
+                    # 每個 missing 節點上），job 以 `pack_failed` 失敗（鈴鐺算得到）。樹本身已經
+                    # 由 `run_task()` commit，留著；重新展開活動樹就是重交一次。
                     logging.getLogger(__name__).exception(
                         "workbench.submit_pack 失敗：tree_task_id=%s", row["id"],
                     )
+                    text = f"{PACK_FAILED_TEXT}（{type(exc).__name__}：{exc}）"
+                    conn.rollback()  # submit_pack 可能停在一個失敗的交易裡
+                    _record_pack_error(conn, row["id"], PACK_FAILED_CODE, text)
+                    return background.Failed(PACK_FAILED_CODE, text)
+    return None
 
 
 def schedule_diagnosis(org_id: str, brand_id: str) -> None:

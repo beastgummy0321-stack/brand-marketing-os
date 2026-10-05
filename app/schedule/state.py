@@ -14,7 +14,7 @@ from datetime import timedelta
 
 from app import workbench  # module entry point only (docs/contracts/workbench.md)
 from app.background import JOB_FAILED_MESSAGE
-from app.background import job_outcome as background_job_outcome
+from app.background import outcome as background_outcome
 from app.brand_intelligence import personas
 from app.brand_intelligence import repository as bi_repo
 from app.core import rule_cards
@@ -32,6 +32,9 @@ from app.schedule import tree_approval
 TASK_TYPE = "schedule_plan"
 # 票 09：選定一個方案之後展開成三層活動樹，第二個 task_type，同一支 llm_task 表。
 TREE_TASK_TYPE = "schedule_tree"
+# F50 Contract J（slots #14）：活動樹展開成功、交給工作檯的任務包卻沒建起來——`jobs.schedule_tree`
+# 以這個 code 失敗，原因寫在樹那一列的 `structured_output_json.pack_error {code, text}`。
+PACK_FAILED_CODE = "pack_failed"
 # 對照 app/methodology/README.md 既有的「檔期計畫生成」列，不新增列——展開活動樹用的到的
 # 平台知識（帳戶結構、AB 測試分流）跟出方案是同一批，沒有真的用到才新增專屬列（維護規則
 # 「只按消費拉動萃取」）。
@@ -87,18 +90,26 @@ def _latest_task_row(conn, brand_id: str, task_type: str) -> dict | None:
     Job still active while the newest row is not its running row (queued behind an older row,
     or past its AI call) → a running placeholder; job failed while the newest row carries no
     failure of its own → a failed placeholder with `JOB_FAILED_MESSAGE`. Otherwise (and always
-    in memory queue mode, `job_outcome` → None) the row as it is."""
+    in memory queue mode, `outcome` → None) the row as it is.
+
+    F50 Contract J: a tree job that failed with `pack_failed` did write its succeeded row (the
+    tree is real; only the hand-off to the workbench failed, its reason stored on that row), so
+    that row is shown as it is — bind／approve keep working and the briefs name the reason."""
     row = conn.execute(
         "SELECT * FROM llm_task WHERE brand_id = %s AND task_type = %s "
         "ORDER BY started_at DESC LIMIT 1",
         (brand_id, task_type),
     ).fetchone()
     newest = dict(row) if row is not None else None
-    outcome = background_job_outcome(job_lock(task_type, brand_id))
-    if outcome == "active" and (newest is None or newest["status"] != "running"):
+    found = background_outcome(job_lock(task_type, brand_id))
+    queue_state = found["state"] if found is not None else None
+    if queue_state == "running" and (newest is None or newest["status"] != "running"):
         return job_placeholder_row(task_type, "running")
-    if outcome == "failed" and (newest is None or newest["status"] in ("running", "succeeded")):
-        return job_placeholder_row(task_type, "failed")
+    if queue_state == "failed" and (newest is None or newest["status"] in ("running", "succeeded")):
+        pack_failed = (found is not None and found["code"] == PACK_FAILED_CODE
+                       and newest is not None and newest["status"] == "succeeded")
+        if not pack_failed:
+            return job_placeholder_row(task_type, "failed")
     return newest
 
 
@@ -276,13 +287,20 @@ def _briefs_for_tree(conn, org_id: str, brand_id: str, tree_row: dict | None) ->
     tree = binding_mod.tree_with_bindings(conn, tree_row, org_id, brand_id)
     leaves = _leaf_ad_nodes(tree["nodes"]) if tree["failure"] is None else []
 
+    # F50 Contract J（slots #14）：交棒失敗時 `jobs.schedule_tree` 把原因寫在樹那一列的
+    # `structured_output_json.pack_error`——沒有工單的節點顯示那個原因，不是 `None`。
+    stored = tree_row.get("structured_output_json")
+    pack_error = stored.get("pack_error") if isinstance(stored, dict) else None
+    missing_error = pack_error.get("text") if isinstance(pack_error, dict) else None
+
     entries = []
     for leaf in leaves:
         brief = by_node_key.get(leaf["node_key"])
         if brief is None:
             entries.append({
                 "node_key": leaf["node_key"], "node_name": leaf["name"], "brief_id": None,
-                "status": "missing", "last_error": None, "copy": None, "image_prompts": None,
+                "status": "missing", "last_error": missing_error, "copy": None,
+                "image_prompts": None,
             })
             continue
         copy_output = workbench.adopted_output(conn, org_id, brand_id, brief["id"], "copy")

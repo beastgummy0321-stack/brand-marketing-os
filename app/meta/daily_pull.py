@@ -109,6 +109,12 @@ def _pull_one_account(conn, org_id: str, token: str, account: dict) -> None:
     repo.mark_pull_succeeded(conn, org_id, account["id"])
 
 
+#: F50 Contract J：每日拉取有帳號失敗時，這次 job 存的 code。
+ACCOUNT_FAILED_CODE = "account_failed"
+#: F50 Contract J：37 個月補拉一列都沒寫到時，這次 job 存的 code（`background.Empty`）。
+NO_ROWS_CODE = "no_rows"
+
+
 def run_daily_pull(org_id: str) -> None:
     """procrastinate task body。每一句 SQL 都帶 org_id——一個組織的 run 不寫另一個組織
     的列（ADR 0038、票 05 done-check）。`org_id` 是必要參數，滿足 ADR 0038「這份 ADR
@@ -129,7 +135,11 @@ def run_daily_pull(org_id: str) -> None:
                 # procrastinate 把這次 run 記成失敗。
                 failed.append(f"{account['account_id']}：{exc}")
         if failed:
-            raise graph.GraphError("這次拉取有帳號失敗——" + "；".join(failed))
+            # F50 Contract J：用 `JobFailed("account_failed")` 拋——`background.register` 的
+            # wrapper 把 code 與句子存進 `background_job_result`，procrastinate 照樣把這次 run
+            # 記成失敗（鈴鐺的 failed_today 算得到）。
+            raise background.JobFailed(
+                ACCOUNT_FAILED_CODE, "這次拉取有帳號失敗——" + "；".join(failed))
 
 
 def _dispatch_daily_pull(timestamp: int) -> None:
@@ -207,9 +217,11 @@ def backfill(org_id: str, since: date, until: date) -> int:
     不呼叫 `mark_pull_succeeded`：`last_pull_at` 的意思是「今天的數字新到什麼時候」，
     補完去年六月不會讓今天的數字變新（同 `_pull_one_account` 那條誠實標準）。
 
-    錯誤往外丟，不逐帳號吞掉：`run_daily_pull` 吞是因為沒有人在看，這支是人手動跑的，
-    錯誤要當場看見（CLI 接住印人話，見 `__main__`）。每一段拉完就 commit，所以跑到一半
-    斷掉，已經補進去的月份留著；重跑同一個指令安全（唯一索引 upsert，覆蓋不重複）。
+    錯誤往外丟，不逐帳號吞掉：一個帳號 GraphError 時其他帳號照補，跑完拋一個
+    `BackfillError`（是 `graph.GraphError`：帶失敗的帳號、第一個失敗的 Graph code 與已寫列數，
+    F50 Contract J 的 `run_backfill` 用它分類）。錯誤要當場看見（CLI 接住印人話，見
+    `__main__`）。每一段拉完就 commit，所以跑到一半斷掉，已經補進去的月份留著；
+    重跑同一個指令安全（唯一索引 upsert，覆蓋不重複）。
 
     `graph.fetch_page` 的 `timeout=10.0` **維持不動**：ad 層一整個月要花多久，今天沒有
     任何實測數字，沒有量過就不准動那個數字（票 S1 D9）。"""
@@ -232,28 +244,63 @@ def backfill(org_id: str, since: date, until: date) -> int:
         if token is None:
             return 0  # 這個組織還沒接 Meta 權杖，沒有東西可補（比照 run_daily_pull）
         written = 0
+        failures: list[tuple[str, graph.GraphError]] = []
         for account in repo.list_bound_accounts(conn, org_id):
-            for level in _LEVELS:
-                for chunk_since, chunk_until in _month_chunks(since, until):
-                    rows = graph.list_entity_insights(
-                        token, account["account_id"], level, chunk_since, chunk_until
-                    )
-                    repo.upsert_entity_spend(conn, org_id, account["id"], rows)
-                    conn.commit()  # 一段一存：斷在第九個月，前八個月留著
-                    written += len(rows)
+            try:
+                for level in _LEVELS:
+                    for chunk_since, chunk_until in _month_chunks(since, until):
+                        rows = graph.list_entity_insights(
+                            token, account["account_id"], level, chunk_since, chunk_until
+                        )
+                        repo.upsert_entity_spend(conn, org_id, account["id"], rows)
+                        conn.commit()  # 一段一存：斷在第九個月，前八個月留著
+                        written += len(rows)
+            except graph.GraphError as exc:
+                # F50 Contract J：一個帳號失敗不擋其他帳號（比照 run_daily_pull），這個帳號剩下
+                # 的層級／月份不再打；跑完一定拋出去、指名是哪些帳號——不是逐帳號吞掉。
+                failures.append((account["account_id"], exc))
+        if failures:
+            raise BackfillError(failures, written)
         return written
 
 
-def run_backfill(org_id: str) -> None:
+class BackfillError(graph.GraphError):
+    """`backfill()` 有帳號失敗：`failures` = [(account_id, GraphError)]，`written` = 其他段落
+    已經寫進去（並 commit）的列數。`code`／`retryable` 取第一個失敗的，所以
+    `graph.classify_error` 讀它就是讀那個失敗的分類。"""
+
+    def __init__(self, failures: list[tuple[str, graph.GraphError]], written: int):
+        first = failures[0][1]
+        super().__init__(
+            "這次補拉有帳號失敗——" + "；".join(f"{acct}：{exc}" for acct, exc in failures),
+            first.code, retryable=first.retryable,
+        )
+        self.failures = failures
+        self.written = written
+
+
+def run_backfill(org_id: str) -> background.Empty | background.Failed | None:
     """procrastinate task body（票 past-ads/02，ADR 0067 §1.8）：把既有的 `backfill()`
-    包成背景工作，不是另一條拉取路徑——`since`／`until` 兩個都在這裡算好，`backfill()`
-    本身不改一個字（票面「Nothing else: no new pull loop, no second upsert path」）。
+    包成背景工作，不是另一條拉取路徑——`since`／`until` 兩個都在這裡算好，走同一個
+    `backfill()`（票面「Nothing else: no new pull loop, no second upsert path」）。
     `org_id` 是必要參數，滿足 ADR 0038（`TaskSignatureOrgIdGateTest` 只掃 "background."
-    前綴，這支就是這樣命名的，同 `run_daily_pull` 檔頭）。"""
+    前綴，這支就是這樣命名的，同 `run_daily_pull` 檔頭）。
+
+    F50 Contract J（R7 A12）：結果一定留下來，讓 `GET …/backfill` 分得出「沒跑過」「跑完
+    沒資料」「失敗」——有帳號失敗 → `Failed(<graph.classify_error 分類>, 帳號＋原因)`；一列
+    都沒寫到 → `Empty("no_rows")`；否則 done。done 不帶句子：`background.register` 的
+    wrapper 對 done 只存 state，日期範圍與列數由 `backfill_status` 讀表給。"""
     with connection() as conn:
         today = coresettings.today_for_org(conn, org_id=org_id)
     since = _earliest_pullable(today)
-    backfill(org_id, since, today)
+    try:
+        written = backfill(org_id, since, today)
+    except BackfillError as exc:
+        return background.Failed(graph.classify_error(exc), str(exc))
+    if written == 0:
+        return background.Empty(
+            NO_ROWS_CODE, f"{since} ~ {today} 這段期間 Meta 沒有回任何成效資料。")
+    return None
 
 
 def backfill_lock(org_id: str) -> str:
