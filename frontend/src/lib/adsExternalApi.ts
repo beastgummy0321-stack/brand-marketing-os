@@ -1,5 +1,5 @@
-import { apiFetch } from "./http";
-import { BASE, parseJsonOrThrow } from "./adsApi";
+import { apiFetch, readJson } from "./http";
+import { BASE } from "./adsApi";
 
 export interface ExternalCampaignFields {
   origin?: "internal" | "imported";
@@ -70,17 +70,17 @@ export function query(values: Record<string, string | undefined | null>): string
   return params.toString();
 }
 export async function existingCampaigns(brand: string, values: Record<string, string | undefined> = {}, signal?: AbortSignal): Promise<ExistingPage> {
-  return parseJsonOrThrow(await apiFetch(`${brandPath(brand)}/existing-campaigns?${query(values)}`, { signal }), "讀取既有活動失敗。");
+  return readJson(await apiFetch(`${brandPath(brand)}/existing-campaigns?${query(values)}`, { signal }), "讀取既有活動失敗。");
 }
 export async function importExisting(brand: string, source: { platform: string; source_account: string; native_kind: string; native_id: string }): Promise<{ campaign: { id: string } }> {
-  return parseJsonOrThrow(await apiFetch(`${brandPath(brand)}/imports`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(source) }), "納入活動失敗。");
+  return readJson(await apiFetch(`${brandPath(brand)}/imports`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(source) }), "納入活動失敗。");
 }
 /** `range` (F47 Contract H, the connections page's `reread`): read these days again instead of the default window. */
 export async function refreshExisting(brand: string, platform: string, source_account: string, range?: { start: string; end: string }): Promise<{ job: SyncJob }> {
-  return parseJsonOrThrow(await apiFetch(`${brandPath(brand)}/existing-campaigns/refresh`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ platform, source_account, ...range }) }), "更新清單失敗。");
+  return readJson(await apiFetch(`${brandPath(brand)}/existing-campaigns/refresh`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ platform, source_account, ...range }) }), "更新清單失敗。");
 }
 export async function externalView(brand: string, campaign: string, values: Record<string, string | undefined> = {}, signal?: AbortSignal): Promise<ExternalView> {
-  return parseJsonOrThrow(await apiFetch(`${brandPath(brand)}/campaigns/${encodeURIComponent(campaign)}/external?${query(values)}`, { signal }), "讀取原始資料失敗。");
+  return readJson(await apiFetch(`${brandPath(brand)}/campaigns/${encodeURIComponent(campaign)}/external?${query(values)}`, { signal }), "讀取原始資料失敗。");
 }
 
 /** Both cursors are independent. Never publish a partial page as campaign totals. */
@@ -113,13 +113,13 @@ export async function completeExternalView(brand: string, campaign: string, sign
 }
 /** `jobs`: every job the re-read requested (each account it covers); `job` is the first. */
 export async function syncCampaign(brand: string, campaign: string): Promise<{ job: SyncJob; jobs?: SyncJob[] }> {
-  return parseJsonOrThrow(await apiFetch(`${brandPath(brand)}/campaigns/${encodeURIComponent(campaign)}/sync`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }), "同步失敗。");
+  return readJson(await apiFetch(`${brandPath(brand)}/campaigns/${encodeURIComponent(campaign)}/sync`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }), "同步失敗。");
 }
 /** `campaignId` scopes `outcome` to that campaign's tasks (plus the account's own). */
 export async function syncJob(brand: string, id: string, signal?: AbortSignal, campaignId?: string): Promise<{ job: SyncJob; connected: boolean; outcome?: SyncOutcome }> {
   const scope = query({ campaign_id: campaignId });
-  return parseJsonOrThrow(await apiFetch(`${brandPath(brand)}/sync-jobs/${encodeURIComponent(id)}${scope ? `?${scope}` : ""}`, { signal }), "讀取同步狀態失敗。");
+  return readJson(await apiFetch(`${brandPath(brand)}/sync-jobs/${encodeURIComponent(id)}${scope ? `?${scope}` : ""}`, { signal }), "讀取同步狀態失敗。");
 }
 export async function syncOutcome(brand: string, campaign: string, signal?: AbortSignal): Promise<CampaignSyncOutcome> {
-  return parseJsonOrThrow(await apiFetch(`${brandPath(brand)}/campaigns/${encodeURIComponent(campaign)}/sync-outcome`, { signal }), "讀取同步結果失敗。");
+  return readJson(await apiFetch(`${brandPath(brand)}/campaigns/${encodeURIComponent(campaign)}/sync-outcome`, { signal }), "讀取同步結果失敗。");
 }

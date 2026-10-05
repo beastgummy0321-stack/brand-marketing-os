@@ -11,6 +11,7 @@ from app.ads import (
     handoff_new_ad,
     handoff_reconsider,
     launch_view,
+    month_budget,
 )
 from app.shared import web
 
@@ -79,6 +80,10 @@ _CODED = {
 def _run(request, brand, campaign, function, *args):
     try:
         return function(web.conn, web.require_actor(request).org_id, brand, campaign, *args)
+    except month_budget.MonthBudgetBlocked as exc:
+        # F51 Contract C: launch re-approval refused by the month budget (`details.reason`).
+        web.conn.rollback()
+        raise web.ApiError(409, "month_budget_blocked", str(exc), {"reason": exc.code}) from None
     except ValueError as exc:
         web.conn.rollback()
         code = str(exc)

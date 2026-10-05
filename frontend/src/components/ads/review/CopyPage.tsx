@@ -1,3 +1,4 @@
+import { isRejected } from "@/lib/http";
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { Image as ImageIcon, X } from "lucide-react";
@@ -12,7 +13,7 @@ import { getReview, type ReviewRound } from "@/lib/adsReviewApi";
 import { getQueue } from "@/lib/adsTriageApi";
 import { useApiRead } from "@/lib/useApiRead";
 import {
-  ChangeRequestRejected, createChangeSet, getChangeControl, type ChangeDraft, type SettingValues,
+  createChangeSet, getChangeControl, type ChangeDraft, type SettingValues,
 } from "@/lib/adsChangeApi";
 import { changeStepPath, truncate } from "../flow/changeFlow";
 import { currentBudgetMonth } from "../MonthlyBudgetPanel";
@@ -117,7 +118,7 @@ function variantMarks(value: string, keptValues: string[]): Set<string> {
  * 的建議附帶的 `suggested_copy`；沒有 AI 新版時（F30：AI 說明被擋下）新版從平台現在的文案開始、
  * 目的行改說「AI 沒給新版，從現在的文案直接改」，沒改過不給存；沒有 adjust 建議就不替
  * `createChangeSet` 附上 `review_id`/`recommendation_id`。保存失敗分兩種：
- * 4xx（`ChangeRequestRejected`，premise 變了／單則超過 30 天／建議不是 adjust）顯示後端訊息、
+ * 4xx（`isRejected`，premise 變了／單則超過 30 天／建議不是 adjust）顯示後端訊息、
  * 保留草稿；其餘（沒收到回應）顯示「上次保存沒收到回應」banner，之後只能用 banner 自己的按鈕
  * 沿用同一份草稿（同一個 `operation_id`）重試——主動作列的「加入變更清單」在這段期間停用，
  * 不讓使用者從另一個入口重複建立（同原型 `setBar` 的第三個參數）。 */
@@ -223,9 +224,9 @@ export function CopyPage({ brandId, campaignId, reviewId }: {
       setPendingDraft(null);
       navigate(changeStepPath(brandId, campaignId, created.id, "confirm"));
     } catch (err) {
-      if (err instanceof ChangeRequestRejected) {
+      if (isRejected(err)) {
         setPendingDraft(null);
-        setSaveError(err.message);
+        setSaveError(err instanceof Error ? err.message : "內容未保存，請修正後再試。");
       } else {
         // 沒收到回應：草稿已經有效（欄位驗證已通過），保留同一份草稿，讓 banner 的按鈕沿用同一個
         // `operation_id` 重試（feature Decisions「Lost response」）。

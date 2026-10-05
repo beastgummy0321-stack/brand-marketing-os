@@ -1,8 +1,8 @@
 // F29-I04 Contract F: automatic A/B pairs of an internal campaign and the "pause the loser"
 // proposal. The proposal is only a local change set (`source: "ab"`) that still goes through the
 // normal approve -> platform -> verify flow; nothing here writes to an ad platform.
-import { apiFetch } from "./http";
-import { BASE, parseJsonOrThrow } from "./adsApi";
+import { apiFetch, readJson } from "./http";
+import { BASE } from "./adsApi";
 import type { ChangeItem, ChangeSet } from "./adsChangeApi";
 
 export type AbPairState = "collecting" | "no_difference" | "judged" | "unreadable";
@@ -34,7 +34,7 @@ const pairsPath = (brand: string, campaign: string) =>
   `${BASE}/brands/${encodeURIComponent(brand)}/campaigns/${encodeURIComponent(campaign)}/ab-pairs`;
 
 export async function getAbPairs(brand: string, campaign: string, signal?: AbortSignal): Promise<AbPairsView> {
-  return parseJsonOrThrow(await apiFetch(pairsPath(brand, campaign), { signal }), "讀取 A/B 比較失敗。");
+  return readJson(await apiFetch(pairsPath(brand, campaign), { signal }), "讀取 A/B 比較失敗。");
 }
 // 409 `ab_not_judged` / `ab_loser_unbound`, 404 `ab_pair_unknown`. An open set for the pair is
 // returned instead of a second one; the same `operation_id` replays the same set.
@@ -43,5 +43,5 @@ export async function pauseAbLoser(brand: string, campaign: string, pairId: stri
     method: "POST", signal, headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ operation_id: operationId }),
   });
-  return (await parseJsonOrThrow<{ change_set: ChangeSet }>(response, "建立暫停清單失敗。")).change_set;
+  return (await readJson<{ change_set: ChangeSet }>(response, "建立暫停清單失敗。")).change_set;
 }

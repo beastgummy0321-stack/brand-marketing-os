@@ -1,8 +1,7 @@
 /** 素材工作檯 API 型別與呼叫（F02-I07，取代舊版 brief 形狀）。對應 `app/workbench/routes.py`
- * F02-I03 之後的介面：任務包 → 素材組 → 產物 → 版本。錯誤處理沿用既有寫法：`apiFetch` 之後
- * 檢查 `res.ok`，不行就試著解析 `{"error": {...}}` 信封餵給 `errorMessageFrom`，解不出來就用
- * 預設訊息——`parseJsonOrThrow`/`ensureOk` 兩個小工具全部呼叫共用。 */
-import { apiFetch, errorMessageFrom } from "./http";
+ * F02-I03 之後的介面：任務包 → 素材組 → 產物 → 版本。錯誤：回應一律交給
+ * `http.readJson`（F51 Contract H），失敗是 `ApiResponseError`，訊息是伺服器的句子，讀不出來用預設訊息。 */
+import { apiFetch, readJson } from "./http";
 
 export type PackStatus = "pending" | "running" | "awaiting_approval" | "done";
 /** `closed` lists only the closed packs (F47, drill-10 乙 #21); every other value lists open ones. */
@@ -252,23 +251,6 @@ export const LENGTH_HINTS = {
 
 export const LENGTH_LABELS = { short: "短版", medium: "中版", long: "長版" } as const;
 
-async function ensureOk(res: Response, fallback: string): Promise<void> {
-  if (res.ok) return;
-  let message = fallback;
-  try {
-    const data = (await res.json()) as { error?: { message?: string } };
-    message = errorMessageFrom(data, message);
-  } catch {
-    // 回應不是 JSON，用預設訊息。
-  }
-  throw new Error(message);
-}
-
-async function parseJsonOrThrow<T>(res: Response, fallback: string): Promise<T> {
-  await ensureOk(res, fallback);
-  return (await res.json()) as T;
-}
-
 const BASE = "/api/workbench";
 
 export interface VisualSpecWarning {
@@ -280,7 +262,7 @@ export async function getVisualSpec(
   brandId: string,
 ): Promise<{ warnings: VisualSpecWarning[] }> {
   const res = await apiFetch(`${BASE}/brands/${encodeURIComponent(brandId)}/visual-spec`);
-  return parseJsonOrThrow<{ warnings: VisualSpecWarning[] }>(res, "讀取品牌視覺基礎失敗。");
+  return readJson<{ warnings: VisualSpecWarning[] }>(res, "讀取品牌視覺基礎失敗。");
 }
 
 export async function listPacks(
@@ -294,7 +276,7 @@ export async function listPacks(
   const res = await apiFetch(
     `${BASE}/brands/${encodeURIComponent(brandId)}/packs?${params.toString()}`,
   );
-  const data = await parseJsonOrThrow<{ packs: PackCard[] }>(res, "讀取任務包清單失敗。");
+  const data = await readJson<{ packs: PackCard[] }>(res, "讀取任務包清單失敗。");
   return data.packs;
 }
 
@@ -302,7 +284,7 @@ export async function getPack(brandId: string, packId: string): Promise<PackDeta
   const res = await apiFetch(
     `${BASE}/brands/${encodeURIComponent(brandId)}/packs/${encodeURIComponent(packId)}`,
   );
-  const data = await parseJsonOrThrow<{ pack: PackDetail }>(res, "讀取任務包失敗。");
+  const data = await readJson<{ pack: PackDetail }>(res, "讀取任務包失敗。");
   return data.pack;
 }
 
@@ -319,7 +301,7 @@ export async function parseFreeText(
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ free_text: freeText, defaults }),
   });
-  const data = await parseJsonOrThrow<{ parse: FreeParseResult }>(res, "AI 解析失敗，請稍後再試。");
+  const data = await readJson<{ parse: FreeParseResult }>(res, "AI 解析失敗，請稍後再試。");
   return data.parse;
 }
 
@@ -332,7 +314,7 @@ export async function createFreePack(
     headers: { "content-type": "application/json" },
     body: JSON.stringify(input),
   });
-  const data = await parseJsonOrThrow<{ pack: PackDetail }>(res, "建立自由創作失敗。");
+  const data = await readJson<{ pack: PackDetail }>(res, "建立自由創作失敗。");
   return data.pack;
 }
 
@@ -350,7 +332,7 @@ export async function setPackCompletion(
       body: JSON.stringify({ key, checked }),
     },
   );
-  const data = await parseJsonOrThrow<{ pack: PackDetail }>(res, "更新完成條件失敗。");
+  const data = await readJson<{ pack: PackDetail }>(res, "更新完成條件失敗。");
   return data.pack;
 }
 
@@ -359,7 +341,7 @@ export async function approvePack(brandId: string, packId: string): Promise<Pack
     `${BASE}/brands/${encodeURIComponent(brandId)}/packs/${encodeURIComponent(packId)}/approve`,
     { method: "POST" },
   );
-  const data = await parseJsonOrThrow<{ pack: PackDetail }>(res, "核准整包失敗。");
+  const data = await readJson<{ pack: PackDetail }>(res, "核准整包失敗。");
   return data.pack;
 }
 
@@ -368,7 +350,7 @@ export async function closePack(brandId: string, packId: string): Promise<PackDe
     `${BASE}/brands/${encodeURIComponent(brandId)}/packs/${encodeURIComponent(packId)}/close`,
     { method: "POST" },
   );
-  const data = await parseJsonOrThrow<{ pack: PackDetail }>(res, "關閉任務包失敗。");
+  const data = await readJson<{ pack: PackDetail }>(res, "關閉任務包失敗。");
   return data.pack;
 }
 
@@ -376,7 +358,7 @@ export async function getSet(brandId: string, setId: string): Promise<SetDetail>
   const res = await apiFetch(
     `${BASE}/brands/${encodeURIComponent(brandId)}/sets/${encodeURIComponent(setId)}`,
   );
-  const data = await parseJsonOrThrow<{ set: SetDetail }>(res, "讀取素材組失敗。");
+  const data = await readJson<{ set: SetDetail }>(res, "讀取素材組失敗。");
   return data.set;
 }
 
@@ -395,7 +377,7 @@ export async function runProduct(
       body: JSON.stringify(count === undefined ? {} : { count }),
     },
   );
-  const data = await parseJsonOrThrow<{ set: SetDetail }>(res, "產出失敗。");
+  const data = await readJson<{ set: SetDetail }>(res, "產出失敗。");
   return data.set;
 }
 
@@ -409,7 +391,7 @@ export async function selectVersion(
       + `${encodeURIComponent(versionId)}/select`,
     { method: "POST" },
   );
-  const data = await parseJsonOrThrow<{ set: SetDetail }>(res, "選定失敗。");
+  const data = await readJson<{ set: SetDetail }>(res, "選定失敗。");
   return data.set;
 }
 
@@ -423,6 +405,6 @@ export async function deselectVersion(
       + `${encodeURIComponent(versionId)}/select`,
     { method: "DELETE" },
   );
-  const data = await parseJsonOrThrow<{ set: SetDetail }>(res, "取消選定失敗。");
+  const data = await readJson<{ set: SetDetail }>(res, "取消選定失敗。");
   return data.set;
 }

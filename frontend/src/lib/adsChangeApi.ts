@@ -1,5 +1,5 @@
-import { apiFetch } from "./http";
-import { BASE, parseJsonOrThrow } from "./adsApi";
+import { apiFetch, readJson } from "./http";
+import { BASE } from "./adsApi";
 import type { NativeEntity } from "./adsExternalApi";
 
 /** F40-I01 (`app/ads/month_budget.py::preflight` `ongoing_owners`): one budget owner still running this month --
@@ -93,21 +93,11 @@ export interface ChangeControlSummary {
 }
 const brandPath = (brand: string) => `${BASE}/brands/${encodeURIComponent(brand)}`;
 const campaignPath = (brand: string, campaign: string) => `${brandPath(brand)}/campaigns/${encodeURIComponent(campaign)}`;
-export class ChangeRequestRejected extends Error {}
 async function json<T>(path: string, method: string, body?: unknown, signal?: AbortSignal): Promise<T> {
-  try {
-    const response = await apiFetch(path, { method, signal, ...(body === undefined ? {} : {
-      headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-    }) });
-    try { return await parseJsonOrThrow(response, "目前無法完成，已保存的內容會保留。請稍後重試。"); }
-    catch (error) {
-      if (response.status >= 400 && response.status < 500) throw new ChangeRequestRejected(error instanceof Error ? error.message : "內容未保存，請修正後再試。");
-      throw error;
-    }
-  } catch (error) {
-    if (error instanceof TypeError) throw new Error("未收到伺服器回應，結果尚未確認。請沿用原操作重試，不要重做平台操作。");
-    throw error;
-  }
+  const response = await apiFetch(path, { method, signal, ...(body === undefined ? {} : {
+    headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  }) });
+  return readJson<T>(response, "目前無法完成，已保存的內容會保留。請稍後重試。");
 }
 export async function getMonthlyBudget(brand: string, month: string, signal?: AbortSignal) {
   return (await json<{ budget: MonthlyBudget }>(`${brandPath(brand)}/monthly-budget?month=${encodeURIComponent(month)}`, "GET", undefined, signal)).budget;

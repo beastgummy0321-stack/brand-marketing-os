@@ -6,14 +6,15 @@
  * F44-I05 (prototype `f44-blocked-slot`, Contract D): a blocked slot says why (the quoted words marked, 「另有 N 個原因」),
  * offers the exit of its reason (F45: 改這句文案 / 到工作檯換一版 → or 換一版文案 / 換一張) and 再檢查一次, is counted in the head, the progress bar
  * and the draft bar, never keeps the poll alive, and every planned slot's head carries its offer chip. */
+import { ApiResponseError } from "@/lib/http";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CampaignDetail } from "@/lib/adsApi";
-import { cancelMaterialTask, MaterialRequestError } from "@/lib/adsMaterialApi";
-import { chooseSlotCopy, editSlotCopy, fetchSlotThumbnail, getSlotCopyOptions, getSlots, recheckSlot, SlotRecheckError, uploadIntoSlot, type CampaignSlots, type Slot } from "@/lib/adsSlotsApi";
-import { AssetApiError, createUploadBatch, putUpload, type Placement } from "@/lib/adsUserAssetsApi";
+import { cancelMaterialTask } from "@/lib/adsMaterialApi";
+import { chooseSlotCopy, editSlotCopy, fetchSlotThumbnail, getSlotCopyOptions, getSlots, recheckSlot, uploadIntoSlot, type CampaignSlots, type Slot } from "@/lib/adsSlotsApi";
+import { createUploadBatch, putUpload, type Placement } from "@/lib/adsUserAssetsApi";
 import { fetchActiveJobs, type ActiveJobsSnapshot } from "@/lib/jobsApi";
 import { AssetsBody } from "./AssetsBody";
 // F50 Contract K: the org clock reads the workspace org zone; dates assert Asia/Taipei output, never the runner's.
@@ -291,7 +292,7 @@ describe("AssetsBody — 素材需求 card", () => {
   ])("a 409 (%s) says why under the row and re-reads", async (_code, message) => {
     const user = userEvent.setup();
     vi.mocked(getSlots).mockResolvedValue(live());
-    vi.mocked(cancelMaterialTask).mockRejectedValue(new MaterialRequestError(message, 409));
+    vi.mocked(cancelMaterialTask).mockRejectedValue(new ApiResponseError(message, 409, {}, { code: "material_task_in_use" }));
     const { props } = renderBody(campaign({ status: "live" }));
     const card = await screen.findByRole("region", { name: "素材需求" });
     await user.click(within(card).getAllByRole("button", { name: "取消需求" })[0]);
@@ -539,7 +540,7 @@ describe("AssetsBody — two halves (F35 Contract T)", () => {
     const user = userEvent.setup();
     vi.mocked(getSlots).mockResolvedValue(twoHalves());
     vi.mocked(getSlotCopyOptions).mockResolvedValue(options());
-    vi.mocked(chooseSlotCopy).mockRejectedValue(new AssetApiError("這一格還沒有圖，先上傳圖再選文案。", 409));
+    vi.mocked(chooseSlotCopy).mockRejectedValue(new ApiResponseError("這一格還沒有圖，先上傳圖再選文案。", 409, {}, { code: "slot_no_file" }));
     renderBody();
     await screen.findByRole("heading", { name: "1／4 格已備妥" });
     await user.click(screen.getByRole("button", { name: /選一版文案/ }));
@@ -956,7 +957,7 @@ describe("AssetsBody — F44-I05: a blocked slot says why and offers its exit (p
   it("a failed recheck says why on the tile and leaves the grid; slot_no_file re-reads the slots and says nothing", async () => {
     const user = userEvent.setup();
     vi.mocked(getSlots).mockResolvedValue(grid());
-    vi.mocked(recheckSlot).mockRejectedValueOnce(new SlotRecheckError("找不到這份素材，請重新上傳。", 409, "user_asset_unavailable"));
+    vi.mocked(recheckSlot).mockRejectedValueOnce(new ApiResponseError("找不到這份素材，請重新上傳。", 409, {}, { code: "user_asset_unavailable" }));
     const { props } = renderBody();
     await screen.findByRole("heading", { name: "1／5 格已備妥" });
     await user.click(within(tile(NAME_MISMATCH)).getByRole("button", { name: `再檢查一次：${NAME_MISMATCH}` }));
@@ -968,7 +969,7 @@ describe("AssetsBody — F44-I05: a blocked slot says why and offers its exit (p
 
     // The slot was confirmed somewhere else in the meantime: nothing to check, the re-read shows what is true now.
     const confirmed = slot({ ...unbacked, state: "ready", confirmed: true, blocked: null });
-    vi.mocked(recheckSlot).mockRejectedValueOnce(new SlotRecheckError("這一格還沒有圖，先上傳圖再選文案。", 409, "slot_no_file"));
+    vi.mocked(recheckSlot).mockRejectedValueOnce(new ApiResponseError("這一格還沒有圖，先上傳圖再選文案。", 409, {}, { code: "slot_no_file" }));
     vi.mocked(getSlots).mockResolvedValue(grid([ready, mismatch, confirmed, failedFile, running]));
     await user.click(within(tile(NAME_UNBACKED)).getByRole("button", { name: `再檢查一次：${NAME_UNBACKED}` }));
     expect(await screen.findByRole("heading", { name: "2／5 格已備妥" })).toBeTruthy();
@@ -1195,7 +1196,7 @@ describe("AssetsBody — F45-I08: 處理中, 等你 and 卡住 told apart (proto
     const user = userEvent.setup();
     const both = slot({ ...a5, copy: placed("待確認", "一顆就好", "午休 5 分鐘") });
     vi.mocked(getSlots).mockResolvedValue(grid([a1, both]));
-    vi.mocked(editSlotCopy).mockRejectedValue(new AssetApiError("這一格還沒有圖，先上傳圖再選文案。", 409));
+    vi.mocked(editSlotCopy).mockRejectedValue(new ApiResponseError("這一格還沒有圖，先上傳圖再選文案。", 409, {}, { code: "slot_no_file" }));
     renderBody();
     await screen.findByRole("heading", { name: "1／2 格已備妥" });
     await user.click(within(tile(NAMES.a5)).getByRole("button", { name: `改文案：${NAMES.a5}` }));
@@ -1367,7 +1368,7 @@ describe("AssetsBody — F49 Contract T: every slot state told in the served wor
     vi.mocked(getSlotCopyOptions).mockResolvedValue({ options: [
       { set_id: "wb_set_2", version_id: "wo_5", label: "超能特惠組 · 版本 2", copy_fields: { headline: "練前一顆", body: "不配水也能補" } },
     ] });
-    vi.mocked(chooseSlotCopy).mockRejectedValue(new AssetApiError(FROZEN, 400));
+    vi.mocked(chooseSlotCopy).mockRejectedValue(new ApiResponseError(FROZEN, 400));
     renderBody();
     await screen.findByRole("heading", { name: "1／1 格已備妥" });
     await user.click(within(tile(N.ready)).getByRole("button", { name: `換文案：${N.ready}` }));

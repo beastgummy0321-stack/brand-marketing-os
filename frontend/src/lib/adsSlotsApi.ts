@@ -1,7 +1,7 @@
-import { apiFetch, errorMessageFrom } from "./http";
+import { apiFetch, readJson, throwIfFailed } from "./http";
 import { BASE } from "./adsApi";
 import type { MaterialReplaces } from "./adsMaterialApi";
-import { AssetApiError, assetRequest, type CopyFields, type Placement } from "./adsUserAssetsApi";
+import { assetRequest, type CopyFields, type Placement } from "./adsUserAssetsApi";
 
 /** F30 Contract F: the assets tab's slots — one planned ad (app-built) or one platform ad (imported).
  * `ready` = the launch rule (a confirmed material, or already a platform ad); `in_progress` = a file
@@ -124,19 +124,13 @@ export const chooseSlotCopy = (brand: string, campaign: string, adId: string, bo
 export const editSlotCopy = (brand: string, campaign: string, adId: string, copyFields: CopyFields, signal?: AbortSignal) =>
   assetRequest<{ placement: Placement; slots: CampaignSlots }>(`${slotsPath(brand, campaign)}/${encodeURIComponent(adId)}/copy`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ copy_fields: copyFields }), signal });
 
-/** A refused recheck. `code` tells `slot_no_file` (the slot has nothing to check any more — re-read the slots) from
- * the errors whose `message` is for the user (`user_asset_unavailable`, `campaign_unknown`). */
-export class SlotRecheckError extends AssetApiError {
-  code: string | null;
-  constructor(message: string, status: number, code: string | null) { super(message, status); this.code = code; }
-}
 /** F44 Contract D: run a blocked slot's confirmation again (no body). 200 carries the slots whether the slot became
- * ready or is still blocked (then with the new refusal's reason). */
+ * ready or is still blocked (then with the new refusal's reason). A refusal's `code` tells `slot_no_file` (the slot has
+ * nothing to check any more — re-read the slots) from the errors whose `message` is for the user
+ * (`user_asset_unavailable`, `campaign_unknown`). */
 export async function recheckSlot(brand: string, campaign: string, adId: string, signal?: AbortSignal): Promise<{ slots: CampaignSlots }> {
   const res = await apiFetch(`${slotsPath(brand, campaign)}/${encodeURIComponent(adId)}/recheck`, { method: "POST", signal });
-  const data = await res.json().catch(() => null);
-  if (!res.ok) throw new SlotRecheckError(errorMessageFrom(data, "沒有檢查成功，請稍後再試。"), res.status, typeof data?.error?.code === "string" ? data.error.code : null);
-  return data as { slots: CampaignSlots };
+  return readJson<{ slots: CampaignSlots }>(res, "沒有檢查成功，請稍後再試。");
 }
 
 /** A user-asset thumbnail is served behind the bearer token, so a bare `<img src>` cannot load it. */
@@ -144,6 +138,6 @@ export const isAuthThumbnail = (url: string | null): url is string => !!url && u
 /** Fetch an authenticated thumbnail as a Blob (the caller makes and revokes the object URL). */
 export async function fetchSlotThumbnail(url: string, signal?: AbortSignal): Promise<Blob> {
   const res = await apiFetch(url, { signal });
-  if (!res.ok) throw new AssetApiError("縮圖尚未完成。", res.status);
+  await throwIfFailed(res, "縮圖尚未完成。");
   return res.blob();
 }

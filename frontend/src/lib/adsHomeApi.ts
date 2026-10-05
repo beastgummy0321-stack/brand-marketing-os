@@ -11,9 +11,9 @@
  *   `spend`, `purchases`, `no_purchase_campaign`).
  * - The month's data stops at yesterday (org timezone): `pace.daily` ends yesterday, and
  *   `previous_same_period.days` is that many days at the start of the previous month. */
-import { apiFetch } from "./http";
+import { apiFetch, readJson } from "./http";
 import {
-  BASE, parseJsonOrThrow, type CampaignLifecycle, type CampaignStatus, type CampaignSyncState, type RunningAds,
+  BASE, type CampaignLifecycle, type CampaignStatus, type CampaignSyncState, type RunningAds,
 } from "./adsApi";
 import type { CampaignDataStatus, CapBasis, TriageGrade } from "./adsTriageApi";
 
@@ -128,13 +128,6 @@ export async function getHomeOverview(
   brand: string, month?: string, signal?: AbortSignal,
 ): Promise<HomeOverview> {
   const query = month ? `?month=${encodeURIComponent(month)}` : "";
-  try {
-    const response = await apiFetch(
-      `${BASE}/brands/${encodeURIComponent(brand)}/home${query}`, { signal },
-    );
-    return await parseJsonOrThrow<HomeOverview>(response, "讀取投放中心首頁失敗。");
-  } catch (error) {
-    if (error instanceof TypeError) throw new Error("未收到伺服器回應，請重試。");
-    throw error;
-  }
+  const response = await apiFetch(`${BASE}/brands/${encodeURIComponent(brand)}/home${query}`, { signal });
+  return readJson<HomeOverview>(response, "讀取投放中心首頁失敗。");
 }

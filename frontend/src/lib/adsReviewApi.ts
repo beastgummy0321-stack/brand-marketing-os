@@ -1,5 +1,5 @@
-import { apiFetch } from "./http";
-import { BASE, parseJsonOrThrow } from "./adsApi";
+import { apiFetch, readJson } from "./http";
+import { BASE } from "./adsApi";
 import type { NativeEntity } from "./adsExternalApi";
 import type { ReviewMonitor } from "./adsRuntimeApi";
 
@@ -68,7 +68,7 @@ export interface ReviewsData { reviews: ReviewRound[]; targets: NativeEntity[]; 
 const route = (brand: string, campaign: string) => `${BASE}/brands/${encodeURIComponent(brand)}/campaigns/${encodeURIComponent(campaign)}/reviews`;
 async function request<T>(path: string, signal?: AbortSignal, body?: unknown): Promise<T> {
   const response = await apiFetch(path, { signal, ...(body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }) });
-  return parseJsonOrThrow<T>(response, "目前無法讀取或保存本次檢討，請稍後重新讀取。已保存的內容會保留。");
+  return readJson<T>(response, "目前無法讀取或保存本次檢討，請稍後重新讀取。已保存的內容會保留。");
 }
 export const getReviews = (brand: string, campaign: string, signal?: AbortSignal) => request<ReviewsData>(route(brand, campaign), signal);
 export async function getReview(brand: string, campaign: string, id: string, signal?: AbortSignal) {

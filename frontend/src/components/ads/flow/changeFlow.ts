@@ -204,22 +204,6 @@ export function buildBudgetDraftItem(ownerId: string, to: number, reason: string
   return { kind: "budget", target_id: ownerId, after: { daily_amount: to }, reason };
 }
 
-// F25-I03: `app/ads/change_control.py::approve` maps every `ValueError` it raises to the same
-// `409 change_control_unavailable` — there is no `code` telling "premise changed" (which should
-// rebuild once) apart from "the month budget can't take this" (which should not, feature
-// Decisions "a 409 from approve about the month budget shows the backend message and does NOT
-// rebuild"). These three are the only messages `app/ads/month_budget.py::preflight` ever raises —
-// matched verbatim rather than guessed at, same duplication style as `QueueRow.tsx`'s
-// `STOP_LOSS_SPEND_MULTIPLE` comment.
-const MONTH_BUDGET_REJECTION_MESSAGES = new Set([
-  "新增花費請在執行月份重新確認月預算與最新資料。",
-  "餘額尚不確定，暫不能核准新增花費；可補資料、檢視或核准降低風險的操作。",
-  "這份變更超過本月總額；尚未讀回完成的降額不能先釋放額度。",
-]);
-export function isMonthBudgetRejection(message: string): boolean {
-  return MONTH_BUDGET_REJECTION_MESSAGES.has(message);
-}
-
 /** Rebuilding a draft after approve answers a conflict (feature Decisions: "the page rebuilds the
  * draft once with a NEW operation_id and supersedes_id = the old set") resends the same items. */
 export function toChangeInput(item: ChangeItem): ChangeInput {

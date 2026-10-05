@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { RefreshCw } from "lucide-react";
 import { Button } from "@/components/layout/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from "@/components/layout/ui/dialog";
-import { closeCampaign, CoverageMissingError, type CampaignDetail } from "@/lib/adsApi";
+import { closeCampaign, coverageGapOf, type CampaignDetail, type CoverageGap } from "@/lib/adsApi";
 import { getCoordinateLearnings, type CoordinateLearnings } from "@/lib/adsLearningsApi";
 import { dayList } from "@/lib/orgClock";
 import { Chip } from "./patterns";
@@ -42,7 +42,7 @@ export function coveredRange(start: string, end: string, missing: string[]): { f
  * window. 缺日 = amber (re-read first, 確認結案 held); 重讀仍失敗 (`can_skip`) = red with the sync error
  * and the explicit skip. The server re-validates every close, so this only mirrors its last answer. */
 function CoverageNote({ gap, syncError, syncing, reread, onSync, onSkip, closing }: {
-  gap: CoverageMissingError;
+  gap: CoverageGap;
   syncError: string | null;
   syncing: boolean;
   reread: boolean;
@@ -166,7 +166,7 @@ export function CloseCampaignDialog({ brandId, campaign: c, onClose, onCampaignC
 }) {
   const [closing, setClosing] = useState(false);
   const [closeError, setCloseError] = useState<string | null>(null);
-  const [coverageGap, setCoverageGap] = useState<CoverageMissingError | null>(null);
+  const [coverageGap, setCoverageGap] = useState<CoverageGap | null>(null);
   // A platform read finished after the last refusal: 確認結案 is released and the next click
   // re-validates on the server (the server, not this flag, decides).
   const [reread, setReread] = useState(false);
@@ -195,8 +195,9 @@ export function CloseCampaignDialog({ brandId, campaign: c, onClose, onCampaignC
       }
       setDone({ campaign: updated, learned });
     } catch (err) {
-      if (err instanceof CoverageMissingError) {
-        setCoverageGap(err);
+      const gap = coverageGapOf(err);
+      if (gap) {
+        setCoverageGap(gap);
         setReread(false);
       } else {
         setCloseError(err instanceof Error ? err.message : "結案失敗，請稍後再試。");

@@ -32,6 +32,7 @@ from app.ads import (
     judgment,
     manual_settings_routes,
     materials_in_hand,
+    month_budget,
     outcome,
     plan,
     readiness,
@@ -886,6 +887,10 @@ def publish_campaign(request: Request, brand_id: str, campaign_id: str, body: Pu
                            operation_id=body.operation_id, content_hash=body.content_hash)
         else:
             chosen.publish(web.conn, actor.org_id, brand_id, campaign_id, actor=str(actor.user_id))
+    except month_budget.MonthBudgetBlocked as exc:
+        # F51 Contract C: the manual launch's month-budget refusal has its own code (it used to
+        # answer the sentence as the code through the generic path below).
+        raise web.ApiError(409, "month_budget_blocked", str(exc), {"reason": exc.code}) from exc
     except ValueError as exc:
         code = str(exc)
         # 唯一沒進 `_PUBLISH_ERRORS` 的例外碼是 `auto_meta` adapter 保留位置的那個（F03-I09），

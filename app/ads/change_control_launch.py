@@ -151,11 +151,6 @@ def _launch_item(conn, org, brand, campaign_id, frozen):
     }
 
 
-# F41-I03: `month_budget.preflight`'s refusal for an unknown balance, word for word (that module
-# owns the month rule and is not edited here; `month_fit` only mirrors its outcome).
-_UNCERTAIN_TEXT = "餘額尚不確定，暫不能核准新增花費；可補資料、檢視或核准降低風險的操作。"
-
-
 def month_fit(conn, org, brand, campaign_id, snapshot) -> dict:
     """F41-I03 (drill-8 #6): the first-launch list page's 「本月預算放得下」 card, computed
     from exactly what `_approve_set` hands `month_budget.preflight` -- `snapshot["month"]` and
@@ -173,7 +168,9 @@ def month_fit(conn, org, brand, campaign_id, snapshot) -> dict:
     if budget["amount"] is None:
         blocker, text = "unset", f"要先設 {number} 月月預算"
     elif budget["uncertainties"]:
-        blocker, text = "uncertain", _UNCERTAIN_TEXT
+        # F41-I03: preflight's own refusal sentence, read from its one table (F51 Contract C).
+        # Read at call time: via the `adapters` import cycle `month_budget` may still be loading.
+        blocker, text = "uncertain", month_budget.BLOCKED_TEXT["balance_unknown"]
     elif budget["available"] is None or budget["available"] < 0:
         blocker, text = "short", f"{number} 月預算不夠這期花"
     else:

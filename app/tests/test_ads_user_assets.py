@@ -575,6 +575,18 @@ class UserAssetsTest(unittest.TestCase):
                 "test",
             )
 
+    def test_retry_without_a_stored_original_answers_asset_file_missing(self):
+        """F51 Contract C: the library retries on the code, never on the sentence."""
+        item = self.batch()
+        self.conn.commit()
+        response = self.client.post(f"{self.prefix}/uploads/{item['id']}/retry", json={})
+        self.assertEqual(response.status_code, 409, response.text)
+        error = response.json()["error"]
+        self.assertEqual(
+            (error["code"], error["message"]),
+            ("asset_file_missing", "沒有可核對的原檔，請重新上傳此檔。"),
+        )
+
     def test_item_lock_excludes_second_attempt_and_retry(self):
         item = self.batch()
         slot, key = routes._lock_upload(self.conn, self.org, self.brand, item["id"])

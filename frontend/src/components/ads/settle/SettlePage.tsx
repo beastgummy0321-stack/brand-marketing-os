@@ -1,8 +1,9 @@
+import { isRejected } from "@/lib/http";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Navigate, useSearchParams } from "react-router-dom";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { Skeleton } from "@/components/layout/Skeleton";
-import { getSettle, writeSettle, SettleRequestRejected, type SettleView } from "@/lib/adsSettleApi";
+import { getSettle, writeSettle, type SettleView } from "@/lib/adsSettleApi";
 import { getQueue, type QueuePayload } from "@/lib/adsTriageApi";
 import { fetchActiveJobs } from "@/lib/jobsApi";
 import { Chip, FlowHeader, ReadFailed, useAdsRules, type FlowStep } from "../patterns";
@@ -99,7 +100,7 @@ export function SettlePage({ brandId, month }: { brandId: string; month: string 
         .map((row) => ({ entity_id: row.entity_id, angle: angleOf(row, picks[row.entity_id]) ?? "" }));
       setRead({ status: "ready", view: await writeSettle(brandId, month, body) });
     } catch (error) {
-      if (error instanceof SettleRequestRejected && error.code === "settle_not_ended") setTick((t) => t + 1);
+      if (isRejected(error, "settle_not_ended")) setTick((t) => t + 1);
       setWriteError(error instanceof Error ? error.message : "目前無法完成，請稍後重試。");
     } finally {
       setBusy(false);

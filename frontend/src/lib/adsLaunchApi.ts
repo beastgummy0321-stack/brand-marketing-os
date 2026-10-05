@@ -1,7 +1,7 @@
 /** 投放前的品牌層資料：可投放檢查表（F05-I04）＋通路清單（F05-I05）。跟 `adsApi.ts` 分開檔案
- * 只是為了不撐破 800 行慣例，共用 `parseJsonOrThrow`／`BASE` 從那邊 import，不重寫一份。 */
-import { apiFetch } from "./http";
-import { BASE, parseJsonOrThrow } from "./adsApi";
+ * 只是為了不撐破 800 行慣例，共用 `BASE` 從那邊 import，回應一律交給 `http.readJson`。 */
+import { apiFetch, readJson } from "./http";
+import { BASE } from "./adsApi";
 import type { MonthlyBudget } from "./adsChangeApi";
 import type { SettingsReadback } from "./adsLaunchSettingsApi";
 
@@ -38,7 +38,7 @@ export interface LaunchReadiness {
 
 export async function fetchLaunchReadiness(brandId: string): Promise<LaunchReadiness> {
   const res = await apiFetch(`${BASE}/brands/${encodeURIComponent(brandId)}/readiness`);
-  const data = await parseJsonOrThrow<{ readiness: LaunchReadiness }>(res, "讀取可投放檢查表失敗。");
+  const data = await readJson<{ readiness: LaunchReadiness }>(res, "讀取可投放檢查表失敗。");
   return data.readiness;
 }
 
@@ -47,7 +47,7 @@ export interface Channel { key: string; label: string; connected: boolean; state
 
 export async function fetchChannels(brandId: string): Promise<Channel[]> {
   const res = await apiFetch(`${BASE}/brands/${encodeURIComponent(brandId)}/channels`);
-  const data = await parseJsonOrThrow<{ channels: Channel[] }>(res, "讀取通路清單失敗。");
+  const data = await readJson<{ channels: Channel[] }>(res, "讀取通路清單失敗。");
   return data.channels;
 }
 
@@ -67,7 +67,7 @@ export async function saveManualSettings(
   const res = await apiFetch(`${BASE}/brands/${brandId}/campaigns/${campaignId}/groups/${groupId}/manual-settings`, {
     method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ values }),
   });
-  await parseJsonOrThrow<{ ok: boolean }>(res, "儲存人工上架設定失敗，請稍後再試。");
+  await readJson<{ ok: boolean }>(res, "儲存人工上架設定失敗，請稍後再試。");
 }
 
 /** F30 Contract G: the one launch view of the publish page (`app/ads/launch_view.py`). The batch
@@ -164,7 +164,7 @@ async function launchRequest(url: string, method: string, fallback: string, body
   const res = await apiFetch(url, body === undefined ? { method } : {
     method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
   });
-  return parseJsonOrThrow<LaunchView>(res, fallback);
+  return readJson<LaunchView>(res, fallback);
 }
 
 export const fetchLaunchView = (brandId: string, campaignId: string) =>
@@ -189,6 +189,6 @@ export const confirmLaunchItemField = (brandId: string, campaignId: string, item
 export async function confirmAllLaunchFields(brandId: string, campaignId: string): Promise<LaunchView> {
   const url = `${BASE}/brands/${encodeURIComponent(brandId)}/campaigns/${encodeURIComponent(campaignId)}/handoff/launch/confirm-all`;
   const res = await apiFetch(url, { method: "POST" });
-  const data = await parseJsonOrThrow<{ confirmed_items: number; confirmed_settings: number; view: LaunchView }>(res, "全部標記失敗，請再按一次。");
+  const data = await readJson<{ confirmed_items: number; confirmed_settings: number; view: LaunchView }>(res, "全部標記失敗，請再按一次。");
   return data.view;
 }

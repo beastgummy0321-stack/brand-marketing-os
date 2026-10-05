@@ -1,9 +1,10 @@
+import { ApiResponseError } from "@/lib/http";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ManualHandoffPanel } from "./ManualHandoffPanel";
-import { assignPlannedMaterial, getHandoff, getPlannedMaterials, HandoffRequestRejected, reapproveLaunch, revertLaunch, type HandoffItem, type HandoffWorkspace, type LaunchStale } from "@/lib/adsHandoffApi";
+import { assignPlannedMaterial, getHandoff, getPlannedMaterials, reapproveLaunch, revertLaunch, type HandoffItem, type HandoffWorkspace, type LaunchStale } from "@/lib/adsHandoffApi";
 import { existingCampaigns, externalView } from "@/lib/adsExternalApi";
 
 vi.mock("@/components/layout/WorkspaceContext", () => ({ useWorkspace: () => ({ scope: "user:org", identity: { user: { id: "u", email: "a@example.com" }, org: { id: "o", name: "測試", kind: "personal", role: "owner", timezone: "Asia/Taipei", today: "2026-09-28" }, orgs: [] } }) }));
@@ -80,7 +81,7 @@ describe("stale launch", () => {
   });
 
   it("reloads and says the plan changed again when re-approval is refused (409)", async () => {
-    vi.mocked(reapproveLaunch).mockRejectedValue(new HandoffRequestRejected("計畫、素材或月份已改變，請重新檢視後核准。"));
+    vi.mocked(reapproveLaunch).mockRejectedValue(new ApiResponseError("計畫、素材或月份已改變，請重新檢視後核准。", 409, {}, { code: "handoff_unavailable" }));
     render(view());
     const button = await screen.findByRole("button", { name: "用現在的方案重新核准 →" });
     vi.mocked(getHandoff).mockResolvedValue(workspace(stale({ content_hash: "b".repeat(64), diff: [...stale().diff, { kind: "campaign", item_id: "i1", name: "活動", field: "end_date", field_label: "結束日期", before: "2026-09-30", after: "2026-10-05" }] })));

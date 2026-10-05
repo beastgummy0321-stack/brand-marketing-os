@@ -1,3 +1,4 @@
+import { isRejected } from "@/lib/http";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { Target } from "lucide-react";
@@ -5,7 +6,7 @@ import { Button } from "@/components/layout/ui/button";
 import { cn } from "@/lib/utils";
 import { getCampaign, type CampaignDetail } from "@/lib/adsApi";
 import {
-  getTarget, getTriage, putTarget, TriageRequestRejected, type CampaignTarget, type TargetRequest, type TriageItem,
+  getTarget, getTriage, putTarget, type CampaignTarget, type TargetRequest, type TriageItem,
 } from "@/lib/adsTriageApi";
 import { fetchProductList, type ProductListItem } from "@/lib/productsApi";
 import { Chip, Disclosure, Segmented, TargetRuler, formatAmount, type RulerAd, type RulerCap } from "../patterns";
@@ -82,7 +83,7 @@ export function CapBlock({ brandId, campaign: c, onCampaignChange }: {
       setEditOpen(false);
       setValue("");
     } catch (err) {
-      if (err instanceof TriageRequestRejected && err.code === TARGET_CONFLICT) setConflict(true);
+      if (isRejected(err, TARGET_CONFLICT)) setConflict(true);
       else setError(errorText(err, "儲存上限失敗，請稍後再試。"));
     } finally {
       setSaving(false);
@@ -295,7 +296,7 @@ function CapSourceForm({ brandId, campaignId, onSaved }: {
       await putTarget(brandId, campaignId, body);
       onSaved(await getCampaign(brandId, campaignId));
     } catch (err) {
-      if (err instanceof TriageRequestRejected && err.code === TARGET_CONFLICT) {
+      if (isRejected(err, TARGET_CONFLICT)) {
         setError("這個活動的設定剛被更新，已重新讀取，請再選一次。");
         setReloadKey((n) => n + 1);
       } else {

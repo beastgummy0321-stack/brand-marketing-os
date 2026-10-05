@@ -1,5 +1,5 @@
-import { apiFetch } from "./http";
-import { BASE, parseJsonOrThrow } from "./adsApi";
+import { apiFetch, readJson } from "./http";
+import { BASE } from "./adsApi";
 import type { HandoffWorkspace } from "./adsHandoffApi";
 
 /** F29 Contract I: one set of launch settings per campaign, used by every ad set of the launch.
@@ -81,12 +81,12 @@ const path = (brand: string, campaign: string) =>
 
 /** Reads the account's pixel list from the platform (read only) before answering. */
 export async function getLaunchSettings(brand: string, campaign: string, signal?: AbortSignal): Promise<LaunchSettingsView> {
-  return parseJsonOrThrow(await apiFetch(`${path(brand, campaign)}/launch-settings`, { signal }), "讀取投放設定失敗。");
+  return readJson(await apiFetch(`${path(brand, campaign)}/launch-settings`, { signal }), "讀取投放設定失敗。");
 }
 /** Saves shape-checked values (400 `launch_settings_malformed` otherwise); format problems come
  * back in `errors`, saved, not refused. An edit after approval makes the launch stale. */
 export async function saveLaunchSettings(brand: string, campaign: string, values: LaunchSettingsValues, signal?: AbortSignal): Promise<LaunchSettingsView> {
-  return parseJsonOrThrow(await apiFetch(`${path(brand, campaign)}/launch-settings`, {
+  return readJson(await apiFetch(`${path(brand, campaign)}/launch-settings`, {
     method: "PUT", signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify(values),
   }), "儲存投放設定失敗。");
 }
@@ -95,7 +95,7 @@ export async function saveLaunchSettings(brand: string, campaign: string, values
 export async function confirmLaunchSetting(
   brand: string, campaign: string, key: SettingsReadbackKey, signal?: AbortSignal,
 ): Promise<HandoffWorkspace & { settings_readback: SettingsReadback | null }> {
-  return parseJsonOrThrow(await apiFetch(`${path(brand, campaign)}/handoff/launch/settings-confirm`, {
+  return readJson(await apiFetch(`${path(brand, campaign)}/handoff/launch/settings-confirm`, {
     method: "POST", signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key }),
   }), "確認投放設定失敗。");
 }

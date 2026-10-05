@@ -1,3 +1,4 @@
+import { isRejected } from "@/lib/http";
 import { useEffect, useState } from "react";
 import { Image as ImageIcon } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
@@ -13,7 +14,7 @@ import { getQueue } from "@/lib/adsTriageApi";
 import { useApiRead } from "@/lib/useApiRead";
 import type { MaterialMode } from "@/lib/adsMaterialApi";
 import {
-  createNewAdHandoff, getHandoff, HandoffRequestRejected,
+  createNewAdHandoff, getHandoff,
   type HandoffPlacement, type HandoffWorkspace, type NewAdHandoffRequest,
 } from "@/lib/adsHandoffApi";
 import { MaterialTasksPanel } from "../MaterialTasksPanel";
@@ -282,9 +283,9 @@ function NewAdSection({ brandId, campaignId, review, newTestRecommendationId, de
       setPending(null);
       navigate(changeStepPath(brandId, campaignId, result.id, "confirm"));
     } catch (err) {
-      if (err instanceof HandoffRequestRejected) {
+      if (isRejected(err)) {
         setPending(null);
-        setError(err.message);
+        setError(err instanceof Error ? err.message : "請修正內容後重試。");
       } else {
         // 沒收到回應：請求已有效，保留同一份請求，讓使用者用同一個 `operation_id` 重試
         // （同 `CopyPage.tsx::attemptCommit` 的「Lost response」處理）。

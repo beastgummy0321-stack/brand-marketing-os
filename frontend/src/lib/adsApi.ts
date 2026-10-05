@@ -1,8 +1,8 @@
 import type { AdapterKey, PublishDescribe, PublishGetResponse } from "./adsPublishTypes";
 export type { AdapterKey, AdapterOption, PublishChecklistField, PublishChecklistNode, PublishDescribe, PublishGetResponse } from "./adsPublishTypes";
 /** 投放中心 API 型別與呼叫（F03-I01），對應 `app/ads/routes.py`；後續票在這裡加，不重排既定形狀。
- * 錯誤：`apiFetch` 後檢查 `res.ok`，解析 `{"error": {...}}` 信封餵給 `errorMessageFrom`，解不出來用預設訊息。 */
-import { apiFetch, errorMessageFrom } from "./http";
+ * 錯誤：回應一律交給 `http.readJson`／`throwIfFailed`（F51 Contract H），失敗是 `ApiResponseError`（`code`／`details`）。 */
+import { apiFetch, isRejected, readJson, throwIfFailed, type ApiResponseError } from "./http";
 import type { ExternalCampaignFields } from "./adsExternalApi";
 import type { ManualHandoff } from "./adsLaunchApi";
 // F27-I06 800-line gate: `CampaignCapacity` moved to `adsTriageApi.ts` (its own owner lookup
@@ -340,40 +340,11 @@ export interface SelectScenarioInput {
   custom_total?: number | null;
 }
 
-/** A refused ads request: `message` is the server's sentence, `code` its `error.code` (e.g. `name_forbidden`,
- * `coordinate_unavailable`) so a form can put the sentence beside the field it is about. */
-export class AdsApiError extends Error {
-  readonly code: string | null;
-  constructor(message: string, code: string | null) {
-    super(message);
-    this.code = code;
-  }
-}
-
-async function ensureOk(res: Response, fallback: string): Promise<void> {
-  if (res.ok) return;
-  let message = fallback;
-  let code: string | null = null;
-  try {
-    const data = (await res.json()) as { error?: { message?: string; code?: unknown } };
-    message = errorMessageFrom(data, message);
-    if (data && typeof data.error === "object" && typeof data.error?.code === "string") code = data.error.code;
-  } catch {
-    // 回應不是 JSON，用預設訊息。
-  }
-  throw new AdsApiError(message, code);
-}
-
-export async function parseJsonOrThrow<T>(res: Response, fallback: string): Promise<T> {
-  await ensureOk(res, fallback);
-  return (await res.json()) as T;
-}
-
 export const BASE = "/api/ads";
 
 export async function listCampaigns(brandId: string): Promise<CampaignCard[]> {
   const res = await apiFetch(`${BASE}/brands/${encodeURIComponent(brandId)}/campaigns`);
-  const data = await parseJsonOrThrow<{ campaigns: CampaignCard[] }>(res, "讀取 Campaign 清單失敗。");
+  const data = await readJson<{ campaigns: CampaignCard[] }>(res, "讀取 Campaign 清單失敗。");
   return data.campaigns;
 }
 
@@ -381,7 +352,7 @@ export async function getCampaign(brandId: string, campaignId: string): Promise<
   const res = await apiFetch(
     `${BASE}/brands/${encodeURIComponent(brandId)}/campaigns/${encodeURIComponent(campaignId)}`,
   );
-  const data = await parseJsonOrThrow<{ campaign: CampaignDetail }>(res, "讀取 Campaign 失敗。");
+  const data = await readJson<{ campaign: CampaignDetail }>(res, "讀取 Campaign 失敗。");
   return data.campaign;
 }
 
@@ -394,7 +365,7 @@ export async function createCampaign(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
   });
-  const data = await parseJsonOrThrow<{ campaign: CampaignDraft }>(res, "建立 Campaign 失敗。");
+  const data = await readJson<{ campaign: CampaignDraft }>(res, "建立 Campaign 失敗。");
   return data.campaign;
 }
 
@@ -407,7 +378,7 @@ export async function patchCampaign(
     `${BASE}/brands/${encodeURIComponent(brandId)}/campaigns/${encodeURIComponent(campaignId)}`,
     { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) },
   );
-  const data = await parseJsonOrThrow<{ campaign: CampaignDetail }>(res, "更新 Campaign 失敗。");
+  const data = await readJson<{ campaign: CampaignDetail }>(res, "更新 Campaign 失敗。");
   return data.campaign;
 }
 
@@ -416,7 +387,7 @@ export async function generateStrategy(brandId: string, campaignId: string): Pro
     `${BASE}/brands/${encodeURIComponent(brandId)}/campaigns/${encodeURIComponent(campaignId)}/strategy`,
     { method: "POST" },
   );
-  const data = await parseJsonOrThrow<{ campaign: CampaignDetail }>(res, "產生策略失敗。");
+  const data = await readJson<{ campaign: CampaignDetail }>(res, "產生策略失敗。");
   return data.campaign;
 }
 
@@ -435,7 +406,7 @@ export async function selectScenario(
     `${BASE}/brands/${encodeURIComponent(brandId)}/campaigns/${encodeURIComponent(campaignId)}/strategy/scenario`,
     { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) },
   );
-  const data = await parseJsonOrThrow<{ campaign: CampaignDetail; resplit?: ResplitRow[] | null }>(res, "選擇預算情境失敗。");
+  const data = await readJson<{ campaign: CampaignDetail; resplit?: ResplitRow[] | null }>(res, "選擇預算情境失敗。");
   return { campaign: data.campaign, resplit: data.resplit ?? null };
 }
 
@@ -445,7 +416,7 @@ export async function setBudgetCap(brandId: string, campaignId: string, budgetCa
     `${BASE}/brands/${encodeURIComponent(brandId)}/campaigns/${encodeURIComponent(campaignId)}/strategy/budget-cap`,
     { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ budget_cap: budgetCap }) },
   );
-  return (await parseJsonOrThrow<{ campaign: CampaignDetail }>(res, "更新預算上限失敗。")).campaign;
+  return (await readJson<{ campaign: CampaignDetail }>(res, "更新預算上限失敗。")).campaign;
 }
 
 /** F04-I13：採用之前調整三個角色的百分比——金額由後端 `budget.split()` 重算，這裡只送
@@ -459,7 +430,7 @@ export async function setAllocation(
     `${BASE}/brands/${encodeURIComponent(brandId)}/campaigns/${encodeURIComponent(campaignId)}/strategy/allocation`,
     { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ allocation }) },
   );
-  const data = await parseJsonOrThrow<{ campaign: CampaignDetail }>(res, "調整預算分配失敗。");
+  const data = await readJson<{ campaign: CampaignDetail }>(res, "調整預算分配失敗。");
   return data.campaign;
 }
 
@@ -472,7 +443,7 @@ export async function adoptStrategy(brandId: string, campaignId: string): Promis
     `${BASE}/brands/${encodeURIComponent(brandId)}/campaigns/${encodeURIComponent(campaignId)}/plan`,
     { method: "POST" },
   );
-  const data = await parseJsonOrThrow<{ campaign: CampaignDetail }>(res, "展開投放結構失敗。");
+  const data = await readJson<{ campaign: CampaignDetail }>(res, "展開投放結構失敗。");
   return data.campaign;
 }
 
@@ -493,7 +464,7 @@ export async function createGroup(
     `${BASE}/brands/${encodeURIComponent(brandId)}/campaigns/${encodeURIComponent(campaignId)}/groups`,
     { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) },
   );
-  const data = await parseJsonOrThrow<{ group: DeliveryGroupRow }>(res, "新增投放組失敗。");
+  const data = await readJson<{ group: DeliveryGroupRow }>(res, "新增投放組失敗。");
   return data.group;
 }
 
@@ -515,7 +486,7 @@ export async function patchGroup(
     `${BASE}/brands/${encodeURIComponent(brandId)}/groups/${encodeURIComponent(groupId)}`,
     { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) },
   );
-  const data = await parseJsonOrThrow<{ group: DeliveryGroupRow }>(res, "更新投放組失敗。");
+  const data = await readJson<{ group: DeliveryGroupRow }>(res, "更新投放組失敗。");
   return data.group;
 }
 
@@ -524,7 +495,7 @@ export async function deleteGroup(brandId: string, groupId: string): Promise<voi
     `${BASE}/brands/${encodeURIComponent(brandId)}/groups/${encodeURIComponent(groupId)}`,
     { method: "DELETE" },
   );
-  await ensureOk(res, "刪除投放組失敗。");
+  await throwIfFailed(res, "刪除投放組失敗。");
 }
 
 /** 七維座標——值一律是 `brand_coordinate.key`，不是 `label`。 */
@@ -553,7 +524,7 @@ export async function createAd(
     `${BASE}/brands/${encodeURIComponent(brandId)}/campaigns/${encodeURIComponent(campaignId)}/ads`,
     { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) },
   );
-  const data = await parseJsonOrThrow<{ ad: AdRow }>(res, "新增廣告失敗。");
+  const data = await readJson<{ ad: AdRow }>(res, "新增廣告失敗。");
   return data.ad;
 }
 
@@ -571,7 +542,7 @@ export async function patchAd(
     `${BASE}/brands/${encodeURIComponent(brandId)}/ads/${encodeURIComponent(adId)}`,
     { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) },
   );
-  const data = await parseJsonOrThrow<{ ad: AdRow }>(res, "更新廣告失敗。");
+  const data = await readJson<{ ad: AdRow }>(res, "更新廣告失敗。");
   return data.ad;
 }
 
@@ -580,7 +551,7 @@ export async function deleteAd(brandId: string, adId: string): Promise<void> {
     `${BASE}/brands/${encodeURIComponent(brandId)}/ads/${encodeURIComponent(adId)}`,
     { method: "DELETE" },
   );
-  await ensureOk(res, "刪除廣告失敗。");
+  await throwIfFailed(res, "刪除廣告失敗。");
 }
 
 // -- F03-I08：素材就緒 -- 交棒工作檯任務包／讀就緒狀態／手動勾「素材已就位」 -------------------
@@ -593,7 +564,7 @@ export async function dispatchPack(brandId: string, campaignId: string): Promise
     `${BASE}/brands/${encodeURIComponent(brandId)}/campaigns/${encodeURIComponent(campaignId)}/pack`,
     { method: "POST" },
   );
-  const data = await parseJsonOrThrow<{ pack_id: string | null }>(res, "交棒素材工作檯失敗。");
+  const data = await readJson<{ pack_id: string | null }>(res, "交棒素材工作檯失敗。");
   return data.pack_id;
 }
 
@@ -605,7 +576,7 @@ export async function getAssets(brandId: string, campaignId: string): Promise<As
   const res = await apiFetch(
     `${BASE}/brands/${encodeURIComponent(brandId)}/campaigns/${encodeURIComponent(campaignId)}/assets`,
   );
-  return parseJsonOrThrow<AssetsResponse>(res, "讀取素材就緒狀態失敗。");
+  return readJson<AssetsResponse>(res, "讀取素材就緒狀態失敗。");
 }
 
 export async function setAssetReady(
@@ -617,7 +588,7 @@ export async function setAssetReady(
     `${BASE}/brands/${encodeURIComponent(brandId)}/ads/${encodeURIComponent(adId)}/asset-ready`,
     { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ready }) },
   );
-  const data = await parseJsonOrThrow<{ ad: AdRow }>(res, "更新素材就位狀態失敗。");
+  const data = await readJson<{ ad: AdRow }>(res, "更新素材就位狀態失敗。");
   return data.ad;
 }
 
@@ -632,7 +603,7 @@ export async function getPublish(
     `${BASE}/brands/${encodeURIComponent(brandId)}/campaigns/${encodeURIComponent(campaignId)}`
     + `/publish?adapter=${encodeURIComponent(adapter)}`,
   );
-  return parseJsonOrThrow<PublishGetResponse>(res, "讀取發布方式失敗。");
+  return readJson<PublishGetResponse>(res, "讀取發布方式失敗。");
 }
 
 export async function publishCampaign(
@@ -645,7 +616,7 @@ export async function publishCampaign(
     `${BASE}/brands/${encodeURIComponent(brandId)}/campaigns/${encodeURIComponent(campaignId)}/publish`,
     { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ adapter, ...approval }) },
   );
-  return parseJsonOrThrow<PublishDescribe>(res, "發布失敗。");
+  return readJson<PublishDescribe>(res, "發布失敗。");
 }
 
 // -- F03-I11：成效 -----------------------------------------------------------------------------
@@ -720,28 +691,34 @@ export async function getPerformance(
   const res = await apiFetch(
     `${BASE}/brands/${encodeURIComponent(brandId)}/campaigns/${encodeURIComponent(campaignId)}/performance`,
   );
-  return parseJsonOrThrow<CampaignPerformance>(res, "讀取成效失敗。");
+  return readJson<CampaignPerformance>(res, "讀取成效失敗。");
 }
 
 // -- F03-I12：結案 -----------------------------------------------------------------------------
 
 /** F37 Contract Q/S: the close route refuses a window the platform read does not cover with 409
  * `coverage_missing`; `error.details` names the days and whether the skip is open (`can_skip`, only
- * after the last platform read failed). */
-export class CoverageMissingError extends Error {
+ * after the last platform read failed). F51 Contract H: the refusal is an `ApiResponseError` with that
+ * code; `coverageGapOf` reads its details (`null` for any other failure). */
+export interface CoverageGap {
   missing_days: string[];
   never_synced: boolean;
   can_skip: boolean;
-  constructor(message: string, details: { missing_days: string[]; never_synced: boolean; can_skip: boolean }) {
-    super(message);
-    this.missing_days = details.missing_days;
-    this.never_synced = details.never_synced;
-    this.can_skip = details.can_skip;
-  }
+}
+
+export function coverageGapOf(err: unknown): CoverageGap | null {
+  if (!isRejected(err, "coverage_missing")) return null;
+  const d = (err as ApiResponseError).details as { missing_days?: unknown; never_synced?: unknown; can_skip?: unknown } | null;
+  if (!d || typeof d !== "object") return null;
+  return {
+    missing_days: Array.isArray(d.missing_days) ? d.missing_days.filter((x): x is string => typeof x === "string") : [],
+    never_synced: d.never_synced === true,
+    can_skip: d.can_skip === true,
+  };
 }
 
 /** 手動結案——結案永遠是使用者動作，沒有活動過了結束日就自動結案這回事（F16-I05）。
- * `skip_missing` 只在 `CoverageMissingError.can_skip` 之後由使用者明確選擇（F37 ruling 3）。 */
+ * `skip_missing` 只在 `coverageGapOf(err).can_skip` 之後由使用者明確選擇（F37 ruling 3）。 */
 export async function closeCampaign(
   brandId: string,
   campaignId: string,
@@ -755,24 +732,7 @@ export async function closeCampaign(
       body: JSON.stringify({ reason: body.reason ?? null, skip_missing: body.skip_missing ?? false }),
     },
   );
-  if (res.status === 409) {
-    type Details = { missing_days?: unknown; never_synced?: unknown; can_skip?: unknown };
-    let error: { code?: string; message?: string; details?: Details } | undefined;
-    try {
-      error = ((await res.clone().json()) as { error?: typeof error }).error;
-    } catch {
-      // Not JSON: the generic path below reports the fallback message.
-    }
-    if (error?.code === "coverage_missing" && error.details) {
-      const d = error.details;
-      throw new CoverageMissingError(error.message ?? "還有日子沒讀到平台資料，先重新讀取平台。", {
-        missing_days: Array.isArray(d.missing_days) ? d.missing_days.filter((x): x is string => typeof x === "string") : [],
-        never_synced: d.never_synced === true,
-        can_skip: d.can_skip === true,
-      });
-    }
-  }
-  const data = await parseJsonOrThrow<{ campaign: CampaignDetail }>(res, "結案失敗。");
+  const data = await readJson<{ campaign: CampaignDetail }>(res, "結案失敗。");
   return data.campaign;
 }
 

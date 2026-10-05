@@ -272,6 +272,28 @@ class MonthlyPersistenceTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "餘額尚不確定"):
                 budget.preflight(self.conn, self.org, self.brand, self.month, [change(150)])
 
+    def test_each_refusal_carries_its_reason_code_and_sentence(self):
+        """F51 Contract C: `preflight` raises `MonthBudgetBlocked` with one of three codes, the
+        sentence read from the one table (`BLOCKED_TEXT`)."""
+        cases = (
+            ("month_not_current", date(2026, 10, 1), {"amount": 30000, "uncertainties": []}),
+            ("balance_unknown", date(2026, 9, 10), {"amount": 30000, "uncertainties": ["缺日"]}),
+            ("balance_unknown", date(2026, 9, 10), {"amount": None, "uncertainties": []}),
+            ("over_month_total", date(2026, 9, 10),
+             {"amount": 30000, "uncertainties": [], "available": -1}),
+        )
+        for reason, today, view in cases:
+            with (
+                self.subTest(reason=reason, view=view),
+                patch.object(budget, "view", return_value=view),
+                patch.object(budget.settings, "today_for_org", return_value=today),
+                self.assertRaises(budget.MonthBudgetBlocked) as caught,
+            ):
+                budget.preflight(self.conn, self.org, self.brand, self.month, [change(150)])
+            self.assertEqual(caught.exception.code, reason)
+            self.assertEqual(str(caught.exception), budget.BLOCKED_TEXT[reason])
+            self.assertIsInstance(caught.exception, ValueError)
+
     def test_invalid_money_is_rejected_without_writing(self):
         for value in (True, -1, "NaN", "Infinity", None):
             with self.subTest(value=value), self.assertRaises(ValueError):

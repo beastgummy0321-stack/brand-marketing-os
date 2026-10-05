@@ -2,7 +2,7 @@ import { beforeEach, expect, it, vi } from "vitest";
 import { apiFetch } from "@/lib/http";
 import { completeExternalView, type ExternalView } from "@/lib/adsExternalApi";
 
-vi.mock("@/lib/http", () => ({ apiFetch: vi.fn() }));
+vi.mock("@/lib/http", async () => ({ ...(await vi.importActual<typeof import("@/lib/http")>("@/lib/http")), apiFetch: vi.fn() }));
 const page = (overrides: Partial<ExternalView> = {}): ExternalView => ({
   entities: [], observations: [], next_entity_cursor: null, next_observation_cursor: null,
   window: { start: "2026-08-20", end: "2026-09-18" }, connections: [], sync: {}, coverage: {}, ...overrides,

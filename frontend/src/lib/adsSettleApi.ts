@@ -4,7 +4,7 @@
  * `grade_period` rows (`PeriodGradeRow`) plus the settle's fate; unknown numbers are `null`,
  * never 0. Errors carry the backend `code` (`settle_not_ended`, `settle_angle_missing`,
  * `settle_angle_invalid`) so the page can branch on it. */
-import { apiFetch } from "./http";
+import { apiFetch, readJson } from "./http";
 import { BASE } from "./adsApi";
 import type { PeriodGradeBucket, PeriodGradeRow } from "./adsMonthApi";
 import type { LearningVerdict } from "./adsLearningsApi";
@@ -74,44 +74,13 @@ export interface SettleView {
  * for skip rows are ignored. */
 export interface SettlePick { entity_id: string; angle: string }
 
-export class SettleRequestRejected extends Error {
-  code: string | null;
-  status: number;
-  constructor(message: string, code: string | null, status: number) {
-    super(message);
-    this.code = code;
-    this.status = status;
-  }
-}
-
 const settlePath = (brand: string) => `${BASE}/brands/${encodeURIComponent(brand)}/settle`;
 
 async function json<T>(path: string, method: string, body?: unknown, signal?: AbortSignal): Promise<T> {
-  let response: Response;
-  try {
-    response = await apiFetch(path, { method, signal, ...(body === undefined ? {} : {
-      headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-    }) });
-  } catch (error) {
-    if (error instanceof TypeError) throw new Error("未收到伺服器回應，結果尚未確認。請重試。");
-    throw error;
-  }
-  if (!response.ok) {
-    let code: string | null = null;
-    let message = "目前無法完成，請稍後重試。";
-    try {
-      const data = (await response.json()) as { error?: { code?: string; message?: string } };
-      if (data.error?.code) code = data.error.code;
-      if (data.error?.message) message = data.error.message;
-    } catch {
-      // 回應不是 JSON，用預設訊息，`code` 維持 `null`。
-    }
-    if (response.status >= 400 && response.status < 500) {
-      throw new SettleRequestRejected(message, code, response.status);
-    }
-    throw new Error(message);
-  }
-  return (await response.json()) as T;
+  const response = await apiFetch(path, { method, signal, ...(body === undefined ? {} : {
+    headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  }) });
+  return readJson<T>(response, "目前無法完成，請稍後重試。");
 }
 
 /** `month` omitted = the latest ended month in the org timezone. */

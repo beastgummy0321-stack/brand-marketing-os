@@ -12,7 +12,6 @@ import {
   decideChangeSet,
   getChangeControl,
   getMonthlyBudget,
-  ChangeRequestRejected,
   type ChangeDecision,
   type ChangeDraft,
   type ChangeSet,
@@ -20,6 +19,7 @@ import {
 } from "@/lib/adsChangeApi";
 import { getQueue, type QueueItem } from "@/lib/adsTriageApi";
 import { getAngles, type AnglesResponse } from "@/lib/adsAnglesApi";
+import { isRejected } from "@/lib/http";
 import { useApiRead } from "@/lib/useApiRead";
 import { currentBudgetMonth, monthlyBudgetHref } from "../MonthlyBudgetPanel";
 import { formatInstant, useOrgClock } from "@/lib/orgClock";
@@ -50,7 +50,6 @@ import {
   flowPosition,
   isAbSet,
   isCleanupTriageItem,
-  isMonthBudgetRejection,
   itemAngle,
   nextOpenQueueItem,
   pauseTitle,
@@ -339,11 +338,9 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
     } catch (err) {
       // feature Decisions「When approve answers 409 because the premise changed」：只重建一次，
       // 用新的 operation_id 帶 supersedes_id 再核准一次；再失敗就照一般錯誤處理，不無限重試。
-      // 月預算放不下的 409（`isMonthBudgetRejection`）不是「前提變了」，是「這個月的餘額真的不夠」
-      // ——重建一份一樣內容的草稿再核准一次只會得到同一個錯誤，還多留一份沒用的草稿；這種 409
-      // 直接把後端訊息顯示出來，不重建（feature Decisions「a 409 from approve about the month
-      // budget shows the backend message and does NOT rebuild」）。
-      if (err instanceof ChangeRequestRejected && !rebuilt && !isMonthBudgetRejection(err.message)) {
+      // 只認 `change_control_unavailable`（前提變了）；月預算放不下是 409 `month_budget_blocked`
+      // （F51 Contract C）——重建一樣內容的草稿只會得到同一個錯誤，直接顯示後端訊息、不重建。
+      if (isRejected(err, "change_control_unavailable") && !rebuilt) {
         // F40-I08 (issue Done 3): on the budget page the premise change is the 本月預算放得下 card's
         // third state — the user rebuilds with 重新檢查, 核准 stays grey with the reason beside it.
         if (kind === "budget" && !rechecked) { setPremiseSet(target); return null; }

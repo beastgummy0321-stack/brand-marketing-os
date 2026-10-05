@@ -3,8 +3,8 @@
  * exactly — the GET response is flat (no outer wrapper key), same shape as
  * `adsChangeApi.ts::getChangeControl`. Same fetch helper/error style as the other `ads*Api.ts`
  * files (each keeps its own small copy, existing convention — see `adsChangeApi.ts`). */
-import { apiFetch } from "./http";
-import { BASE, parseJsonOrThrow } from "./adsApi";
+import { apiFetch, readJson } from "./http";
+import { BASE } from "./adsApi";
 import type { CampaignObjectiveFamily, RankedGrade, TriageGrade, TriageSampleView } from "./adsTriageApi";
 
 export type MonthVerdict = "met" | "missed" | "unjudged";
@@ -80,25 +80,11 @@ export interface MonthSummary {
 
 const brandPath = (brand: string) => `${BASE}/brands/${encodeURIComponent(brand)}`;
 
-export class MonthRequestRejected extends Error {}
-
 async function json<T>(path: string, method: string, body?: unknown, signal?: AbortSignal): Promise<T> {
-  try {
-    const response = await apiFetch(path, { method, signal, ...(body === undefined ? {} : {
-      headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-    }) });
-    try {
-      return await parseJsonOrThrow(response, "目前無法完成，請稍後重試。");
-    } catch (error) {
-      if (response.status >= 400 && response.status < 500) {
-        throw new MonthRequestRejected(error instanceof Error ? error.message : "請修正後再試。");
-      }
-      throw error;
-    }
-  } catch (error) {
-    if (error instanceof TypeError) throw new Error("未收到伺服器回應，請重試。");
-    throw error;
-  }
+  const response = await apiFetch(path, { method, signal, ...(body === undefined ? {} : {
+    headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  }) });
+  return readJson<T>(response, "目前無法完成，請稍後重試。");
 }
 
 export function getMonthSummary(brand: string, month: string, signal?: AbortSignal) {

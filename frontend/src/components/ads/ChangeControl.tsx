@@ -1,3 +1,4 @@
+import { isRejected } from "@/lib/http";
 import { useEffect, useRef, useState } from "react";
 import { ManualHandoffPanel } from "./ManualHandoffPanel";
 import { getMaterialTask } from "@/lib/adsMaterialApi";
@@ -6,7 +7,7 @@ import { Button } from "@/components/layout/ui/button";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { getOrgId } from "@/lib/auth";
 import { getReview } from "@/lib/adsReviewApi";
-import { ChangeRequestRejected, actOnChangeItem, approveChangeSet, createChangeSet, decideChangeSet, getChangeControl, type ChangeControlData, type ChangeDraft, type ChangeSet } from "@/lib/adsChangeApi";
+import { actOnChangeItem, approveChangeSet, createChangeSet, decideChangeSet, getChangeControl, type ChangeControlData, type ChangeDraft, type ChangeSet } from "@/lib/adsChangeApi";
 import { ChangeComposer } from "./ChangeComposer";
 import { ChangeSetView } from "./ChangeSetView";
 import { currentBudgetMonth, MonthlyBudgetPanel } from "./MonthlyBudgetPanel";
@@ -133,7 +134,7 @@ function Control({ brandId, campaignId }: { brandId: string; campaignId: string 
       let result;
       try { result = await createChangeSet(brandId, campaignId, request, signal); }
       catch (err) {
-        if (!signal.aborted && err instanceof ChangeRequestRejected) { sessionStorage.removeItem(storageKey); setPending(null); }
+        if (!signal.aborted && isRejected(err)) { sessionStorage.removeItem(storageKey); setPending(null); }
         throw err;
       }
       if (!signal.aborted) { sessionStorage.removeItem(storageKey); setPending(null); setInitialDraft(undefined); setComposing(false); }

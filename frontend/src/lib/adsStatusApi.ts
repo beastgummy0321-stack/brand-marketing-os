@@ -1,11 +1,11 @@
 /** frontend/src/lib/adsStatusApi.ts — F27-I09 Contract I: the brand-wide sync/queue status
  * summary. Shapes served by `app/ads/status_summary.py::get_status_summary` — a read shape, not
- * re-worded. Same `BASE`/`parseJsonOrThrow` helpers `adsApi.ts` already exports, same import
+ * re-worded. Same `BASE` `adsApi.ts` exports and `http.readJson`, same import
  * style `adsTriageApi.ts` already uses for them.
  *
  * F27-I10 Contract K: `getRecovery` reads the shape served by `app/ads/recovery.py::get_recovery` the same way. */
-import { apiFetch } from "./http";
-import { BASE, parseJsonOrThrow } from "./adsApi";
+import { apiFetch, readJson } from "./http";
+import { BASE } from "./adsApi";
 
 /** `last_success_at`: the newest moment among this brand's own non-closed campaigns that are
  * currently syncing cleanly (`state === "ok"`), `null` when none are. `attention` (F47 Contract H):
@@ -22,7 +22,7 @@ export async function getStatusSummary(brandId: string, signal?: AbortSignal): P
   const res = await apiFetch(
     `${BASE}/brands/${encodeURIComponent(brandId)}/status-summary`, { signal },
   );
-  return parseJsonOrThrow<AdsStatusSummary>(res, "讀取同步狀態摘要失敗。");
+  return readJson<AdsStatusSummary>(res, "讀取同步狀態摘要失敗。");
 }
 
 /** One of the five recovery steps (always present, in order): `state` is `"done"` (past),
@@ -48,5 +48,5 @@ export async function getRecovery(brandId: string, signal?: AbortSignal): Promis
   const res = await apiFetch(
     `${BASE}/brands/${encodeURIComponent(brandId)}/recovery`, { signal },
   );
-  return parseJsonOrThrow<AdsRecovery>(res, "讀取系統恢復狀態失敗。");
+  return readJson<AdsRecovery>(res, "讀取系統恢復狀態失敗。");
 }

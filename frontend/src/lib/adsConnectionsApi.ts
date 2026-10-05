@@ -23,8 +23,8 @@
  *   latest import, so a zero-order day an import covered is `ok`, not missing. This is the one
  *   orders-coverage rule: the wait page reads the `orders` source's `missing_days` instead of
  *   deriving a gap from the latest order date. */
-import { apiFetch } from "./http";
-import { BASE, parseJsonOrThrow } from "./adsApi";
+import { apiFetch, readJson } from "./http";
+import { BASE } from "./adsApi";
 
 export type ConnectionSourceKind = "ad_account" | "orders" | "product_costs" | "platform";
 
@@ -86,13 +86,6 @@ export interface AdsConnections {
 }
 
 export async function getConnections(brandId: string, signal?: AbortSignal): Promise<AdsConnections> {
-  try {
-    const response = await apiFetch(
-      `${BASE}/brands/${encodeURIComponent(brandId)}/connections`, { signal },
-    );
-    return await parseJsonOrThrow<AdsConnections>(response, "讀取資料連線失敗。");
-  } catch (error) {
-    if (error instanceof TypeError) throw new Error("未收到伺服器回應，請重試。");
-    throw error;
-  }
+  const response = await apiFetch(`${BASE}/brands/${encodeURIComponent(brandId)}/connections`, { signal });
+  return readJson<AdsConnections>(response, "讀取資料連線失敗。");
 }

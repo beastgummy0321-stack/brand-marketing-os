@@ -1,9 +1,10 @@
+import { ApiResponseError } from "@/lib/http";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, useLocation } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ManualHandoffPanel } from "./ManualHandoffPanel";
-import { checkHandoff, createNewAdHandoff, getHandoff, HandoffRequestRejected, reconsiderHandoff, refreshHandoffSources, reportHandoff, type HandoffItem, type HandoffWorkspace } from "@/lib/adsHandoffApi";
+import { checkHandoff, createNewAdHandoff, getHandoff, reconsiderHandoff, refreshHandoffSources, reportHandoff, type HandoffItem, type HandoffWorkspace } from "@/lib/adsHandoffApi";
 import { existingCampaigns, externalView, syncJob, syncOutcome, type NativeEntity, type SyncOutcome } from "@/lib/adsExternalApi";
 import type { ChangeSet } from "@/lib/adsChangeApi";
 
@@ -192,7 +193,7 @@ describe("new independent ad", () => {
     expect(screen.getAllByText(note).length).toBeGreaterThan(1);
   });
   it("unlocks editing only after a definitive request rejection", async () => {
-    vi.mocked(createNewAdHandoff).mockRejectedValueOnce(new HandoffRequestRejected("素材版本已變更"));
+    vi.mocked(createNewAdHandoff).mockRejectedValueOnce(new ApiResponseError("素材版本已變更", 409, {}, { code: "handoff_unavailable" }));
     render(view("brand", "campaign", "new-ad"));
     await fillNewAd();
     await userEvent.click(screen.getByRole("button", { name: "保存清單，檢視並核准" }));

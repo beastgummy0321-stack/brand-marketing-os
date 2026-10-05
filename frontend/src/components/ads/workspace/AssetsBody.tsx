@@ -1,11 +1,12 @@
+import { ApiResponseError, isRejected } from "@/lib/http";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { Button } from "@/components/layout/ui/button";
 import { Skeleton } from "@/components/layout/Skeleton";
 import { WorkerStoppedNotice } from "@/components/layout/WorkerStoppedNotice";
 import type { CampaignDetail } from "@/lib/adsApi";
-import { cancelMaterialTask, MaterialRequestError } from "@/lib/adsMaterialApi";
-import { getSlots, recheckSlot, SlotRecheckError, uploadIntoSlot, type CampaignSlots, type ReplaceRequest, type Slot } from "@/lib/adsSlotsApi";
+import { cancelMaterialTask } from "@/lib/adsMaterialApi";
+import { getSlots, recheckSlot, uploadIntoSlot, type CampaignSlots, type ReplaceRequest, type Slot } from "@/lib/adsSlotsApi";
 import { createUploadBatch, putUpload } from "@/lib/adsUserAssetsApi";
 import { useApiRead } from "@/lib/useApiRead";
 import { useWorkerHealth } from "@/lib/useWorkerHealth";
@@ -119,7 +120,7 @@ function RequestsCard({ brandId, campaignId, slots, onChanged }: {
       setErrors((prev) => ({ ...prev, [taskId]: message }));
       // A 409 says why (`material_task_in_use`: an approved change set uses it; `material_unavailable`: it is gone or
       // changed) — re-read so the card shows what is true now; the reason stays under the row.
-      if (err instanceof MaterialRequestError && err.status === 409) onChanged();
+      if (err instanceof ApiResponseError && err.status === 409) onChanged();
     } finally {
       setBusy(null);
     }
@@ -297,7 +298,7 @@ export function AssetsBody({ brandId, campaign: c, refreshKey, advanced, onPlace
       }
       onPlacementChanged();
     } catch (err) {
-      if (err instanceof SlotRecheckError && err.code === "slot_no_file") reload();
+      if (isRejected(err, "slot_no_file")) reload();
       else setChecked({ adId, line: err instanceof Error ? err.message : "請稍後再試。", error: true });
     } finally {
       setChecking(null);
@@ -322,7 +323,7 @@ export function AssetsBody({ brandId, campaign: c, refreshKey, advanced, onPlace
       });
       onPlacementChanged();
     } catch (err) {
-      if (err instanceof SlotRecheckError && err.code === "slot_no_file") reload();
+      if (isRejected(err, "slot_no_file")) reload();
       else setChecked({ adId, line: err instanceof Error ? err.message : "請稍後再試。", error: true });
     } finally {
       setChecking(null);
