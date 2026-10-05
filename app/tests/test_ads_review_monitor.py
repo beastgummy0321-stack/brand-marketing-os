@@ -175,7 +175,7 @@ class ReviewMonitorTest(unittest.TestCase):
             row["id"],
             "deferred",
             "等待重看",
-            due.isoformat(),
+            due,
         )
         self.assertIsNone(self.monitor()["window"])
         self.assertEqual(self.tick()["monitors_checked"], 0)
@@ -523,7 +523,8 @@ class ReviewMonitorTest(unittest.TestCase):
                 json={
                     "decision": "deferred",
                     "reason": "之後重看",
-                    "revisit_at": (db.now_utc() + timedelta(days=1)).isoformat(),
+                    # F50 Contract K: an org calendar date after today (two UTC days ahead is).
+                    "revisit_on": (db.now_utc() + timedelta(days=2)).date().isoformat(),
                 },
             )
         self.assertEqual(response.status_code, 500)

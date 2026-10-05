@@ -25,7 +25,6 @@ class DecisionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     decision: str
     reason: str = Field(min_length=1, max_length=2000)
-    revisit_at: str | None = None
     revisit_on: str | None = None
 
 
@@ -55,16 +54,16 @@ class ApproveRequest(BaseModel):
     content_hash: str
 
 
-def revisit_instant(request, revisit_on, revisit_at):
+def revisit_instant(request, revisit_on):
     """F50 Contract K: a deferral date `revisit_on` ("YYYY-MM-DD", the org's calendar) as the
     stored instant (`change_control_data.deferral_start`: that day's 00:00 in the org zone),
-    refused with 400 unless after the org's today. `revisit_at` (an instant) is still accepted
-    until the frontend senders move (F50-I12)."""
+    refused with 400 unless after the org's today. It is the only way a deferral gets its
+    revisit time: the instant input `revisit_at` is gone (F50-I12)."""
     if revisit_on is None:
-        return revisit_at
+        return None
     actor = web.require_actor(request)
     try:
-        return data.deferral_start(web.conn, actor.org_id, revisit_on).isoformat()
+        return data.deferral_start(web.conn, actor.org_id, revisit_on)
     except ValueError as exc:
         raise web.ApiError(400, "revisit_on_invalid", str(exc)) from None
 
@@ -91,8 +90,7 @@ def create(request: Request, brand_id: str, campaign_id: str, body: CreateReques
     payload = body.model_dump()
     decision = payload.pop("decide", None)
     if decision is not None:
-        decision["revisit_at"] = revisit_instant(
-            request, decision.pop("revisit_on", None), decision.get("revisit_at"))
+        decision["revisit"] = revisit_instant(request, decision.pop("revisit_on", None))
     for key in ("source", "declined_ids"):
         if payload.get(key) is None:
             payload.pop(key, None)
@@ -140,7 +138,7 @@ def decide(request: Request, brand_id: str, campaign_id: str, set_id: str, body:
             set_id,
             body.decision,
             body.reason,
-            revisit_instant(request, body.revisit_on, body.revisit_at),
+            revisit_instant(request, body.revisit_on),
             str(web.require_actor(request).user_id),
         )
     }

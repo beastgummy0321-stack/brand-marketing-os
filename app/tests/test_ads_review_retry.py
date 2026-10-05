@@ -1,6 +1,7 @@
 """F30 Contract A: a fact-check rejection keeps the round usable, and a round can be re-run."""
 
 import unittest
+from datetime import timedelta
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
@@ -296,7 +297,7 @@ class ReviewRetryTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             review_rounds.decide(
                 self.conn, self.org, self.brand, self.campaign, old["id"], "deferred", "x",
-                "2999-01-01T00:00:00+00:00",
+                db.now_utc() + timedelta(days=3),  # valid deferral; refused: superseded
             )
         self.reply()
         self.run_review(again)

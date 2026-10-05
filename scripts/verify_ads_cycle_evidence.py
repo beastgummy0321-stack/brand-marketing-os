@@ -3,7 +3,7 @@
 import io
 import struct
 import zlib
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, timedelta
 
 from app.tests.fixtures.ads_external import runtime as fixture
 
@@ -97,20 +97,29 @@ def monitor_conditions(run, route):
     monitor = run.call("GET", monitor_url)["monitor"]
     assert monitor["review_id"] == run.context["recovered_gap_review_id"]
     before = run.count_calls()
-    revisit = datetime.now(UTC) + timedelta(seconds=10)
+    # F50 Contract K: a deferral is an org calendar date after the org's today.
+    today = date.fromisoformat(run.call("GET", "/api/identity/me")["org"]["today"])
     deferred = run.call(
         "POST",
         route + "/reviews/" + monitor["review_id"] + "/decision",
         json={
             "decision": "deferred",
             "reason": "隔離驗證：到期才重看一次，不更改平台。",
-            "revisit_at": revisit.isoformat(),
+            "revisit_on": (today + timedelta(days=1)).isoformat(),
         },
     )["review"]
     assert deferred["status"] == "deferred"
     run.drain()
     assert run.count_calls() == before, "Defer must not invoke the provider before its due time"
-    run.wait(lambda: datetime.now(UTC) >= revisit, "real deferred due time")
+    # The isolated run moves the due instant to now instead of waiting for the org's tomorrow;
+    # `review_monitor.on_decision` copied it into the monitor's `next_check_at`, so both move.
+    run.query(
+        "UPDATE ads_review_round SET revisit_at=now() WHERE id=%s RETURNING id", (deferred["id"],)
+    )
+    run.query(
+        "UPDATE ads_review_monitor SET next_check_at=now() WHERE entity_id=%s RETURNING id",
+        (run.context["ad_entity_id"],),
+    )
     run.drain()
     monitor = run.call("GET", monitor_url)["monitor"]
     due = run.call("GET", route + "/reviews/" + monitor["review_id"])["review"]

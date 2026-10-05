@@ -208,7 +208,7 @@ class ReviewCycleTest(unittest.TestCase):
             row["id"],
             "deferred",
             "待補資料",
-            (db.now_utc() + timedelta(days=1)).isoformat(),
+            db.now_utc() + timedelta(days=1),
         )
         self.assertEqual(deferred["status"], "deferred")
         self.enqueue.assert_not_called()
@@ -229,7 +229,7 @@ class ReviewCycleTest(unittest.TestCase):
         self.conn.commit()
         review_rounds.decide(self.conn, self.org, self.brand, self.campaign, row["id"],
                              "deferred", "待補資料",
-                             (db.now_utc() + timedelta(days=1)).isoformat())
+                             db.now_utc() + timedelta(days=1))
         self.assertNotIn(key, {
             r["dedupe_key"] for r in interrupts.list_open(
                 self.conn, org_id=self.org, brand_id=self.brand, category="ads_triage_worse",
@@ -676,6 +676,12 @@ class ReviewCycleTest(unittest.TestCase):
         self.assertEqual(refused.json()["error"]["message"],
                          change_control_data.DEFERRAL_DAY_REFUSAL)
         tomorrow = today + timedelta(days=1)
+        # F50-I12: the browser-instant input `revisit_at` is gone.
+        removed = client.post(url, json={
+            "decision": "deferred", "reason": "延後",
+            "revisit_at": (db.now_utc() + timedelta(days=3)).isoformat(),
+        })
+        self.assertEqual(removed.status_code, 422, removed.text)
         accepted = client.post(url, json={
             "decision": "deferred", "reason": "延後", "revisit_on": tomorrow.isoformat(),
         })

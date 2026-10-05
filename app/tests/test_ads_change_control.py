@@ -245,7 +245,7 @@ class ChangeControlTest(unittest.TestCase):
             first["id"],
             "deferred",
             "需要更多資料",
-            (db.now_utc() + timedelta(days=1)).isoformat(),
+            data.deferral_start(self.conn, self.org, (db.now_utc() + timedelta(days=2)).date()),
             "test",
         )
         revised = self.create(supersedes_id=first["id"])
@@ -270,9 +270,10 @@ class ChangeControlTest(unittest.TestCase):
     def test_create_with_decision_is_one_write(self):
         """F47-I07 (drill-10 Q3): a 暫緩 on a proposal with no set yet creates the set already
         deferred -- one transaction, never a draft first."""
-        revisit = (db.now_utc() + timedelta(days=3)).isoformat()
+        day = (db.now_utc() + timedelta(days=3)).date()
+        revisit = data.deferral_start(self.conn, self.org, day)
         created = self._create_deciding(
-            {"decision": "deferred", "reason": "想再觀察幾天", "revisit_at": revisit},
+            {"decision": "deferred", "reason": "想再觀察幾天", "revisit": revisit},
         )
         self.assertEqual(created["status"], "deferred")
         self.assertEqual(created["reason"], "想再觀察幾天")
@@ -281,10 +282,16 @@ class ChangeControlTest(unittest.TestCase):
 
     def test_create_with_a_past_revisit_leaves_no_draft(self):
         audits = self.count("audit_log")
-        with self.assertRaisesRegex(ValueError, "未來的重看時間"):
+        with self.assertRaisesRegex(ValueError, data.DEFERRAL_DAY_REFUSAL):
             self._create_deciding({
                 "decision": "deferred", "reason": "想再觀察幾天",
-                "revisit_at": (db.now_utc() - timedelta(days=1)).isoformat(),
+                "revisit": db.now_utc() - timedelta(days=1),
+            })
+        with self.assertRaisesRegex(ValueError, data.DEFERRAL_DAY_REFUSAL):
+            # F50-I12: instant text is no input any more -- only `deferral_start`'s instant is.
+            self._create_deciding({
+                "decision": "deferred", "reason": "想再觀察幾天",
+                "revisit": (db.now_utc() + timedelta(days=3)).isoformat(),
             })
         self.assertEqual(self.count("ads_change_set"), 0)
         self.assertEqual(self.count("audit_log"), audits)
@@ -304,7 +311,9 @@ class ChangeControlTest(unittest.TestCase):
         self.assertEqual(again["status"], "approved")
         self.assertEqual(self.count("ads_change_set"), 1)
 
-    def test_http_create_with_decide_and_a_past_revisit_is_a_409_with_no_set(self):
+    def test_http_decide_refuses_the_removed_revisit_at_instant_with_no_set(self):
+        """F50-I12: `revisit_at` (a browser instant) is no longer an input on create's `decide`;
+        the request is refused before anything is written (deferrals send `revisit_on`)."""
         from app.main import app
 
         base = f"/api/ads/brands/{self.brand}/campaigns/{self.campaign}"
@@ -318,9 +327,9 @@ class ChangeControlTest(unittest.TestCase):
         client = TestClient(app)
         refused = client.post(base + "/change-sets", json={**body, "decide": {
             "decision": "deferred", "reason": "再看看",
-            "revisit_at": (db.now_utc() - timedelta(hours=1)).isoformat(),
+            "revisit_at": (db.now_utc() + timedelta(days=3)).isoformat(),
         }})
-        self.assertEqual(refused.status_code, 409, refused.text)
+        self.assertEqual(refused.status_code, 422, refused.text)
         self.assertEqual(self.count("ads_change_set"), 0)
         accepted = client.post(base + "/change-sets", json={**body, "decide": {
             "decision": "rejected", "reason": "這則還想留著",
@@ -936,7 +945,7 @@ class ChangeControlTest(unittest.TestCase):
                 first["id"],
                 "deferred",
                 "try again",
-                (db.now_utc() + timedelta(days=1)).isoformat(),
+                db.now_utc() + timedelta(days=1),
                 "test",
             )
 
@@ -1329,7 +1338,7 @@ class ChangeControlTest(unittest.TestCase):
         copy_set = self.create()
         with self._triage({self.ad["id"]: ("over", 150.0)}):
             service.decide(self.conn, self.org, self.brand, self.campaign, cleanup["id"],
-                           "deferred", "下週再看", (db.now_utc() + timedelta(days=3)).isoformat(),
+                           "deferred", "下週再看", db.now_utc() + timedelta(days=3),
                            "test")
             service.decide(self.conn, self.org, self.brand, self.campaign, copy_set["id"],
                            "rejected", "不改", None, "test")
