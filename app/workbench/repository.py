@@ -751,7 +751,7 @@ def pack_for_source(conn: _AnyConn, org_id: str, brand_id: str, source_kind: str
 # ---------------------------------------------------------------------------
 
 
-#: The provider timeout of one generation call (`jobs.py` hands it to every round's
+#: The provider timeout of one generation call (`jobs.py` passes it to every round's
 #: `TaskOptions`). A `queued`／`running` round with no job behind it is only declared dead once
 #: it has waited this long — it covers the gap between `run_part` writing `queued` and enqueueing.
 GENERATION_TIMEOUT_S = 480.0

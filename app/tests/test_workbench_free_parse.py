@@ -107,7 +107,8 @@ class UnknownPartTest(_FreeParseTestBase):
         self.assertEqual(result["reason"], "reply_invalid")
         self.assertIsNone(result["error_code"])
         self.assertEqual(
-            result["note"], "AI 這次沒有讀懂（回覆裡沒有可以用的產出項目），先照預設往下。",
+            result["note"],
+            "AI 這次沒有給出可用的結果（回覆裡沒有可以用的產出項目），先照預設往下。",
         )
         self.assertEqual(result["spec"], self.defaults)
         self.assertEqual(self._task_count(), 1)
@@ -127,7 +128,7 @@ class NonJsonReplyTest(_FreeParseTestBase):
         self.assertFalse(result["parsed"])
         self.assertEqual(result["reason"], "reply_unreadable")
         self.assertEqual(
-            result["note"], "AI 這次沒有讀懂（回覆不是看得懂的格式），先照預設往下。",
+            result["note"], "AI 這次沒有給出可用的結果（回覆不是看得懂的格式），先照預設往下。",
         )
         self.assertEqual(result["spec"], self.defaults)
         self.assertEqual(self._task_count(), 1)
@@ -149,7 +150,9 @@ class ProviderTimeoutTest(_FreeParseTestBase):
         # F50 Contract J: the fallback keeps why — the provider timed out.
         self.assertEqual(result["reason"], "llm_failed")
         self.assertEqual(result["error_code"], "timeout")
-        self.assertEqual(result["note"], "AI 這次沒有讀懂（等太久沒有回應），先照預設往下。")
+        self.assertEqual(
+            result["note"], "AI 這次沒有給出可用的結果（等太久沒有回應），先照預設往下。",
+        )
         self.assertEqual(result["spec"], self.defaults)
         # The provider's own error is kept on the row, never replaced.
         self.assertEqual(self._last_task()["error"], "AI 服務逾時未回應，請再試一次。")

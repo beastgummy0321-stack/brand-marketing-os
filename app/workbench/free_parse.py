@@ -42,11 +42,11 @@ _LLM_ERROR_WORDS = {
 
 
 def not_parsed_note(reason: str, error_code: str | None = None) -> str:
-    """The one fallback sentence, naming why (「AI 這次沒有讀懂（…），先照預設往下」)."""
+    """The one fallback sentence, naming why (「AI 這次沒有給出可用的結果（…），先照預設往下」)."""
     words = REASONS[reason]
     if reason == "llm_failed" and error_code in _LLM_ERROR_WORDS:
         words = _LLM_ERROR_WORDS[error_code]
-    return f"AI 這次沒有讀懂（{words}），先照預設往下。"
+    return f"AI 這次沒有給出可用的結果（{words}），先照預設往下。"
 
 
 def _valid_outputs(outputs) -> list | None:

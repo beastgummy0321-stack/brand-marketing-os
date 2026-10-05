@@ -207,7 +207,9 @@ def _fix_call(conn, brand_id: str, context, task_type: str, failing: list, *,
         conn, PROVIDER, brand_id=brand_id, task_type=task_type,
         prompt_template_id=f"{task_type}_fix", prompt_template_version="v1",
         system=None, messages=[{"role": "user", "content": prompt}], context=context,
-        options=gateway.TaskOptions(max_tokens=16000, timeout_s=480.0),
+        options=gateway.TaskOptions(
+            max_tokens=16000, timeout_s=repository.GENERATION_TIMEOUT_S,
+        ),
     )
 
 
@@ -445,7 +447,9 @@ def _image_fix_call(conn, brand_id: str, context, worksheet: str, data: dict, gr
         conn, PROVIDER, brand_id=brand_id, task_type="workbench_image_prompt",
         prompt_template_id="workbench_image_prompt_fix", prompt_template_version="v1",
         system=None, messages=[{"role": "user", "content": prompt}], context=context,
-        options=gateway.TaskOptions(max_tokens=16000, timeout_s=480.0),
+        options=gateway.TaskOptions(
+            max_tokens=16000, timeout_s=repository.GENERATION_TIMEOUT_S,
+        ),
     )
 
 
@@ -562,7 +566,9 @@ def _run_image_prompt(conn, org_id: str, brand_id: str, brief_id: str, brief: di
         conn, PROVIDER, brand_id=brand_id, task_type="workbench_image_prompt",
         prompt_template_id="workbench_image_prompt", prompt_template_version="v1",
         system=None, messages=[{"role": "user", "content": prompt}], context=context,
-        options=gateway.TaskOptions(max_tokens=16000, timeout_s=480.0, tools=[tool_schema]),
+        options=gateway.TaskOptions(
+            max_tokens=16000, timeout_s=repository.GENERATION_TIMEOUT_S, tools=[tool_schema],
+        ),
     )
     if task_row["status"] != "succeeded":
         raise RuntimeError(task_row.get("error") or "生成失敗。")
@@ -759,7 +765,9 @@ def _run(conn, org_id: str, brand_id: str, brief_id: str, part: str, count) -> N
         conn, PROVIDER, brand_id=brand_id, task_type=task_type,
         prompt_template_id=task_type, prompt_template_version="v1",
         system=None, messages=[{"role": "user", "content": prompt}], context=context,
-        options=gateway.TaskOptions(max_tokens=16000, timeout_s=480.0),
+        options=gateway.TaskOptions(
+            max_tokens=16000, timeout_s=repository.GENERATION_TIMEOUT_S,
+        ),
     )
     if task_row["status"] != "succeeded":
         raise RuntimeError(task_row.get("error") or "生成失敗。")
