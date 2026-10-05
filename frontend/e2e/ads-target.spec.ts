@@ -111,5 +111,6 @@ test("一個上限：選商品、沒有成本、暫用打平、自己的上限�
   // --- 整頁重新整理（不是前端快取）也還在 ------------------------------------------------------------------
   await page.reload();
   await expect(page.getByText("120 TWD", { exact: true })).toBeVisible();
-  await expect(page.getByText("花到上限時", { exact: true })).toBeVisible();
+  await expect(page.getByText("13.17x", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "花到上限時怎麼算：售價 ÷ 每筆上限", exact: true })).toBeVisible();
 });
