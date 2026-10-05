@@ -226,11 +226,12 @@ def ranked_section(conn: _AnyConn, org_id: str, brand_id: str, campaign: dict, *
             f"第 {number} 群（{group['who']}）" if number is not None
             else f"這期沒列：{group['who']}"
         )
+        # F51 (planning #16): campaigns with different caps or currencies share no one cap.
+        cap = "" if group["caps_differ"] else f"｜上限 {_cap_text(group['cap'])}"
         lines.append(
             f"- 顧客群 {name}｜{group['ads']} 則廣告｜賣 {group['sales']} 筆"
             f"｜花 {learning_rank.whole(group['spend'])}"
-            f"｜每筆 {_money_or(group['cost_per_sale'], '沒賣出')}"
-            f"｜上限 {_cap_text(group['cap'])}"
+            f"｜每筆 {_money_or(group['cost_per_sale'], '沒賣出')}{cap}"
         )
     for campaign_view in view["campaigns"]:
         lines.append(

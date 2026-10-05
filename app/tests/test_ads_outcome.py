@@ -146,8 +146,8 @@ class NoDataDayIsUntrackedNotZeroTest(OutcomeTestBase):
         self.assertIsNone(result["totals"]["purchases"])
         self.assertIsNone(result["totals"]["revenue"])
         self.assertIsNone(result["totals"]["cpa"])
-        self.assertIsNone(result["totals"]["roas"])
-        self.assertIsNone(result["totals"]["roas_conservative"])
+        self.assertIsNone(result["totals"]["roas_tracked_spend"])
+        self.assertIsNone(result["totals"]["roas_all_spend"])
 
 
 class ConservativeAndOptimisticRoasBothPresentTest(OutcomeTestBase):
@@ -164,16 +164,16 @@ class ConservativeAndOptimisticRoasBothPresentTest(OutcomeTestBase):
 
         result = outcome.summary(web.conn, self.org_id, self.brand_id, detail["id"])
 
-        self.assertIsNotNone(result["totals"]["roas"])
-        self.assertIsNotNone(result["totals"]["roas_conservative"])
+        self.assertIsNotNone(result["totals"]["roas_tracked_spend"])
+        self.assertIsNotNone(result["totals"]["roas_all_spend"])
         # 兩者都是拿 (1200 + 600) = 1800 除，分母都是 1000（全部花費都有追蹤到營收），
         # 這個情境下兩個值理當相等——但都要是數字，不是 None。
-        self.assertAlmostEqual(result["totals"]["roas"], 1.8)
-        self.assertAlmostEqual(result["totals"]["roas_conservative"], 1.8)
+        self.assertAlmostEqual(result["totals"]["roas_tracked_spend"], 1.8)
+        self.assertAlmostEqual(result["totals"]["roas_all_spend"], 1.8)
 
 
 class RoasBasesDivergeWhenPartlyUntrackedTest(OutcomeTestBase):
-    """使用者裁決：optimistic（`roas`）／conservative（`roas_conservative`）兩個基準永遠都要
+    """使用者裁決：optimistic（`roas_tracked_spend`）／conservative（`roas_all_spend`）兩個基準永遠都要
     顯示、不能收斂成一個。一天有追蹤、一天沒有，兩個基準的分母因此不同，數字必須真的不一樣。"""
 
     def test_optimistic_and_conservative_roas_diverge_when_one_day_is_untracked(self):
@@ -192,9 +192,9 @@ class RoasBasesDivergeWhenPartlyUntrackedTest(OutcomeTestBase):
 
         # optimistic：只拿「有追蹤到營收」那一天的花費當分母 —— 1000 / 500 = 2.0。
         # conservative：拿全部花費（含未追蹤那天）當分母 —— 1000 / 1000 = 1.0。
-        self.assertAlmostEqual(totals["roas"], 2.0)
-        self.assertAlmostEqual(totals["roas_conservative"], 1.0)
-        self.assertNotEqual(totals["roas"], totals["roas_conservative"])
+        self.assertAlmostEqual(totals["roas_tracked_spend"], 2.0)
+        self.assertAlmostEqual(totals["roas_all_spend"], 1.0)
+        self.assertNotEqual(totals["roas_tracked_spend"], totals["roas_all_spend"])
 
 
 class TrackedZeroUntrackedAndRealCountSumOnlyKnownTest(OutcomeTestBase):

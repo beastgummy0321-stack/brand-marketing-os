@@ -310,20 +310,24 @@ def _ad_spend(aggregated):
     return sum(s["metrics"]["spend"] for s in entries)
 
 
+def _ad_view(aggregated):
+    """This ad's one result view of an `aggregate()` output (or a stored evidence period, the same
+    shape). More than one currency in the window has no single unambiguous view (same defensive
+    shape `targets._trailing_30` uses) -- treated as unknown, never an arbitrary pick. F29-I01: it
+    is reported as its own `mixed_currency` reason so `grade_window` reads it as 資料不足, never as
+    剛開始 (`too_new`) or a 0. `None` when the window has no ad-scope row."""
+    ad_views = [v for v in aggregated["result_views"] if v["metric_scope"] == "ad"]
+    if len(ad_views) > 1:
+        return _MIXED_CURRENCY_VIEW
+    return ad_views[0] if ad_views else None
+
+
 def _ad_window(entity_rows, start, end):
     """`entity_rows` is this ad's own pre-fetched rows for the whole campaign-level lookback
     (`classify()`'s single read) -- sliced here per window, never re-queried."""
     rows = [row for row in entity_rows if start <= row["day"] <= end]
     aggregated = review_evidence.aggregate(rows, start, end)
-    ad_views = [v for v in aggregated["result_views"] if v["metric_scope"] == "ad"]
-    # More than one currency in the window has no single unambiguous view (same defensive shape
-    # `targets._trailing_30` uses) -- treated as unknown, never an arbitrary pick. F29-I01: it is
-    # reported as its own `mixed_currency` reason so `grade_window` reads it as 資料不足, never as
-    # 剛開始 (`too_new`) or a 0.
-    if len(ad_views) > 1:
-        return _MIXED_CURRENCY_VIEW, _ad_spend(aggregated)
-    view = ad_views[0] if ad_views else None
-    return view, _ad_spend(aggregated)
+    return _ad_view(aggregated), _ad_spend(aggregated)
 
 
 _MIXED_CURRENCY_VIEW = {

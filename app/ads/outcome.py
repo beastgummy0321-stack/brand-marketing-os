@@ -62,10 +62,31 @@ def _fetch_rows(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str,
     return rows(conn, org_id, brand_id, campaign_id, entity_kind)
 
 
+def roas_pair(rows: list) -> dict:
+    """F51 Contract F: the two ROAS bases of `rows` (`app/core/figures.py::BASES`), keyed by their
+    basis codes. `roas_all_spend` = revenue ÷ every known spend; `roas_tracked_spend` = revenue ÷
+    the spend of the rows whose revenue is tracked. Both are true; printing one alone hides the
+    other half. No tracked revenue, or no spend to divide by, is `None` -- never 0. The one
+    computation `_bucket` and the workspace totals share."""
+    spend = sum(float(r["spend"]) for r in rows if r["spend"] is not None)
+    revenue_tracked_rows = [r for r in rows if r["revenue"] is not None]
+    if not revenue_tracked_rows:
+        return {"roas_all_spend": None, "roas_tracked_spend": None}
+    revenue = round(sum(float(r["revenue"]) for r in revenue_tracked_rows), 2)
+    spend_tracked = sum(
+        float(r["spend"]) for r in revenue_tracked_rows if r["spend"] is not None
+    )
+    return {
+        "roas_all_spend": (revenue / spend) if spend else None,
+        "roas_tracked_spend": (revenue / spend_tracked) if spend_tracked else None,
+    }
+
+
 def _bucket(rows: list) -> dict:
     """跟 `app/schedule/performance.py::_bucket()` 同一套算法（再實作一份，不 import —
-    container contract §5）：`roas`/optimistic 只算「有追蹤到營收」那一份花費當分母，
-    `roas_conservative` 用**全部**花費當分母——兩個都是真的，只印一個是在說謊的另一半。
+    container contract §5）。F51 Contract F：ROAS 以口徑命名（`roas_pair`）——
+    `roas_tracked_spend`（樂觀）只算「有追蹤到營收」那一份花費當分母，`roas_all_spend`（保守）
+    用**全部**花費當分母——兩個都是真的，只印一個是在說謊的另一半。
     購買數／營收是否追蹤直接看欄位是不是 `NULL`（平台列的 `purchases`／`revenue` 是 nullable，
     未追蹤就是 `NULL`，不用猜來源是哪個平台）；有追蹤到的列一起加總，完全沒有追蹤到的列讓整包
     回 `None`，未追蹤永遠不是 0。花費／曝光／點擊只加總已知的值。"""
@@ -80,16 +101,10 @@ def _bucket(rows: list) -> dict:
     )
 
     revenue_tracked_rows = [r for r in rows if r["revenue"] is not None]
-    revenue = None
-    roas = None
-    roas_conservative = None
-    if revenue_tracked_rows:
-        revenue = round(sum(float(r["revenue"]) for r in revenue_tracked_rows), 2)
-        spend_tracked = sum(
-            float(r["spend"]) for r in revenue_tracked_rows if r["spend"] is not None
-        )
-        roas = (revenue / spend_tracked) if spend_tracked else None
-        roas_conservative = (revenue / spend) if spend else None
+    revenue = (
+        round(sum(float(r["revenue"]) for r in revenue_tracked_rows), 2)
+        if revenue_tracked_rows else None
+    )
 
     cpa = (spend / purchases) if purchases else None
     ctr = (clicks / impressions) if impressions else None
@@ -97,7 +112,40 @@ def _bucket(rows: list) -> dict:
     return {
         "spend": spend, "impressions": impressions, "clicks": clicks,
         "purchases": purchases, "revenue": revenue, "cpa": cpa, "ctr": ctr,
-        "roas": roas, "roas_conservative": roas_conservative,
+        **roas_pair(rows),
+    }
+
+
+def window_totals(conn: _AnyConn, org_id: str, brand_id: str, campaign: dict) -> dict:
+    """F51 (planning #16): a closed campaign's own totals over its window `start_date … end_date`
+    across EVERY ad on the platform, ranked or not -- the ad-scope rows and the rules each ranked
+    ad's own numbers were cut by (`review_evidence.aggregate`, `triage._ad_spend`／`_ad_view`), so
+    a campaign total never skips an unranked ad and never mixes units with its rows.
+    `{spend, results, currency}`: spend `None` on an unknown day or across two currencies (never a
+    sum across currencies), results `None` unless every row agrees on one known result; no window
+    or no row at all is all `None` -- never 0."""
+    from app.ads import review_evidence, triage  # 延遲 import 避免循環
+
+    start, end = campaign.get("start_date"), campaign.get("end_date")
+    if start is None or end is None or end < start:
+        return {"spend": None, "results": None, "currency": None}
+    rows = [
+        dict(r) for r in conn.execute(
+            "SELECT * FROM ads_external_daily WHERE org_id = %s AND brand_id = %s"
+            " AND campaign_id = %s AND metric_scope = 'ad' AND day BETWEEN %s AND %s",
+            (org_id, brand_id, campaign["id"], start, end),
+        ).fetchall()
+    ]
+    aggregated = review_evidence.aggregate(rows, start, end)
+    if not aggregated["series"]:
+        return {"spend": None, "results": None, "currency": None}
+    spend = triage._ad_spend(aggregated)  # noqa: SLF001 -- the one ad-spend rule
+    view = triage._ad_view(aggregated)  # noqa: SLF001 -- the one ad result view
+    currencies = {s["currency"] for s in aggregated["series"] if s["metric_scope"] == "ad"}
+    return {
+        "spend": spend,
+        "results": triage._sales(view),  # noqa: SLF001 -- known whole count, else None
+        "currency": next(iter(currencies)) if len(currencies) == 1 else None,
     }
 
 

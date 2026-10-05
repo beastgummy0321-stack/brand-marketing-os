@@ -6,17 +6,21 @@ customer-group summary (a deleted group reads 已刪除的顧客群), `closed_on
 date, the `campaign_id` / `sell_way_id` filters and the next-campaign link.
 
 Rows are seeded with the public `record_learning` (the scope the closeout writes is proven in
-`test_ads_coordinate_learning.py`).
+`test_ads_coordinate_learning.py`); each ranked ad also spends on the platform inside the window,
+because a campaign's own totals are its closed-window platform totals over every ad (F51 planning
+#16: an unranked ad that spent counts; a customer group across campaigns with different caps has
+no one cap).
 """
 
 import unittest
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
-from app.ads import learning_view, plan
+from app.ads import external_repository, learning_view, outcome, plan
 from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi_repo
 from app.core import db as coredb
 from app.shared import web
+from app.tests.fixtures.ads_external import outcome_seed
 
 ACTOR = "測試員"
 
@@ -60,23 +64,40 @@ class LearningViewTestBase(unittest.TestCase):
         self.conn.commit()
         return campaign
 
-    def _ranked(self, campaign: dict, name: str, *, verdict: str, rank: int, of: int,
-                sales: int, spend: int, group: str | None, few: int = 0,
-                angle: str = "box") -> dict:
+    def _ad(self, campaign: dict, name: str, angle: str = "box") -> dict:
         group_obj = plan.create_group(
             self.conn, self.org_id, self.brand_id, campaign["id"], name=f"組 {name}",
             role="new", daily_budget=500,
         )
-        ad = plan.create_ad(
+        return plan.create_ad(
             self.conn, self.org_id, self.brand_id, campaign["id"], group_obj["id"], name=name,
             coordinates={"audience": "cold", "pain": "effort", "angle": angle, "hook": "h",
                          "proof": "none", "offer": "none", "format": "single_image"},
         )
+
+    def _spent(self, campaign: dict, ad: dict, *, spend: int, sales: int) -> None:
+        """One platform day of `ad` inside the window, written the way a read writes it."""
+        ids = outcome_seed.bind_platform(self.conn, self.org_id, self.brand_id, campaign["id"])
+        external_repository.upsert_observation(
+            self.conn, self.org_id, self.brand_id, campaign["id"],
+            {"entity_id": ids[ad["id"]], "day": date(2026, 9, 6), "metric_scope": "ad",
+             "attribution_key": outcome_seed.ATTRIBUTION_KEY, "currency": "TWD",
+             "source": "test", "spend": spend, "impressions": 100, "purchases": sales},
+            result_kind="purchase", result_count=sales, result_action="omni_purchase",
+            result_attribution="7d_click",
+        )
+        self.conn.commit()
+
+    def _ranked(self, campaign: dict, name: str, *, verdict: str, rank: int, of: int,
+                sales: int, spend: int, group: str | None, few: int = 0,
+                angle: str = "box", cap: int = 450) -> dict:
+        ad = self._ad(campaign, name, angle)
+        self._spent(campaign, ad, spend=spend, sales=sales)
         cpr = round(spend / sales) if sales else "none"
         scope = (
             f"coord；v=2；verdict={verdict}；rank={rank}；of={of}；sales={sales}；spend={spend}"
-            f"；cpr={cpr}；cap=450；few={few}；group={group or 'none'}；audience=cold；pain=effort"
-            f"；angle={angle}；hook=h；proof=none；offer=none；format=single_image；cur=TWD"
+            f"；cpr={cpr}；cap={cap}；few={few}；group={group or 'none'}；audience=cold"
+            f"；pain=effort；angle={angle}；hook=h；proof=none；offer=none；format=single_image；cur=TWD"
         )
         bi_repo.record_learning(
             self.conn, self.brand_id, actor=ACTOR, learning_text=name,
@@ -162,10 +183,53 @@ class ViewShapeTest(LearningViewTestBase):
         )
         self.assertIsNone(view["groups"][2]["cost_per_sale"])
         self.assertEqual(view["groups"][0]["cap"], 450)
+        self.assertFalse(view["groups"][0]["caps_differ"])
         self.assertEqual(view["next"], {
             "sell_way_id": self.product["id"],
             "new_campaign_href": f"/brands/{self.brand_id}/ads/new?sell_way={self.product['id']}",
         })
+
+
+class CampaignTotalsTest(LearningViewTestBase):
+    """F51 planning #16: 上一期花費 counts every ad of the window, ranked or not."""
+
+    def test_an_unranked_spending_ad_counts_in_the_campaign_spend(self):
+        campaign = self._closed("三盒組・第三期", datetime(2026, 9, 19, tzinfo=UTC))
+        self._ranked(campaign, "賣得動", verdict="keep", rank=1, of=1, sales=3, spend=900,
+                     group=self.groups[0]["id"])
+        # A known zero under the 沒賣出 line (3 × 450): never ranked, but it spent.
+        self._spent(campaign, self._ad(campaign, "剛開始"), spend=400, sales=0)
+
+        listed = self._view()["campaigns"][0]
+
+        platform_spend = sum(
+            float(r["spend"]) for r in outcome.rows(
+                self.conn, self.org_id, self.brand_id, campaign["id"], "ad")
+        )
+        self.assertEqual(platform_spend, 1300)
+        self.assertEqual((listed["spend"], listed["sales"]), (platform_spend, 3))
+        self.assertAlmostEqual(listed["cost_per_sale"], 1300 / 3)
+        self.assertEqual(len(listed["rows"]), 1)  # the ranking itself is unchanged
+
+    def test_no_platform_row_is_unknown_never_zero(self):
+        campaign = self._closed("沒讀到", datetime(2026, 9, 19, tzinfo=UTC))
+        listed = self._view(campaign_id=campaign["id"])["campaigns"][0]
+        self.assertEqual((listed["spend"], listed["sales"], listed["cost_per_sale"]),
+                         (None, None, None))
+
+    def test_a_group_across_campaigns_with_different_caps_has_no_one_cap(self):
+        students = self.groups[0]["id"]
+        older = self._closed("第一期", datetime(2026, 9, 19, tzinfo=UTC))
+        self._ranked(older, "甲", verdict="keep", rank=1, of=1, sales=2, spend=600,
+                     group=students, cap=450)
+        newer = self._closed("第二期", datetime(2026, 9, 20, tzinfo=UTC))
+        self._ranked(newer, "乙", verdict="keep", rank=1, of=1, sales=2, spend=500,
+                     group=students, cap=300)
+
+        group = self._view()["groups"][0]
+
+        self.assertEqual((group["who"], group["spend"], group["sales"]), ("學生備考", 1100, 4))
+        self.assertEqual((group["cap"], group["caps_differ"]), (None, True))
 
 
 class EmptyAndFilterTest(LearningViewTestBase):

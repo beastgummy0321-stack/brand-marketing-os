@@ -377,6 +377,28 @@ class RankedSectionTest(CoordinateLearningTestBase):
         self.assertIn("｜顧客群 這期沒列：學生備考｜「考前一週・書包一盒」", text)
         self.assertIn("- 顧客群 這期沒列：學生備考｜", text)
 
+    def test_a_group_whose_campaigns_had_different_caps_prints_no_cap(self):
+        """F51 (planning #16): a cross-campaign 每筆 is never set against one campaign's cap."""
+        row = {
+            "learning_id": "lrn_1", "rank": 1, "of": 1, "verdict_label": "留下", "flags": [],
+            "customer_group": {"id": "g1", "who": "學生備考"}, "ad_name": "甲",
+            "cost_per_sale": 300, "sales": 2, "spend": 600, "coordinates": [],
+        }
+        view = {
+            "campaigns": [{"campaign_name": "第二期", "cap": 300, "rule_text": "r",
+                           "empty_reason": None, "rows": [row]}],
+            "groups": [{"customer_group_id": "g1", "who": "學生備考", "ads": 2, "sales": 4,
+                        "spend": 1100, "cost_per_sale": 275, "cap": None, "caps_differ": True}],
+            "next": None,
+        }
+        campaign = self._campaign("新的一期")
+
+        text, _ = coordinate_learning.ranked_section(
+            self.conn, self.org_id, self.brand_id, campaign, view=view, listed=[],
+        )
+
+        self.assertIn("- 顧客群 這期沒列：學生備考｜2 則廣告｜賣 4 筆｜花 1,100｜每筆 275\n", text)
+
 
 class GatePairsTest(CoordinateLearningTestBase):
     def test_keep_and_replace_pairs_only_count_listed_groups(self):

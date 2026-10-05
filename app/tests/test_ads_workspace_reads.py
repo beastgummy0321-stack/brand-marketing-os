@@ -75,12 +75,12 @@ def _ad(conn, org, brand, campaign_id, native_id, parent, *, status="ACTIVE"):
     return entity_id
 
 
-def _obs(conn, org, brand, campaign_id, ad_id, day, *, spend, count=0):
+def _obs(conn, org, brand, campaign_id, ad_id, day, *, spend, count=0, revenue=None):
     external.upsert_observation(
         conn, org, brand, campaign_id,
         {"entity_id": ad_id, "day": day, "metric_scope": "ad", "attribution_key": "a",
          "currency": "TWD", "source": "meta", "spend": spend, "impressions": 100,
-         "purchases": None},
+         "purchases": None, "revenue": revenue},
         result_kind="purchase", result_count=count, result_action="omni_purchase",
         result_attribution="7d_click+1d_view",
     )
@@ -491,6 +491,8 @@ class TotalsWindowTest(_WithReader):
             "results": 2, "cost_per_result": 75,
             "window": {"start": "2026-09-10", "end": "2026-09-23", "days": 14,
                        "label": "近 14 天"},
+            # No revenue tracked on any row: both ROAS bases are unknown, never 0.
+            "roas_all_spend": None, "roas_tracked_spend": None,
         })
 
     def test_an_ended_campaign_shows_the_fourteen_days_before_its_end(self):
@@ -554,6 +556,31 @@ class TotalsWindowTest(_WithReader):
             totals = self.workspace(brand, campaign)["totals"]
         self.assertEqual((totals["spend"], totals["results"], totals["cost_per_result"]),
                          (180, 2, 90))
+
+    def test_roas_bases_over_the_window_and_null_when_one_day_is_unread(self):
+        """F51 Contract F: `roas_all_spend` = revenue ÷ every spend of the window,
+        `roas_tracked_spend` = revenue ÷ the spend of the rows whose revenue is tracked; an unread
+        day of the window nulls both with the spend."""
+        brand = _brand(self.conn, self.org, "工作區：ROAS 口徑")
+        campaign = _imported(self.conn, self.org, brand, "口徑", "c_roas", cap=100)
+        ad = _ad(self.conn, self.org, brand, campaign, "a_roas", ("campaign", "c_roas"))
+        _obs(self.conn, self.org, brand, campaign, ad, date(2026, 9, 14), spend=100, count=1,
+             revenue=300)
+        _obs(self.conn, self.org, brand, campaign, ad, date(2026, 9, 20), spend=100, count=1)
+        _synced(self.conn, self.org, brand, campaign, date(2026, 9, 10), date(2026, 9, 23))
+        with mock.patch.object(db, "now_utc", return_value=_Clock.now_utc):
+            totals = self.workspace(brand, campaign)["totals"]
+        self.assertEqual(totals["spend"], 200)
+        self.assertAlmostEqual(totals["roas_all_spend"], 1.5)
+        self.assertAlmostEqual(totals["roas_tracked_spend"], 3.0)
+
+        _synced(self.conn, self.org, brand, campaign, date(2026, 9, 11), date(2026, 9, 23))
+        with mock.patch.object(db, "now_utc", return_value=_Clock.now_utc):
+            totals = self.workspace(brand, campaign)["totals"]  # 9/10 never read
+        self.assertEqual(
+            (totals["spend"], totals["roas_all_spend"], totals["roas_tracked_spend"]),
+            (None, None, None),
+        )
 
     def test_rows_without_any_recorded_coverage_are_unknown(self):
         brand = _brand(self.conn, self.org, "工作區：沒有讀取紀錄")

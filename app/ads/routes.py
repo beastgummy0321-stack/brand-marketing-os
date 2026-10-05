@@ -30,6 +30,7 @@ from app.ads import (
     external_repository,
     handoff_assignment,
     judgment,
+    learning,
     manual_settings_routes,
     materials_in_hand,
     month_budget,
@@ -127,6 +128,8 @@ def _with_readiness(actor, brand_id: str, campaign: dict | None) -> dict | None:
     campaign.update(plan.served(web.conn, actor.org_id, brand_id, campaign))
     # F50 Contract J (R7 B4): a planner call still running for this campaign survives a reload.
     campaign["busy"] = busy.busy_state(web.conn, actor.org_id, brand_id, campaign["id"])
+    # F51 Contract F: the closeout sentence the ledger stored, served (null before closeout).
+    campaign["learning_sentence"] = learning.closed_sentence(campaign)
     return campaign
 
 

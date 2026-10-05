@@ -232,6 +232,7 @@ class OneSpentTest(_Pinned):
         # No monthly budget confirmed: nothing to compare against, never a zero.
         self.assertIsNone(pace["budget_amount"])
         self.assertIsNone(pace["available"])
+        self.assertIsNone(pace["budget_to_date"])
 
     def test_money_is_purchase_campaigns_only(self):
         money = self.overview(self.brand)["money"]
@@ -239,7 +240,7 @@ class OneSpentTest(_Pinned):
         self.assertEqual(money["purchases"], 3)
         self.assertEqual(money["cost_per_purchase"], round(1700 / 3, 2))
         self.assertEqual(money["cap"], {"value": 250, "basis": "own", "break_even": 300})
-        self.assertEqual(money["earn"], 3 * 300 - 1700)
+        self.assertEqual(money["earn_after_cost_and_ads"], 3 * 300 - 1700)
         self.assertEqual(money["earn_missing"], [])
         self.assertEqual(money["excluded"], [
             {"campaign_id": self.lead, "name": "名單活動", "reason": "not_purchase"},
@@ -332,7 +333,7 @@ class CounterexampleTest(_Pinned):
         self.assertIsNone(home["currency"])
         self.assertIsNone(home["quality"])
         self.assertEqual(home["money"]["purchases"], None)
-        self.assertIsNone(home["money"]["earn"])
+        self.assertIsNone(home["money"]["earn_after_cost_and_ads"])
         self.assertEqual(home["money"]["earn_missing"], ["no_purchase_campaign"])
         self.assertTrue(all(d["cumulative"] is None for d in home["pace"]["daily"]))
         self.assertIsNone(home["pace"]["projected_month_end"])
@@ -348,7 +349,7 @@ class CounterexampleTest(_Pinned):
         money = self.overview(brand)["money"]
         self.assertEqual(money["purchases"], 0)
         self.assertIsNone(money["cost_per_purchase"])
-        self.assertEqual(money["earn"], -120)
+        self.assertEqual(money["earn_after_cost_and_ads"], -120)
         self.assertEqual(money["cap"], {"value": 300, "basis": "break_even", "break_even": 300})
 
     def test_null_spend_day_nulls_spent_but_not_other_campaigns(self):
@@ -370,7 +371,7 @@ class CounterexampleTest(_Pinned):
         self.assertEqual(rows[good]["month_spend"], 80)
         self.assertIsNone(rows[bad]["month_spend"])
         self.assertIsNone(home["money"]["cost_per_purchase"])
-        self.assertIsNone(home["money"]["earn"])
+        self.assertIsNone(home["money"]["earn_after_cost_and_ads"])
         self.assertIn("spend", home["money"]["earn_missing"])
 
     def test_mixed_currencies_are_never_summed(self):
@@ -388,7 +389,7 @@ class CounterexampleTest(_Pinned):
         self.assertTrue(all(c["month_spend"] is None for c in home["campaigns"]))
         self.assertEqual(home["money"]["purchases"], 2)  # counts are not money
         self.assertIsNone(home["money"]["cost_per_purchase"])
-        self.assertIsNone(home["money"]["earn"])
+        self.assertIsNone(home["money"]["earn_after_cost_and_ads"])
 
     def test_no_cap_anywhere_and_no_break_even(self):
         conn, org, brand = self.conn, self.org, self.brand
@@ -399,7 +400,7 @@ class CounterexampleTest(_Pinned):
         home = self.overview(brand)
         self.assertIsNone(home["money"]["cap"])
         self.assertEqual(home["money"]["cost_per_purchase"], 30)
-        self.assertIsNone(home["money"]["earn"])  # unknown, never 0
+        self.assertIsNone(home["money"]["earn_after_cost_and_ads"])  # unknown, never 0
         self.assertEqual(home["money"]["earn_missing"], ["product"])
         self.assertIsNone(home["campaigns"][0]["cap"])
         buckets = {b["grade"]: b["amount"] for b in home["quality"]["buckets"]}
@@ -424,6 +425,14 @@ class CounterexampleTest(_Pinned):
         self.assertEqual(pace["budget_amount"], 60000)
         # No connected account to reconcile against: the remainder stays unknown.
         self.assertIsNone(pace["available"])
+        # F51 Contract F: served, never rebuilt by the browser -- 60,000 × 23 ÷ 30.
+        self.assertEqual(pace["budget_to_date"], 46000)
+
+    def test_budget_to_date_rounds_half_up(self):
+        """45 × 23 ÷ 30 = 34.5 -> 35 (`budget.whole`, half up; Python's `round` would give 34)."""
+        month_budget.save(self.conn, self.org, self.brand, month=MONTH, currency="TWD",
+                          amount=45, expected_revision=0, actor="test")
+        self.assertEqual(self.overview(self.brand)["pace"]["budget_to_date"], 35)
 
     def test_draft_with_no_ads_is_listed_after_live_rows(self):
         conn, org, brand = self.conn, self.org, self.brand

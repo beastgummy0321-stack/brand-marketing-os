@@ -39,7 +39,7 @@ def _metric_value(metric: str, bucket: dict) -> float | None:
     if metric == "cpa":
         return bucket["cpa"]
     if metric == "roas":
-        return bucket["roas_conservative"]
+        return bucket["roas_all_spend"]
     return bucket["purchases"]
 
 

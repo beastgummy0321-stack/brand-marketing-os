@@ -292,7 +292,14 @@ def _starting_point_section(brand: dict, history: dict | None, reads: dict, camp
         )
 
     loop_purchases = reads["loop_purchases"]
-    loop_text = f"{_count_text(loop_purchases)} 筆" if loop_purchases else "沒有"
+    # F51 (planning #15): no closed campaign yet -> 沒有; closed but the purchases were never
+    # tracked -> 未追蹤 (never 沒有, never 0); a counted zero -> 0 筆.
+    if not reads["closed_campaigns"]:
+        loop_text = "沒有"
+    elif loop_purchases is None:
+        loop_text = "未追蹤"
+    else:
+        loop_text = f"{_count_text(loop_purchases)} 筆"
 
     pixels = launch_settings.cached_pixels(campaign)
     pixel_text = f"已讀到 {len(pixels)} 個像素" if pixels is not None else "還沒讀像素"

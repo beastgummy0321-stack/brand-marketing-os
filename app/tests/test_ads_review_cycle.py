@@ -306,6 +306,9 @@ class ReviewCycleTest(unittest.TestCase):
         self.assertEqual(prior["actions"][0]["verification_state"], "deviated")
         self.assertFalse(prior["actions"][0]["evidence_json"]["setting_matches"])
         self.assertIn("current", prior["evidence"])
+        # F51: the round read's figures are not evidence; the next snapshot never carries them.
+        self.assertNotIn("ad_spend", prior["evidence"]["current"])
+        self.assertNotIn("ad_result_view", prior["evidence"]["current"])
 
     def test_unknown_purchase_not_zero_and_separate_attribution_currency_source(self):
         self.observation()
@@ -318,11 +321,34 @@ class ReviewCycleTest(unittest.TestCase):
         self.assertEqual(len(evidence["current"]["series"]), 2)
         series = next(s for s in evidence["current"]["series"] if s["currency"] == "TWD")
         self.assertIsNone(series["metrics"]["purchases"])
-        self.assertIsNone(series["metrics"]["roas"])
+        self.assertIsNone(series["metrics"]["roas_platform"])
         self.assertEqual(series["known_counts"]["purchases"], 1)
         self.assertEqual(evidence["current"]["missing_days"], 1)
         self.assertEqual(evidence["conditions"]["history"], "unknown")
         self.assertEqual(evidence["previous"]["row_count"], 0)
+        # F51 Contract F: the ad's window spend is served by the round read, and two currencies
+        # are never summed -- null, with the view naming the mixed currency.
+        self.assertEqual(evidence["current"]["ad_spend"], {"value": None, "currency": None})
+        self.assertEqual(evidence["current"]["ad_result_view"]["reason"], "mixed_currency")
+        self.assertEqual(evidence["previous"]["ad_spend"], {"value": None, "currency": None})
+        self.assertIsNone(evidence["previous"]["ad_result_view"])
+
+    def test_round_read_serves_the_ads_window_spend_and_result_view(self):
+        self.observation(result_kind="purchase", result_count=2, result_action="omni_purchase",
+                         result_attribution="7d_click", purchases=2)
+        self.observation(self.end - timedelta(days=1), spend=50, result_kind="purchase",
+                         result_count=1, result_action="omni_purchase",
+                         result_attribution="7d_click", purchases=1)
+        current = self.request()["evidence_json"]["current"]
+        self.assertEqual(current["ad_spend"], {"value": 150, "currency": "TWD"})
+        self.assertEqual(
+            (current["ad_result_view"]["result_count"], current["ad_result_view"]["reason"]),
+            (3, None),
+        )
+        stored = self.conn.execute(
+            "SELECT evidence_json FROM ads_review_round WHERE campaign_id=%s", (self.campaign,)
+        ).fetchone()["evidence_json"]
+        self.assertNotIn("ad_spend", stored["current"])  # the snapshot is never rewritten
 
     def test_f48_forbidden_list_is_scoped_to_the_campaigns_products(self):
         """F48 Contract G: the review evidence carries the one 「不能講」 list of the campaign's

@@ -25,6 +25,7 @@ from app.ads import (
     home_overview,
     lifecycle,
     month_summary,
+    outcome,
     queue_done,
     repository,
     review_evidence,
@@ -98,7 +99,9 @@ def _totals(conn, org_id, brand_id, campaign) -> dict:
     currencies -> null), results and cost per result by `month_summary._ad_result` (the one
     ad-scope result view; null unless every row agrees on one result kind). A read day with a
     zero-spend row, or with no row at all, is a known zero; a window without any row is unknown,
-    as on the home."""
+    as on the home. F51 Contract F: `roas_all_spend`／`roas_tracked_spend` over the same rows
+    (`outcome.roas_pair`, the performance tab's one rule), null whenever spend is null (an unread
+    day included) or no revenue is tracked."""
     campaign_id = campaign["id"]
     cutoff = coverage.last_complete_day(conn, org_id, brand_id, campaign_id)
     start, end = coverage.window(campaign, cutoff, TOTALS_DAYS)
@@ -108,6 +111,7 @@ def _totals(conn, org_id, brand_id, campaign) -> dict:
         return {
             "start": None, "end": None, "window": None, "currency": None,
             "spend": None, "results": None, "cost_per_result": None,
+            "roas_all_spend": None, "roas_tracked_spend": None,
         }
     window = _totals_window(start, end, cutoff)
     read = coverage.load(conn, org_id, brand_id, campaign, start, end)
@@ -128,7 +132,7 @@ def _totals(conn, org_id, brand_id, campaign) -> dict:
         return {
             "start": start.isoformat(), "end": end.isoformat(), "window": window,
             "currency": spend["currency"], "spend": None, "results": None,
-            "cost_per_result": None,
+            "cost_per_result": None, "roas_all_spend": None, "roas_tracked_spend": None,
         }
     return {
         "start": start.isoformat(), "end": end.isoformat(), "window": window,
@@ -136,6 +140,9 @@ def _totals(conn, org_id, brand_id, campaign) -> dict:
         "spend": home_overview._money_out(spend["amount"]) if spend["known"] else None,
         "results": home_overview._count_out(results),
         "cost_per_result": None if cost_per_result is None else round(cost_per_result, 2),
+        **(outcome.roas_pair(rows) if spend["known"] else {
+            "roas_all_spend": None, "roas_tracked_spend": None,
+        }),
     }
 
 
