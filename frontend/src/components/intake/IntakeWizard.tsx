@@ -79,10 +79,9 @@ export function IntakeWizard({ brandId }: { brandId: string | null }) {
         <StartStep
           brandId={null}
           nav={{ crumb: brandCrumb(""), steps: BRAND_STEPS, current: 1 }}
-          onSaved={async ({ brand_id }) => {
+          onSaved={({ brand_id }) => {
             refreshBrands();
-            const onboarding = await fetchOnboardingStatus(brand_id);
-            navigate(`/brands/${encodeURIComponent(brand_id)}/intake?step=${onboarding.step}`, { replace: true });
+            navigate(`/brands/${encodeURIComponent(brand_id)}/intake?step=2`, { replace: true });
           }}
         />
       </Page>

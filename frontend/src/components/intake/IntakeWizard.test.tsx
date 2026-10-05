@@ -327,3 +327,28 @@ it("creating replaces the new-brand entry so browser Back cannot open a blank fo
   await userEvent.click(screen.getByRole("button",{name:"Browser Back"}));
   expect(await screen.findByText("Previous page")).toBeTruthy();
 });
+
+
+it("retains the created brand URL when status loading fails and recovers on reload", async () => {
+  vi.mocked(submitIntakeStart).mockResolvedValue({brand_id:"brd_x",quick:false});
+  mockStatus.mockRejectedValue(new ApiResponseError("讀取暫時失敗", 500, {}));
+  mockDraft.mockResolvedValue({scan_done:true} as unknown as IntakeDraft);
+  render(<MemoryRouter initialEntries={["/intake/new"]}>
+    <Where/><Routes>
+      <Route path="/intake/new" element={<IntakeWizard brandId={null}/>}/>
+      <Route path="/brands/:brandId/intake" element={<IntakeWizard brandId="brd_x"/>}/>
+    </Routes>
+  </MemoryRouter>);
+  await userEvent.type(screen.getByLabelText("品牌名稱"),"New brand");
+  await userEvent.click(screen.getByRole("radio",{name:"完全沒投過"}));
+  await userEvent.click(screen.getByRole("button",{name:"下一步 →"}));
+  expect(await screen.findByText("讀取失敗")).toBeTruthy();
+  const url = screen.getByTestId("where").textContent!;
+  expect(url).toBe("/brands/brd_x/intake?step=2");
+  cleanup();
+  mockStatus.mockResolvedValue(status({step:3}));
+  renderWizard(url);
+  expect(await screen.findByRole("heading",{name:"品牌是誰"})).toBeTruthy();
+  await waitFor(() => expect(screen.getByTestId("where").textContent).toBe("/brands/brd_x/intake?step=3"));
+  expect(submitIntakeStart).toHaveBeenCalledTimes(1);
+});
