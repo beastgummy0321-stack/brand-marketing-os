@@ -6,6 +6,11 @@ import { useEffect } from "react";
  * loaded, restored when the step mounts again (「← 上一步」, the step bar, a reload), and dropped once the step's
  * 下一步 saved. Each step keeps only its own shape check and its loaded baseline. */
 
+/** Brand drafts are isolated by user/org scope, brand and step; files never belong here. */
+export function brandDraftKey(scope: string | undefined, brandId: string, step: string): string {
+  return `intake-draft:${scope ?? ""}:${brandId}:${step}`;
+}
+
 /** The draft key of a product onboarding step (product ids are unique across brands; sessionStorage is per tab). */
 export function productDraftKey(brandId: string, productId: string, step: string): string {
   return `intake-draft:${brandId}:${productId}:${step}`;

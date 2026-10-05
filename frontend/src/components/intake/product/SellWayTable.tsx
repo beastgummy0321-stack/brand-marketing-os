@@ -1,3 +1,4 @@
+import { formatCurrency } from "@/lib/format";
 import type { ReactNode } from "react";
 import { Button } from "@/components/layout/ui/button";
 import { formatCount } from "@/lib/format";
@@ -301,15 +302,15 @@ function Result({ numbers: n, shape, pending, missing, showCloseRate, onFillCost
     be = (
       <>
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-          <b className="text-base font-[650] tabular-nums">每筆最多花 NT${amount(Math.max(n.break_even, 0))}</b>
+          <b className="text-base font-[650] tabular-nums">每筆最多花 {formatCurrency(Math.max(n.break_even, 0))}</b>
           {n.break_even_derived && <EstChip />}
         </div>
         <div className="text-[11.5px] text-muted-foreground">
-          {rate && "（"}售價 {amount(n.price ?? 0)}{priceEst} − 成本 {amount(n.cost ?? 0)}{costEst} − 運費成本 {amount(n.shipping ?? 0)}{rate && `）${rate}`}
+          {rate && "（"}售價 {n.price === null ? "不明" : amount(n.price)}{priceEst} − 成本 {n.cost === null ? "不明" : amount(n.cost)}{costEst} − 運費成本 {n.shipping === null ? "不明" : amount(n.shipping)}{rate && `）${rate}`}
         </div>
         {n.break_even <= 0 && (
           <div className="text-[11.5px] font-medium text-warning">
-            {showCloseRate ? "這個價錢賣一筆就虧" : `這個價錢賣一筆就虧 NT$${amount(-n.break_even)}`}，廣告花多少都不划算
+            {showCloseRate ? "這個價錢賣一筆就虧" : `這個價錢賣一筆就虧 ${formatCurrency(-n.break_even)}`}，廣告花多少都不划算
           </div>
         )}
       </>

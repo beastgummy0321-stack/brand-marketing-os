@@ -58,7 +58,7 @@ export function NewProductStep({ brandId, nav, back, onCreated }: {
       </section>
       {error && <p role="alert" className="text-sm text-danger">{error}</p>}
       <OnboardingBar back={back}>
-        <NextButton disabled={!ready} reason={saving ? null : nextBlocked(name, false)} />
+        <NextButton busy={saving} reason={nextBlocked(name, false)} />
       </OnboardingBar>
     </form>
   );
@@ -72,9 +72,9 @@ function nextBlocked(name: string, uploading: boolean): string | null {
 }
 
 /** The bar's primary button (`BarNext`) with F47-I03's disabled reason. */
-function NextButton({ disabled, reason }: { disabled: boolean; reason: string | null }) {
+function NextButton({ busy, reason }: { busy: boolean; reason: string | null }) {
   return (
-    <Button type="submit" size="lg" className="font-semibold" disabled={disabled} disabledReason={reason ?? undefined}>
+    <Button type="submit" size="lg" className="font-semibold" busy={busy} disabledReason={reason}>
       下一步 →
     </Button>
   );
@@ -185,7 +185,7 @@ export function WhatStep({ brandId, productId, nav, back, what, prefillDone, abo
             {photos.map((p) => (
               <Thumb key={p.id} url={p.url} />
             ))}
-            <Button type="button" variant="outline" size="sm" disabled={uploading} onClick={() => fileInput.current?.click()}>
+            <Button type="button" variant="outline" size="sm" busy={uploading} onClick={() => fileInput.current?.click()}>
               {uploading ? "上傳中…" : "＋上傳"}
             </Button>
             <input
@@ -229,7 +229,7 @@ export function WhatStep({ brandId, productId, nav, back, what, prefillDone, abo
       </section>
       {error && <p role="alert" className="text-sm text-danger">{error}</p>}
       <OnboardingBar back={back}>
-        <NextButton disabled={!ready} reason={saving ? null : nextBlocked(name, uploading)} />
+        <NextButton busy={saving || uploading} reason={nextBlocked(name, uploading)} />
       </OnboardingBar>
     </form>
   );

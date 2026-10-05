@@ -9,7 +9,7 @@ import { cn } from "@/lib/utils";
 import { BarNext, OnboardingBar, OnboardingStepHead, type BarBack, type StepNav } from "../OnboardingStepHead";
 import { AiTag } from "../shared/AiTag";
 import { CustomEscape, CustomMark } from "../shared/CustomEscape";
-import { clearStepDraft, readStepDraft, useStepDraft } from "../shared/stepDraft";
+import { brandDraftKey, clearStepDraft, readStepDraft, useStepDraft } from "../shared/stepDraft";
 
 /** Prototype `chips(…, 2)`: at most two tones; picking a third drops the oldest. */
 const TONE_MAX = 2;
@@ -22,7 +22,7 @@ const TONE_MAX = 2;
 export function IdentityStep({ nav, back, onNext }: { nav: StepNav; back?: BarBack; onNext: () => void }) {
   const { brandId = "" } = useParams<{ brandId: string }>();
   const { scope } = useWorkspace();
-  const draftKey = `intake-draft:${scope ?? ""}:${brandId}:identity`;
+  const draftKey = brandDraftKey(scope, brandId, "identity");
   const [loaded, setLoaded] = useState<OnboardingIdentity | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [positioning, setPositioning] = useState("");
@@ -201,7 +201,7 @@ export function IdentityStep({ nav, back, onNext }: { nav: StepNav; back?: BarBa
       {error && <p role="alert" className="text-sm text-danger">{error}</p>}
 
       <OnboardingBar back={back}>
-        <BarNext type="submit" label="下一步" disabled={!loaded || saving} />
+        <BarNext type="submit" label="下一步" busy={!loaded || saving} />
       </OnboardingBar>
     </form>
   );

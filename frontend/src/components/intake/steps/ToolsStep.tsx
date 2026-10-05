@@ -1,3 +1,5 @@
+import { useWorkspace } from "@/components/layout/WorkspaceContext";
+import { brandDraftKey, clearStepDraft, readStepDraft, useStepDraft } from "../shared/stepDraft";
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { Button } from "@/components/layout/ui/button";
@@ -22,6 +24,10 @@ const HINT = "之後回到「品牌資料」或投放中心的資料連線再接
  * opens the existing token → account flow inline (`MetaConnectPanel`); a connector with an in-app page (the orders
  * file) links there. Then 成效目標, saved on change (`POST …/conversion-goal`). Skipping every connector is allowed. */
 export function ToolsStep({ brandId, nav, back, onNext }: { brandId: string; nav: StepNav; back?: BarBack; onNext: () => void }) {
+  const { scope } = useWorkspace();
+  const draftKey = brandDraftKey(scope, brandId, "tools");
+  const [goal, setGoal] = useState<string | null>(null);
+  const [goalSaved, setGoalSaved] = useState(false);
   const [load, setLoad] = useState<LoadState>({ status: "loading" });
   const [metaOpen, setMetaOpen] = useState(false);
   const [savingGoal, setSavingGoal] = useState(false);
@@ -30,7 +36,10 @@ export function ToolsStep({ brandId, nav, back, onNext }: { brandId: string; nav
   function reload(quiet = false) {
     if (!quiet) setLoad({ status: "loading" });
     fetchOnboardingTools(brandId)
-      .then((tools) => setLoad({ status: "ready", tools }))
+      .then((tools) => {
+        setGoal(readStepDraft(draftKey, (v): v is string => typeof v === "string") ?? tools.conversion_goal);
+        setLoad({ status: "ready", tools });
+      })
       .catch((err: unknown) => {
         if (!quiet) setLoad({ status: "error", message: err instanceof Error ? err.message : "讀取失敗，請稍後再試。" });
       });
@@ -39,13 +48,21 @@ export function ToolsStep({ brandId, nav, back, onNext }: { brandId: string; nav
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => reload(), [brandId]);
 
+  useStepDraft(draftKey, load.status === "ready", goal, load.status === "ready" ? load.tools.conversion_goal : null);
+
   async function selectGoal(goal: string) {
-    if (load.status !== "ready" || goal === load.tools.conversion_goal) return;
+    if (load.status !== "ready") return;
+    setGoal(goal);
+    setGoalSaved(false);
+    setGoalError(null);
+    if (goal === load.tools.conversion_goal) return;
     setSavingGoal(true);
     setGoalError(null);
     try {
       await saveConversionGoal(brandId, goal);
       setLoad({ status: "ready", tools: { ...load.tools, conversion_goal: goal } });
+      clearStepDraft(draftKey);
+      setGoalSaved(true);
     } catch (err) {
       setGoalError(err instanceof Error ? err.message : "儲存失敗，請稍後再試。");
     } finally {
@@ -88,10 +105,12 @@ export function ToolsStep({ brandId, nav, back, onNext }: { brandId: string; nav
               <div className="min-w-0">
                 <GoalSegmented
                   options={load.tools.conversion_goal_options}
-                  value={load.tools.conversion_goal}
-                  disabled={savingGoal}
+                  value={goal}
+                  busy={savingGoal}
                   onChange={(goal) => void selectGoal(goal)}
                 />
+                {goal !== load.tools.conversion_goal && !savingGoal && <p className="mt-2 text-xs text-warning">尚未儲存，重新選取可再試</p>}
+                {goalSaved && <p role="status" className="mt-2 text-xs text-primary">已儲存</p>}
                 {goalError && <p role="alert" className="mt-2 text-xs text-danger">{goalError}</p>}
               </div>
             </div>
@@ -99,7 +118,7 @@ export function ToolsStep({ brandId, nav, back, onNext }: { brandId: string; nav
         </>
       )}
       <OnboardingBar back={back} hint={HINT}>
-        <BarNext label="完成品牌建檔" onClick={onNext} />
+        <BarNext label="完成品牌建檔" busy={savingGoal} disabledReason={load.status === "ready" && goal !== load.tools.conversion_goal ? "成效目標還沒儲存，重新選取後再試" : null} onClick={onNext} />
       </OnboardingBar>
     </div>
   );
@@ -171,17 +190,17 @@ function ConnectorAction({ connector: c, metaOpen, onToggleMeta }: { connector: 
 
 /** Prototype `.seg`: one-of segmented control, radio keyboard pattern (the picked option is the tab stop). No goal saved
  * yet → nothing is picked; the first option is then the tab stop. */
-function GoalSegmented({ options, value, disabled, onChange }: {
+function GoalSegmented({ options, value, busy, onChange }: {
   options: { key: string; label: string }[];
   value: string | null;
-  disabled: boolean;
+  busy: boolean;
   onChange: (key: string) => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const stop = options.some((o) => o.key === value) ? value : options[0]?.key;
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     const keys = ["ArrowRight", "ArrowDown", "ArrowLeft", "ArrowUp", "Home", "End"];
-    if (disabled || !keys.includes(e.key) || !ref.current) return;
+    if (busy || !keys.includes(e.key) || !ref.current) return;
     e.preventDefault();
     const radios = Array.from(ref.current.querySelectorAll<HTMLButtonElement>("[role=radio]"));
     const at = radios.indexOf(document.activeElement as HTMLButtonElement);
@@ -203,13 +222,13 @@ function GoalSegmented({ options, value, disabled, onChange }: {
       {options.map((o, i) => {
         const on = o.key === value;
         return (
-          <button
+          <Button
             key={o.key}
             type="button"
             role="radio"
             aria-checked={on}
             tabIndex={o.key === stop ? 0 : -1}
-            disabled={disabled}
+            busy={busy}
             onClick={() => onChange(o.key)}
             className={cn(
               "px-3 py-[5px] text-[12.5px] font-medium disabled:cursor-default",
@@ -218,7 +237,7 @@ function GoalSegmented({ options, value, disabled, onChange }: {
             )}
           >
             {o.label}
-          </button>
+          </Button>
         );
       })}
     </div>

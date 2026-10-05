@@ -50,7 +50,7 @@ beforeAll(() => {
 
 afterEach(() => {
   cleanup();
-  localStorage.clear();
+  sessionStorage.clear();
   workspace.scope = "usr_1:org_1";
   vi.clearAllMocks();
 });

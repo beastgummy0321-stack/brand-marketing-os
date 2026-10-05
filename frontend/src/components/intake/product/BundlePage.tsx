@@ -296,7 +296,7 @@ export function BundlePage({ brandId, bundleId }: { brandId: string; bundleId: s
   );
   const bar = (
     <OnboardingBar back={{ label: "商品", onClick: () => navigate(productsPath(brandId)) }}>
-      <BarNext label={editing ? "儲存組合" : "建立組合"} disabled={!loaded || busy} onClick={() => void submit()} />
+      <BarNext label={editing ? "儲存組合" : "建立組合"} busy={!loaded || busy} onClick={() => void submit()} />
     </OnboardingBar>
   );
 
@@ -477,7 +477,7 @@ function ReusedCard({ bundle }: { bundle: Bundle | BundlePreview }) {
   const counts = new Map<string, number>();
   for (const p of proof) {
     const key = p.label || p.text;
-    counts.set(key, (counts.get(key) ?? 0) + 1);
+    counts.set(key, (counts.get(key) ?? 0) + 1 /* ZERO_OK: first occurrence starts at zero */);
   }
   const evidence = [...counts].map(([key, n]) => (n > 1 ? `${key} ${n} 則` : key));
   return (

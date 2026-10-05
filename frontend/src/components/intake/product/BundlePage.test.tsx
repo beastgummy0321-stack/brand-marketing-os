@@ -84,11 +84,11 @@ function bundle(over: Partial<Bundle> = {}): Bundle {
     cost_estimate: 170, cost_missing: [],
     shipping: 60, free_shipping: false, break_even: 269, break_even_derived: true,
     cap_per_sale: 269, cap_is_default: true, landing_url: "https://beastgummy.tw/shop/duo", landing_is_default: false,
-    offer_sentences: ["優惠價 NT$499（原價 NT$580）"], offer_labels: ["組合價 省 81"], offer_notes: [], assumptions: [],
+    offer_sentences: ["優惠價 NT$ 499（原價 NT$ 580）"], offer_labels: ["組合價 省 81"], offer_notes: [], assumptions: [],
     show_close_rate: false,
     benchmarks: {
       gross_margin: { value: 45, source_text: "毛利率假設 45%" },
-      shipping_cost: { value: 80, source_text: "運費假設 NT$80" },
+      shipping_cost: { value: 80, source_text: "運費假設 NT$ 80" },
     },
     reused: {
       groups: [
@@ -259,7 +259,7 @@ describe("BundlePage — 新增組合", () => {
     await user.type(input("組合名稱"), NAME);
     await user.tab();
 
-    await waitFor(() => expect(breakEven()).toContain("每筆最多花 NT$350"));
+    await waitFor(() => expect(breakEven()).toContain("每筆最多花 NT$ 350"));
     expect(mockPreview).toHaveBeenCalledWith(B, {
       name: NAME,
       components: [{ sell_way_id: "sw_box", qty: "2" }, { sell_way_id: "sw_pbox", qty: "1" }],
@@ -288,7 +288,7 @@ describe("BundlePage — 新增組合", () => {
   it("勾「這個賣法免運」就重算，廣告裡的優惠出現伺服器的「這組免運」", async () => {
     mockPage.mockResolvedValue(PAGE);
     mockPreview.mockImplementation(async (_brand, body) => (body.free_shipping
-      ? preview({ free_shipping: true, offer_sentences: ["優惠價 NT$499（原價 NT$580）", "這組免運"] })
+      ? preview({ free_shipping: true, offer_sentences: ["優惠價 NT$ 499（原價 NT$ 580）", "這組免運"] })
       : preview()));
     renderPage(null);
     const user = userEvent.setup();
@@ -300,7 +300,7 @@ describe("BundlePage — 新增組合", () => {
     await user.type(input("組合名稱"), NAME);
     await user.type(input("售價"), "499");
     await user.tab();
-    await waitFor(() => expect(screen.getByText("「優惠價 NT$499（原價 NT$580）」")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("「優惠價 NT$ 499（原價 NT$ 580）」")).toBeTruthy());
     expect(screen.queryByText("「這組免運」")).toBeNull();
     const calls = mockPreview.mock.calls.length;
 
@@ -356,9 +356,9 @@ describe("BundlePage — 編輯組合", () => {
     expect(input("原價").placeholder).toBe("580");
     expect(input("成本").placeholder).toBe("170");
     expect(screen.getByText(`推算：${EN}・單盒 50 × 2 ＋ ${PRO}・單盒 70 × 1`)).toBeTruthy();
-    expect(breakEven()).toContain("每筆最多花 NT$269");
+    expect(breakEven()).toContain("每筆最多花 NT$ 269");
     expect(breakEven()).toContain("推算");
-    expect(screen.getByText("「優惠價 NT$499（原價 NT$580）」").getAttribute("data-tone")).toBe("ok");
+    expect(screen.getByText("「優惠價 NT$ 499（原價 NT$ 580）」").getAttribute("data-tone")).toBe("ok");
     expect((screen.getByRole("checkbox", { name: "這個賣法免運" }) as HTMLInputElement).checked).toBe(false);
     expect(input("落地頁").value).toBe("https://beastgummy.tw/shop/duo");
 
@@ -391,7 +391,7 @@ describe("BundlePage — 編輯組合", () => {
       components: [comp({ sell_way_id: "sw_box", qty: 3 }), comp({ sell_way_id: "sw_pbox" })],
       list_price: 760, list_price_note: `推算：${EN}・單盒 180 × 3 ＋ ${PRO}・單盒 220 × 1`,
       cost: 220, cost_note: `推算：${EN}・單盒 50 × 3 ＋ ${PRO}・單盒 70 × 1`, cost_estimate: 220,
-      break_even: 219, cap_per_sale: 219, offer_sentences: ["優惠價 NT$499（原價 NT$760）"],
+      break_even: 219, cap_per_sale: 219, offer_sentences: ["優惠價 NT$ 499（原價 NT$ 760）"],
     }));
     renderPage("sw_duo");
     const user = userEvent.setup();
@@ -411,8 +411,8 @@ describe("BundlePage — 編輯組合", () => {
     });
     await waitFor(() => expect(input("原價").placeholder).toBe("760"));
     expect(input("成本").placeholder).toBe("220");
-    expect(breakEven()).toContain("每筆最多花 NT$219");
-    expect(screen.getByText("「優惠價 NT$499（原價 NT$760）」")).toBeTruthy();
+    expect(breakEven()).toContain("每筆最多花 NT$ 219");
+    expect(screen.getByText("「優惠價 NT$ 499（原價 NT$ 760）」")).toBeTruthy();
   });
 
   it("儲存組合：有改就 PUT 再回商品頁；伺服器拒絕時留在本頁並照它的話說", async () => {

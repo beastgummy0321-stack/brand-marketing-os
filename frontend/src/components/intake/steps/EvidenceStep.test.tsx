@@ -1,3 +1,4 @@
+vi.mock("@/components/layout/WorkspaceContext", () => ({ useWorkspace: () => ({ scope: "test-org" }) }));
 /** frontend/src/components/intake/steps/EvidenceStep.test.tsx — brand onboarding `#/b4` 證據與政策 (F42-I09):
  * the policy chips and 「更多政策」 come from the API registry; a chosen policy shows its params and the offer it
  * becomes; an empty required param or a 不適用 cooling-off without text blocks 下一步 with the reason in the bar;
@@ -25,6 +26,7 @@ const mockPropose = vi.mocked(proposeCustom);
 const NAV: StepNav = { crumb: brandCrumb("山嵐手作果醬"), steps: BRAND_STEPS, current: 4 };
 
 afterEach(() => {
+  sessionStorage.clear();
   cleanup();
   vi.clearAllMocks();
 });
@@ -151,7 +153,7 @@ describe("EvidenceStep", () => {
     renderStep();
 
     await userEvent.click(await within(await screen.findByRole("region", { name: "全店政策" })).findByRole("button", { name: "滿額免運" }));
-    expect(screen.getByRole("status").textContent).toBe("滿額免運還沒填門檻");
+    expect(screen.getByText("滿額免運還沒填門檻")).toBeTruthy();
     expect(nextButton().disabled).toBe(true);
 
     await userEvent.type(within(chosenRow("ship_threshold")).getByLabelText("門檻 NT$"), "1200");
@@ -180,7 +182,7 @@ describe("EvidenceStep", () => {
     await userEvent.click(link);
     expect(link.getAttribute("aria-expanded")).toBe("true");
     expect(nextButton().disabled).toBe(true);
-    expect(screen.getByRole("status").textContent).toContain("要填網頁上的告知文字");
+    expect(document.getElementById(nextButton().getAttribute("aria-describedby")!)?.textContent).toContain("要填網頁上的告知文字");
 
     await userEvent.type(screen.getByLabelText("網頁上的告知文字"), "本店商品為易腐敗食品，依法不適用七天猶豫期");
     expect(nextButton().disabled).toBe(false);
@@ -361,4 +363,20 @@ describe("EvidenceStep", () => {
     expect((await screen.findByRole("alert")).textContent).toBe("讀取失敗，請稍後再試。");
     expect(screen.queryByRole("region", { name: "全店政策" })).toBeNull();
   });
+});
+
+
+it("restores unsaved evidence and Enter commits only the inline edit", async () => {
+  mockFetch.mockResolvedValue(evidence());
+  const onNext = renderStep();
+  await userEvent.click(await screen.findByRole("button", { name: /改「創辦人/ }));
+  const input = screen.getByRole("textbox", { name: "創辦人第一手" });
+  await userEvent.clear(input);
+  await userEvent.type(input, "仍未儲存的證據{Enter}");
+  expect(onNext).not.toHaveBeenCalled();
+  expect(saveOnboardingEvidence).not.toHaveBeenCalled();
+  expect(screen.getByText("仍未儲存的證據")).toBeTruthy();
+  cleanup();
+  renderStep();
+  expect(await screen.findByText("仍未儲存的證據")).toBeTruthy();
 });

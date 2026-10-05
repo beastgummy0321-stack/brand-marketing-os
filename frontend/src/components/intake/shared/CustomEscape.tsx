@@ -99,7 +99,7 @@ export function CustomEscape<B extends AnyCustomBlock>({ brandId, block, placeho
               type="button"
               variant="outline"
               size="sm"
-              disabled={!text.trim() || busy}
+              busy={busy}
               disabledReason={!text.trim() && !busy ? EMPTY_REASON : undefined}
               aria-busy={busy}
               onClick={() => void organise()}

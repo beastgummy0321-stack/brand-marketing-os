@@ -1,3 +1,4 @@
+import { ApiResponseError } from "@/lib/http";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { EmptyState } from "@/components/layout/EmptyState";
@@ -60,7 +61,7 @@ export function ProductOnboarding({ brandId, productId }: { brandId: string; pro
       return onboarding;
     } catch (err) {
       if (!alive.current) return null;
-      if (err instanceof Error && err.message.includes("找不到")) setState({ status: "notfound" });
+      if (err instanceof ApiResponseError && err.status === 404) setState({ status: "notfound" });
       else setState({ status: "error", message: errorText(err) });
       return null;
     }

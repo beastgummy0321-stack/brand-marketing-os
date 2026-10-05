@@ -1,3 +1,4 @@
+import { brandDraftKey, clearStepDraft, readStepDraft, useStepDraft } from "../shared/stepDraft";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useWorkspace } from "@/components/layout/WorkspaceContext";
 import { Button } from "@/components/layout/ui/button";
@@ -22,63 +23,24 @@ const PHOTO_SLOTS: [BrandPhotoKind, string][] = [
   ["other", "其他"],
 ];
 
-/** Unsent text of this form (F31-I01), kept in localStorage per user+org scope and brand ("new"
- * for a brand not created yet), so leaving the step and coming back keeps it. Cleared once the
- * save went through. Photos are not kept: their tokens are server-side and temporary. On re-entry
- * only text that differs from the saved values is kept. Anything not of this shape reads as nothing kept. */
+/** Unsaved text and choices; photos and upload tokens are excluded. */
 interface KeptText {
   brandName: string;
   clientName: string;
   description: string;
   urls: string[];
   pastAds: AdvertisingHistory | null;
-}
-
-function keptTextKey(scope: string | undefined, brandId: string | null): string {
-  return `intake-start:${scope ?? ""}:${brandId ?? "new"}`;
+  marketRegion: string;
+  foodRegime: boolean;
 }
 
 function isKeptText(value: unknown): value is KeptText {
   if (!value || typeof value !== "object") return false;
   const v = value as Record<string, unknown>;
-  return [v.brandName, v.clientName, v.description].every((x) => typeof x === "string")
+  return typeof v.marketRegion === "string" && typeof v.foodRegime === "boolean"
+    && [v.brandName, v.clientName, v.description].every((x) => typeof x === "string")
     && Array.isArray(v.urls) && v.urls.every((u) => typeof u === "string")
     && (v.pastAds === null || v.pastAds === "has_history" || v.pastAds === "none");
-}
-
-function hasText(t: KeptText): boolean {
-  return !!(t.brandName.trim() || t.clientName.trim() || t.description.trim() || t.urls.some((u) => u.trim()) || t.pastAds);
-}
-
-function sameText(a: KeptText, b: KeptText): boolean {
-  const norm = (t: KeptText) => JSON.stringify([t.brandName.trim(), t.clientName.trim(), t.description.trim(), filledUrls(t.urls), t.pastAds]);
-  return norm(a) === norm(b);
-}
-
-function readKeptText(key: string): KeptText | null {
-  try {
-    const value: unknown = JSON.parse(localStorage.getItem(key) || "null");
-    return isKeptText(value) && hasText(value) ? value : null;
-  } catch {
-    return null;
-  }
-}
-
-function writeKeptText(key: string, text: KeptText): void {
-  try {
-    if (hasText(text)) localStorage.setItem(key, JSON.stringify(text));
-    else localStorage.removeItem(key);
-  } catch {
-    /* Storage unavailable: nothing is kept. */
-  }
-}
-
-function clearKeptText(key: string): void {
-  try {
-    localStorage.removeItem(key);
-  } catch {
-    /* Storage unavailable. */
-  }
 }
 
 function filledUrls(urls: string[]): string[] {
@@ -110,8 +72,8 @@ export function StartStep({
 }) {
   const isNew = brandId === null;
   const { scope } = useWorkspace();
-  const keptKey = keptTextKey(scope, brandId);
-  const [kept] = useState(() => readKeptText(keptKey));
+  const keptKey = brandDraftKey(scope, brandId ?? "new", "start");
+  const [kept] = useState(() => readStepDraft(keptKey, isKeptText));
 
   const [loaded, setLoaded] = useState(isNew);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -122,8 +84,8 @@ export function StartStep({
   const [description, setDescription] = useState(kept?.description ?? "");
   const [urls, setUrls] = useState<string[]>(urlInputs(kept?.urls ?? []));
   const [pastAds, setPastAds] = useState<AdvertisingHistory | null>(kept?.pastAds ?? null);
-  const [marketRegion, setMarketRegion] = useState(MARKET_REGIONS[0][0]);
-  const [foodRegime, setFoodRegime] = useState(false);
+  const [marketRegion, setMarketRegion] = useState(kept?.marketRegion ?? MARKET_REGIONS[0][0]);
+  const [foodRegime, setFoodRegime] = useState(kept?.foodRegime ?? false);
 
   const [existing, setExisting] = useState<BrandPhoto[]>([]);
   const [uploads, setUploads] = useState<Partial<Record<BrandPhotoKind, Upload>>>({});
@@ -138,7 +100,7 @@ export function StartStep({
     fetchOnboardingBasics(brandId)
       .then((b) => {
         if (cancelled) return;
-        const server: KeptText = { brandName: b.name, clientName: b.client_name, description: b.description, urls: b.urls, pastAds: b.advertising_history };
+        const server: KeptText = { brandName: b.name, clientName: b.client_name, description: b.description, urls: b.urls, pastAds: b.advertising_history, marketRegion: b.market_region ?? MARKET_REGIONS[0][0], foodRegime: b.regulatory_regime === "food_tw" };
         const text = kept ?? server;
         setSaved(server);
         setBrandName(text.brandName);
@@ -146,8 +108,8 @@ export function StartStep({
         setDescription(text.description);
         setUrls(urlInputs(text.urls));
         setPastAds(text.pastAds);
-        setMarketRegion(b.market_region ?? MARKET_REGIONS[0][0]);
-        setFoodRegime(b.regulatory_regime === "food_tw");
+        setMarketRegion(text.marketRegion);
+        setFoodRegime(text.foodRegime);
         setExisting(b.photos);
         setLoaded(true);
       })
@@ -159,12 +121,8 @@ export function StartStep({
     };
   }, [isNew, brandId, kept]);
 
-  useEffect(() => {
-    if (!loaded) return;
-    const text = { brandName, clientName, description, urls, pastAds };
-    if (saved && sameText(text, saved)) clearKeptText(keptKey);
-    else writeKeptText(keptKey, text);
-  }, [loaded, saved, keptKey, brandName, clientName, description, urls, pastAds]);
+  useStepDraft(keptKey, loaded, { brandName, clientName, description, urls, pastAds, marketRegion, foodRegime },
+    saved ?? { brandName: "", clientName: "", description: "", urls: [""], pastAds: null, marketRegion: MARKET_REGIONS[0][0], foodRegime: false });
 
   const uploadsRef = useRef(uploads);
   uploadsRef.current = uploads;
@@ -218,7 +176,7 @@ export function StartStep({
         createdId.current = res.brand_id;
       }
       await setAdvertisingHistory(createdId.current, pastAds);
-      clearKeptText(keptKey);
+      clearStepDraft(keptKey);
       await onSaved({ brand_id: createdId.current });
       return;
     }
@@ -235,7 +193,7 @@ export function StartStep({
       photo_tokens,
       photo_kinds,
     });
-    clearKeptText(keptKey);
+    clearStepDraft(keptKey);
     await onSaved({ brand_id: brandId });
   });
 
@@ -295,7 +253,7 @@ export function StartStep({
                 preview={uploads[kind]?.preview ?? null}
                 photoUrl={shownExisting(kind)?.url ?? null}
                 uploading={uploadingKind === kind}
-                disabled={!loaded || uploadingKind !== null}
+                busy={!loaded || uploadingKind !== null}
                 onFile={(file) => void handlePhoto(kind, file)}
               />
             ))}
@@ -318,12 +276,12 @@ export function StartStep({
         <Row label="投過網路廣告嗎">
           <div data-slot="segmented" role="radiogroup" aria-label="投過網路廣告嗎" className="inline-flex w-fit overflow-hidden rounded-lg border border-border">
             {([["has_history", "投過"], ["none", "完全沒投過"]] as const).map(([value, label]) => (
-              <button
+              <Button
                 key={value}
                 type="button"
                 role="radio"
                 aria-checked={pastAds === value}
-                disabled={!loaded}
+                busy={!loaded}
                 onClick={() => setPastAds(value)}
                 className={cn(
                   "border-l border-border px-3 py-[5px] text-[12.5px] font-medium first:border-l-0 focus-visible:relative focus-visible:z-10",
@@ -331,7 +289,7 @@ export function StartStep({
                 )}
               >
                 {label}
-              </button>
+              </Button>
             ))}
           </div>
         </Row>
@@ -358,7 +316,7 @@ export function StartStep({
 
       <OnboardingBar hint={hasScanInput ? "下一步系統讀網站，約 1 分鐘" : undefined}>
         {/* The bar's primary button (`BarNext`) plus F47-I03's disabled reason (drill-10 甲 建檔 #9). */}
-        <Button type="submit" size="lg" className="font-semibold" disabled={!ready || saving} disabledReason={saving ? undefined : blocked ?? undefined}>
+        <Button type="submit" size="lg" className="font-semibold" busy={saving} disabledReason={blocked}>
           {saving ? "處理中…" : hasScanInput ? "讓系統讀網站" : "下一步"} →
         </Button>
       </OnboardingBar>
@@ -395,16 +353,16 @@ function Row({ label, note, children }: { label: ReactNode; note?: string; child
 }
 
 /** Prototype `.phslot`: a 72px tile (the photo, or a dashed ＋) over its kind; the tile picks a file. */
-function PhotoSlot({ label, preview, photoUrl, uploading, disabled, onFile }: {
+function PhotoSlot({ label, preview, photoUrl, uploading, busy, onFile }: {
   label: string;
   preview: string | null;
   photoUrl: string | null;
   uploading: boolean;
-  disabled: boolean;
+  busy: boolean;
   onFile: (file: File | undefined) => void;
 }) {
   return (
-    <label className={cn("flex flex-col items-center gap-1 text-[11.5px] text-muted-foreground", disabled ? "cursor-not-allowed" : "cursor-pointer")}>
+    <label className={cn("flex flex-col items-center gap-1 text-[11.5px] text-muted-foreground", busy ? "cursor-not-allowed" : "cursor-pointer")}>
       {preview ? (
         <img src={preview} alt={label} className="size-[72px] rounded-[10px] object-cover" />
       ) : photoUrl ? (
@@ -420,7 +378,7 @@ function PhotoSlot({ label, preview, photoUrl, uploading, disabled, onFile }: {
         accept={PHOTO_ACCEPT}
         aria-label={`上傳${label}照片`}
         className="sr-only"
-        disabled={disabled}
+        disabled={busy}
         onChange={(e) => {
           onFile(e.target.files?.[0]);
           e.target.value = "";

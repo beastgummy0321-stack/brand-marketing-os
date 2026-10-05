@@ -268,3 +268,16 @@ describe("ProductEvidenceStep", () => {
     expect(sessionStorage.length).toBe(0);
   });
 });
+
+
+it("Enter commits only the inline proof edit", async () => {
+  mockFetch.mockResolvedValue(evidence({claims:[]}));
+  const onNext = renderStep();
+  await userEvent.click(await screen.findByRole("button", {name:/改「SGS/}));
+  const box = screen.getByRole("textbox", {name:"檢驗報告／認證"});
+  await userEvent.clear(box);
+  await userEvent.type(box, "修正後的檢驗描述{Enter}");
+  expect(screen.getByText("修正後的檢驗描述")).toBeTruthy();
+  expect(mockSave).not.toHaveBeenCalled();
+  expect(onNext).not.toHaveBeenCalled();
+});

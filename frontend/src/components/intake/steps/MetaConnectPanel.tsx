@@ -180,7 +180,7 @@ export function MetaConnectPanel({ brandId, onBound }: { brandId: string; onBoun
               aria-label="Meta 存取權杖"
               className="min-w-[240px] flex-1 rounded-lg border border-input bg-card px-3 py-[7px] text-sm focus:border-primary focus:shadow-[0_0_0_3px_var(--color-accent)] focus:outline-none"
             />
-            <Button type="button" variant="outline" size="sm" disabled={connecting} onClick={() => void handleConnectToken()}>
+            <Button type="button" variant="outline" size="sm" busy={connecting} onClick={() => void handleConnectToken()}>
               {connecting ? "讀取中…" : "讀取帳戶"}
             </Button>
           </div>

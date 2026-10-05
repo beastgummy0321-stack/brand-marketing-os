@@ -1,3 +1,5 @@
+vi.mock("@/lib/libraryApi", async (actual) => ({...await actual<typeof import("@/lib/libraryApi")>(), setAdvertisingHistory: vi.fn().mockResolvedValue("none")}));
+import { ApiResponseError } from "@/lib/http";
 /** frontend/src/components/intake/IntakeWizard.test.tsx — the seven-step brand onboarding shell
  * (F42-I06): the step dots, step 2 skipped when the brand gave no website or photo, a completed brand
  * opening step 7, and `?step=N` re-entry. The API calls are fakes (importActual + override), no server.
@@ -5,12 +7,12 @@
  * default here (`answerEveryStep`, reset before each test); a step issue adds no mocks to this file. */
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/intakeApi", async () => {
   const actual = await vi.importActual<typeof import("@/lib/intakeApi")>("@/lib/intakeApi");
-  return { ...actual, fetchIntakeDraft: vi.fn() };
+  return { ...actual, fetchIntakeDraft: vi.fn(), submitIntakeStart: vi.fn() };
 });
 vi.mock("@/lib/intakeOnboardingApi", async () => {
   const actual = await vi.importActual<typeof import("@/lib/intakeOnboardingApi")>("@/lib/intakeOnboardingApi");
@@ -45,7 +47,7 @@ vi.mock("@/components/layout/WorkspaceContext", () => ({
 }));
 
 import type { IntakeDraft } from "@/lib/intakeApi";
-import { fetchIntakeDraft } from "@/lib/intakeApi";
+import { fetchIntakeDraft, submitIntakeStart } from "@/lib/intakeApi";
 import type {
   OnboardingBasics,
   OnboardingEvidence,
@@ -267,9 +269,10 @@ describe("IntakeWizard", () => {
     const box = (await screen.findByLabelText("一句話說你的品牌")) as HTMLTextAreaElement;
     await userEvent.clear(box);
     await userEvent.type(box, "我改過還沒存的一句話");
+    const url = screen.getByTestId("where").textContent!;
     cleanup();
 
-    renderWizard();
+    renderWizard(url);
     expect(await screen.findByRole("heading", { level: 1, name: "品牌是誰" })).toBeTruthy();
     await waitFor(() =>
       expect((screen.getByLabelText("一句話說你的品牌") as HTMLTextAreaElement).value).toBe("我改過還沒存的一句話"));
@@ -282,11 +285,45 @@ describe("IntakeWizard", () => {
   });
 
   it("品牌不存在時顯示找不到，而不是一片空白", async () => {
-    mockStatus.mockRejectedValue(new Error("找不到這筆資料。"));
+    mockStatus.mockRejectedValue(new ApiResponseError("任意文案", 404, {}));
     mockDraft.mockRejectedValue(new Error("找不到建檔進度"));
 
     renderWizard();
 
     await waitFor(() => expect(screen.getByText("找不到這個品牌")).toBeTruthy());
   });
+});
+
+
+it("replaces an unreachable draft step and Back retains the saved basics", async () => {
+  mockStatus.mockResolvedValue(status({ step: 3 }));
+  mockDraft.mockResolvedValue({ scan_done: true } as unknown as IntakeDraft);
+  renderWizard("/brands/brd_x/intake?step=9");
+  await screen.findByRole("heading", {name:"品牌是誰"});
+  await waitFor(() => expect(screen.getByTestId("where").textContent).toBe("/brands/brd_x/intake?step=3"));
+  await userEvent.click(screen.getByRole("button", {name:"← 基本"}));
+  expect(await screen.findByDisplayValue(BASICS.name)).toBeTruthy();
+  expect(screen.getByTestId("where").textContent).toBe("/brands/brd_x/intake?step=1");
+});
+
+
+it("creating replaces the new-brand entry so browser Back cannot open a blank form", async () => {
+  vi.mocked(submitIntakeStart).mockResolvedValue({brand_id:"brd_x",quick:false});
+  mockStatus.mockResolvedValue(status({step:3}));
+  mockDraft.mockResolvedValue({scan_done:true} as unknown as IntakeDraft);
+  function Back() { const navigate=useNavigate();return <button onClick={()=>navigate(-1)}>Browser Back</button>; }
+  render(<MemoryRouter initialEntries={["/before","/intake/new"]} initialIndex={1}>
+    <Back/><Where/><Routes>
+      <Route path="/before" element={<p>Previous page</p>}/>
+      <Route path="/intake/new" element={<IntakeWizard brandId={null}/>}/>
+      <Route path="/brands/:brandId/intake" element={<IntakeWizard brandId="brd_x"/>}/>
+    </Routes>
+  </MemoryRouter>);
+  await userEvent.type(screen.getByLabelText("品牌名稱"),"New brand");
+  await userEvent.click(screen.getByRole("radio",{name:"完全沒投過"}));
+  await userEvent.click(screen.getByRole("button",{name:"下一步 →"}));
+  await screen.findByRole("heading",{name:"品牌是誰"});
+  await waitFor(() => expect(screen.getByTestId("where").textContent).toBe("/brands/brd_x/intake?step=3"));
+  await userEvent.click(screen.getByRole("button",{name:"Browser Back"}));
+  expect(await screen.findByText("Previous page")).toBeTruthy();
 });
