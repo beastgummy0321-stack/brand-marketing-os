@@ -91,7 +91,7 @@ export function CopyIconButton({
         aria-label={ariaLabel}
         title={state === "failed" ? (errorMessage ?? ariaLabel) : ariaLabel}
         className={cn(
-          "h-auto gap-1.5 whitespace-nowrap px-2 py-1 text-xs font-medium text-muted-foreground has-[>svg]:px-2 hover:border-primary hover:bg-card hover:text-primary",
+          "h-auto gap-1.5 whitespace-nowrap px-2 py-1 text-xs font-medium text-muted-foreground has-[>svg]:px-2 hover:border-primary hover:bg-card hover:text-primary aria-busy:opacity-100",
           PRESS_FEEDBACK,
           className,
         )}
