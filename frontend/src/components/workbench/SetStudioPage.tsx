@@ -458,7 +458,7 @@ function ProductPanel({
           </span>
         </div>
         <Button
-          busy={generating} disabledReason={locked ? set.lock.reason ?? "素材組目前已鎖定" : undefined}
+          busy={generating} disabledReason={locked ? set.lock.reason || "素材組目前已鎖定" : undefined}
           title={runLabel.title}
           aria-label={runLabel.title}
           onClick={() => void handleRun()}
@@ -533,7 +533,7 @@ function ProductPanel({
             尚需選定：{missingLabels.join("、")}
           </span>
         )}
-        <Button disabledReason={set.lock.locked ? set.lock.reason ?? "素材組目前已鎖定" : !allDone ? "先選定每一項需要的素材" : undefined} onClick={onFinish}>完成此素材組</Button>
+        <Button disabledReason={set.lock.locked ? set.lock.reason || "素材組目前已鎖定" : !allDone ? "先選定每一項需要的素材" : undefined} onClick={onFinish}>完成此素材組</Button>
       </div>
     </div>
   );

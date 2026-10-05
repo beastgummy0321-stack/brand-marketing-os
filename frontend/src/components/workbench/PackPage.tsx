@@ -181,8 +181,7 @@ export function PackPage({ brandId, packId }: { brandId: string; packId: string 
                   </DropdownMenu>
                 )}
                 <div className="flex flex-col items-end gap-1">
-                  {/* F40-I05（drill-7 #14）：按鈕灰掉時，原因與按鈕同一行（參考原型 #/assets 底列
-                   * 的「⚠ …」）；文字整段來自後端 `blocking_text`，這裡不重算。 */}
+                  {/* The shared button prints the served approval reason beside the action. */}
                   <div className="flex flex-wrap items-center justify-end gap-3">
                     <Button
                       disabledReason={pack.status === "done" ? "這包素材已核准" : !pack.can_approve ? pack.blocking_text || "先完成這包素材的檢查" : undefined}
