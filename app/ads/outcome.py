@@ -64,27 +64,15 @@ def _fetch_rows(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str,
 
 def roas_pair(rows: list) -> dict:
     """F51 Contract F: the two ROAS bases of `rows` (`app/core/figures.py::BASES`), keyed by their
-    basis codes. `roas_all_spend` = revenue ÷ every known spend; `roas_tracked_spend` = revenue ÷
-    the spend of the rows whose revenue is tracked. Both are true; printing one alone hides the
-    other half. No tracked revenue, or no spend to divide by, is `None` -- never 0. The one
-    computation `_bucket` and the workspace totals share."""
-    spend = sum(float(r["spend"]) for r in rows if r["spend"] is not None)
-    revenue_tracked_rows = [r for r in rows if r["revenue"] is not None]
-    if not revenue_tracked_rows:
-        return {"roas_all_spend": None, "roas_tracked_spend": None}
-    revenue = round(sum(float(r["revenue"]) for r in revenue_tracked_rows), 2)
-    spend_tracked = sum(
-        float(r["spend"]) for r in revenue_tracked_rows if r["spend"] is not None
-    )
-    return {
-        "roas_all_spend": (revenue / spend) if spend else None,
-        "roas_tracked_spend": (revenue / spend_tracked) if spend_tracked else None,
-    }
+    basis codes -- `_bucket`'s own (one computation), for a reader that needs only these two
+    (the workspace totals)."""
+    bucket = _bucket(rows)
+    return {key: bucket[key] for key in ("roas_all_spend", "roas_tracked_spend")}
 
 
 def _bucket(rows: list) -> dict:
     """跟 `app/schedule/performance.py::_bucket()` 同一套算法（再實作一份，不 import —
-    container contract §5）。F51 Contract F：ROAS 以口徑命名（`roas_pair`）——
+    container contract §5）。F51 Contract F：ROAS 以口徑命名（key 就是口徑代碼）——
     `roas_tracked_spend`（樂觀）只算「有追蹤到營收」那一份花費當分母，`roas_all_spend`（保守）
     用**全部**花費當分母——兩個都是真的，只印一個是在說謊的另一半。
     購買數／營收是否追蹤直接看欄位是不是 `NULL`（平台列的 `purchases`／`revenue` 是 nullable，
@@ -101,10 +89,16 @@ def _bucket(rows: list) -> dict:
     )
 
     revenue_tracked_rows = [r for r in rows if r["revenue"] is not None]
-    revenue = (
-        round(sum(float(r["revenue"]) for r in revenue_tracked_rows), 2)
-        if revenue_tracked_rows else None
-    )
+    revenue = None
+    roas_tracked_spend = None
+    roas_all_spend = None
+    if revenue_tracked_rows:
+        revenue = round(sum(float(r["revenue"]) for r in revenue_tracked_rows), 2)
+        spend_tracked = sum(
+            float(r["spend"]) for r in revenue_tracked_rows if r["spend"] is not None
+        )
+        roas_tracked_spend = (revenue / spend_tracked) if spend_tracked else None
+        roas_all_spend = (revenue / spend) if spend else None
 
     cpa = (spend / purchases) if purchases else None
     ctr = (clicks / impressions) if impressions else None
@@ -112,7 +106,7 @@ def _bucket(rows: list) -> dict:
     return {
         "spend": spend, "impressions": impressions, "clicks": clicks,
         "purchases": purchases, "revenue": revenue, "cpa": cpa, "ctr": ctr,
-        **roas_pair(rows),
+        "roas_tracked_spend": roas_tracked_spend, "roas_all_spend": roas_all_spend,
     }
 
 
