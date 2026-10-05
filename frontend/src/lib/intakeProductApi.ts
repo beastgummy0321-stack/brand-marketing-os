@@ -437,6 +437,25 @@ export const fetchProductsPage = (brandId: string): Promise<ProductsPage> =>
 export const dismissProductSuggestion = (brandId: string, name: string): Promise<ProductsPage> =>
   send(`${brandBase(brandId)}/products/suggestions/dismiss`, json("POST", { name }));
 
+/** One archived product of the products page's 「已封存」 fold (F50-I17): `GET /api/products/brands/{b}?status=archived`
+ * (root products only; sell-way rows are never listed — they come back with their product). */
+export interface ArchivedProduct {
+  id: string;
+  name: string;
+}
+
+export const fetchArchivedProducts = (brandId: string): Promise<ArchivedProduct[]> =>
+  send(`/api/products/brands/${encodeURIComponent(brandId)}?status=archived`);
+
+/** 「還原」 = the existing archive toggle (archived → active, 204); 409 carries the server's same-name sentence. */
+export async function restoreProduct(brandId: string, productId: string): Promise<void> {
+  const res = await apiFetch(
+    `/api/products/brands/${encodeURIComponent(brandId)}/products/${encodeURIComponent(productId)}/archive`,
+    { method: "POST" },
+  );
+  await throwIfFailed(res, `還原失敗（狀態碼 ${res.status}）`);
+}
+
 /** A new product at step 1 (with `page_url`, the product-page read can start). */
 export const createProduct = (brandId: string, input: { name: string; page_url?: string }): Promise<CreatedProduct> =>
   send(`${brandBase(brandId)}/products`, json("POST", input));

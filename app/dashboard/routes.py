@@ -37,6 +37,17 @@ def overview(request: Request):
     }
 
 
+@router.get("/archived-brands")
+def archived_brands(request: Request):
+    """F50-I17: the org's archived brands `[{brand_id, name}]` (restored through
+    `POST /api/library/brands/{b}/restore`)."""
+    actor = main_mod.require_actor(request)
+    return {
+        "data": dashboard_repo.archived_brands(main_mod.conn, org_id=actor.org_id),
+        "generated_at": now_iso(),
+    }
+
+
 @router.get("/brands/{brand_id}/month")
 def brand_month(request: Request, brand_id: str):
     """票 06：品牌頁本月花費／營收／毛利／ROAS 併桌。"""

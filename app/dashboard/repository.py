@@ -163,3 +163,9 @@ def overview(conn, *, org_id: str, today: str) -> list:
     """today 必填（F50 Contract K）：組織行事曆上的今天（路由用 `today_for_org` 算好）。"""
     brands = bi_repo.list_brands(conn, org_id, status="active")
     return [_brand_card(conn, brand, today) for brand in brands]
+
+
+def archived_brands(conn, *, org_id: str) -> list:
+    """F50-I17: the overview's 「已封存的品牌」 fold -- the org's archived brands, by name."""
+    return [{"brand_id": brand["id"], "name": brand["name"]}
+            for brand in bi_repo.list_brands(conn, org_id, status="archived")]

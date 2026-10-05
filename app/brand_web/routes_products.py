@@ -148,14 +148,24 @@ def _product_list_item(brand_id: str, product: dict, kind: str) -> dict:
 # ---------------------------------------------------------------------------
 
 @router.get("/api/products/brands/{brand_id}")
-def product_list(request: Request, brand_id: str):
+def product_list(request: Request, brand_id: str, status: str = "active"):
     """F50 Contract R: the pickers' list (FreeJobPage, CapBlock) -- the brand's active knowledge
     products (creation order) then its sellable sell-ways (`sellable_products`, the wizard's
     order). An archived product, its sell-ways and every bundle holding it are not listed. Each
     item's `kind` says which (`knowledge` / `sell_way`): money lives on sell-ways only, creative
-    context on knowledge products."""
+    context on knowledge products.
+
+    F50-I17: `?status=archived` = the products page's 「已封存」 fold -- the brand's archived root
+    products only (same item shape, creation order). Sell-way rows are never listed: restoring the
+    product through `…/archive` brings its sell-ways back (the archive cascade is derived)."""
     actor = require_actor(request)
     require_brand(brand_id, actor)
+    if status == "archived":
+        return _envelope([_product_list_item(brand_id, p, "knowledge")
+                          for p in repo.knowledge_products(web.conn, brand_id, include_archived=True)
+                          if p["status"] == "archived"])
+    if status != "active":
+        return _error(400, "商品清單只能看使用中或已封存的。")
     items = [_product_list_item(brand_id, p, "knowledge")
              for p in repo.knowledge_products(web.conn, brand_id)]
     items += [_product_list_item(brand_id, p, "sell_way")

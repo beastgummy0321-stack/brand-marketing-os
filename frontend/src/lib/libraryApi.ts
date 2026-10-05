@@ -459,6 +459,11 @@ export async function saveBrandProfile(
   await postJson(`/api/library/brands/${encodeURIComponent(brandId)}/edit`, fields);
 }
 
+/** F50-I17: 「還原」 an archived brand (only its status goes back to active); 409 = it is not archived. */
+export async function restoreBrand(brandId: string): Promise<void> {
+  await postJson(`/api/library/brands/${encodeURIComponent(brandId)}/restore`);
+}
+
 /** 票 past-ads/03（ADR 0067 rule 6）：投放過／沒投過的一次性選擇（兩顆按鈕的
  * `ui/dialog`，也能從品牌頁改）。PUT，跟本檔其餘寫入端點的 POST 慣例不同——後端路由本身
  * 就是 PUT（票面明講）。 */

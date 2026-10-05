@@ -36,6 +36,19 @@ export async function fetchOverview(): Promise<DashboardBrandCard[]> {
   return body.data;
 }
 
+/** F50-I17：總覽「已封存的品牌」摺疊區——這個組織封存了的品牌（依名稱排序）。 */
+export interface ArchivedBrand {
+  brand_id: string;
+  name: string;
+}
+
+export async function fetchArchivedBrands(): Promise<ArchivedBrand[]> {
+  const res = await apiFetch("/api/dashboard/archived-brands");
+  await throwIfFailed(res, `讀不到已封存的品牌（狀態碼 ${res.status}）`);
+  const body: Envelope<ArchivedBrand[]> = await res.json();
+  return body.data;
+}
+
 /** 票 06：品牌頁本月花費／營收／毛利／ROAS 併桌。對應 app/dashboard/repository.py
  * `brand_month_money()`。revenue／margin／roas 為 null 一律代表「沒得算」（鐵則 16），
  * 不是 0。票 12：revenue 是全通路加總（官網、平台商店、實體店…），margin 仍然只有官網

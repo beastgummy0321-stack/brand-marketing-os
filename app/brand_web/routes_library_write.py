@@ -461,6 +461,20 @@ async def brand_update_api(request: Request, brand_id: str):
     return {"data": _brand_profile_shape(brand_id, updated)}
 
 
+@router.post("/api/library/brands/{brand_id}/restore")
+def brand_restore_api(request: Request, brand_id: str):
+    """F50-I17: the overview's 「還原」 -- an archived brand back to `active`, only that field
+    (the edit route above needs the whole profile body). An active brand → 409."""
+    actor = require_actor(request)
+    brand = require_brand(brand_id, actor)
+    if brand["status"] != "archived":
+        return JSONResponse({"error": "這個品牌沒有封存，不用還原。"}, status_code=409)
+    repo.update_brand(web.conn, brand_id, name=brand["name"], client_name=brand["client_name"],
+                      status="active", actor=str(actor.user_id))
+    updated = repo.get_brand(web.conn, brand_id)
+    return {"data": _brand_profile_shape(brand_id, updated)}
+
+
 # ---- 票 past-ads/03（ADR 0067 rule 6）：投放過／沒投過的一次性選擇，兩顆按鈕的
 # ui/dialog，不是表單欄位——PUT 是票面明講的動詞，跟本檔其餘端點的 POST 慣例不同。 ----
 

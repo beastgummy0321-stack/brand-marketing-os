@@ -7,23 +7,39 @@ import type { ReactNode } from "react";
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/intakeProductApi", async () => {
   const actual = await vi.importActual<typeof import("@/lib/intakeProductApi")>("@/lib/intakeProductApi");
-  return { ...actual, fetchProductsPage: vi.fn(), createProduct: vi.fn(), dismissProductSuggestion: vi.fn() };
+  return {
+    ...actual,
+    fetchProductsPage: vi.fn(),
+    createProduct: vi.fn(),
+    dismissProductSuggestion: vi.fn(),
+    fetchArchivedProducts: vi.fn(),
+    restoreProduct: vi.fn(),
+  };
 });
 vi.mock("@/lib/useAuthedImage", () => ({
   useAuthedImage: (url: string | undefined) => ({ src: url ? `blob:${url}` : null, failed: !url }),
 }));
 
-import { createProduct, dismissProductSuggestion, fetchProductsPage, type ProductsPage as PageData } from "@/lib/intakeProductApi";
+import {
+  createProduct,
+  dismissProductSuggestion,
+  fetchArchivedProducts,
+  fetchProductsPage,
+  restoreProduct,
+  type ProductsPage as PageData,
+} from "@/lib/intakeProductApi";
 import { ProductCard } from "./ProductCard";
 import { ProductsPage } from "./ProductsPage";
 
 const mockFetch = vi.mocked(fetchProductsPage);
 const mockCreate = vi.mocked(createProduct);
 const mockDismiss = vi.mocked(dismissProductSuggestion);
+const mockArchived = vi.mocked(fetchArchivedProducts);
+const mockRestore = vi.mocked(restoreProduct);
 const B = "brd_1";
 
 const fixture: PageData = {
@@ -86,6 +102,10 @@ function renderPage() {
     </MemoryRouter>,
   );
 }
+
+beforeEach(() => {
+  mockArchived.mockResolvedValue([]);
+});
 
 afterEach(() => {
   cleanup();
@@ -224,6 +244,68 @@ describe("ProductsPage", () => {
     await userEvent.click(screen.getByRole("button", { name: "重新載入" }));
     expect(await screen.findByRole("region", { name: "組合" })).toBeTruthy();
     await waitFor(() => expect(mockFetch).toHaveBeenCalledTimes(2));
+  });
+});
+
+describe("ProductsPage 已封存 fold (F50-I17)", () => {
+  const archivedTea = { id: "prd_tea", name: "回甘烏龍茶包（30 入）" };
+  const restoredTea = {
+    ...fixture.products[1], id: "prd_tea", name: "回甘烏龍茶包（30 入）", state: "ready" as const, missing: [], step: null,
+    summary: "1 群顧客・證據 0・說法 1", sell_ways: [],
+  };
+
+  it("is hidden when nothing is archived", async () => {
+    mockFetch.mockResolvedValue(fixture);
+    renderPage();
+    await screen.findByRole("region", { name: "商品" });
+    await waitFor(() => expect(mockArchived).toHaveBeenCalledWith(B));
+    expect(screen.queryByText(/已封存/)).toBeNull();
+    expect(document.querySelector("[data-slot=archived-products]")).toBeNull();
+  });
+
+  it("lists archived products folded under the list; 「還原」 moves the product back to 商品", async () => {
+    mockFetch.mockResolvedValueOnce(fixture).mockResolvedValueOnce({ ...fixture, products: [...fixture.products, restoredTea] });
+    mockArchived.mockResolvedValueOnce([archivedTea]).mockResolvedValueOnce([]);
+    mockRestore.mockResolvedValue(undefined);
+    renderPage();
+
+    const fold = (await screen.findByText("已封存（1）")).closest("details") as HTMLElement;
+    expect(fold.hasAttribute("open")).toBe(false);
+    const products = screen.getByRole("region", { name: "商品" });
+    expect(within(products).queryByText("回甘烏龍茶包（30 入）")).toBeNull();
+
+    await userEvent.click(screen.getByText("已封存（1）"));
+    const card = within(fold).getByText("回甘烏龍茶包（30 入）").closest("[data-slot=product-card]") as HTMLElement;
+    await userEvent.click(within(card).getByRole("button", { name: "還原" }));
+
+    expect(mockRestore).toHaveBeenCalledWith(B, "prd_tea");
+    expect(await within(screen.getByRole("region", { name: "商品" })).findByRole("link", { name: "回甘烏龍茶包（30 入）" })).toBeTruthy();
+    await waitFor(() => expect(screen.queryByText(/已封存（/)).toBeNull());
+  });
+
+  it("a failed 「還原」 keeps the row and shows the server's sentence on it", async () => {
+    mockFetch.mockResolvedValue(fixture);
+    mockArchived.mockResolvedValue([archivedTea]);
+    mockRestore.mockRejectedValue(new Error("已有同名產品"));
+    renderPage();
+
+    await userEvent.click(await screen.findByText("已封存（1）"));
+    const card = screen.getByText("回甘烏龍茶包（30 入）").closest("[data-slot=product-card]") as HTMLElement;
+    await userEvent.click(within(card).getByRole("button", { name: "還原" }));
+
+    expect((await within(card).findByRole("alert")).textContent).toBe("已有同名產品");
+    expect(within(card).getByRole("button", { name: "還原" }).hasAttribute("disabled")).toBe(false);
+    expect(screen.getByText("已封存（1）")).toBeTruthy();
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("an empty brand with an archived product still shows the fold under the empty state", async () => {
+    mockFetch.mockResolvedValue({ products: [], bundles: [], suggestions: [] });
+    mockArchived.mockResolvedValue([archivedTea]);
+    renderPage();
+
+    expect(await screen.findByText("還沒有商品")).toBeTruthy();
+    expect(await screen.findByText("已封存（1）")).toBeTruthy();
   });
 });
 

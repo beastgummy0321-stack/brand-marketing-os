@@ -165,6 +165,31 @@ export function ProductCard(props: ProductCardProps) {
   );
 }
 
+/** F50-I17: an archived product in the products page's 「已封存」 fold — its name and 「還原」 (the page owns the call;
+ * `error` is the server's sentence, e.g. the same-name collision). */
+export function ArchivedProductCard({ name, busy, error, onRestore }: {
+  name: string;
+  busy: boolean;
+  error: string | null;
+  onRestore: () => void;
+}) {
+  return (
+    <div data-slot="product-card" data-state="archived" className={CARD}>
+      <div className="flex items-center gap-2.5">
+        <Thumb url={null} size={44} />
+        <div className="min-w-0 flex-1">
+          <b className="font-semibold text-muted-foreground [overflow-wrap:anywhere]">{name}</b>
+          <div className="text-[11.5px] text-muted-foreground">已封存</div>
+        </div>
+        <Button type="button" variant="outline" size="sm" className="shrink-0 font-medium" disabled={busy} onClick={onRestore}>
+          還原
+        </Button>
+      </div>
+      {error && <p role="alert" className="text-xs text-danger">{error}</p>}
+    </div>
+  );
+}
+
 /** A product the brand scan read that is not created yet: 「繼續建檔 →」 creates it (the page owns the call). */
 /** F47 Q8: `onDismiss` = 「不用了」 next to 「繼續建檔 →」 (the name is never suggested again). */
 export function SuggestionCard({ suggestion, busy, error, onContinue, onDismiss }: {
