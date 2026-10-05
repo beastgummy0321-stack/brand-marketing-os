@@ -80,7 +80,8 @@ function toInput(g: Draft): CustomerGroupInput {
  * six pains (`pain_options`) + 顧客會怎麼說 + 「自訂」 (product block `pain`: checks the mapped pain and fills the quote,
  * marked 你自訂), 什麼時候用 and a remove ×. Under the groups 「自訂」 (block `group`) appends a group marked 你自訂; it
  * hides at three. 下一步 saves the full list through `PUT …/onboarding/who` and moves on only after the server
- * confirmed; a group without 是誰 or without a pain keeps 下一步 off with the reason in the bar. */
+ * confirmed; a group without 是誰 or without a pain keeps 下一步 off with the reason in the bar. Removing every group is
+ * the server's call (F50 Contract R): a refused save shows its sentence and puts the loaded groups back. */
 export function WhoStep({ brandId, productId, nav, back, onNext }: {
   brandId: string;
   productId: string;
@@ -134,7 +135,15 @@ export function WhoStep({ brandId, productId, nav, back, onNext }: {
   useStepDraft(draftKey, loaded !== null, kept(groups), loadedGroups);
 
   const { saving, error, submit, formProps } = useFormSubmit(async () => {
-    await saveProductWho(brandId, productId, groups.map(toInput));
+    try {
+      await saveProductWho(brandId, productId, groups.map(toInput));
+    } catch (err) {
+      // F50 Contract R: whether a product may keep zero groups is the server's call (a finished one may not:
+      // 「至少留一群顧客；不賣給任何人就先封存這個商品。」). When it refuses a save that removed every group, the
+      // groups come back as loaded and the sentence shows under them.
+      if (groups.length === 0) setGroups(loadedGroups.map((g) => ({ ...g, key: nextKey.current++ })));
+      throw err;
+    }
     clearStepDraft(draftKey);
     onNext();
   });

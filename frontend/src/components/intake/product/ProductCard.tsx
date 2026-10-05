@@ -110,7 +110,8 @@ export type ProductCardProps = { brandId: string; compact?: boolean } & (
   | { bundle: BundleCardData; product?: undefined }
 );
 
-/** A knowledge product (with its sell-ways) or a bundle. */
+/** A knowledge product (with its sell-ways) or a bundle. The chip is the served `state`; a draft product's sub-line
+ * is its first served `missing` label (「還沒有顧客群」), else the served summary. */
 export function ProductCard(props: ProductCardProps) {
   const { brandId, compact = false } = props;
   const thumbSize = compact ? 40 : 44;
@@ -118,9 +119,13 @@ export function ProductCard(props: ProductCardProps) {
     const p = props.product;
     const draft = p.state === "draft";
     const next = productOnboardingPath(brandId, p.id, draft ? (p.step ?? 1) : null);
-    const line = compact && !draft && p.sell_ways.length > 0
-      ? p.sell_ways.map((w) => (w.price === null ? w.name : `${w.name} ${amount(w.price)}`)).join("・")
-      : p.summary;
+    // F50 Contract R: a draft's sub-line names the first thing the server says keeps it from ready.
+    const firstMissing = draft ? p.missing?.[0]?.label : undefined;
+    let line = p.summary;
+    if (firstMissing) line = firstMissing;
+    else if (compact && !draft && p.sell_ways.length > 0) {
+      line = p.sell_ways.map((w) => (w.price === null ? w.name : `${w.name} ${amount(w.price)}`)).join("・");
+    }
     const right = compact && draft
       ? <ContinueButton to={next} label="繼續 →" />
       : <StateChip state={p.state} />;

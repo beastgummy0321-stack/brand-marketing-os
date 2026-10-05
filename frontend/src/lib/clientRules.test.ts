@@ -43,18 +43,9 @@ export const RULES: Record<Rule, RegExp[]> = {
 
 interface Pending { file: string; rule: Rule; text: string; issue: string }
 
-/** Today's hits (file relative to `src/`, the trimmed line) with the issue that removes each: the product done page
- * reads the served checklist in F50-I15. */
-const PENDING: Pending[] = [
-  { file: "components/intake/product/ProductDoneStep.tsx", rule: "length_ready", issue: "F50-I15",
-    text: '{ step: 1, ok: saved(1) && whatParts.length > 0, label: "商品是什麼", detail: whatParts.join("、") },' },
-  { file: "components/intake/product/ProductDoneStep.tsx", rule: "length_ready", issue: "F50-I15",
-    text: "ok: saved(2) && groups.length > 0," },
-  { file: "components/intake/product/ProductDoneStep.tsx", rule: "length_ready", issue: "F50-I15",
-    text: "ok: saved(3) && proof.length + claims.length > 0," },
-  { file: "components/intake/product/ProductDoneStep.tsx", rule: "length_ready", issue: "F50-I15",
-    text: '{ step: 4, ok: saved(4) && ways.length > 0, label: `賣法 ${ways.length} 種`, detail: ways.map(sellWayText).join("・") },' },
-];
+/** Today's hits (file relative to `src/`, the trimmed line) with the issue that removes each. Empty since F50-I15
+ * (the product done page prints the served checklist); a new hit is fixed, never listed. */
+const PENDING: Pending[] = [];
 
 /** Permanent: hits that do not read a typed field, with the reason (a stale entry still fails). */
 const NOT_INPUT: { file: string; rule: Rule; text: string; why: string }[] = [
