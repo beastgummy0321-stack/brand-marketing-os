@@ -37,24 +37,34 @@ const buttonVariants = cva(
   },
 );
 
-/** F47-I02 (feature F47 Contract B): `disabledReason` — while the button is disabled and a reason is
- * set, one muted sentence renders right after the button and is wired as its accessible description
- * (`aria-describedby`), so a greyed-out control always says why. Ignored while enabled. */
+/** F51 Contract D (extends F47 Contract B): a disabled control says why. The button is disabled exactly when
+ * it is `busy` or has a `disabledReason`:
+ *  - `busy` → `aria-busy`, no sentence (the label already says 儲存中…);
+ *  - a reason → one muted sentence right after the button, wired as its accessible description
+ *    (`aria-describedby`), so a greyed-out control always says why.
+ * `disabled` is still accepted (deprecated: F51-I13 removes it from the type once the sweeps converted every
+ * caller); a reason passed beside it is printed while the button is disabled and not busy. */
 function Button({
   className,
   variant = "default",
   size = "default",
   asChild = false,
+  busy = false,
   disabledReason,
+  disabled,
   ...props
 }: React.ComponentProps<"button"> &
   VariantProps<typeof buttonVariants> & {
     asChild?: boolean;
-    disabledReason?: string;
+    /** The action this button started is running: disabled, `aria-busy`, no sentence. */
+    busy?: boolean;
+    /** Why the button cannot be pressed now; a non-empty reason disables it and is printed after it. */
+    disabledReason?: string | null;
   }) {
   const Comp = asChild ? Slot.Root : "button";
   const reasonId = React.useId();
-  const showReason = Boolean(props.disabled && disabledReason);
+  const isDisabled = Boolean(busy || disabledReason || disabled);
+  const showReason = Boolean(isDisabled && !busy && disabledReason);
   const describedBy = showReason
     ? [props["aria-describedby"], reasonId].filter(Boolean).join(" ")
     : props["aria-describedby"];
@@ -66,6 +76,8 @@ function Button({
       data-size={size}
       className={cn(buttonVariants({ variant, size, className }))}
       {...props}
+      disabled={isDisabled}
+      aria-busy={busy || props["aria-busy"] || undefined}
       aria-describedby={describedBy}
     />
   );

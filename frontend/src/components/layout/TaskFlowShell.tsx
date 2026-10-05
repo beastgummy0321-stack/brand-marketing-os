@@ -1,6 +1,9 @@
 import { Check } from "lucide-react";
-import type { ReactNode } from "react";
+import { useId, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
+
+/** F51 Contract D: why a step tab further on cannot be opened yet. */
+export const STEP_LOCKED_REASON = "先完成前面的步驟";
 
 /** 任務流殼：頂部步驟軌＋中央目前步驟＋右欄插槽。唯一呼叫端是
  * `components/intake/IntakeWizard.tsx`（建檔精靈）。
@@ -40,7 +43,8 @@ export function TaskFlowShell({
   );
 }
 
-/** 頂部步驟軌：只能點回已經走過的步驟，不能跳過還沒到的步驟。 */
+/** 頂部步驟軌：只能點回已經走過的步驟，不能跳過還沒到的步驟。F51 Contract D: while any step is still
+ * locked, one muted line under the rail says 「先完成前面的步驟」 and every locked tab is described by it. */
 function TaskFlowSteps({
   steps,
   current,
@@ -52,46 +56,56 @@ function TaskFlowSteps({
   reachableThrough?: number;
   onSelect: (step: number) => void;
 }) {
+  const lockedId = useId();
+  const anyLocked = steps.length > reachableThrough;
   return (
-    <ol className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-card p-4">
-      {steps.map((label, idx) => {
-        const step = idx + 1;
-        const done = step < current;
-        const isActive = step === current;
-        const reachable = step <= reachableThrough;
-        return (
-          <li key={label} className="flex items-center gap-2">
-            {idx > 0 && (
-              <span
-                className="h-px w-6 shrink-0 bg-border"
-                aria-hidden="true"
-              />
-            )}
-            <button
-              type="button"
-              disabled={!reachable}
-              onClick={() => onSelect(step)}
-              aria-current={isActive ? "step" : undefined}
-              className={cn(
-                "flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium",
-                isActive && "bg-primary text-primary-foreground",
-                !isActive &&
-                  done &&
-                  "bg-success/10 text-success hover:bg-success/20",
-                !isActive && !done && "bg-muted text-muted-foreground",
-                !reachable && "cursor-not-allowed opacity-60",
+    <div className="flex flex-col gap-1.5">
+      <ol className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-card p-4">
+        {steps.map((label, idx) => {
+          const step = idx + 1;
+          const done = step < current;
+          const isActive = step === current;
+          const reachable = step <= reachableThrough;
+          return (
+            <li key={label} className="flex items-center gap-2">
+              {idx > 0 && (
+                <span
+                  className="h-px w-6 shrink-0 bg-border"
+                  aria-hidden="true"
+                />
               )}
-            >
-              {done ? (
-                <Check className="h-3 w-3" aria-hidden="true" />
-              ) : (
-                <span>{step}</span>
-              )}
-              {label}
-            </button>
-          </li>
-        );
-      })}
-    </ol>
+              <button
+                type="button"
+                disabled={!reachable} // DISABLED_OK: the rail prints STEP_LOCKED_REASON once, and every locked tab points to it
+                aria-describedby={reachable ? undefined : lockedId}
+                onClick={() => onSelect(step)}
+                aria-current={isActive ? "step" : undefined}
+                className={cn(
+                  "flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium",
+                  isActive && "bg-primary text-primary-foreground",
+                  !isActive &&
+                    done &&
+                    "bg-success/10 text-success hover:bg-success/20",
+                  !isActive && !done && "bg-muted text-muted-foreground",
+                  !reachable && "cursor-not-allowed opacity-60",
+                )}
+              >
+                {done ? (
+                  <Check className="h-3 w-3" aria-hidden="true" />
+                ) : (
+                  <span>{step}</span>
+                )}
+                {label}
+              </button>
+            </li>
+          );
+        })}
+      </ol>
+      {anyLocked && (
+        <p id={lockedId} data-slot="step-locked-reason" className="px-1 text-xs text-muted-foreground">
+          {STEP_LOCKED_REASON}
+        </p>
+      )}
+    </div>
   );
 }

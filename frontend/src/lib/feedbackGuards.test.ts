@@ -14,6 +14,14 @@
  *    declares its own `Error` class. Drill 11 B8: three different network sentences and 「Failed to fetch」.
  * 4. `message-branch` (F51 Contract C): a component branches on `err.code`／`err.status`／
  *    `err.rejected`, never on message text (`.message ===`, `.message.includes(`, `message === CONST`).
+ * 5. `disabled` (F51 Contract D, installed by F51-I04): a greyed-out control says why. `disabled=` on a `<Button`,
+ *    `<BarNext`, `<StepButton`, `<WarnButton` or raw `<button` opening tag (any line of a multi-line tag), and
+ *    `actionDisabled=`, are hits: pass `busy` (no sentence) or `disabledReason` (`EmptyState`:
+ *    `actionBusy`／`actionDisabledReason`). Form fields keep `disabled` (no rule). Structural disabling (a pager at
+ *    its first／last page) carries `// DISABLED_OK: <why>` on the `disabled=` line.
+ *
+ * The figure rules (zero, currency, money-ratio, roas-format) live in `lib/figureGuards.test.ts`, read the same
+ * allow modules and use the same comment blanking (a copy: a test file cannot import another test file).
  *
  * Rules 3–4 (and the later F51 rules) are ratchets: comments are blanked before scanning (line numbers
  * kept); a hit in a file no `lib/guards/F51-INN.allow.ts` module lists fails; a listed `(rule, file)`
@@ -139,13 +147,15 @@ function blankComments(text: string): string {
   return out;
 }
 
-type RuleName = "envelope" | "message-branch";
+type RuleName = "envelope" | "message-branch" | "disabled";
 
 interface Rule {
   /** Which sources the rule reads (path relative to `src/`, `/` separators). */
   applies: (rel: string) => boolean;
   /** Whether one comment-blanked line is a hit, given the file it is in. */
-  hit: (line: string, rel: string) => boolean;
+  hit?: (line: string, rel: string) => boolean;
+  /** For a rule that reads across lines: the 1-based hit lines of the whole comment-blanked source. */
+  lines?: (code: string, rel: string) => number[];
   /** The inline excuse marker, e.g. `ENVELOPE_OK:`. */
   excuse: string;
 }
@@ -168,6 +178,38 @@ const MESSAGE_BRANCH_PATTERNS = [
   /\bmessage\s*[!=]==\s*[A-Z][A-Z0-9_]+\b/, // `message === SOME_SENTENCE`
 ];
 
+/** The opening tags whose `disabled=` must become `busy`／`disabledReason` (F51 Contract D). */
+const DISABLED_TAG = /<(?:Button|BarNext|StepButton|WarnButton|button)(?=[\s>/])/g;
+const ACTION_DISABLED = /(?<![\w-])actionDisabled=/;
+
+/** 1-based line of every `disabled=` attribute written on one of `DISABLED_TAG`'s opening tags (attribute
+ * position only: inside `{…}` an expression is not an attribute), plus every `actionDisabled=` line. */
+function disabledLines(code: string): number[] {
+  const lineOf = (at: number) => code.slice(0, at).split("\n").length;
+  const out = new Set<number>();
+  for (const match of code.matchAll(DISABLED_TAG)) {
+    let i = (match.index ?? 0) + match[0].length;
+    let depth = 0;
+    while (i < code.length) {
+      const c = code[i];
+      if (depth === 0 && (c === '"' || c === "'")) {
+        const close = code.indexOf(c, i + 1);
+        i = close === -1 ? code.length : close + 1;
+        continue;
+      }
+      if (c === "{") depth++;
+      else if (c === "}") depth--;
+      else if (depth === 0 && (c === ">" || (c === "/" && code[i + 1] === ">"))) break;
+      else if (depth === 0 && code.startsWith("disabled=", i) && !/[\w-]/.test(code[i - 1] ?? "")) out.add(lineOf(i));
+      i++;
+    }
+  }
+  code.split("\n").forEach((line, index) => {
+    if (ACTION_DISABLED.test(line)) out.add(index + 1);
+  });
+  return [...out].sort((a, b) => a - b);
+}
+
 const RULES: Record<RuleName, Rule> = {
   envelope: {
     applies: (rel) => (rel.startsWith("components/") || rel.startsWith("lib/")) && NOT_TRANSLATOR(rel),
@@ -179,18 +221,25 @@ const RULES: Record<RuleName, Rule> = {
     hit: (line) => MESSAGE_BRANCH_PATTERNS.some((p) => p.test(line)),
     excuse: "MESSAGE_BRANCH_OK:",
   },
+  disabled: {
+    applies: (rel) => (rel.startsWith("components/") || rel.startsWith("lib/")) && !rel.startsWith("lib/guards/"),
+    lines: (code) => disabledLines(code),
+    excuse: "DISABLED_OK:",
+  },
 };
 
 /** Line numbers (1-based) of `rule`'s hits in `source`, split into excused and not. An excuse sits on
  * the hit line itself; `strayExcuses` are excuse markers on a line without a hit. */
 function scan(rule: RuleName, rel: string, source: string): { hits: number[]; excused: number[]; strayExcuses: number[] } {
-  const { hit, excuse } = RULES[rule];
+  const { hit, lines, excuse } = RULES[rule];
   const raw = source.split("\n");
-  const code = blankComments(source).split("\n");
+  const blanked = blankComments(source);
+  const code = blanked.split("\n");
+  const hitLines = new Set(lines ? lines(blanked, rel) : []);
   const out = { hits: [] as number[], excused: [] as number[], strayExcuses: [] as number[] };
   code.forEach((line, index) => {
     const excused = raw[index]?.includes(excuse) ?? false;
-    if (hit(line, rel)) (excused ? out.excused : out.hits).push(index + 1);
+    if (hitLines.has(index + 1) || (hit?.(line, rel) ?? false)) (excused ? out.excused : out.hits).push(index + 1);
     else if (excused) out.strayExcuses.push(index + 1);
   });
   return out;
@@ -260,11 +309,11 @@ describe("feedback guards (F47 Contract B)", () => {
   });
 });
 
-describe("feedback guards (F51 Contract H／C ratchets)", () => {
+describe("feedback guards (F51 Contract H／C／D ratchets)", () => {
   const files = sourceFiles();
   const allow = allowed();
 
-  for (const rule of ["envelope", "message-branch"] as const) {
+  for (const rule of ["envelope", "message-branch", "disabled"] as const) {
     it(`${rule}: every hit is in a file an F51 issue still lists, or excused inline`, () => {
       expect(ratchet(rule, files, allow).unlisted).toEqual([]);
     });
@@ -321,5 +370,24 @@ describe("feedback guards (F51 Contract H／C ratchets)", () => {
     expect(lines("if (err.code === \"campaign_busy\" || err.status === 404) x();")).toEqual([]);
     expect(scan("message-branch", "lib/x.ts", 'if (err.message === "x") y();').hits).toEqual([1]);
     expect(RULES["message-branch"].applies("lib/x.ts")).toBe(false);
+  });
+
+  it("the disabled scan sees disabled= on buttons (any line of the tag) and actionDisabled=, and leaves fields alone", () => {
+    const lines = (src: string) => scan("disabled", "components/x/Y.tsx", src).hits;
+    expect(lines("<Button disabled={busy} onClick={go}>送出</Button>")).toEqual([1]);
+    expect(lines('<Button\n  variant="outline"\n  disabled={!ready}\n  onClick={go}\n>送出</Button>')).toEqual([3]);
+    expect(lines('<button type="button" disabled={x}>a</button>')).toEqual([1]);
+    expect(lines('<BarNext label="下一步" disabled={!ok} />')).toEqual([1]);
+    expect(lines("<StepButton disabled={a} />\n<WarnButton disabled={b}>x</WarnButton>")).toEqual([1, 2]);
+    expect(lines('<EmptyState title="t" actionDisabled={busy} />')).toEqual([1]);
+    expect(lines("<Button busy={saving} disabledReason={why}>送出</Button>")).toEqual([]);
+    expect(lines("<Input disabled={busy} />\n<select disabled={busy} />\n<Textarea disabled={busy} />")).toEqual([]);
+    expect(lines('<Button aria-disabled="true" onClick={() => go({ disabled: true })}>x</Button>')).toEqual([]);
+    expect(lines('<Button title="a > b" disabled={x}>y</Button>')).toEqual([1]);
+    expect(lines("<Button onClick={() => (a > b ? x() : y())} disabled={z}>y</Button>")).toEqual([1]);
+    expect(lines("<Buttons disabled={x} />")).toEqual([]);
+    expect(lines("// <Button disabled={x}>\nconst a = 1;")).toEqual([]);
+    expect(scan("disabled", "components/x/Y.tsx", "<button\n  disabled={first} // DISABLED_OK: structural\n>").excused).toEqual([2]);
+    expect(RULES.disabled.applies("lib/guards/F51-I06.allow.ts")).toBe(false);
   });
 });

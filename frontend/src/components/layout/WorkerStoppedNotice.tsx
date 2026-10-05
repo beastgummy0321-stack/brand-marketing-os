@@ -37,7 +37,7 @@ export function WorkerStoppedNotice({ onRecheck }: { onRecheck: () => Promise<un
       <p className="min-w-[200px] flex-1 text-[13px] leading-relaxed">
         <b className="text-[15px] font-semibold">背景程式停了</b>：{WORKER_STOPPED_TEXT}
       </p>
-      <Button type="button" variant="outline" size="sm" disabled={checking} onClick={() => void recheck()}>
+      <Button type="button" variant="outline" size="sm" busy={checking} onClick={() => void recheck()}>
         {checking ? "檢查中…" : "再檢查一次"}
       </Button>
     </div>

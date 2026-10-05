@@ -1,5 +1,5 @@
-/** F51 feedback-guard ratchet entries that F51-I08 removes (library, products, settings, orders and coordinates clients move onto `readJson`).
- * Read by `lib/feedbackGuards.test.ts` through `import.meta.glob("./guards/*.allow.ts")`; an entry whose
+/** F51 guard ratchet entries that F51-I08 removes (library, products, settings, orders and coordinates clients move onto `readJson`).
+ * Read by `lib/feedbackGuards.test.ts` and `lib/figureGuards.test.ts` through `import.meta.glob("./guards/*.allow.ts")`; an entry whose
  * file no longer hits fails as stale. F51-I08 deletes its entries as it cleans each file, and this module when it is empty. */
 export default [
   { rule: "envelope", file: "lib/libraryApi.ts" },
@@ -8,4 +8,31 @@ export default [
   { rule: "envelope", file: "lib/ordersApi.ts" },
   { rule: "envelope", file: "lib/coordinatesApi.ts" },
   { rule: "message-branch", file: "components/products/ProductDetailPage.tsx" },
+  // F51-I04 (Contract D／F scanners: disabled, zero, currency, money-ratio, roas-format).
+  { rule: "disabled", file: "components/inbox/InboxItemCard.tsx" },
+  { rule: "disabled", file: "components/inbox/InboxPage.tsx" },
+  { rule: "disabled", file: "components/library/LibraryPage.tsx" },
+  { rule: "disabled", file: "components/library/panels/BrandProfilePanel.tsx" },
+  { rule: "disabled", file: "components/library/PersonaSection.tsx" },
+  { rule: "disabled", file: "components/library/shared/InlineDeleteButton.tsx" },
+  { rule: "disabled", file: "components/library/shared/PanelSaveButton.tsx" },
+  { rule: "disabled", file: "components/orders/OrdersPage.tsx" },
+  { rule: "disabled", file: "components/overview/ArchivedBrands.tsx" },
+  { rule: "disabled", file: "components/products/panels/ProductDeletePanel.tsx" },
+  { rule: "disabled", file: "components/products/ProductDetailPage.tsx" },
+  { rule: "disabled", file: "components/products/shared/InlineDeleteButton.tsx" },
+  { rule: "disabled", file: "components/products/shared/PanelSaveButton.tsx" },
+  { rule: "disabled", file: "components/settings/ApiKeySection.tsx" },
+  { rule: "disabled", file: "components/settings/RuleCardsSection.tsx" },
+  { rule: "disabled", file: "components/settings/SettingsPage.tsx" },
+  { rule: "disabled", file: "components/workbench/FreeJobPage.tsx" },
+  { rule: "disabled", file: "components/workbench/PackPage.tsx" },
+  { rule: "disabled", file: "components/workbench/SetGenerationStatus.tsx" },
+  { rule: "disabled", file: "components/workbench/SetStudioPage.tsx" },
+  { rule: "disabled", file: "components/workbench/WorkbenchHomePage.tsx" },
+  { rule: "zero", file: "components/workbench/PackPage.tsx" },
+  { rule: "currency", file: "components/products/panels/HandoffPanel.tsx" },
+  { rule: "currency", file: "components/products/ProductDetailPage.tsx" },
+  { rule: "currency", file: "components/settings/ApiKeySection.tsx" },
+  { rule: "currency", file: "components/settings/SettingsPage.tsx" },
 ];

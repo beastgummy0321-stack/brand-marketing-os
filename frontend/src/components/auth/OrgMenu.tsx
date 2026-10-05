@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { CopyIconButton } from "@/components/layout/CopyIconButton";
+import { Button } from "@/components/layout/ui/button";
 import { SidePanel } from "@/components/layout/SidePanel";
 import { setOrgId } from "@/lib/auth";
 import { apiFetch, readJson, signOutByUser } from "@/lib/http";
@@ -170,13 +171,9 @@ export function OrgMenu({ identity, onIdentityChanged }: { identity?: MeResponse
               />
             </label>
             {renameForm.error && <p className="text-sm text-danger">{renameForm.error}</p>}
-            <button
-              type="submit"
-              disabled={renameForm.saving}
-              className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
-            >
+            <Button type="submit" busy={renameForm.saving}>
               {renameForm.saving ? "儲存中…" : "儲存並邀請成員"}
-            </button>
+            </Button>
           </form>
         </SidePanel>
       )}
@@ -205,13 +202,9 @@ export function OrgMenu({ identity, onIdentityChanged }: { identity?: MeResponse
               />
             </label>
             {inviteForm.error && <p className="text-sm text-danger">{inviteForm.error}</p>}
-            <button
-              type="submit"
-              disabled={inviteForm.saving}
-              className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
-            >
+            <Button type="submit" busy={inviteForm.saving}>
               {inviteForm.saving ? "送出中…" : "送出邀請"}
-            </button>
+            </Button>
           </form>
 
           {inviteResult && (
