@@ -29,7 +29,7 @@ class ProductHierarchyTest(unittest.TestCase):
             web.conn, self.brand_id, name="薑黃錠 · 單瓶", actor="測試員", parent_id=parent["id"])
         child_b = bi_repo.create_product(
             web.conn, self.brand_id, name="薑黃錠 · 3 入組", actor="測試員", parent_id=parent["id"])
-        rows = bi_repo.list_products(web.conn, self.brand_id)
+        rows = bi_repo.all_product_rows(web.conn, self.brand_id)
         self.assertEqual(len(rows), 3)
         by_id = {r["id"]: r for r in rows}
         self.assertIsNone(by_id[parent["id"]]["parent_id"])

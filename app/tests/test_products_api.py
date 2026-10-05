@@ -68,6 +68,13 @@ class _BaseProductsApiTest(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         return resp.json()["id"]
 
+    def _sell_way(self, name="單盒") -> str:
+        """A sell-way row under a fresh knowledge product -- where economics live (Contract R)."""
+        pid = self._create_product()
+        product = repo.get_product(web.conn, self.bid, pid)
+        return repo.create_product(web.conn, self.bid, name=f"{product['name']} · {name}",
+                                   actor=ACTOR, parent_id=pid)["id"]
+
     def _run_worker(self) -> None:
         """票 08：POST 現在只 enqueue，真正打代理在 worker 裡——先 commit 這個 request
         留下的異動，worker 自己開一條新連線，看不到還沒 commit 的交易（比照
@@ -100,15 +107,66 @@ class ProductListTest(_BaseProductsApiTest):
         item = data[0]
         self.assertEqual(
             set(item.keys()),
-            {"id", "name", "status", "fact_count", "pending_fact_count", "economics_status", "parent_id"},
+            {"id", "name", "status", "fact_count", "pending_fact_count", "economics_status", "parent_id",
+             "kind"},
         )
+        self.assertEqual(item["kind"], "knowledge")
         self.assertEqual(item["fact_count"], 2)
         self.assertEqual(item["pending_fact_count"], 1)
         self.assertEqual(item["economics_status"], "none")
         self.assertIsNone(item["parent_id"])
 
 
+class ProductListReadinessTest(_BaseProductsApiTest):
+    """F50 Contract R: the pickers' list = active knowledge products, then sellable sell-ways."""
+
+    def _ready_product(self, name):
+        pid = self._create_product(name)
+        repo.save_customer_groups(web.conn, self.bid, pid, [
+            {"who": "上班族", "pain_keys": ["effort"]}], actor=ACTOR)
+        way = repo.save_sell_way(web.conn, self.bid, name="單盒", product_id=pid, actor=ACTOR,
+                                 economics={"selling_price": 399})
+        repo.set_product_onboarding_step(web.conn, self.bid, pid, None, actor=ACTOR)
+        return pid, way["id"]
+
+    def _listed(self):
+        data = self.client.get(f"/api/products/brands/{self.bid}").json()["data"]
+        return [(item["id"], item["kind"]) for item in data]
+
+    def test_archive_hides_sell_ways_and_bundles_and_restore_brings_them_back(self):
+        tea, tea_box = self._ready_product("虛構回甘烏龍")
+        gummy, gummy_box = self._ready_product("虛構軟糖")
+        bundle = repo.save_sell_way(
+            web.conn, self.bid, name="茶點組", actor=ACTOR, economics={"selling_price": 699},
+            components=[{"sell_way_id": tea_box, "qty": 1}, {"sell_way_id": gummy_box, "qty": 1}],
+        )["id"]
+        # knowledge products in creation order; sell-ways in the wizard's order (product name)
+        everything = [(tea, "knowledge"), (gummy, "knowledge"), (tea_box, "sell_way"),
+                      (gummy_box, "sell_way"), (bundle, "sell_way")]
+        self.assertEqual(self._listed(), everything)
+        resp = self.client.post(f"/api/products/brands/{self.bid}/products/{tea}/archive")
+        self.assertEqual(resp.status_code, 204)
+        self.assertEqual(self._listed(), [(gummy, "knowledge"), (gummy_box, "sell_way")])
+        # Restoring is the one write: its sell-way and the bundle are listed again.
+        repo.update_product(web.conn, self.bid, tea, name="虛構回甘烏龍", status="active",
+                            actor=ACTOR)
+        self.assertEqual(self._listed(), everything)
+
+    def test_a_product_with_zero_groups_lists_no_sell_way(self):
+        pid, way = self._ready_product("虛構回甘烏龍")
+        repo.save_customer_groups(web.conn, self.bid, pid, [], actor=ACTOR)
+        self.assertEqual(self._listed(), [(pid, "knowledge")])
+        self.assertNotIn(way, [p["id"] for p in repo.sellable_products(web.conn, self.bid)])
+
+
 class ProductCreateTest(_BaseProductsApiTest):
+    def test_create_is_a_draft_at_step_one(self):
+        """F50 Contract R: a root product is born through product onboarding, never ready."""
+        pid = self._create_product()
+        self.assertEqual(repo.get_product(web.conn, self.bid, pid)["onboarding_step"], 1)
+        verdict = repo.product_readiness(web.conn, self.bid, pid)
+        self.assertEqual([m["key"] for m in verdict["missing"]], ["steps", "sell_ways", "groups"])
+
     def test_manual_create_returns_id_and_ignores_source_url(self):
         resp = self.client.post(f"/api/products/brands/{self.bid}",
                                  json={"name": "虛構純手動產品", "source_url": "https://ignored.example"})
@@ -122,7 +180,7 @@ class ProductCreateTest(_BaseProductsApiTest):
         resp = self.client.post(f"/api/products/brands/{self.bid}", json={"name": "", "source_url": ""})
         self.assertEqual(resp.status_code, 400)
         self.assertIn("error", resp.json())
-        self.assertEqual(repo.list_products(web.conn, self.bid), [])
+        self.assertEqual(repo.all_product_rows(web.conn, self.bid), [])
 
     def test_manual_create_with_existing_name_lands_on_existing_product(self):
         """F36-I10 (drill-6 #16): a second manual add with the same name (spacing / case
@@ -133,7 +191,7 @@ class ProductCreateTest(_BaseProductsApiTest):
                                      json={"name": variant, "source_url": ""})
             self.assertEqual(resp.status_code, 200, variant)
             self.assertEqual(resp.json()["id"], first, repr(variant))
-        products = repo.list_products(web.conn, self.bid)
+        products = repo.all_product_rows(web.conn, self.bid)
         self.assertEqual([p["id"] for p in products], [first])
 
     def test_manual_create_after_archive_makes_a_new_active_product(self):
@@ -143,7 +201,7 @@ class ProductCreateTest(_BaseProductsApiTest):
         self.assertEqual(resp.status_code, 204)
         second = self._create_product("超能特惠組")
         self.assertNotEqual(second, first)
-        statuses = {p["id"]: p["status"] for p in repo.list_products(web.conn, self.bid)}
+        statuses = {p["id"]: p["status"] for p in repo.all_product_rows(web.conn, self.bid)}
         self.assertEqual(statuses, {first: "archived", second: "active"})
 
 
@@ -156,7 +214,8 @@ class ProductDetailTest(_BaseProductsApiTest):
         self.assertEqual(
             set(data.keys()),
             {"id", "brand_id", "name", "status", "knowledge_version", "cards",
-             "latest_source_url", "economics_pending", "facts", "economics", "rules", "claims"},
+             "latest_source_url", "economics_pending", "facts", "economics", "rules", "claims",
+             "sell_ways"},
         )
         self.assertEqual(len(data["cards"]), 4)
         self.assertEqual(data["economics"], None)
@@ -276,7 +335,7 @@ class ResearchBackgroundTest(_BaseProductsApiTest):
         self.assertIn("US$", resp.json()["error"])
         # 產品已經建立（同步階段），不因超預算而消失——422 的回應本身不帶 product_id
         # （這不是票要保留形狀的三支狀態端點之一），從清單反查剛建立的那一個。
-        products = repo.list_products(web.conn, self.bid)
+        products = repo.all_product_rows(web.conn, self.bid)
         self.assertEqual(len(products), 1)
         pid = products[0]["id"]
         self.assertEqual(repo.list_product_facts(web.conn, self.bid, pid), [])
@@ -292,7 +351,7 @@ class ResearchBackgroundTest(_BaseProductsApiTest):
             json={"name": "虛構產品", "source_url": "not-a-url"},
         )
         self.assertEqual(resp.status_code, 400)
-        self.assertEqual(repo.list_products(web.conn, self.bid), [])
+        self.assertEqual(repo.all_product_rows(web.conn, self.bid), [])
 
     def test_a_scheme_alone_is_not_a_product_page(self):
         """F50 Contract I: research and rescan check the address with `input_rules.url`."""
@@ -300,7 +359,7 @@ class ResearchBackgroundTest(_BaseProductsApiTest):
         resp = self.client.post(f"/api/products/brands/{self.bid}/research",
                                 json={"name": "虛構產品", "source_url": "https://"})
         self.assertEqual((resp.status_code, resp.json()), (400, {"error": sentence}))
-        self.assertEqual(repo.list_products(web.conn, self.bid), [])
+        self.assertEqual(repo.all_product_rows(web.conn, self.bid), [])
         pid = self._create_product()
         resp = self.client.post(f"/api/products/brands/{self.bid}/products/{pid}/rescan",
                                 json={"source_url": "https://"})
@@ -381,8 +440,11 @@ class ProductFactCrudTest(_BaseProductsApiTest):
 
 
 class EconomicsTest(_BaseProductsApiTest):
+    """The economics routes edit a sell-way row's money (F50 Contract R: a knowledge product holds
+    none -- `MoneyLivesOnSellWaysTest`)."""
+
     def test_save_and_confirm(self):
-        pid = self._create_product()
+        pid = self._sell_way()
         resp = self.client.post(
             f"/api/products/brands/{self.bid}/products/{pid}/economics",
             json={"selling_price": 690, "fixed_cost": 0, "unit_variable_cost": 0, "shipping_cost": 0,
@@ -401,7 +463,7 @@ class EconomicsTest(_BaseProductsApiTest):
         self.assertEqual(repo.get_product_economics(web.conn, self.bid, pid)["confirmed_by"], DEV_USER_ID)
 
     def test_non_numeric_selling_price_rejected(self):
-        pid = self._create_product()
+        pid = self._sell_way()
         resp = self.client.post(
             f"/api/products/brands/{self.bid}/products/{pid}/economics",
             json={"selling_price": "not-a-number", "fixed_cost": 0, "unit_variable_cost": 0,
@@ -419,7 +481,7 @@ class EconomicsTest(_BaseProductsApiTest):
     def test_store_keeps_what_was_sent_or_refuses_naming_the_field(self):
         """F47 Contract A (drill-10 V3): price 0 and a negative cost are refused with the field
         sentence (nothing saved); shipping is >= 0 on every path (lead decision) and 0 is kept."""
-        pid = self._create_product()
+        pid = self._sell_way()
         for field, value, sentence in (("selling_price", 0, "售價要大於 0。"),
                                        ("unit_variable_cost", -1, "單位變動成本不能是負數。"),
                                        ("fixed_cost", -1, "固定成本不能是負數。"),
@@ -436,7 +498,7 @@ class EconomicsTest(_BaseProductsApiTest):
     def test_dates_and_close_rate_go_through_the_one_table(self):
         """F50 Contract I: 生效日 is an ISO date (a non-ISO one used to be a 500) and 成交率 is a
         percent 0–100 (`percent`, decision 9); each refusal is keyed by its field, nothing is saved."""
-        pid = self._create_product()
+        pid = self._sell_way()
         for field, value, sentence in (
                 ("effective_from", "01/06/2026", "生效日請用 YYYY-MM-DD 格式（例如 2026-10-05）。"),
                 ("close_rate", 0, "成交率要大於 0、最多 100（填 20 代表 20%）。"),
@@ -451,7 +513,7 @@ class EconomicsTest(_BaseProductsApiTest):
 
     def test_store_refuses_a_zero_cap_and_a_price_above_the_list_price(self):
         """F50 Contract I: the economics store runs the same rules as product onboarding."""
-        pid = self._create_product()
+        pid = self._sell_way()
         for money, sentence in (({"cap_per_sale": 0}, "每筆上限要大於 0。"),
                                 ({"selling_price": 1280, "list_price": 999},
                                  "售價（1280）不能大於原價（999）。")):
@@ -465,7 +527,7 @@ class EconomicsTest(_BaseProductsApiTest):
     def test_empty_cost_is_unset_and_empty_price_is_refused(self):
         """F47-I03: the form sends an empty field as null -- a cost left empty is stored unset (never
         0); the selling price is required."""
-        pid = self._create_product()
+        pid = self._sell_way()
         resp = self._save(pid, selling_price=None)
         self.assertEqual(resp.status_code, 400)
         self.assertEqual(resp.json()["field_errors"], {"selling_price": "售價請填數字。"})
@@ -474,6 +536,35 @@ class EconomicsTest(_BaseProductsApiTest):
         raw = repo.get_product_economics(web.conn, self.bid, pid, raw=True)
         self.assertEqual((raw["fixed_cost"], raw["unit_variable_cost"], raw["shipping_cost"]),
                          (None, None, None))
+
+
+class MoneyLivesOnSellWaysTest(_BaseProductsApiTest):
+    """F50 Contract R (R6 A3): a root knowledge product carries no money."""
+
+    def test_economics_save_and_confirm_on_a_knowledge_product_are_409(self):
+        pid = self._create_product()
+        body = {"selling_price": 690, "currency": "TWD", "confirmed_by": "小陳"}
+        for path in ("economics", "economics/confirm"):
+            resp = self.client.post(f"/api/products/brands/{self.bid}/products/{pid}/{path}",
+                                    json=body)
+            self.assertEqual((resp.status_code, resp.json()),
+                             (409, {"error": "錢記在賣法上，請到商品建檔第 4 步改。"}), path)
+        self.assertIsNone(repo.get_product_economics(web.conn, self.bid, pid, raw=True))
+
+    def test_detail_lists_the_sell_ways_prices(self):
+        pid = self._create_product()
+        repo.save_sell_way(web.conn, self.bid, name="單盒", product_id=pid, actor=ACTOR,
+                           economics={"selling_price": 399, "unit_variable_cost": 90,
+                                      "shipping_cost": 60})
+        repo.save_sell_way(web.conn, self.bid, name="三盒組", product_id=pid, actor=ACTOR,
+                           economics={"selling_price": 999})
+        data = self.client.get(f"/api/products/brands/{self.bid}/products/{pid}").json()["data"]
+        self.assertEqual([(w["name"], w["price"], w["break_even"]) for w in data["sell_ways"]],
+                         [("單盒", 399.0, 249.0), ("三盒組", 999.0, None)])
+        self.assertEqual(data["sell_ways"][0]["offer_labels"], [])
+        way = data["sell_ways"][0]["id"]
+        sell_way = self.client.get(f"/api/products/brands/{self.bid}/products/{way}").json()["data"]
+        self.assertEqual(sell_way["sell_ways"], [])
 
 
 class HandoffTest(_BaseProductsApiTest):

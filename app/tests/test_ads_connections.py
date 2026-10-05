@@ -458,6 +458,9 @@ class ConnectionsTest(unittest.TestCase):
         # F43-I04: judged on the finished sell-ways the wizard offers; a knowledge product
         # without a sell-way is not counted.
         product = brands.create_product(self.conn, self.brand, name="經典款", actor=ACTOR)
+        # F50 Contract R: a product with zero customer groups is not ready (not offered).
+        brands.save_customer_groups(self.conn, self.brand, product["id"],
+                                    [{"who": "測試客群", "pain_keys": ["cost"]}], actor=ACTOR)
         brands.create_product(self.conn, self.brand, name="還沒有賣法", actor=ACTOR)
         for name, economics in (("單瓶", {"selling_price": 500, "unit_variable_cost": 200}),
                                 ("秋季新色", {"selling_price": 520})):

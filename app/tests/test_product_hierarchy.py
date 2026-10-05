@@ -77,6 +77,9 @@ class ContextCompilerReadsEveryBundleProductTest(unittest.TestCase):
                              claim_type="approved")
         bi_repo.create_rule(web.conn, self.brand_id, actor=ACTOR, rule_type="tone",
                             content="花茶不說能瘦", severity="hard", product_id=self.tea)
+        for product_id in (self.gummy, self.tea):  # F50 Contract R: bundles take ready products
+            bi_repo.save_customer_groups(web.conn, self.brand_id, product_id,
+                                         [{"who": "測試客群", "pain_keys": ["cost"]}], actor=ACTOR)
         bases = [bi_repo.save_sell_way(web.conn, self.brand_id, name="單件", actor=ACTOR,
                                        product_id=product_id,
                                        economics={"selling_price": 500})["id"]
@@ -193,6 +196,9 @@ class BaseAndComposedSellWayTest(unittest.TestCase):
     def test_cross_product_bundle_knowledge_is_each_product_once(self):
         tea = bi_repo.create_product(web.conn, self.brand_id, name="益生菌軟糖",
                                      actor=ACTOR)["id"]
+        for product_id in (self.gummy, tea):  # F50 Contract R: a bundle takes ready products
+            bi_repo.save_customer_groups(web.conn, self.brand_id, product_id,
+                                         [{"who": "測試客群", "pain_keys": ["cost"]}], actor=ACTOR)
         tea_box = self._base("單盒", product_id=tea, selling_price=220, unit_variable_cost=70)
         duo = self._composed("雙效組", [(self.box, 2), (tea_box, 1), (self.trial, 1)],
                              selling_price=499)
@@ -252,7 +258,7 @@ class SameNameGuardTest(unittest.TestCase):
         )["id"]
 
     def _active_parents(self) -> list:
-        return [p for p in bi_repo.list_products(web.conn, self.brand_id)
+        return [p for p in bi_repo.all_product_rows(web.conn, self.brand_id)
                 if p["parent_id"] is None and p["status"] == "active"]
 
     def test_same_parent_name_twice_returns_one_row(self):
@@ -297,7 +303,7 @@ class SameNameGuardTest(unittest.TestCase):
         second = bi_repo.create_product(
             web.conn, self.brand_id, name=" 薑黃錠 · 單瓶 ", actor=ACTOR, parent_id=mother["id"])
         self.assertEqual(second["id"], first["id"])
-        children = [p for p in bi_repo.list_products(web.conn, self.brand_id)
+        children = [p for p in bi_repo.all_product_rows(web.conn, self.brand_id)
                     if p["parent_id"] == mother["id"]]
         self.assertEqual(len(children), 1)
 

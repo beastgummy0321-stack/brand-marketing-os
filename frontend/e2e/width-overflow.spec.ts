@@ -113,6 +113,10 @@ test("15 條路由（扣 /accept-invite）在 1280 寬不橫向溢出", async ({
   await api(page, headers, "PUT", `${intake}/${onboarded.data.product_id}/onboarding/sell-ways`, {
     sell_ways: [{ name: "單品", price: 1580 }],
   });
+  // F50 Contract R: a product with zero customer groups is not ready (not pickable, 完成 refused) — one group first.
+  await api(page, headers, "PUT", `${intake}/${onboarded.data.product_id}/onboarding/who`, {
+    groups: [{ who: "通勤上班族", pain_keys: ["effort"] }],
+  });
   await api(page, headers, "POST", `${intake}/${onboarded.data.product_id}/onboarding/complete`);
   const product = { id: onboarded.data.product_id };
   await page.reload();

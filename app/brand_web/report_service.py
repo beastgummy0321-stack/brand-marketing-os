@@ -37,7 +37,7 @@ def generate(conn, brand_id: str, actor: str, provider=None) -> tuple:
         raise ValueError(f"找不到品牌：{brand_id}")
 
     context_text, knowledge_item_ids, brand_version, _ = context_compiler.compile(conn, brand_id)
-    products = [p["name"] for p in repo.list_products(conn, brand_id)]
+    products = [p["name"] for p in repo.knowledge_products(conn, brand_id)]
     source_fact_count = len(knowledge_item_ids)
     today = coresettings.today_for_org(conn, org_id=brand["org_id"]).isoformat()
     user_text = brand_report_mod._build_user_text(

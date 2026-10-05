@@ -81,6 +81,10 @@ test("冷啟動：建立精靈帶自己的圖 → 策略 → 自己填總額 →
   await api(page, headers, "PUT", `${intake}/${onboarded.data.product_id}/onboarding/sell-ways`, {
     sell_ways: [{ name: "單品", price: 1580 }],
   });
+  // F50 Contract R: a product with zero customer groups is not ready (not pickable, 完成 refused) — one group first.
+  await api(page, headers, "PUT", `${intake}/${onboarded.data.product_id}/onboarding/who`, {
+    groups: [{ who: "通勤上班族", pain_keys: ["effort"] }],
+  });
   await api(page, headers, "POST", `${intake}/${onboarded.data.product_id}/onboarding/complete`);
 
   // --- 建立精靈：商品、購買、預算上限；進階裡上傳一張自己的圖（上傳後自動勾選）--------------------------------

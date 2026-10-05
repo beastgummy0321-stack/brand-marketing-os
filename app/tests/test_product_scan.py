@@ -108,7 +108,7 @@ class ProductScanTest(_BaseProductScanTest):
         product_ai.PROVIDER = FakeProvider(response=_fake_response(_GOOD_FACTS))
         product_id, state = self._post()
         self.assertEqual(state["status"], "done")
-        products = bi_repo.list_products(web.conn, self.brand["id"])
+        products = bi_repo.all_product_rows(web.conn, self.brand["id"])
         self.assertEqual(len(products), 1)
         self.assertEqual(products[0]["id"], product_id)
         self.assertEqual(products[0]["name"], "虛構回甘烏龍")
@@ -152,7 +152,7 @@ class ProductScanTest(_BaseProductScanTest):
         resp = self.client.post(f"/api/products/brands/{self.brand['id']}",
                                 json={"name": "虛構純手動產品"})
         self.assertEqual(resp.status_code, 200)
-        products = bi_repo.list_products(web.conn, self.brand["id"])
+        products = bi_repo.all_product_rows(web.conn, self.brand["id"])
         self.assertEqual(len(products), 1)
         self.assertEqual(bi_repo.list_product_facts(web.conn, self.brand["id"], products[0]["id"]), [])
 
@@ -219,8 +219,22 @@ class ProductRescanTest(_BaseProductScanTest):
         self.assertEqual(bi_repo.list_product_facts(web.conn, self.brand["id"], product_id), [])
         self.assertEqual(product_ai.PROVIDER.calls, [])
 
-    def test_price_found_creates_pending_economics_with_source(self):
+    def _sell_way_row(self) -> str:
+        """A sell-way row (where money lives; F50 Contract R) under a fresh knowledge product."""
+        parent = self._create_product()
+        return bi_repo.create_product(web.conn, self.brand["id"], name="虛構回甘烏龍 · 單盒",
+                                      actor=ACTOR, parent_id=parent)["id"]
+
+    def test_a_price_found_on_a_knowledge_product_is_not_written(self):
+        """F50 Contract R (R6 A3): a knowledge product holds no money; the facts still land."""
         product_id = self._create_product()
+        product_ai.PROVIDER = FakeProvider(response=_fake_response(_FACTS_WITH_PRICE))
+        self.assertEqual(self._rescan(product_id)["status"], "done")
+        self.assertIsNone(bi_repo.get_product_economics(web.conn, self.brand["id"], product_id))
+        self.assertTrue(bi_repo.list_product_facts(web.conn, self.brand["id"], product_id))
+
+    def test_price_found_creates_pending_economics_with_source(self):
+        product_id = self._sell_way_row()
         product_ai.PROVIDER = FakeProvider(response=_fake_response(_FACTS_WITH_PRICE))
         state = self._rescan(product_id)
         self.assertEqual(state["status"], "done")
@@ -241,7 +255,7 @@ class ProductRescanTest(_BaseProductScanTest):
         self.assertIsNone(bi_repo.get_product_economics(web.conn, self.brand["id"], product_id))
 
     def test_existing_economics_not_overwritten_by_scan(self):
-        product_id = self._create_product()
+        product_id = self._sell_way_row()
         bi_repo.save_product_economics(
             web.conn, self.brand["id"], product_id, actor=ACTOR,
             selling_price=999.0, currency="USD", confirmed_by=ACTOR,
@@ -256,7 +270,7 @@ class ProductRescanTest(_BaseProductScanTest):
         self.assertEqual(economics["status"], "confirmed")
 
     def test_pending_economics_one_click_confirm(self):
-        product_id = self._create_product()
+        product_id = self._sell_way_row()
         product_ai.PROVIDER = FakeProvider(response=_fake_response(_FACTS_WITH_PRICE))
         self.assertEqual(self._rescan(product_id)["status"], "done")
         economics = bi_repo.get_product_economics(web.conn, self.brand["id"], product_id)

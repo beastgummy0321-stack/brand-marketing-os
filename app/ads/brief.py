@@ -158,8 +158,10 @@ def _products_context(conn, org_id: str, brand_id: str) -> tuple[str, list[str],
     實際引用到的 economics id 清單, 這個品牌自己的商品 id 清單)——過期的價格（`effective_to`
     已經過去）照樣列出，只是標「已過期」，絕不悄悄當成現在有效的價格用（§0「a price whose
     effective window has passed is passed in labelled stale」）。商品 id 清單同時是
-    `create_draft` 過濾模型瞎掰的 `product_ids` 用的唯一名單（F03-I19，別重複收集一次）。"""
-    products = bi_repo.list_products(conn, brand_id)
+    `create_draft` 過濾模型瞎掰的 `product_ids` 用的唯一名單（F03-I19，別重複收集一次）。
+    F50 Contract R: the list is `sellable_products` -- the model can only name what the wizard
+    offers (a knowledge product, an archived or unready product's sell-way is never listed)."""
+    products = wizard_options.sellable_products(conn, brand_id)
     if not products:
         return "【商品清單】（品牌還沒有任何商品）", [], []
 

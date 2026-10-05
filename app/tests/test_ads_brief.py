@@ -43,6 +43,7 @@ class _BriefTestBase(unittest.TestCase):
         )
         self.brand_id = self.brand["id"]
         self.product = bi_repo.create_product(web.conn, self.brand_id, name="夜跑背心", actor=ACTOR)
+        self._ready(self.product)
         self.economics = bi_repo.save_product_economics(
             web.conn, self.brand_id, self.product["id"], actor=ACTOR,
             selling_price=1000, currency="TWD", confirmed_by=ACTOR,
@@ -52,6 +53,17 @@ class _BriefTestBase(unittest.TestCase):
 
     def tearDown(self):
         brief.PROVIDER = self._orig_provider
+
+    def _product(self, name):
+        """A knowledge product that is ready to sell once it has a sell-way (one group)."""
+        return self._ready(bi_repo.create_product(web.conn, self.brand_id, name=name, actor=ACTOR))
+
+    def _ready(self, product, who="夜跑族"):
+        """One customer group: F50 Contract R -- a product with zero groups is not ready, so its
+        sell-ways are neither pickable nor listed to the model."""
+        bi_repo.save_customer_groups(web.conn, self.brand_id, product["id"], [
+            {"who": who, "pain_keys": ["effort"]}], actor=ACTOR)
+        return product
 
     def _task_count(self) -> int:
         row = web.conn.execute(
@@ -117,9 +129,16 @@ class ValidReplyTest(_BriefTestBase):
 
     def test_parsed_reply_preserves_sentence_and_names_products_used(self):
         goal_text = "幫夜跑背心做一波購買導向的投放，這個月衝業績"
+        # F50 Contract R: the model can only name what the wizard offers -- a sellable sell-way.
+        way = bi_repo.save_sell_way(
+            web.conn, self.brand_id, name="單件", actor=ACTOR, product_id=self.product["id"],
+            economics={"selling_price": 1000, "unit_variable_cost": 300, "shipping_cost": 100})
+        way_economics = bi_repo.get_product_economics(web.conn, self.brand_id, way["id"])
+        assert way_economics is not None
         reply = json.dumps({
             "objective": "購買", "cap": 500,
-            "product_ids": [self.product["id"]], "audience_hint": "夜跑愛好者", "notes": None,
+            "product_ids": [way["id"], self.product["id"]], "audience_hint": "夜跑愛好者",
+            "notes": None,
         }, ensure_ascii=False)
         brief.PROVIDER = _fake(reply)
 
@@ -133,8 +152,9 @@ class ValidReplyTest(_BriefTestBase):
         self.assertEqual(detail["cap"]["break_even"], 600)  # 1000 - 300 - 100
         self.assertFalse([key for key in detail if key.startswith("success_")])
         self.assertEqual(detail["status"], "draft")
-        self.assertEqual(detail["context_json"]["product_ids"], [self.product["id"]])
-        self.assertEqual(detail["context_json"]["economics_ids"], [self.economics["id"]])
+        # the knowledge product the model also named is not on the list: dropped
+        self.assertEqual(detail["context_json"]["product_ids"], [way["id"]])
+        self.assertEqual(detail["context_json"]["economics_ids"], [way_economics["id"]])
         self.assertEqual(self._task_count(), 1)
 
 
@@ -291,20 +311,23 @@ class ManyProductsCappedTest(_BriefTestBase):
     的 id 是模型「瞎掰」也照樣被接受，因為它其實存在，只是沒被列進 prompt。"""
 
     def test_prompt_lists_only_20_but_whitelist_keeps_all_products(self):
-        extra_products = [
-            bi_repo.create_product(web.conn, self.brand_id, name=f"商品{i:02d}", actor=ACTOR)
-            for i in range(30)
-        ]
+        extra_products = []
+        for i in range(30):  # F50 Contract R: the list is the sellable sell-ways
+            product = self._ready(bi_repo.create_product(
+                web.conn, self.brand_id, name=f"商品{i:02d}", actor=ACTOR))
+            extra_products.append(bi_repo.save_sell_way(
+                web.conn, self.brand_id, name="單件", actor=ACTOR, product_id=product["id"],
+                economics={"selling_price": 100 + i}))
         provider = _fake("{}")
         brief.PROVIDER = provider
 
         detail = self._create()
 
         sent_prompt = provider.calls[0]["messages"][0]["content"]
-        # `list_products` 依名稱排序（app/brand_intelligence/repository.py）；補零讓字串排序
-        # 等於數字排序，前 20 個是「商品00」~「商品19」，其餘 11 個（「商品20」~「商品29」
-        # 加上 setUp 建的「夜跑背心」）都被截掉。
-        self.assertIn("（這個品牌另有 11 個商品沒有列出）", sent_prompt)
+        # `sellable_products` 依商品名稱排序（app/brand_intelligence/repository.py）；補零讓字串排序
+        # 等於數字排序，前 20 個是「商品00」~「商品19」的賣法，其餘 10 個（「商品20」~「商品29」）
+        # 都被截掉；setUp 的「夜跑背心」沒有賣法、不在清單上。
+        self.assertIn("（這個品牌另有 10 個商品沒有列出）", sent_prompt)
 
         beyond_cap_id = extra_products[24]["id"]
         reply = json.dumps({
@@ -587,7 +610,7 @@ class StructuredCreateTest(_SellWayBase):
     # -- F41-I03 (drill-8 #5): the default name keeps its dates ----------------------------------
 
     def _named_sell_way(self, product_name, way_name="單品"):
-        product = bi_repo.create_product(web.conn, self.brand_id, name=product_name, actor=ACTOR)
+        product = self._product(product_name)
         return self._sell_way(way_name, [(product, 1)], selling_price=399)
 
     def test_structured_create_is_named_sell_way_then_dates(self):
@@ -601,7 +624,7 @@ class StructuredCreateTest(_SellWayBase):
 
     def test_a_bundle_is_named_by_its_own_name(self):
         brief.PROVIDER = _fake("{}")
-        other = bi_repo.create_product(web.conn, self.brand_id, name="反光臂帶", actor=ACTOR)
+        other = self._product("反光臂帶")
         bundle = self._sell_way("夜跑安全組", [(self.product, 1), (other, 1)], selling_price=1299)
         detail = self._create_picks(
             picks=self._picks(product_ids=[bundle["id"]]),
@@ -689,14 +712,14 @@ class StructuredCreateTest(_SellWayBase):
         # knowledge product itself (with or without sell-ways), an archived sell-way, or a
         # 建到一半 product's sell-way.
         brief.PROVIDER = _fake("{}")
-        other = bi_repo.create_product(web.conn, self.brand_id, name="反光臂帶", actor=ACTOR)
+        other = self._product("反光臂帶")
         other_way = self._sell_way("單條", [(other, 1)], selling_price=199)
         archived = self._sell_way("舊包裝", [(self.product, 1)], selling_price=900)
         bi_repo.update_product(
             web.conn, self.brand_id, archived["id"], name=archived["name"], status="archived",
             actor=ACTOR,
         )
-        half = bi_repo.create_product(web.conn, self.brand_id, name="夜跑頭燈", actor=ACTOR)
+        half = self._product("夜跑頭燈")
         half_way = self._sell_way("單顆", [(half, 1)], selling_price=590)
         bi_repo.set_product_onboarding_step(web.conn, self.brand_id, half["id"], 4, actor=ACTOR)
         for bad, code in (
@@ -1030,20 +1053,23 @@ class SellWayDefaultsTest(_SellWayBase):
         self.assertEqual(context["landing_url"], "https://shop.example.test/vest")
         self.assertEqual(context["field_sources"]["landing_url"], "sell_way")
 
-    def test_a_sell_way_without_groups_or_page_leaves_them_unset(self):
+    def test_a_product_without_groups_is_not_pickable_and_no_page_leaves_landing_unset(self):
         other = bi_repo.create_product(web.conn, self.brand_id, name="反光臂帶", actor=ACTOR)
         way = self._sell_way("單條", [(other, 1)], selling_price=199)
+        # F50 Contract R: zero customer groups is not ready -- not pickable.
+        with self.assertRaises(ValueError) as ctx:
+            self._create_picks(picks=self._picks(product_ids=[way["id"]]))
+        self.assertEqual(str(ctx.exception), "product_unknown")
 
+        self._ready(other)
         detail = self._create_picks(picks=self._picks(product_ids=[way["id"]]))
 
         context = detail["context_json"]
-        self.assertEqual(context["customer_group_ids"], [])
         self.assertIsNone(context["landing_url"])
-        sources = context["field_sources"]
-        self.assertEqual((sources["audience"], sources["landing_url"]), ("system", "system"))
+        self.assertEqual(context["field_sources"]["landing_url"], "system")
 
     def test_a_bundle_defaults_to_every_group_of_every_product(self):
-        other = bi_repo.create_product(web.conn, self.brand_id, name="反光臂帶", actor=ACTOR)
+        other = self._product("反光臂帶")
         other_groups = bi_repo.save_customer_groups(web.conn, self.brand_id, other["id"], [
             {"who": "騎腳踏車通勤的人", "pain_keys": ["uncertainty"]},
         ], actor=ACTOR)
@@ -1071,7 +1097,7 @@ class SellWayDefaultsTest(_SellWayBase):
                          ("user", "user", "user"))
 
     def test_customer_groups_must_be_the_sell_ways(self):
-        other = bi_repo.create_product(web.conn, self.brand_id, name="反光臂帶", actor=ACTOR)
+        other = self._product("反光臂帶")
         foreign = bi_repo.save_customer_groups(web.conn, self.brand_id, other["id"], [
             {"who": "騎腳踏車通勤的人", "pain_keys": ["uncertainty"]},
         ], actor=ACTOR)[0]["id"]
@@ -1121,7 +1147,8 @@ class PreviousCampaignDefaultsTest(_SellWayBase):
         sources = detail["context_json"]["field_sources"]
         self.assertEqual((sources["platform"], sources["cap"], sources["budget"]),
                          ("copied", "copied", "copied"))
-        self.assertEqual(sources["audience"], "system")  # the sell-way has no groups
+        # F50 Contract R: a pickable sell-way's product has groups -- its default audience
+        self.assertEqual(sources["audience"], "sell_way")
         self.assertNotEqual(detail["id"], previous["id"])
 
     def test_a_different_budget_is_the_users_and_request_values_win(self):
@@ -1166,7 +1193,7 @@ class PreviousCampaignDefaultsTest(_SellWayBase):
         # A newer draft of the sell-way, a newer campaign of another sell-way and a sentence
         # campaign never count.
         self._create_picks(picks=self._picks(platform="meta", cap=111))
-        other = bi_repo.create_product(web.conn, self.brand_id, name="反光臂帶", actor=ACTOR)
+        other = self._product("反光臂帶")
         other_way = self._sell_way("單條", [(other, 1)], selling_price=199)
         self._ran(self._create_picks(picks=self._picks(product_ids=[other_way["id"]],
                                                        platform="meta", cap=222)))
@@ -1186,14 +1213,14 @@ class PreviousCampaignDefaultsTest(_SellWayBase):
         self.assertEqual(detail["context_json"]["field_sources"]["cap"], "sell_way")
 
     def test_no_break_even_leaves_the_cap_unset(self):
-        bare = bi_repo.create_product(web.conn, self.brand_id, name="鞋帶燈", actor=ACTOR)
+        bare = self._product("鞋帶燈")
         way = self._sell_way("一組", [(bare, 1)], selling_price=99)  # no cost
         detail = self._create_picks(picks=self._picks(product_ids=[way["id"]]))
         self.assertIsNone(detail["cap"]["own_value"])
         self.assertEqual(detail["context_json"]["field_sources"]["cap"], "system")
 
     def test_a_fractional_break_even_is_stored_whole(self):
-        odd = bi_repo.create_product(web.conn, self.brand_id, name="髮帶", actor=ACTOR)
+        odd = self._product("髮帶")
         way = self._sell_way("一條", [(odd, 1)], selling_price=399.5, unit_variable_cost=120,
                              shipping_cost=0)
         detail = self._create_picks(picks=self._picks(product_ids=[way["id"]]))
@@ -1259,7 +1286,7 @@ class PatchCustomerGroupsTest(_SellWayBase):
             {"who": "下班夜跑的上班族", "pain_keys": ["uncertainty"]},
             {"who": "帶狗散步的人", "pain_keys": ["effort", "cost"]},
         ], actor=ACTOR)
-        self.other = bi_repo.create_product(web.conn, self.brand_id, name="反光臂帶", actor=ACTOR)
+        self.other = self._product("反光臂帶")
         self.other_groups = bi_repo.save_customer_groups(
             web.conn, self.brand_id, self.other["id"], [
                 {"who": "騎腳踏車通勤的人", "pain_keys": ["uncertainty"]},
@@ -1324,6 +1351,7 @@ class PatchCustomerGroupsTest(_SellWayBase):
         self.assertEqual(res.json()["error"]["code"], "customer_group_unknown")
 
     def test_a_sell_way_without_groups_resets_to_none(self):
+        # A PATCH checks the id is the brand's (identity), not pickability.
         bare = bi_repo.create_product(web.conn, self.brand_id, name="鞋帶燈", actor=ACTOR)
         bare_way = self._sell_way("一組", [(bare, 1)], selling_price=99)
         web.conn.commit()

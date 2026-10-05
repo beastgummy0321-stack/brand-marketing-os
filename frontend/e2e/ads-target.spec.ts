@@ -48,6 +48,10 @@ test("一個上限：選商品、沒有成本、暫用打平、自己的上限�
   const sellWays = await api<{ data: { sell_ways: { id: string }[] } }>(page, headers, "PUT", `${intake}/${productId}/onboarding/sell-ways`, {
     sell_ways: [{ name: "單品", price: 1580 }],
   });
+  // F50 Contract R: a product with zero customer groups is not ready (not pickable, 完成 refused) — one group first.
+  await api(page, headers, "PUT", `${intake}/${productId}/onboarding/who`, {
+    groups: [{ who: "通勤上班族", pain_keys: ["effort"] }],
+  });
   await api(page, headers, "POST", `${intake}/${productId}/onboarding/complete`);
   const product = { id: sellWays.data.sell_ways[0].id };
 

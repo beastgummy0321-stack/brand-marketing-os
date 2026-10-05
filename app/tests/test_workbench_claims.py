@@ -182,6 +182,9 @@ _OWN_PRICE = "優惠價 NT$999（原價 NT$1,197）"
 
 def _knowledge_product(brand_id: str, name: str, fact: str, claim: str) -> str:
     product_id = bi_repo.create_product(web.conn, brand_id, name=name, actor=ACTOR)["id"]
+    # F50 Contract R: one customer group, so the product is ready (a bundle can take it).
+    bi_repo.save_customer_groups(web.conn, brand_id, product_id,
+                                 [{"who": "測試客群", "pain_keys": ["cost"]}], actor=ACTOR)
     bi_repo.create_product_fact(web.conn, brand_id, product_id, actor=ACTOR, fact_type="core_info",
                                 label="成分", value=fact, status="confirmed", confirmed_by=ACTOR)
     bi_repo.create_claim(web.conn, brand_id, actor=ACTOR, claim_text=claim, claim_type="approved",

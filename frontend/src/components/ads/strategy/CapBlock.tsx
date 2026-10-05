@@ -259,7 +259,8 @@ function CapSourceForm({ brandId, campaignId, onSaved }: {
       .then(([t, list]) => {
         if (cancelled) return;
         setTarget(t);
-        setProducts(list.filter((p) => p.status === "active"));
+        // F50 Contract R: the break-even needs money, and money lives on sellable sell-ways only.
+        setProducts(list.filter((p) => p.kind === "sell_way"));
         setKind(t.result_kind);
         setProductId(t.product_ids[0] ?? "");
       })

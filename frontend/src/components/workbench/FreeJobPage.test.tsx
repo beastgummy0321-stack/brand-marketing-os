@@ -188,7 +188,10 @@ describe("FreeJobPage product list read (F29-I10)", () => {
   it("the product read fails: the error line and 重試 show; 重試 re-requests and the products come back", async () => {
     vi.mocked(fetchProductList)
       .mockRejectedValueOnce(new Error("伺服器沒回應"))
-      .mockResolvedValueOnce([{ id: "p1", name: "夜跑鞋" }] as Awaited<ReturnType<typeof fetchProductList>>);
+      .mockResolvedValueOnce([
+        { id: "p1", name: "夜跑鞋", kind: "knowledge" },
+        { id: "p2", name: "夜跑鞋 · 單雙", kind: "sell_way" },
+      ] as Awaited<ReturnType<typeof fetchProductList>>);
     render(
       <MemoryRouter>
         <FreeJobPage brandId="brd_1" />
@@ -198,6 +201,8 @@ describe("FreeJobPage product list read (F29-I10)", () => {
     await userEvent.click(screen.getByRole("button", { name: "重試" }));
     expect(vi.mocked(fetchProductList)).toHaveBeenCalledTimes(2);
     expect(await screen.findByRole("option", { name: "夜跑鞋" })).toBeTruthy();
+    // F50 Contract R: a free job's context is a knowledge product; sell-ways are not listed.
+    expect(screen.queryByRole("option", { name: "夜跑鞋 · 單雙" })).toBeNull();
     expect(screen.queryByRole("alert")).toBeNull();
   });
 });

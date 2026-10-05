@@ -396,7 +396,12 @@ def get_product(conn: Conn, brand_id: str, product_id: str) -> dict | None:
     ).fetchone())
 
 
-def list_products(conn: Conn, brand_id: str) -> list:
+def all_product_rows(conn: Conn | ConnProxy, brand_id: str) -> list:
+    """Every `product` row of the brand (knowledge products, sell-ways, bundles; archived and
+    建到一半 alike), by name. F50 Contract R: an identity read only -- name uniqueness, "does this
+    brand own the id", names to strip. "Is it ready / pickable" is `product_readiness` /
+    `sellable_products` / `knowledge_products`, never this list (`test_readiness_gate.py` keeps
+    its callers to the allowlist)."""
     return _rows(conn.execute("SELECT * FROM product WHERE brand_id = %s ORDER BY name", (brand_id,)))
 
 
@@ -1549,6 +1554,16 @@ def _check_components(conn: Conn, brand_id: str, components, sell_way_id: str | 
         if econ["currency"] != currency:
             raise ValueError(f"「{name}」的幣別是 {econ['currency']}，跟這個組合的 {currency} 不同")
         out.append({"base": base, "qty": qty})
+    # F50 Contract R: a cross-product bundle takes bases of ready products only (an archived or
+    # unfinished product's sell-way is not sellable); a composition of one product's own bases is
+    # part of that product's onboarding and follows its readiness.
+    parents = list(dict.fromkeys(c["base"]["parent_id"] for c in out))
+    if len(parents) > 1:
+        verdicts = _readiness(conn, brand_id, [get_product(conn, brand_id, pid) for pid in parents])
+        for c in out:
+            if not verdicts[c["base"]["parent_id"]]["ready"]:
+                raise ValueError(f"「{_display_name(conn, brand_id, c['base'])}」的商品還沒建完"
+                                 "（或已封存），不能放進組合")
     if sum(c["qty"] for c in out) < 2:
         raise ValueError(f"只放 1 份就跟「{_display_name(conn, brand_id, out[0]['base'])}」一樣；"
                          "組合的數量至少 2")
@@ -1679,6 +1694,95 @@ def list_sell_ways(conn: Conn | ConnProxy, brand_id: str, product_id: str | None
     if product_id is not None:
         rows = [r for r in rows if product_id in knowledge_product_ids(conn, brand_id, r["id"])]
     return [_sell_way_view(conn, brand_id, r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Readiness (F50 Contract R, audit W13): the only answers to "is this product ready" and "is this
+# sell-way pickable". Archive writes one row; everything below is derived on read, so restoring a
+# product restores its sell-ways' and bundles' sellability with no second write.
+# ---------------------------------------------------------------------------
+
+READINESS_ITEMS = (
+    ("archived", "已封存"),
+    ("steps", "建檔還沒走完"),
+    ("sell_ways", "還沒有賣法"),
+    ("groups", "還沒有顧客群"),
+)
+
+
+def _readiness(conn: Conn | ConnProxy, brand_id: str, products: list) -> dict:
+    """`product_readiness`'s batch form: knowledge product id -> `{ready, missing}` for each row of
+    `products`, with one read of the brand's active single sell-ways and one of its groups."""
+    with_single = {r["parent_id"] for r in _rows(conn.execute(
+        "SELECT DISTINCT parent_id FROM product WHERE brand_id = %s AND parent_id IS NOT NULL"
+        " AND status = 'active'", (brand_id,)))}
+    with_group = {r["product_id"] for r in _rows(conn.execute(
+        "SELECT DISTINCT product_id FROM product_customer_group WHERE brand_id = %s", (brand_id,)))}
+    out = {}
+    for product in products:
+        failed = {
+            "archived": product["status"] != "active",
+            "steps": product.get("onboarding_step") is not None,
+            "sell_ways": product["id"] not in with_single,
+            "groups": product["id"] not in with_group,
+        }
+        missing = [{"key": key, "label": label} for key, label in READINESS_ITEMS if failed[key]]
+        out[product["id"]] = {"ready": not missing, "missing": missing}
+    return out
+
+
+def product_readiness(conn: Conn | ConnProxy, brand_id: str, product_id: str) -> dict:
+    """F50 Contract R: `{ready, missing: [{key, label}]}` of one knowledge product -- missing in
+    order `archived` 「已封存」, `steps` 「建檔還沒走完」 (onboarding not finished), `sell_ways`
+    「還沒有賣法」 (no active single sell-way), `groups` 「還沒有顧客群」 (zero customer groups);
+    `ready` = nothing missing. Readers: product onboarding (products page, status, 完成, the
+    who-step guard, bundle components), `_check_components`, `sellable_products`. ValueError for a
+    product that is not this brand's."""
+    product = get_product(conn, brand_id, product_id)
+    if product is None:
+        raise ValueError(f"找不到產品：{product_id}")
+    return _readiness(conn, brand_id, [product])[product_id]
+
+
+def sellable_products(conn: Conn | ConnProxy, brand_id: str) -> list[dict]:
+    """F50 Contract R (moved from `app/ads/wizard_options.py`, same order and item shape): the
+    sell-ways a campaign can sell -- the new-campaign wizard's list and the only ids a structured
+    create / the brief prompt accept. An active sell-way of `list_sell_ways` (its own onboarding
+    finished) whose every knowledge product (`knowledge_product_ids`) is `product_readiness`
+    ready: so an archived product's single sell-ways, every bundle containing one, and the
+    sell-ways of a product with zero customer groups are not sellable. A knowledge product itself
+    is never one. Order: single sell-ways grouped by knowledge product (name order), each group in
+    creation order; then bundles in creation order. Each item is the `list_sell_ways` item plus
+    `knowledge_products` (the product rows of `knowledge_product_ids`, in order)."""
+    products = {p["id"]: p for p in all_product_rows(conn, brand_id)}
+    verdicts = _readiness(conn, brand_id, [p for p in products.values() if p["parent_id"] is None])
+    out = []
+    for way in list_sell_ways(conn, brand_id):
+        if way.get("status") != "active" or way.get("onboarding_step") is not None:
+            continue
+        knowledge = [products.get(pid) for pid in knowledge_product_ids(conn, brand_id, way["id"])]
+        if not knowledge or any(
+            p is None or not verdicts.get(p["id"], {}).get("ready") for p in knowledge
+        ):
+            continue
+        out.append({**way, "knowledge_products": knowledge})
+    # Stable sort: creation order is kept inside each group.
+    return sorted(out, key=lambda w: (w["kind"] == "bundle",
+                                      "" if w["kind"] == "bundle"
+                                      else w["knowledge_products"][0]["name"]))
+
+
+def knowledge_products(conn: Conn | ConnProxy, brand_id: str, *,
+                       include_archived: bool = False) -> list:
+    """F50 Contract R: the brand's knowledge products -- root rows only (no sell-way, no bundle),
+    in creation order; archived ones only with `include_archived`. 建到一半 ones are included
+    (`product_readiness` tells). The scope-picker source: the products page, library rule / claim
+    / asset panels, the brand report, persona generation, `GET /api/products/brands/{b}`."""
+    archived = "" if include_archived else " AND p.status = 'active'"
+    return _rows(conn.execute(
+        "SELECT * FROM product p WHERE p.brand_id = %s AND p.parent_id IS NULL" + archived +
+        " AND NOT EXISTS (SELECT 1 FROM product_component c WHERE c.brand_id = %s"
+        " AND c.sell_way_id = p.id) ORDER BY p.created_at, p.id", (brand_id, brand_id)))
 
 
 def _check_same_shape(conn: Conn, brand_id: str, before: dict, composed: bool) -> None:

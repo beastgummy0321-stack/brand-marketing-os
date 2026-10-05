@@ -277,6 +277,9 @@ class ProductPrefillTest(_Base):
         resp = self.client.put(self._step(done, "/sell-ways"),
                                json={"sell_ways": [{"name": "單盒", "price": 399}]})
         self.assertEqual(resp.status_code, 200, resp.text)
+        resp = self.client.put(self._step(done, "/who"),  # F50 Contract R: one group to finish
+                               json={"groups": [{"who": "上班族", "pain_keys": ["effort"]}]})
+        self.assertEqual(resp.status_code, 200, resp.text)
         self.assertEqual(self.client.post(self._step(done, "/complete")).status_code, 200)
         self.assertEqual(self.client.post(self._step(done, "/scan")).status_code, 400)  # finished
 

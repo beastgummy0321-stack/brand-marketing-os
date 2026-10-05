@@ -20,6 +20,9 @@ export interface ProductListItem {
   status: "active" | "archived";
   // 選填：舊呼叫端（例如其他 feature 建構假資料）不見得帶這欄，缺值一律當「沒有母產品」。
   parent_id?: string | null;
+  /** F50 Contract R: `knowledge` = a knowledge product (creative context, no money); `sell_way` = a sellable
+   * sell-way (`sellable_products`; where price and cost live). Knowledge products come first. */
+  kind: "knowledge" | "sell_way";
   fact_count: number;
   pending_fact_count: number;
   economics_status: "confirmed" | "pending" | "none";
@@ -117,6 +120,20 @@ export interface ProductDetailBundle {
   economics: ProductEconomics | null;
   rules: ProductRule[];
   claims: ProductClaim[];
+  /** F50 Contract R (R6 A3): a knowledge product's money lives on its sell-ways -- the products-page briefs
+   * (name, price, break-even, offer labels); [] for a sell-way row. Optional only for older fixtures. */
+  sell_ways?: ProductSellWayBrief[];
+}
+
+/** One sell-way brief of `ProductDetailBundle.sell_ways` (the products-page shape). */
+export interface ProductSellWayBrief {
+  id: string;
+  name: string;
+  shape?: "base" | "composed";
+  price: number | null;
+  /** null = cost unknown. */
+  break_even: number | null;
+  offer_labels: string[];
 }
 
 export const PRODUCT_FACT_TYPES: [string, string][] = [

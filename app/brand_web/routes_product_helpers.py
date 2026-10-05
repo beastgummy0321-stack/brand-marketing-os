@@ -31,10 +31,18 @@ def _scan_budget_error(brand_id: str, cost: float | None = None, action: str = "
         web.conn, brand_id, cost, org_id=org_id, action=action, fallback_hint=fallback_hint)
 
 
+def is_knowledge_product(brand_id: str, product: dict) -> bool:
+    """A root knowledge product (no parent, no components): it carries no money (F50 Contract R,
+    R6 A3) -- money lives on its sell-ways."""
+    return product["parent_id"] is None and repo.knowledge_product_ids(
+        web.conn, brand_id, product["id"]) == [product["id"]]
+
+
 def _apply_product_scan_result(brand_id: str, product_id: str, actor: str,
                                 source_reference_id: str | None, result: dict) -> tuple:
     """把快掃／再次調研結果套進一個產品：跳過跟既有事實（不論 pending 或 confirmed）同 label
-    的結果，避免重複堆積；價格有抓到且這個產品目前完全沒有經濟數字列時，才建一筆 pending。
+    的結果，避免重複堆積；價格有抓到且這個產品目前完全沒有經濟數字列時，才建一筆 pending——
+    F50 Contract R: never on a knowledge product (it holds no money; prices live on sell-ways).
     回傳 (新增事實數, 跳過事實數, 是否新建了待確認經濟數字)。"""
     existing_labels = {f["label"] for f in repo.list_product_facts(web.conn, brand_id, product_id)}
     added, skipped = 0, 0
@@ -49,7 +57,9 @@ def _apply_product_scan_result(brand_id: str, product_id: str, actor: str,
         added += 1
     price_created = False
     price = result.get("price")
-    if price and repo.get_product_economics(web.conn, brand_id, product_id) is None:
+    product = repo.get_product(web.conn, brand_id, product_id)
+    if (price and product is not None and not is_knowledge_product(brand_id, product)
+            and repo.get_product_economics(web.conn, brand_id, product_id) is None):
         repo.create_pending_product_economics(
             web.conn, brand_id, product_id, actor=actor,
             selling_price=price["amount"], currency=price["currency"],

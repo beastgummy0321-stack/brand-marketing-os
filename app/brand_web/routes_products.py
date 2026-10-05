@@ -45,6 +45,7 @@ from app.core import settings as coresettings
 from app.core import vocab as md
 from app.core.db import connection as core_db_connection
 from app.core.db import new_id, now_iso
+from app.intake import product_onboarding
 from app.llm import gateway
 from app.shared import web
 from app.shared.web import (
@@ -130,13 +131,13 @@ def _claim_shape(brand_id: str, claim: dict) -> dict:
     }
 
 
-def _product_list_item(brand_id: str, product: dict) -> dict:
+def _product_list_item(brand_id: str, product: dict, kind: str) -> dict:
     facts = repo.list_product_facts(web.conn, brand_id, product["id"])
     pending = sum(1 for f in facts if f["status"] == "pending")
     economics = repo.get_product_economics(web.conn, brand_id, product["id"])
     return {
         "id": product["id"], "name": product["name"], "status": product["status"],
-        "parent_id": product["parent_id"],
+        "parent_id": product["parent_id"], "kind": kind,
         "fact_count": len(facts), "pending_fact_count": pending,
         "economics_status": economics["status"] if economics else "none",
     }
@@ -148,25 +149,43 @@ def _product_list_item(brand_id: str, product: dict) -> dict:
 
 @router.get("/api/products/brands/{brand_id}")
 def product_list(request: Request, brand_id: str):
+    """F50 Contract R: the pickers' list (FreeJobPage, CapBlock) -- the brand's active knowledge
+    products (creation order) then its sellable sell-ways (`sellable_products`, the wizard's
+    order). An archived product, its sell-ways and every bundle holding it are not listed. Each
+    item's `kind` says which (`knowledge` / `sell_way`): money lives on sell-ways only, creative
+    context on knowledge products."""
     actor = require_actor(request)
     require_brand(brand_id, actor)
-    products = web.list_products(brand_id)
-    return _envelope([_product_list_item(brand_id, p) for p in products])
+    items = [_product_list_item(brand_id, p, "knowledge")
+             for p in repo.knowledge_products(web.conn, brand_id)]
+    items += [_product_list_item(brand_id, p, "sell_way")
+              for p in repo.sellable_products(web.conn, brand_id)]
+    return _envelope(items)
+
+
+def _onboarding_create(brand_id: str, name: str, actor: str) -> str:
+    """F50 Contract R: a root product is born only through product onboarding (step 1 set),
+    never 「ready」 with no sell-way; a product of the same name is that product. ValueError =
+    the onboarding refusal (400)."""
+    return product_onboarding.create(web.conn, brand_id, {"name": name}, actor=actor)["product_id"]
 
 
 @router.post("/api/products/brands/{brand_id}")
 async def product_create(request: Request, brand_id: str):
-    """S6.9 手動新增：純同步、不花錢，沿用 `repo.create_product`（既有 `product_new_post`
-    邏輯，source_url 這顆表單本來就只給旁邊的 AI 調研按鈕用，手動建立不記錄網址，
-    跟搬家前的行為一致）。"""
+    """S6.9 手動新增：純同步、不花錢。F50 Contract R: created through product onboarding (a
+    draft at step 1, finished on the onboarding steps), source_url 這顆表單本來就只給旁邊的
+    AI 調研按鈕用，手動建立不記錄網址。"""
     actor = require_actor(request)
     require_brand(brand_id, actor)
     body = await _json_body(request)
     name_c = clean(_str_field(body, "name"))
     if not name_c:
         return _error(400, "請填寫產品名稱。")
-    product = repo.create_product(web.conn, brand_id, name=name_c, actor=str(actor.user_id))
-    return {"id": product["id"]}
+    try:
+        product_id = _onboarding_create(brand_id, name_c, str(actor.user_id))
+    except ValueError as exc:
+        return _error(400, str(exc))
+    return {"id": product_id}
 
 
 # ---------------------------------------------------------------------------
@@ -298,16 +317,19 @@ async def product_research_start(request: Request, brand_id: str):
         return _error(400, "請填寫產品頁網址，才能請 AI 幫忙調研；不填網址請改用「新增這個產品」。")
     if url_error := _url_error(url_c):
         return _error(400, url_error)
-    product = repo.create_product(web.conn, brand_id, name=name_c, actor=str(actor.user_id))
+    try:
+        product_id = _onboarding_create(brand_id, name_c, str(actor.user_id))
+    except ValueError as exc:
+        return _error(400, str(exc))
     budget_err = product_helpers._scan_budget_error(brand_id)
     if budget_err:
         return _error(422, budget_err)
     background_enqueue(
-        "background.product_scan", org_id=actor.org_id, lock=f"product_scan:{product['id']}",
-        brand_id=brand_id, product_id=product["id"], actor=str(actor.user_id),
+        "background.product_scan", org_id=actor.org_id, lock=f"product_scan:{product_id}",
+        brand_id=brand_id, product_id=product_id, actor=str(actor.user_id),
         product_name=name_c, url=url_c,
     )
-    return JSONResponse({"product_id": product["id"]}, status_code=202)
+    return JSONResponse({"product_id": product_id}, status_code=202)
 
 
 @router.post("/api/products/brands/{brand_id}/products/{product_id}/rescan")
@@ -379,6 +401,10 @@ def product_detail(request: Request, brand_id: str, product_id: str):
         "economics": _economics_shape(brand, economics) if economics else None,
         "rules": [_rule_shape(r) for r in rules],
         "claims": [_claim_shape(brand_id, c) for c in claims],
+        # F50 Contract R (R6 A3): the 經濟數字 tab reads the knowledge product's sell-ways (the
+        # products-page briefs: name, price, break-even, offer labels); [] for a sell-way row.
+        "sell_ways": (product_onboarding.sell_way_briefs(web.conn, brand_id, product_id)
+                      if product_helpers.is_knowledge_product(brand_id, product) else []),
     }
     return _envelope(data)
 
@@ -518,11 +544,24 @@ def _economics_numbers(body: dict) -> tuple[dict, dict]:
     return numbers, field_errors
 
 
+MONEY_ON_SELL_WAYS_MESSAGE = "錢記在賣法上，請到商品建檔第 4 步改。"
+
+
+def _money_refused(brand_id: str, product: dict) -> JSONResponse | None:
+    """F50 Contract R (R6 A3): a knowledge product carries no money -> 409; a sell-way row keeps
+    the economics routes."""
+    if product_helpers.is_knowledge_product(brand_id, product):
+        return _error(409, MONEY_ON_SELL_WAYS_MESSAGE)
+    return None
+
+
 @router.post("/api/products/brands/{brand_id}/products/{product_id}/economics")
 async def economics_save(request: Request, brand_id: str, product_id: str):
     actor = require_actor(request)
     brand = require_brand(brand_id, actor)
-    require_product(brand, product_id)
+    product = require_product(brand, product_id)
+    if refused := _money_refused(brand_id, product):
+        return refused
     body = await _json_body(request)
     numbers, field_errors = _economics_numbers(body)
     if field_errors:
@@ -560,7 +599,9 @@ async def economics_save(request: Request, brand_id: str, product_id: str):
 def economics_confirm(request: Request, brand_id: str, product_id: str):
     actor = require_actor(request)
     brand = require_brand(brand_id, actor)
-    require_product(brand, product_id)
+    product = require_product(brand, product_id)
+    if refused := _money_refused(brand_id, product):
+        return refused
     existing = repo.get_product_economics(web.conn, brand_id, product_id, raw=True)
     if not existing:
         raise NotFoundKind("產品經濟數字")
