@@ -150,7 +150,8 @@ describe("ProductOnboarding", () => {
     mockWhat.mockResolvedValue(saved);
     renderAt(`/brands/${B}/products/prd_vit/onboarding`);
 
-    await waitFor(() => expect(heading()).toBe("綜合維他命軟糖建好了"));
+    // F50-I18: 「建好了」 needs the served `ready`; this test only checks that step 5 opens.
+    await waitFor(() => expect(currentDot()).toBe("5完成"));
     await userEvent.click(screen.getByRole("button", { name: "回到商品是什麼" }));
 
     await waitFor(() => expect(where()).toBe(`/brands/${B}/products/prd_vit/onboarding?step=1`));

@@ -116,6 +116,9 @@ export interface ProductOnboardingStatus {
   completed: boolean;
   /** F50 Contract R: the server's readiness verdict (`product_readiness`). Optional only for older fixtures. */
   ready?: boolean;
+  /** F50-I18: what keeps it from ready (`product_readiness`, in order; [] when ready) — the done page's title. Optional
+   * only for older fixtures. */
+  missing?: ReadinessMissing[];
   /** F50 Contract R: the done page's checklist, printed as served. Optional only for older fixtures. */
   checklist?: ReadinessCheck[];
   /** The product-page read: none (never started) · running · done · failed. */

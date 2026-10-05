@@ -214,12 +214,10 @@ class ProductDetailTest(_BaseProductsApiTest):
         self.assertEqual(
             set(data.keys()),
             {"id", "brand_id", "name", "status", "knowledge_version", "cards",
-             "latest_source_url", "economics_pending", "facts", "economics", "rules", "claims",
-             "sell_ways"},
+             "latest_source_url", "facts", "rules", "claims", "sell_ways"},
         )
+        # F50-I18: the root `economics`／`economics_pending` fields are gone (money lives on sell-ways).
         self.assertEqual(len(data["cards"]), 4)
-        self.assertEqual(data["economics"], None)
-        self.assertEqual(data["economics_pending"], False)
 
     def test_unknown_product_is_404(self):
         resp = self.client.get(f"/api/products/brands/{self.bid}/products/prd_不存在")
@@ -244,7 +242,7 @@ class ProductDetailTest(_BaseProductsApiTest):
 
     def test_confirmer_user_id_reads_as_the_members_email(self):
         """F47-I03 (drill-10 外觀 #11): 「確認人」 never shows a user id -- a stored member id reads as
-        that member's e-mail (facts and economics); an id that is not a member of this org reads as a
+        that member's e-mail (facts); an id that is not a member of this org reads as a
         former member, never the raw id."""
         member = uuid4()
         email = f"confirmer-{member.hex[:8]}@example.com"
@@ -256,13 +254,10 @@ class ProductDetailTest(_BaseProductsApiTest):
                                   label="成員確認", value="v", status="confirmed", confirmed_by=str(member))
         repo.create_product_fact(web.conn, self.bid, pid, actor=ACTOR, fact_type="core_info",
                                   label="外人確認", value="v", status="confirmed", confirmed_by=stranger)
-        repo.save_product_economics(web.conn, self.bid, pid, actor=ACTOR, selling_price=690,
-                                    currency="TWD", confirmed_by=str(member))
         data = self.client.get(f"/api/products/brands/{self.bid}/products/{pid}").json()["data"]
         by_label = {f["label"]: f["confirmed_by"] for f in data["facts"]}
         self.assertEqual(by_label["成員確認"], email)
         self.assertEqual(by_label["外人確認"], "已不在這個組織的成員")
-        self.assertEqual(data["economics"]["confirmed_by"], email)
 
 
 class ArchiveTest(_BaseProductsApiTest):
@@ -614,6 +609,25 @@ class MoneyLivesOnSellWaysTest(_BaseProductsApiTest):
         way = data["sell_ways"][0]["id"]
         sell_way = self.client.get(f"/api/products/brands/{self.bid}/products/{way}").json()["data"]
         self.assertEqual(sell_way["sell_ways"], [])
+
+    def test_the_economics_card_counts_the_sell_ways(self):
+        """F50-I18: the 經濟數字 card of a knowledge product counts its sell-ways (its root economics
+        row is empty by Contract R, so counting that row read 0); a sell-way row counts its own."""
+        pid = self._create_product()
+        url = f"/api/products/brands/{self.bid}/products/{pid}"
+
+        def card(path):
+            cards = self.client.get(path).json()["data"]["cards"]
+            return next(c for c in cards if c["key"] == "economics-view")
+
+        self.assertEqual((card(url)["count"], card(url)["pending"]), (0, 0))
+        way = repo.save_sell_way(web.conn, self.bid, name="單盒", product_id=pid, actor=ACTOR,
+                                 economics={"selling_price": 399})
+        repo.save_sell_way(web.conn, self.bid, name="三盒組", product_id=pid, actor=ACTOR,
+                           economics={"selling_price": 999})
+        self.assertEqual((card(url)["count"], card(url)["pending"]), (2, 0))
+        way_card = card(f"/api/products/brands/{self.bid}/products/{way['id']}")
+        self.assertEqual(way_card["count"], 1)
 
 
 class HandoffTest(_BaseProductsApiTest):

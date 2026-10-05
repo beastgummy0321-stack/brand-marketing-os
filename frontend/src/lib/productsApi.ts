@@ -56,22 +56,6 @@ export interface ProductFact {
   source_reference: string | null;
 }
 
-export type AssumptionField = "cost" | "shipping" | "close_rate";
-
-export interface ProductEconomics {
-  selling_price: number;
-  fixed_cost: number | null;
-  unit_variable_cost: number | null;
-  shipping_cost: number | null;
-  currency: string;
-  effective_from: string | null;
-  status: "confirmed" | "pending";
-  confirmed_by: string | null;
-  /** A percent 0–100 as typed (20 = 20%; F50 Contract I) — printed 「20%」, never scaled on the page. */
-  close_rate: number | null;
-  assumptions: AssumptionField[];
-}
-
 export interface ProductRule {
   id: string;
   severity: "hard" | "soft";
@@ -123,13 +107,12 @@ export interface ProductDetailBundle {
   knowledge_version: number;
   cards: ProductDetailCard[];
   latest_source_url: string | null;
-  economics_pending: boolean;
   facts: ProductFact[];
-  economics: ProductEconomics | null;
   rules: ProductRule[];
   claims: ProductClaim[];
   /** F50 Contract R (R6 A3): a knowledge product's money lives on its sell-ways -- the products-page briefs
-   * (name, price, break-even, offer labels); [] for a sell-way row. Optional only for older fixtures. */
+   * (name, price, break-even, offer labels); [] for a sell-way row. Optional only for older fixtures. F50-I18: the
+   * root `economics`／`economics_pending` fields and their save／confirm calls are gone (no reader). */
   sell_ways?: ProductSellWayBrief[];
 }
 
@@ -204,8 +187,8 @@ async function postJson<T = void>(path: string, body?: unknown): Promise<T> {
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body ?? {}),
   });
-  // F47-I03: the one failure path (Contract B) — its `ApiResponseError` also carries the economics
-  // route's per-field sentences (`fieldErrors`), which the economics panel shows under each field.
+  // F47-I03: the one failure path (Contract B) — its `ApiResponseError` also carries a route's
+  // per-field sentences (`fieldErrors`) when the route returns them.
   await throwIfFailed(res, `處理失敗（狀態碼 ${res.status}）`);
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
@@ -299,38 +282,6 @@ export function confirmProductFact(
 export function deleteProductFact(brandId: string, productId: string, factId: string): Promise<void> {
   return postJson(
     `/api/products/brands/${encodeURIComponent(brandId)}/products/${encodeURIComponent(productId)}/facts/${encodeURIComponent(factId)}/delete`,
-  );
-}
-
-// ---- 產品經濟數字 ----
-
-export function saveProductEconomics(
-  brandId: string,
-  productId: string,
-  /** Each number as typed (`typedValue`; F50 Contract I): a field left empty is sent as `null` (F47 Contract A: unset,
-   * never 0); the server parses it and refuses an empty selling price, any negative cost or a 成交率 outside 0–100
-   * (a percent, 20 = 20%) with the field's own sentence. */
-  fields: {
-    selling_price: string | null;
-    fixed_cost: string | null;
-    unit_variable_cost: string | null;
-    shipping_cost: string | null;
-    currency: string;
-    effective_from: string;
-    confirmed_by: string;
-    close_rate?: string | null;
-    assumptions?: AssumptionField[];
-  },
-): Promise<void> {
-  return postJson(
-    `/api/products/brands/${encodeURIComponent(brandId)}/products/${encodeURIComponent(productId)}/economics`,
-    fields,
-  );
-}
-
-export function confirmProductEconomics(brandId: string, productId: string): Promise<void> {
-  return postJson(
-    `/api/products/brands/${encodeURIComponent(brandId)}/products/${encodeURIComponent(productId)}/economics/confirm`,
   );
 }
 

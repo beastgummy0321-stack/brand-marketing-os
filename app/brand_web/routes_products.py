@@ -103,18 +103,6 @@ def _fact_shape(brand: dict, fact: dict) -> dict:
     }
 
 
-def _economics_shape(brand: dict, economics: dict) -> dict:
-    return {
-        "selling_price": economics["selling_price"], "fixed_cost": economics["fixed_cost"],
-        "unit_variable_cost": economics["unit_variable_cost"], "shipping_cost": economics["shipping_cost"],
-        "currency": economics["currency"],
-        "effective_from": economics["effective_from"], "status": economics["status"],
-        "confirmed_by": confirmer_label(brand["org_id"], economics["confirmed_by"]),
-        "close_rate": economics["close_rate"],
-        "assumptions": economics.get("assumptions_json") or [],
-    }
-
-
 def _rule_shape(rule: dict) -> dict:
     return {
         "id": rule["id"], "severity": rule["severity"], "rule_type": rule["rule_type"],
@@ -374,17 +362,22 @@ def product_detail(request: Request, brand_id: str, product_id: str):
     product = require_product(brand, product_id)
     facts = repo.list_product_facts(web.conn, brand_id, product_id)
     facts_pending = sum(1 for f in facts if f["status"] == "pending")
-    # F43-I01: effective values on purpose. This payload prefills the old economics editor, which
-    # cannot express "derived"; since F47-I03 an empty cost there is saved as NULL (unset), but a
-    # derived number shown as empty would read as "unknown", so the effective number stays.
-    economics = repo.get_product_economics(web.conn, brand_id, product_id)
     rules = repo.list_rules_for_product(web.conn, brand_id, product_id)
     claims = repo.list_claims_for_product(web.conn, brand_id, product_id)
+    # F50 Contract R (R6 A3): a knowledge product's money lives on its sell-ways -- the 經濟數字
+    # tab lists their briefs and its card counts them (F50-I18); a sell-way row counts its own
+    # economics row.
+    if product_helpers.is_knowledge_product(brand_id, product):
+        sell_ways = product_onboarding.sell_way_briefs(web.conn, brand_id, product_id)
+        economics_card = {"count": len(sell_ways), "pending": 0}
+    else:
+        sell_ways = []
+        economics = repo.get_product_economics(web.conn, brand_id, product_id)
+        economics_card = {"count": 1 if economics else 0,
+                          "pending": 1 if economics and economics["status"] == "pending" else 0}
     cards = [
         {"key": "facts", "title": "產品事實", "count": len(facts), "pending": facts_pending},
-        {"key": "economics-view", "title": "產品經濟數字",
-         "count": 1 if economics else 0,
-         "pending": 1 if economics and economics["status"] == "pending" else 0},
+        {"key": "economics-view", "title": "產品經濟數字", **economics_card},
         {"key": "rules", "title": "適用規則", "count": len(rules), "pending": 0},
         {"key": "claims", "title": "適用宣稱", "count": len(claims), "pending": 0},
     ]
@@ -393,15 +386,12 @@ def product_detail(request: Request, brand_id: str, product_id: str):
         "status": product["status"], "knowledge_version": product["knowledge_version"],
         "cards": cards,
         "latest_source_url": repo.get_latest_product_source_url(web.conn, brand_id, product_id),
-        "economics_pending": bool(economics and economics["status"] == "pending"),
         "facts": [_fact_shape(brand, f) for f in facts],
-        "economics": _economics_shape(brand, economics) if economics else None,
         "rules": [_rule_shape(r) for r in rules],
         "claims": [_claim_shape(brand_id, c) for c in claims],
-        # F50 Contract R (R6 A3): the 經濟數字 tab reads the knowledge product's sell-ways (the
-        # products-page briefs: name, price, break-even, offer labels); [] for a sell-way row.
-        "sell_ways": (product_onboarding.sell_way_briefs(web.conn, brand_id, product_id)
-                      if product_helpers.is_knowledge_product(brand_id, product) else []),
+        # The products-page briefs (name, price, break-even, offer labels); [] for a sell-way row.
+        # F50-I18: the old root `economics`／`economics_pending` fields had no reader left.
+        "sell_ways": sell_ways,
     }
     return _envelope(data)
 

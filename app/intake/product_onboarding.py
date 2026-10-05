@@ -606,7 +606,9 @@ def status(conn: Conn, brand_id: str, product_id: str) -> dict:
     """`GET …/products/{p}/onboarding`: 1–5 while being built (5 = 賣法 saved, 完成 not pressed);
     a finished product reads step 5, completed. F50 Contract R: `ready` (`product_readiness`) and
     `checklist [{key, label, ok, required}]` -- groups required, proof optional, sell-ways
-    required -- are the server's verdict the done page prints."""
+    required -- are the server's verdict the done page prints; F50-I18: `missing [{key, label}]`
+    (`product_readiness`, in order, like the products page's) names what the done page's title
+    says is missing."""
     product = knowledge_product(conn, brand_id, product_id)
     step = product.get("onboarding_step")
     prefill_status, prefill_error = _prefill_status(conn, brand_id, product_id)
@@ -616,6 +618,7 @@ def status(conn: Conn, brand_id: str, product_id: str) -> dict:
         "step": step or STEP_DONE,
         "completed": step is None,
         "ready": verdict["ready"],
+        "missing": verdict["missing"],
         "checklist": _checklist(conn, brand_id, product_id, missing),
         "prefill_status": prefill_status,
         "prefill_error": prefill_error,
