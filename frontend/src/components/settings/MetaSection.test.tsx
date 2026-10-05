@@ -58,3 +58,17 @@ describe("MetaSection 讀不到 Meta", () => {
     expect(screen.getByText("目前使用中的權杖末四碼：-jay")).toBeTruthy();
   });
 });
+
+
+it("acknowledges a connected token until another token is typed", async () => {
+  vi.mocked(fetchMetaAccounts).mockResolvedValue({token_tail:null,accounts:[]});
+  vi.mocked(fetchBrandOptions).mockResolvedValue([]);
+  vi.mocked(connectMetaToken).mockResolvedValue({token_tail:"test",accounts:[]});
+  render(<MetaSection/>);
+  const field=screen.getByPlaceholderText("貼上 Meta 存取權杖");
+  await userEvent.type(field,"test-token");
+  await userEvent.click(screen.getByRole("button",{name:"連接"}));
+  expect(await screen.findByText("已儲存")).toBeTruthy();
+  await userEvent.type(field,"replacement");
+  expect(screen.queryByText("已儲存")).toBeNull();
+});

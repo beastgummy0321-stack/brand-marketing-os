@@ -1,3 +1,4 @@
+import { Button } from "@/components/layout/ui/button";
 import { useState } from "react";
 
 /** 原地二次確認刪除鈕（票 B2-products）：跟 `components/library/shared/InlineDeleteButton.tsx`
@@ -37,22 +38,22 @@ export function InlineDeleteButton({
   return (
     <span className="inline-flex flex-wrap items-center gap-1.5 text-xs">
       <span className="text-muted-foreground">{confirmText}</span>
-      <button
+      <Button variant="outline" size="sm"
         type="button"
-        disabled={deleting}
+        busy={deleting}
         onClick={handleConfirm}
         className="font-medium text-danger hover:underline disabled:cursor-not-allowed disabled:opacity-50"
       >
         {deleting ? "刪除中…" : "確定刪除"}
-      </button>
-      <button
+      </Button>
+      <Button variant="outline" size="sm"
         type="button"
         onClick={() => setConfirming(false)}
-        disabled={deleting}
+        busy={deleting}
         className="text-muted-foreground hover:underline"
       >
         取消
-      </button>
+      </Button>
       {error && <span className="text-danger">{error}</span>}
     </span>
   );

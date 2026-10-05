@@ -1,3 +1,5 @@
+import { formatUsd } from "@/lib/format";
+import { Button } from "@/components/layout/ui/button";
 import { useState } from "react";
 import type { SettingsData } from "@/lib/settingsApi";
 import { clearApiKey, saveAiMonthlyCostLimit, saveApiKey } from "@/lib/settingsApi";
@@ -66,7 +68,7 @@ export function ApiKeySection({ data, onSaved }: { data: SettingsData; onSaved: 
       </label>
       {saveForm.error && <p className="text-sm text-danger">{saveForm.error}</p>}
       <div>
-        <SaveButton saving={saveForm.saving} label="儲存金鑰" />
+        <SaveButton saving={saveForm.saving} saved={saveForm.saved} label="儲存金鑰" />
       </div>
     </form>
   );
@@ -104,8 +106,7 @@ export function ApiKeySection({ data, onSaved }: { data: SettingsData; onSaved: 
         {/* 票 U2 §6：跟 `SectionCard` 的 description 同一條規則。走查抓到這一段沒套上限時
             是 1548px 單行，緊貼在剛折成兩行的 description 下面，一眼看得出不一致。 */}
         <p className="mt-1 max-w-[var(--width-prose)] text-muted-foreground">
-          這個月整個組織（不分品牌）已花 US$ {data.ai_monthly_spend.toFixed(2)}，上限 US${" "}
-          {data.ai_monthly_cost_limit.toFixed(2)}
+          這個月整個組織（不分品牌）已花 {formatUsd(data.ai_monthly_spend)}，上限 {formatUsd(data.ai_monthly_cost_limit)}
           {data.ai_cap_applies
             ? "。用到上限會自動擋下新的 AI 呼叫，下個月 1 號自動歸零；跟下面「花費上限」小節的品牌花費上限是不同的兩道關卡，那個只管單一品牌、不會每月重置。"
             : "（僅供參考：這個組織用自己的金鑰付費，不受這道上限限制）。"}
@@ -135,7 +136,7 @@ export function ApiKeySection({ data, onSaved }: { data: SettingsData; onSaved: 
             </label>
             {capForm.error && <p className="text-sm text-danger">{capForm.error}</p>}
             <div>
-              <SaveButton saving={capForm.saving} label="儲存月費上限" />
+              <SaveButton saving={capForm.saving} saved={capForm.saved} label="儲存月費上限" />
             </div>
           </form>
         )}
@@ -181,14 +182,14 @@ export function ApiKeySection({ data, onSaved }: { data: SettingsData; onSaved: 
           </p>
           {clearForm.error && <p className="text-sm text-danger">{clearForm.error}</p>}
           <div>
-            <button
+            <Button variant="outline" size="sm"
               type="button"
               onClick={handleClear}
-              disabled={clearForm.saving}
+              busy={clearForm.saving}
               className="rounded-md border border-danger px-4 py-2 text-sm font-medium text-danger hover:bg-danger/10 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {clearForm.saving ? "處理中…" : "清除資料庫裡的金鑰"}
-            </button>
+            </Button>
           </div>
         </div>
       )}

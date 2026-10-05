@@ -234,7 +234,7 @@ function PanelShell({ title, onClose, children }: { title: string; onClose: () =
 }
 
 function SubmitButton({ saving, label, pendingLabel }: { saving: boolean; label: string; pendingLabel: string }) {
-  return <Button type="submit" disabled={saving}>{saving ? pendingLabel : label}</Button>;
+  return <Button type="submit" busy={saving}>{saving ? pendingLabel : label}</Button>;
 }
 
 function FormError({ message }: { message: string | null }) {

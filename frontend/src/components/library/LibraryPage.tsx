@@ -222,7 +222,7 @@ export function LibraryPage({ brandId }: { brandId: string }) {
           <Button asChild variant="outline">
             <Link to={`/brands/${encodeURIComponent(brandId)}/intake`}>品牌資料（建檔時填的）</Link>
           </Button>
-          <Button variant="outline" onClick={() => setProfileOpen(true)} disabled={state.status !== "ready"}>品牌資料</Button>
+          <Button variant="outline" onClick={() => setProfileOpen(true)} busy={state.status === "loading"} disabledReason={state.status === "error" ? "先重新載入品牌資料" : undefined}>品牌資料</Button>
         </>
       }/>
       {content}

@@ -1,3 +1,4 @@
+import { formatUsd } from "@/lib/format";
 import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { KeyRound, SlidersHorizontal, Sparkles, Wallet, Link2 } from "lucide-react";
@@ -82,14 +83,14 @@ export function SettingsPage() {
           </details>
         </nav>
         <div className="workspace-content max-w-[1100px]">
-          {error && usesSharedSettings && <div role="alert" className="mb-4 flex items-center justify-between gap-4 rounded-lg border border-danger/25 bg-danger/5 p-4 text-sm"><p>{error}</p><Button variant="outline" onClick={load} disabled={loading}>重新載入</Button></div>}
+          {error && usesSharedSettings && <div role="alert" className="mb-4 flex items-center justify-between gap-4 rounded-lg border border-danger/25 bg-danger/5 p-4 text-sm"><p>{error}</p><Button variant="outline" onClick={load} busy={loading}>重新載入</Button></div>}
           {!data && loading && usesSharedSettings && <div aria-label="設定載入中" className="flex flex-col gap-4"><Skeleton className="h-20" /><Skeleton className="h-80" /></div>}
           {data && <>
             {loading && usesSharedSettings && <p role="status" className="mb-3 text-sm text-muted-foreground">正在更新設定…</p>}
             <div hidden={activeTab !== "budget"} className="mb-4 rounded-lg border border-border bg-muted/30 p-4">
               <p className="text-sm font-medium text-foreground">整個組織本月 AI 費用</p>
               <p className="mt-1 text-sm text-muted-foreground">
-                已使用 US$ {data.ai_monthly_spend.toFixed(2)}／上限 US$ {data.ai_monthly_cost_limit.toFixed(2)}
+                已使用 {formatUsd(data.ai_monthly_spend)}／上限 {formatUsd(data.ai_monthly_cost_limit)}
                 {data.ai_cap_applies ? "；月底前達到上限會停止新的 AI 呼叫。" : "；使用自有金鑰時，此上限僅供參考。"}
               </p>
               <button type="button" className="mt-2 text-sm font-medium text-primary hover:underline" onClick={() => selectTab("ai")}>

@@ -144,3 +144,16 @@ describe("RuleCardsSection 規則卡範圍與重設", () => {
     expect(screen.queryAllByRole("alert")).toHaveLength(0);
   });
 });
+
+
+it("acknowledges a saved rule card until a field changes", async () => {
+  mockFetchBrands.mockResolvedValue([{brand_id:"a",brand_name:"甲品牌"}]);
+  mockFetchCards.mockResolvedValue({brand_id:"a",cards:[card(10)]});
+  vi.mocked(saveRuleCard).mockResolvedValue(card(10));
+  render(<RuleCardsSection/>);
+  await userEvent.selectOptions(await screen.findByLabelText("選擇品牌"),"a");
+  await userEvent.click(await screen.findByRole("button",{name:"儲存這張卡"}));
+  expect(await screen.findByText("已儲存")).toBeTruthy();
+  await userEvent.type(screen.getByRole("spinbutton",{name:/最低花費/}),"1");
+  expect(screen.queryByText("已儲存")).toBeNull();
+});

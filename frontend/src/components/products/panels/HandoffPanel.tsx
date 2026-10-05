@@ -1,3 +1,4 @@
+import { formatUsd } from "@/lib/format";
 import { useEffect, useState } from "react";
 import { X } from "lucide-react";
 import { CopyIconButton } from "@/components/layout/CopyIconButton";
@@ -98,7 +99,7 @@ export function HandoffPanel({
             className="rounded-md border border-border px-3 py-2 text-sm text-foreground"
           />
           <span className="text-xs text-muted-foreground">
-            先嘗試自動讀取（不需費用）；讀取失敗才會請 AI 協助整理格式（預估 US${COST_PRODUCT_HANDOFF_FIX.toFixed(2)}，受花費上限保護）。
+            先嘗試自動讀取（不需費用）；讀取失敗才會請 AI 協助整理格式（預估 {formatUsd(COST_PRODUCT_HANDOFF_FIX)}，受花費上限保護）。
           </span>
         </label>
         {form.error && <p className="text-sm text-danger">{form.error}</p>}

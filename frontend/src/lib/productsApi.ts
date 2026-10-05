@@ -12,7 +12,7 @@
  * 其餘寫入端點沿用契約「改回 JSON」的決定，用 JSON body（跟 S5 沿用舊版 FormData 端點不同，
  * 因為 S6 這些端點契約本來就標記為新端點）。 */
 
-import { apiFetch, throwIfFailed } from "./http";
+import { apiFetch, readJson, throwIfFailed } from "./http";
 
 export interface ProductListItem {
   id: string;
@@ -175,9 +175,7 @@ interface Envelope<T> {
 
 async function getJson<T>(path: string): Promise<T> {
   const res = await apiFetch(path);
-  if (res.status === 404) throw new Error("找不到這筆資料。");
-  await throwIfFailed(res, `讀取失敗（狀態碼 ${res.status}）`);
-  const body: Envelope<T> = await res.json();
+  const body = await readJson<Envelope<T>>(res, `讀取失敗（狀態碼 ${res.status}）`);
   return body.data;
 }
 
@@ -191,7 +189,7 @@ async function postJson<T = void>(path: string, body?: unknown): Promise<T> {
   // per-field sentences (`fieldErrors`) when the route returns them.
   await throwIfFailed(res, `處理失敗（狀態碼 ${res.status}）`);
   if (res.status === 204) return undefined as T;
-  return (await res.json()) as T;
+  return readJson<T>(res, `處理失敗（狀態碼 ${res.status}）`);
 }
 
 // ---- 產品清單 ----

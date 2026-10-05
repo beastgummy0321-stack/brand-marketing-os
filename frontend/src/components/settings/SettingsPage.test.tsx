@@ -47,7 +47,7 @@ describe("SettingsPage 一般與進階層級", () => {
     view();
     expect(await screen.findByText("品牌預算內容")).toBeTruthy();
     expect(screen.getByRole("button", { name: "品牌 AI 費用上限" }).getAttribute("aria-pressed")).toBe("true");
-    expect(screen.getByText(/已使用 US\$ 0\.00／上限 US\$ 20\.00/)).toBeTruthy();
+    expect(screen.getByText(/已使用 0\.00 美元／上限 20\.00 美元/)).toBeTruthy();
     expect(screen.getByRole("button", { name: "查看 AI 金鑰與月費" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Meta 廣告連線" })).toBeTruthy();
     expect(screen.getByText("進階設定").closest("details")?.open).toBe(false);
@@ -143,5 +143,37 @@ describe("settings fields send the typed text and print the server's sentence", 
     await userEvent.click(screen.getByRole("button", { name: "儲存金鑰" }));
     expect(await screen.findByText(keySentence)).toBeTruthy();
     expect(sentBody(fetchMock)).toEqual({ api_key: "abc" });
+  });
+});
+
+
+describe("successful settings saves remain acknowledged until editing", () => {
+  afterEach(() => vi.unstubAllGlobals());
+  it.each([
+    ["SpendCapSection", "儲存花費上限", "建檔精靈等 AI 生成的花費上限"],
+    ["ApiKeySection", "儲存月費上限", "AI 月費上限（整個組織）"],
+  ])("%s acknowledges a successful save", async (module, label, fieldLabel) => {
+    const source = module === "SpendCapSection"
+      ? await vi.importActual<typeof import("./SpendCapSection")>("./SpendCapSection")
+      : await vi.importActual<typeof import("./ApiKeySection")>("./ApiKeySection");
+    const Component = "SpendCapSection" in source ? source.SpendCapSection : source.ApiKeySection;
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(null, {status:204})));
+    const onSaved = vi.fn();
+    render(<Component data={SETTINGS} onSaved={onSaved}/>);
+    await userEvent.click(screen.getByRole("button",{name:label}));
+    expect(await screen.findByText("已儲存")).toBeTruthy();
+    expect(onSaved).toHaveBeenCalledTimes(1);
+    const field = screen.getByRole("textbox", {name:fieldLabel});
+    await userEvent.type(field,"1");
+    expect(screen.queryByText("已儲存")).toBeNull();
+  });
+  it("model changes clear the saved acknowledgement", async () => {
+    const {ModelSection}=await vi.importActual<typeof import("./ModelSection")>("./ModelSection");
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(null,{status:204})));
+    render(<ModelSection data={{...SETTINGS,model_choices:[{id:"model-a",name:"A",price_text:"A"},{id:"model-b",name:"B",price_text:"B"}]}} onSaved={()=>{}}/>);
+    await userEvent.click(screen.getByRole("button",{name:"儲存模型設定"}));
+    expect(await screen.findByText("已儲存")).toBeTruthy();
+    await userEvent.selectOptions(screen.getByRole("combobox"),"model-b");
+    expect(screen.queryByText("已儲存")).toBeNull();
   });
 });

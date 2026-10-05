@@ -60,7 +60,7 @@ export function ArchivedBrands({ onRestored }: { onRestored: () => void }) {
                 variant="outline"
                 size="sm"
                 className="shrink-0 font-medium"
-                disabled={restoring !== null}
+                busy={restoring !== null}
                 onClick={() => restore(brand)}
               >
                 還原

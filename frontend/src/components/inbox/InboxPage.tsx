@@ -57,7 +57,7 @@ export function InboxPage() {
   }
 
   return <div className="flex flex-col gap-5">
-    <PageHeader title="收件匣" description="集中查看跨品牌待辦，依品牌與嚴重度安排處理順序。" actions={<Button variant="outline" onClick={load} disabled={state.status === "loading" || resolvingId !== null}><RefreshCw className="size-4" aria-hidden="true" />重新整理</Button>} />
+    <PageHeader title="收件匣" description="集中查看跨品牌待辦，依品牌與嚴重度安排處理順序。" actions={<Button variant="outline" onClick={load} busy={state.status === "loading" || resolvingId !== null}><RefreshCw className="size-4" aria-hidden="true" />重新整理</Button>} />
     <PageTabs value={tab} onChange={(value) => { setParams((previous) => { const next = new URLSearchParams(previous); next.set("tab", value); return next; }); setSelectedId(null); pagination.resetPage(); }} items={[
       { value: "open", label: "待處理", count: state.status === "ready" ? state.data.open.length : undefined },
       { value: "done", label: "已處理", count: state.status === "ready" ? state.data.done.length : undefined },

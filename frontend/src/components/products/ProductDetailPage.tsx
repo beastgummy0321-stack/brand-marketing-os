@@ -1,3 +1,5 @@
+import { formatUsd } from "@/lib/format";
+import { ApiResponseError } from "@/lib/http";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
@@ -25,7 +27,6 @@ import { HandoffPanel } from "./panels/HandoffPanel";
 import { ProductDeletePanel } from "./panels/ProductDeletePanel";
 
 type TabKey = "facts" | "economics-view" | "rules" | "claims";
-const NOT_FOUND_MESSAGE = "找不到這筆資料。";
 const RESCAN_URL_MISSING = "先填要調研的商品頁網址（從 https:// 開始），AI 才知道要讀哪一頁。";
 
 /** F47-I03 (drill-10 乙 #6): the green line after a pasted-back reply. A reply that yields nothing is
@@ -73,10 +74,10 @@ function ArchiveProductDialog({ name, open, onCancel, onConfirm }: {
         </DialogDescription>
         {error && <p role="alert" className="text-sm text-danger">{error}</p>}
         <DialogFooter>
-          <Button type="button" variant="outline" disabled={busy} onClick={cancel}>
+          <Button type="button" variant="outline" busy={busy} onClick={cancel}>
             取消
           </Button>
-          <Button type="button" disabled={busy} onClick={() => void confirm()}>
+          <Button type="button" busy={busy} onClick={() => void confirm()}>
             {busy ? "封存中…" : "確定封存"}
           </Button>
         </DialogFooter>
@@ -125,7 +126,7 @@ export function ProductDetailPage({ brandId, productId }: { brandId: string; pro
       })
       .catch((err: unknown) => {
         const message = err instanceof Error ? err.message : "讀取失敗，請稍後再試。";
-        setState(message === NOT_FOUND_MESSAGE ? { status: "not-found" } : { status: "error", message });
+        setState(err instanceof ApiResponseError && err.status === 404 ? { status: "not-found" } : { status: "error", message });
       });
   }
 
@@ -284,16 +285,16 @@ export function ProductDetailPage({ brandId, productId }: { brandId: string; pro
                 placeholder="https://example.com/products/xxx"
                 className="min-w-[16rem] flex-1 rounded-md border border-border px-3 py-1.5 text-sm text-foreground"
               />
-              <button
+              <Button variant="outline" size="sm"
                 type="button"
-                disabled={job?.status === "running" || job?.status === "waiting"}
+                busy={job?.status === "running" || job?.status === "waiting"}
                 onClick={() => void submitRescan()}
                 className="rounded-md border border-primary px-3 py-1.5 text-xs font-medium text-primary hover:bg-primary/10 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {job?.status === "running" || job?.status === "waiting"
                   ? "調研進行中…"
-                  : `AI 再次調研（預估 US$${COST_PRODUCT_SCAN.toFixed(2)}）`}
-              </button>
+                  : `AI 再次調研（預估 ${formatUsd(COST_PRODUCT_SCAN)}）`}
+              </Button>
               <button
                 type="button"
                 onClick={() => setHandoffOpen(true)}
