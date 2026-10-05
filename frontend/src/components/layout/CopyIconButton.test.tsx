@@ -1,8 +1,8 @@
-/** F47-I02 (Contract B): copy feedback is visible text — 「已複製」 for 2 s, 「請手動選取複製」 on refusal. */
+/** F47-I02 (Contract B): copy feedback is visible text — 「已複製」 for 2 s, 「請手動選取複製」 on refusal. F51 Contract S
+ * (drill-11 c1-10): 「複製中…」 while the clipboard has not answered; F51 Contract D: nothing to copy says so. */
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { COPIED_FEEDBACK_MS, CopyIconButton } from "./CopyIconButton";
-import { Button } from "./ui/button";
+import { COPIED_FEEDBACK_MS, CopyIconButton, NOTHING_TO_COPY } from "./CopyIconButton";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from "./ui/dialog";
 
 function setClipboard(writeText: (text: string) => Promise<void>) {
@@ -54,21 +54,40 @@ describe("CopyIconButton", () => {
     expect(screen.queryByText("已複製")).toBeNull();
     expect(onResult).toHaveBeenCalledWith(false);
   });
-});
 
-/* The other two Contract B shell pieces have no suite of their own; they sit next to the copy button. */
-describe("Button disabledReason", () => {
-  it("renders one muted sentence as the accessible description only while disabled", () => {
-    const { rerender } = render(<Button disabled disabledReason="先選一張圖才能送出。">送出</Button>);
-    const button = screen.getByRole("button", { name: "送出" });
-    expect(screen.getByText("先選一張圖才能送出。")).toBeTruthy();
-    expect(button.getAttribute("aria-describedby")).toBe(screen.getByText("先選一張圖才能送出。").id);
-    rerender(<Button disabledReason="先選一張圖才能送出。">送出</Button>);
-    expect(screen.queryByText("先選一張圖才能送出。")).toBeNull();
-    expect(screen.getByRole("button", { name: "送出" }).getAttribute("aria-describedby")).toBeNull();
+  it("says 複製中… while the clipboard has not answered, then 已複製 (an icon-only button is never silent)", async () => {
+    let accept: () => void = () => {};
+    setClipboard(vi.fn(() => new Promise<void>((resolve) => { accept = resolve; })));
+    render(<CopyIconButton ariaLabel="複製內文" getText={() => "認識 Beast Gummy"} />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "複製內文" }));
+    });
+    const button = screen.getByRole("button", { name: "複製內文" }) as HTMLButtonElement;
+    expect(screen.getByText("複製中…")).toBeTruthy();
+    expect(button.disabled).toBe(true);
+    expect(button.getAttribute("aria-busy")).toBe("true");
+    await act(async () => {
+      accept();
+    });
+    expect(screen.queryByText("複製中…")).toBeNull();
+    expect(screen.getByText("已複製")).toBeTruthy();
+    expect(button.disabled).toBe(false);
+  });
+
+  it("with nothing to copy it is greyed out and says 沒有可複製的內容", () => {
+    const writeText = vi.fn();
+    setClipboard(writeText);
+    render(<CopyIconButton ariaLabel="複製說明" disabled getText={() => ""} />);
+    const button = screen.getByRole("button", { name: "複製說明" }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    expect(button.getAttribute("aria-describedby")).toBe(screen.getByText(NOTHING_TO_COPY).id);
+    fireEvent.click(button);
+    expect(writeText).not.toHaveBeenCalled();
   });
 });
 
+/* The Dialog close label (F47 Contract B) has no suite of its own; it sits next to the copy button. `Button`'s
+ * disabled reason moved to `ui/button.test.tsx` (F51 Contract D: a reason now disables the button). */
 describe("Dialog close label", () => {
   it("is 關閉, for the corner button and the footer button", () => {
     render(

@@ -22,7 +22,7 @@ export function Pager({
         <button
           type="button"
           onClick={() => onChange(page - 1)}
-          disabled={page <= 1}
+          disabled={page <= 1} // DISABLED_OK: structural — there is no page before the first
           aria-label="上一頁"
           className="rounded-md border border-border p-1.5 text-foreground hover:border-primary hover:text-primary disabled:cursor-not-allowed disabled:opacity-40"
         >
@@ -34,7 +34,7 @@ export function Pager({
         <button
           type="button"
           onClick={() => onChange(page + 1)}
-          disabled={page >= pageCount}
+          disabled={page >= pageCount} // DISABLED_OK: structural — there is no page after the last
           aria-label="下一頁"
           className="rounded-md border border-border p-1.5 text-foreground hover:border-primary hover:text-primary disabled:cursor-not-allowed disabled:opacity-40"
         >

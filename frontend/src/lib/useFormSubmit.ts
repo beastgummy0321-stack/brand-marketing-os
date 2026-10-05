@@ -11,18 +11,25 @@ import { useState, type FormEvent } from "react";
  *  - spread `form.formProps` on the `<form>`: React's `onChange` bubbles from every input, select
  *    and textarea inside it, so one prop covers every field; or
  *  - call `form.clearError()` from a change that is not a form field (e.g. switching a mode).
- * Clearing is a no-op while nothing is shown, so calling it on every keystroke costs nothing. */
+ * Clearing is a no-op while nothing is shown, so calling it on every keystroke costs nothing.
+ *
+ * F51 Contract S — a save acknowledges: `saved` is true after a submit that succeeded and stays true until the
+ * form reports a change the same way (`formProps` / `clearError()`) or the next submit starts; no timer, so
+ * 「已儲存」 means "what you see is what is stored". `settings/shared/SaveButton` prints it. */
 export function useFormSubmit<Args extends unknown[]>(
   action: (...args: Args) => Promise<void>,
 ) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
 
   async function submit(...args: Args) {
     setSaving(true);
     setError(null);
+    setSaved(false);
     try {
       await action(...args);
+      setSaved(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : "儲存失敗，請稍後再試。");
     } finally {
@@ -32,9 +39,10 @@ export function useFormSubmit<Args extends unknown[]>(
 
   function clearError() {
     setError(null);
+    setSaved(false);
   }
 
   const formProps = { onChange: (_event: FormEvent<HTMLFormElement>) => clearError() };
 
-  return { saving, error, submit, clearError, formProps };
+  return { saving, error, saved, submit, clearError, formProps };
 }
