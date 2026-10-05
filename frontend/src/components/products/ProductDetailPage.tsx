@@ -9,7 +9,6 @@ import { Button } from "@/components/layout/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from "@/components/layout/ui/dialog";
 import {
   archiveProduct,
-  confirmProductEconomics,
   COST_PRODUCT_SCAN,
   fetchProductDetail,
   fetchResearchStatus,
@@ -271,22 +270,6 @@ export function ProductDetailPage({ brandId, productId }: { brandId: string; pro
 
           {banner &&<p className="rounded-md bg-success/10 px-3 py-2 text-sm text-success">{banner}</p>}
 
-          {data.economics_pending && (
-            <div className="flex items-center justify-between gap-3 rounded-md border border-warning/40 bg-warning/5 p-3 text-sm">
-              <span className="text-foreground">產品經濟數字還是 AI 快掃抓到的售價，確認一下無誤嗎？</span>
-              <button
-                type="button"
-                onClick={async () => {
-                  await confirmProductEconomics(brandId, productId);
-                  load();
-                }}
-                className="shrink-0 rounded-md border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:border-primary hover:text-primary"
-              >
-                確認無誤
-              </button>
-            </div>
-          )}
-
           <details className="border-t border-border pt-2">
             <summary className="text-sm font-medium text-primary">調研工具 · 再次調研與深入調研</summary>
             <div className="flex flex-wrap items-center gap-2">
@@ -336,7 +319,8 @@ export function ProductDetailPage({ brandId, productId }: { brandId: string; pro
           />
         )}
         {activeTab === "economics-view" && (
-          <EconomicsTab brandId={brandId} productId={productId} economics={data.economics} onChanged={load} />
+          // F50 Contract R (R6 A3): the money is the sell-ways' (edited in onboarding step 4), never the root's.
+          <EconomicsTab brandId={brandId} productId={productId} sellWays={data.sell_ways ?? []} />
         )}
         {activeTab === "rules" && <RulesTab brandId={brandId} productId={productId} rules={data.rules} />}
         {activeTab === "claims" && <ClaimsTab brandId={brandId} productId={productId} claims={data.claims} />}

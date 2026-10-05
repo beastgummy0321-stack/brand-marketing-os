@@ -151,23 +151,47 @@ describe("ProductDetailPage 封存 (F47-I05, drill-10 V9)", () => {
   });
 });
 
-describe("ProductDetailPage 經濟數字 (F50-I04: percents stored 0–100)", () => {
-  it("prints the stored close rate as the percent it is (20 → 「20%」, never a bare 0.2)", async () => {
-    vi.mocked(fetchProductDetail).mockResolvedValue({
-      ...DETAIL,
-      economics: {
-        selling_price: 5000, fixed_cost: null, unit_variable_cost: 1000, shipping_cost: 0, currency: "TWD",
-        effective_from: null, status: "confirmed", confirmed_by: "owner@example.com", close_rate: 20,
-        assumptions: ["close_rate"],
-      },
-    });
+describe("ProductDetailPage 經濟數字 (F50-I15, Contract R; drill-11 R6 A3)", () => {
+  function renderEconomics() {
     render(
       <MemoryRouter initialEntries={["/?tab=economics-view"]}>
         <ProductDetailPage brandId="b1" productId="p1" />
       </MemoryRouter>,
     );
-    const label = await screen.findByText("成交率");
-    expect(label.nextElementSibling?.textContent).toContain("20%");
+  }
+
+  it("lists the served sell-ways with the products-page line and links to onboarding step 4; no root-product editor", async () => {
+    vi.mocked(fetchProductDetail).mockResolvedValue({
+      ...DETAIL,
+      // A root product's old money row is not printed: the money is the sell-ways'.
+      economics: {
+        selling_price: 5000, fixed_cost: null, unit_variable_cost: 1000, shipping_cost: 0, currency: "TWD",
+        effective_from: null, status: "pending", confirmed_by: null, close_rate: 20, assumptions: [],
+      },
+      economics_pending: true,
+      sell_ways: [
+        { id: "sw_one", name: "單盒", shape: "base", price: 399, break_even: 249, offer_labels: [] },
+        { id: "sw_three", name: "三盒組", shape: "composed", price: 999, break_even: 668.5, offer_labels: ["組合價 省 198"] },
+      ],
+    });
+    renderEconomics();
+
+    const rows = await waitFor(() => {
+      const found = [...document.querySelectorAll('[data-slot="sell-way-row"]')] as HTMLElement[];
+      expect(found).toHaveLength(2);
+      return found;
+    });
+    expect(rows.map((r) => r.textContent)).toEqual(["單盒399・打平 249", "三盒組組合價 省 198999・打平 669"]);
+    expect(screen.getByRole("link", { name: "到建檔第 4 步改 →" }).getAttribute("href")).toBe("/brands/b1/products/p1/onboarding?step=4");
+    expect(screen.queryByText("成交率")).toBeNull();
+    expect(screen.queryByRole("button", { name: /填寫產品經濟數字|更新數字|確認無誤/ })).toBeNull();
+  });
+
+  it("a product with no sell-way says so (an unknown price is never 0) and still links to step 4", async () => {
+    vi.mocked(fetchProductDetail).mockResolvedValue({ ...DETAIL, sell_ways: [] });
+    renderEconomics();
+    expect(await screen.findByText("還沒有賣法")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "到建檔第 4 步改 →" })).toBeTruthy();
   });
 });
 

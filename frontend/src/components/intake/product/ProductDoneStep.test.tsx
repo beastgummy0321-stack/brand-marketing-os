@@ -1,9 +1,12 @@
-/** frontend/src/components/intake/product/ProductDoneStep.test.tsx — product onboarding `#/p5` 〈商品〉建好了 (F43-I12):
- * a finished product shows 可以投放 and four green rows built from saved values only (商品是什麼 parts, groups with
- * pain labels, proof kinds and claim verdicts, sell-ways with price / break-even / offers); 「用它建活動 →」 carries the
- * first sell-way's id; a product still missing its sell-ways shows 建到一半, a red 「賣法：還沒有」 row whose 「去補」 opens
- * step 4, and no campaign link; four steps saved but 完成 not recorded completes once on entering. Fixtures are shaped
- * like `app/intake/product_onboarding.py` (`status`, `get_who`, `get_evidence`, `get_sell_ways`). No server. */
+/** frontend/src/components/intake/product/ProductDoneStep.test.tsx — product onboarding `#/p5` 〈商品〉建好了 (F43-I12;
+ * F50-I15, Contract R): the rows are the served `checklist` and the chip the served `ready` — a ready product shows
+ * 可以投放 and three green rows whose words come from saved values only (groups with pain labels, proof kinds and claim
+ * verdicts, sell-ways with price / break-even / offers); 「用它建活動 →」 carries the first sell-way's id; a finished
+ * product whose server checklist says groups missing shows 建到一半 and a red 「誰會買：還沒有」 row (drill-11 b-07)
+ * however many groups the step GET lists; a product still missing its sell-ways shows a red row whose 「去補」 opens
+ * step 4, and no campaign link; four steps saved but 完成 not recorded completes once on entering, and not while a
+ * required item is missing. Fixtures are shaped like `app/intake/product_onboarding.py` (`status`, `get_who`,
+ * `get_evidence`, `get_sell_ways`). No server. */
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
@@ -27,6 +30,7 @@ import type {
   ProductSellWays,
   ProductWhat,
   ProductWho,
+  ReadinessCheck,
   SellWayRow,
 } from "@/lib/intakeProductApi";
 import {
@@ -113,9 +117,16 @@ const SELL_WAYS: ProductSellWays = {
   },
 };
 
-const status = (step: number, completed: boolean): ProductOnboardingStatus => ({
-  step, completed, prefill_status: "done", prefill_error: null,
-});
+/** `status()` as served: `missing` names the checklist keys the server says are not met. */
+function status(step: number, completed: boolean, missing: ReadinessCheck["key"][] = []): ProductOnboardingStatus {
+  const checklist: ReadinessCheck[] = [
+    { key: "groups", label: "誰會買", ok: !missing.includes("groups"), required: true },
+    { key: "proof", label: "證據與說法", ok: !missing.includes("proof"), required: false },
+    { key: "sell_ways", label: "賣法與價格", ok: !missing.includes("sell_ways"), required: true },
+  ];
+  const ready = completed && checklist.every((c) => c.ok || !c.required);
+  return { step, completed, ready, checklist, prefill_status: "done", prefill_error: null };
+}
 
 function renderDone({ completed = true, sellWays = SELL_WAYS, onboarding = status(5, true), whoError = "" } = {}) {
   vi.mocked(fetchProductOnboarding).mockResolvedValue(onboarding);
@@ -138,22 +149,40 @@ const rows = () => [...document.querySelectorAll('[data-slot="check-row"]')] as 
 const chip = () => within(screen.getByRole("region", { name: "這個商品" })).getByText(/可以投放|建到一半/);
 
 describe("ProductDoneStep", () => {
-  it("建好的商品：可以投放、四列全綠，內容只取已存的值", async () => {
+  it("建好的商品：可以投放、伺服器的三列全綠，內容只取已存的值", async () => {
     renderDone();
-    await waitFor(() => expect(rows()).toHaveLength(4));
+    await waitFor(() => expect(rows()).toHaveLength(3));
     expect(screen.getByRole("heading", { name: "綜合維他命軟糖建好了" })).toBeTruthy();
     expect(chip().textContent).toBe("可以投放");
-    expect(rows().map((r) => r.dataset.state)).toEqual(["green", "green", "green", "green"]);
+    expect(rows().map((r) => r.dataset.state)).toEqual(["green", "green", "green"]);
     expect(rows().map((r) => r.textContent)).toEqual([
-      "✓商品是什麼一句話、成分、差異",
       "✓誰會買：2 群上班族（太麻煩）・運動族（怕買錯、太貴）",
       "✓證據 2 項・說法 3 可以講、1 不能講檢驗報告／認證、顧客評論原話",
       "✓賣法 2 種單盒 399（打平 249）・三盒組 999（打平 669，組合價 省 198＋滿 NT$999 免運）",
     ]);
     expect(screen.queryByRole("button", { name: "去補" })).toBeNull();
-    // A finished product needs no status read and is not completed again.
-    expect(fetchProductOnboarding).not.toHaveBeenCalled();
+    // A finished product is not completed again.
     expect(completeProductOnboarding).not.toHaveBeenCalled();
+  });
+
+  it("伺服器說還沒有顧客群：建到一半、誰會買列紅色（不看步驟讀到幾群），不能拿它建活動", async () => {
+    const { onGoStep } = renderDone({ onboarding: status(5, true, ["groups"]) });
+    await waitFor(() => expect(rows()).toHaveLength(3));
+    expect(chip().textContent).toBe("建到一半");
+    expect(rows().map((r) => r.dataset.state)).toEqual(["red", "green", "green"]);
+    expect(rows()[0].textContent).toBe("!誰會買：還沒有去補");
+    await userEvent.click(within(rows()[0]).getByRole("button", { name: "去補" }));
+    expect(onGoStep).toHaveBeenCalledWith(2);
+    expect(screen.queryByRole("link", { name: "用它建活動 →" })).toBeNull();
+    expect(completeProductOnboarding).not.toHaveBeenCalled();
+  });
+
+  it("選填的證據還沒有：黃色列，仍是可以投放", async () => {
+    renderDone({ onboarding: status(5, true, ["proof"]) });
+    await waitFor(() => expect(rows()).toHaveLength(3));
+    expect(chip().textContent).toBe("可以投放");
+    expect(rows().map((r) => r.dataset.state)).toEqual(["green", "yellow", "green"]);
+    expect(rows()[1].textContent).toBe("!證據與說法：還沒有去補");
   });
 
   it("「用它建活動 →」帶第一個賣法的 id；另兩個出口到新增商品與新增組合", async () => {
@@ -166,12 +195,12 @@ describe("ProductDoneStep", () => {
 
   it("還沒存賣法：建到一半、賣法列紅色，「去補」回第 4 步，不能拿它建活動", async () => {
     const proposal: ProductSellWays = { ...SELL_WAYS, sell_ways: [way(null, "單盒", 399, null, [])] };
-    const { onGoStep } = renderDone({ completed: false, onboarding: status(4, false), sellWays: proposal });
-    await waitFor(() => expect(rows()).toHaveLength(4));
+    const { onGoStep } = renderDone({ completed: false, onboarding: status(4, false, ["sell_ways"]), sellWays: proposal });
+    await waitFor(() => expect(rows()).toHaveLength(3));
     expect(chip().textContent).toBe("建到一半");
-    expect(rows().map((r) => r.dataset.state)).toEqual(["green", "green", "green", "red"]);
-    const red = rows()[3];
-    expect(red.textContent).toBe("!賣法：還沒有去補");
+    expect(rows().map((r) => r.dataset.state)).toEqual(["green", "green", "red"]);
+    const red = rows()[2];
+    expect(red.textContent).toBe("!賣法與價格：還沒有去補");
     await userEvent.click(within(red).getByRole("button", { name: "去補" }));
     expect(onGoStep).toHaveBeenCalledWith(4);
     expect(screen.queryByRole("link", { name: "用它建活動 →" })).toBeNull();
@@ -187,10 +216,18 @@ describe("ProductDoneStep", () => {
     expect((await screen.findByRole("link", { name: "用它建活動 →" })).getAttribute("href")).toContain("sell_way=sw_single");
   });
 
+  it("四步都存了但伺服器說還沒有顧客群：不送完成，紅列說缺什麼", async () => {
+    renderDone({ completed: false, onboarding: status(5, false, ["groups"]) });
+    await waitFor(() => expect(rows()).toHaveLength(3));
+    expect(chip().textContent).toBe("建到一半");
+    expect(rows()[0].dataset.state).toBe("red");
+    expect(completeProductOnboarding).not.toHaveBeenCalled();
+  });
+
   it("讀取失敗：顯示原因與重新載入", async () => {
     renderDone({ whoError: "讀取失敗（狀態碼 500）" });
     expect((await screen.findByRole("alert")).textContent).toBe("讀取失敗（狀態碼 500）");
     await userEvent.click(screen.getByRole("button", { name: "重新載入" }));
-    await waitFor(() => expect(rows()).toHaveLength(4));
+    await waitFor(() => expect(rows()).toHaveLength(3));
   });
 });

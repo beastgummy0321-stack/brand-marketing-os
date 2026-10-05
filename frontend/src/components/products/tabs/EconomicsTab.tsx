@@ -1,133 +1,61 @@
-import { useState } from "react";
+import { Link } from "react-router-dom";
 import { EmptyState } from "@/components/layout/EmptyState";
-import {
-  confirmProductEconomics,
-  CURRENCY_SYMBOLS,
-  type AssumptionField,
-  type ProductEconomics,
-} from "@/lib/productsApi";
-import { Badge } from "../shared/Badge";
-import { EconomicsPanel } from "../panels/EconomicsPanel";
+import type { ProductSellWayBrief } from "@/lib/productsApi";
 
-/** 假設值 chip：黃色小標籤，掛在還在用基準值的欄位旁邊（decision 17／18）。 */
-function AssumptionChip({ field, assumptions }: { field: AssumptionField; assumptions: AssumptionField[] }) {
-  if (!assumptions.includes(field)) return null;
+const amount = (value: number) => Math.round(value).toLocaleString("zh-TW");
+
+/** The products page card's sell-way line (`intake/product/ProductCard` `SellWayRow`, kept in step with it):
+ * 「399・打平 249」; a sell-way without a price or a known cost says so instead of printing 0. */
+function priceLine(way: ProductSellWayBrief): string {
+  return `${way.price === null ? "未定價" : amount(way.price)}・打平 ${way.break_even === null ? "未知" : amount(way.break_even)}`;
+}
+
+function OfferChip({ label }: { label: string }) {
   return (
-    <span className="ml-1 rounded-full bg-warning/15 px-1.5 py-0.5 text-[10px] font-medium text-warning">
-      假設
+    <span data-slot="chip" data-tone="ok" className="inline-flex shrink-0 items-center rounded-full bg-zone-ok px-1.5 text-[11px] font-medium text-success">
+      {label}
     </span>
   );
 }
 
-/** 產品經濟數字分頁（契約 S6.32–S6.35）。 */
-export function EconomicsTab({
-  brandId,
-  productId,
-  economics,
-  onChanged,
-}: {
+/** Product onboarding step 4 賣法與價格, where a knowledge product's money is edited. */
+const sellWaysStepPath = (brandId: string, productId: string) =>
+  `/brands/${encodeURIComponent(brandId)}/products/${encodeURIComponent(productId)}/onboarding?step=4`;
+
+/** 產品經濟數字分頁 (F50-I15, Contract R; drill-11 R6 A3): a knowledge product carries no money — its price and cost
+ * live on its sell-ways, which planners read. The tab lists the served `sell_ways` (name, offers, price・break-even —
+ * the products page card's line) and links to onboarding step 4, where they are edited. */
+export function EconomicsTab({ brandId, productId, sellWays }: {
   brandId: string;
   productId: string;
-  economics: ProductEconomics | null;
-  onChanged: () => void;
+  sellWays: ProductSellWayBrief[];
 }) {
-  const [panelOpen, setPanelOpen] = useState(false);
-  const [confirming, setConfirming] = useState(false);
-  const symbol = economics ? (CURRENCY_SYMBOLS[economics.currency] ?? economics.currency) : "";
-
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between">
         <h2 className="font-display text-lg text-foreground">產品經濟數字</h2>
-        <button
-          type="button"
-          onClick={() => setPanelOpen(true)}
+        <Link
+          to={sellWaysStepPath(brandId, productId)}
           className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:opacity-90"
         >
-          {economics ? "更新數字" : "填寫產品經濟數字"}
-        </button>
+          到建檔第 4 步改 →
+        </Link>
       </div>
 
-      {economics === null ? (
-        <EmptyState
-          title="還沒有填產品經濟數字"
-          description="填了售價與成本之後，之後才算得出這個產品的 CPA 與 ROAS 標準。"
-          actionLabel="填寫產品經濟數字"
-          onAction={() => setPanelOpen(true)}
-        />
+      {sellWays.length === 0 ? (
+        <EmptyState title="還沒有賣法" description="售價與成本記在賣法上；建好賣法，之後才算得出這個產品的 CPA 與 ROAS 標準。" />
       ) : (
-        <div className="flex flex-col gap-3 rounded-md border border-border bg-card p-4 shadow-[var(--shadow-card)]">
-          <div className="flex items-center gap-2">
-            <Badge tone={economics.status === "confirmed" ? "success" : "warning"}>
-              {economics.status === "confirmed" ? `已確認・確認人 ${economics.confirmed_by ?? "—"}` : "待確認"}
-            </Badge>
-          </div>
-          <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
-            <dt className="text-muted-foreground">售價</dt>
-            <dd className="text-foreground">
-              {symbol}
-              {economics.selling_price}
-            </dd>
-            <dt className="text-muted-foreground">固定成本</dt>
-            <dd className="text-foreground">
-              {economics.fixed_cost === null ? "—" : `${symbol}${economics.fixed_cost}`}
-            </dd>
-            <dt className="text-muted-foreground">單位變動成本</dt>
-            <dd className="text-foreground">
-              {economics.unit_variable_cost === null ? "—" : `${symbol}${economics.unit_variable_cost}`}
-              <AssumptionChip field="cost" assumptions={economics.assumptions} />
-            </dd>
-            <dt className="text-muted-foreground">運費</dt>
-            <dd className="text-foreground">
-              {economics.shipping_cost === null ? "—" : `${symbol}${economics.shipping_cost}`}
-              <AssumptionChip field="shipping" assumptions={economics.assumptions} />
-            </dd>
-            <dt className="text-muted-foreground">成交率</dt>
-            <dd className="text-foreground">
-              {economics.close_rate === null ? "未設定" : `${economics.close_rate}%`}
-              <AssumptionChip field="close_rate" assumptions={economics.assumptions} />
-            </dd>
-            <dt className="text-muted-foreground">幣別</dt>
-            <dd className="text-foreground">{economics.currency}</dd>
-          </dl>
-
-          {economics.status === "pending" && (
-            <div className="flex flex-col gap-2 rounded-md border border-warning/40 bg-warning/5 p-3 text-sm">
-              <p className="text-foreground">這筆是 AI 快掃抓到的售價，其他欄位還沒有人填過，確認一下無誤嗎？</p>
-              {confirming ? (
-                <p className="text-muted-foreground">處理中…</p>
-              ) : (
-                <div>
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      setConfirming(true);
-                      await confirmProductEconomics(brandId, productId).catch(() => undefined);
-                      setConfirming(false);
-                      onChanged();
-                    }}
-                    className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:border-primary hover:text-primary"
-                  >
-                    確認無誤
-                  </button>
-                </div>
-              )}
+        <div data-slot="sell-ways" className="flex flex-col gap-2 rounded-md border border-border bg-card p-4 text-sm shadow-[var(--shadow-card)]">
+          {sellWays.map((way) => (
+            <div key={way.id} data-slot="sell-way-row" className="flex justify-between gap-2">
+              <span className="flex min-w-0 flex-wrap items-center gap-1">
+                <span className="[overflow-wrap:anywhere]">{way.name}</span>
+                {way.offer_labels.map((offer) => <OfferChip key={offer} label={offer} />)}
+              </span>
+              <span className="shrink-0 whitespace-nowrap tabular-nums">{priceLine(way)}</span>
             </div>
-          )}
+          ))}
         </div>
-      )}
-
-      {panelOpen && (
-        <EconomicsPanel
-          brandId={brandId}
-          productId={productId}
-          economics={economics}
-          onClose={() => setPanelOpen(false)}
-          onSaved={() => {
-            setPanelOpen(false);
-            onChanged();
-          }}
-        />
       )}
     </div>
   );

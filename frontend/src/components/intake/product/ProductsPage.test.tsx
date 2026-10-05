@@ -1,7 +1,8 @@
 /** frontend/src/components/intake/product/ProductsPage.test.tsx — the products page `#/plist` (F43-I07): cards from a
  * fixture shaped like `app/intake/product_onboarding.py::list_page()` (a ready product with two sell-ways, a draft, a
  * brand-scan suggestion, a bundle); 「繼續建檔 →」 on a suggestion posts the create and opens step 1; an empty brand gets
- * one empty state; a failed read keeps the actions and retries. No server: the API calls are fakes. */
+ * one empty state; a failed read keeps the actions and retries. F50-I15 (Contract R): the chip is the served `state` and a
+ * draft's sub-line names its first served `missing` label. No server: the API calls are fakes. */
 import type { ReactNode } from "react";
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -32,6 +33,7 @@ const fixture: PageData = {
       name: "綜合維他命軟糖（成人每日補給・草莓口味 60 粒裝）",
       thumbnail_url: `/api/library/brands/${B}/assets/file/ast_1`,
       state: "ready",
+      missing: [],
       step: null,
       summary: "2 群顧客・證據 2・說法 3",
       sell_ways: [
@@ -44,6 +46,7 @@ const fixture: PageData = {
       name: "益生菌軟糖",
       thumbnail_url: null,
       state: "draft",
+      missing: [{ key: "steps", label: "建檔還沒走完" }, { key: "groups", label: "還沒有顧客群" }],
       step: 2,
       summary: "建到一半：還沒確認顧客",
       sell_ways: [{ id: "sw_pro", name: "單盒", shape: "base", price: 459, break_even: null, offer_labels: [] }],
@@ -116,7 +119,7 @@ describe("ProductsPage", () => {
 
     const draft = screen.getByRole("link", { name: "益生菌軟糖" }).closest("[data-slot=product-card]") as HTMLElement;
     expect(within(draft).getByText("建到一半")).toBeTruthy();
-    expect(within(draft).getByText("建到一半：還沒確認顧客")).toBeTruthy();
+    expect(within(draft).getByText("建檔還沒走完")).toBeTruthy();
     // An unknown cost is said once as unknown, never printed as 0.
     expect(within(draft).getByText("459・打平 未知")).toBeTruthy();
     expect(within(draft).getByRole("link", { name: "繼續建檔 →" }).getAttribute("href")).toBe(`/brands/${B}/products/prd_pro/onboarding?step=2`,
@@ -132,6 +135,22 @@ describe("ProductsPage", () => {
     expect(within(bundles).getByText("組合價 省 59")).toBeTruthy();
     expect(within(bundles).getByText("799・打平 539")).toBeTruthy();
     expect(within(bundles).getByText("建到一半")).toBeTruthy();
+  });
+
+  it("a finished product the server says has no customer group: 建到一半 and 「還沒有顧客群」 in its sub-line (drill-11 b-07)", async () => {
+    const noGroups = {
+      ...fixture.products[0], id: "prd_cof", name: "咖啡因機能軟糖", state: "draft" as const, step: null,
+      missing: [{ key: "groups" as const, label: "還沒有顧客群" }], summary: "0 群顧客・證據 0・說法 4",
+    };
+    mockFetch.mockResolvedValue({ ...fixture, products: [noGroups] });
+    renderPage();
+
+    const card = (await screen.findByRole("link", { name: "咖啡因機能軟糖" })).closest("[data-slot=product-card]") as HTMLElement;
+    expect(card.dataset.state).toBe("draft");
+    expect(within(card).getByText("建到一半")).toBeTruthy();
+    expect(within(card).getByText("還沒有顧客群")).toBeTruthy();
+    expect(within(card).queryByText("可以投放")).toBeNull();
+    expect(within(card).queryByText("0 群顧客・證據 0・說法 4")).toBeNull();
   });
 
   it("「繼續建檔」 on a suggestion creates the product with its page URL, then opens step 1", async () => {

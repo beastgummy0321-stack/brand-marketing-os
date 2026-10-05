@@ -2,7 +2,14 @@ import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { Button } from "@/components/layout/ui/button";
 import { Skeleton } from "@/components/layout/Skeleton";
-import type { ProductEvidence, ProductSellWays, ProductWhat, ProductWho, SellWayRow } from "@/lib/intakeProductApi";
+import type {
+  ProductEvidence,
+  ProductSellWays,
+  ProductWhat,
+  ProductWho,
+  ReadinessCheck,
+  SellWayRow,
+} from "@/lib/intakeProductApi";
 import {
   completeProductOnboarding,
   fetchProductEvidence,
@@ -15,9 +22,10 @@ import { OnboardingStepHead, type StepNav } from "../OnboardingStepHead";
 import { newBundlePath, newProductPath } from "./ProductCard";
 
 interface Loaded {
-  /** The status step (1–5); a finished product reads 5. */
-  step: number;
-  completed: boolean;
+  /** The server's verdict (`product_readiness`): the chip says 可以投放 only when true. */
+  ready: boolean;
+  /** The server's checklist, printed as served (F50 Contract R). */
+  checklist: ReadinessCheck[];
   who: ProductWho;
   evidence: ProductEvidence;
   sellWays: ProductSellWays;
@@ -25,25 +33,24 @@ interface Loaded {
 
 type LoadState = { status: "loading" } | { status: "error"; message: string } | { status: "ready"; data: Loaded };
 
-/** One checklist row: its step, whether that part is saved, the label over the detail line. */
+/** One checklist row: the served item (its `ok` and `required` as served), the step 「去補」 opens, the label over
+ * the detail line. */
 interface Row {
+  key: ReadinessCheck["key"];
   step: number;
   ok: boolean;
+  required: boolean;
   label: string;
   detail: string;
 }
+
+/** The onboarding step that holds each served checklist item (「去補」 opens it). */
+const ITEM_STEP: Record<ReadinessCheck["key"], number> = { groups: 2, proof: 3, sell_ways: 4 };
 
 const errorText = (err: unknown) => (err instanceof Error ? err.message : "讀取失敗，請稍後再試。");
 const amount = (value: number) => Math.round(value).toLocaleString("zh-TW");
 const newCampaignPath = (brandId: string, sellWayId: string) =>
   `/brands/${encodeURIComponent(brandId)}/ads/new?sell_way=${encodeURIComponent(sellWayId)}`;
-
-/** Prototype `.chk` rows: 一句話、成分、差異 name the parts of step 1. */
-const WHAT_PARTS = [
-  ["intro", "一句話"],
-  ["mechanism", "成分"],
-  ["difference", "差異"],
-] as const;
 
 /** 「單盒 399（打平 249）」「三盒組 999（打平 669，組合價 省 198＋滿 NT$999 免運）」: server numbers and labels as is. */
 function sellWayText(way: SellWayRow): string {
@@ -53,43 +60,46 @@ function sellWayText(way: SellWayRow): string {
   return `${way.name} ${price}（打平 ${be}${offers}）`;
 }
 
-/** Only saved parts count: an AI proposal (`source: "ai"`, `id: null`) is not the product's yet. A part is missing
- * when its step is not saved yet (a product being built) or nothing of it is saved. */
-function checklist(what: ProductWhat, data: Loaded): Row[] {
-  const saved = (step: number) => data.completed || data.step > step;
-  const whatParts = WHAT_PARTS.filter(([key]) => what[key].source === "saved" && what[key].value.trim()).map(([, label]) => label);
+/** The rows are the served checklist (F50 Contract R): which items there are, whether each is met and whether it
+ * is required are the server's verdict, never counted here. Only the words under a met item are read from the step
+ * GETs (saved values only: an AI proposal, `source: "ai"`, `id: null`, is not the product's yet). An unmet item
+ * reads 「〈served label〉：還沒有」. */
+function checklist(data: Loaded): Row[] {
   const painLabel = new Map(data.who.pain_options.map((o) => [o.key, o.label]));
   const groups = data.who.groups.filter((g) => g.id !== null && g.source === "saved");
   const proof = data.evidence.proof.filter((p) => p.id !== null && p.source === "saved");
   const claims = data.evidence.claims.filter((c) => c.id !== null && c.source === "saved");
   const proofLabel = new Map(data.evidence.proof_kinds.map((k) => [k.key, k.label]));
   const ways = data.sellWays.sell_ways.filter((w) => w.id !== null);
-  const rows: Row[] = [
-    { step: 1, ok: saved(1) && whatParts.length > 0, label: "商品是什麼", detail: whatParts.join("、") },
-    {
-      step: 2,
-      ok: saved(2) && groups.length > 0,
+  const met: Record<ReadinessCheck["key"], { label: string; detail: string }> = {
+    groups: {
       label: `誰會買：${groups.length} 群`,
       detail: groups.map((g) => `${g.who}（${g.pain_keys.map((k) => painLabel.get(k) ?? k).join("、")}）`).join("・"),
     },
-    {
-      step: 3,
-      ok: saved(3) && proof.length + claims.length > 0,
+    proof: {
       label: `證據 ${proof.length} 項・說法 ${claims.filter((c) => c.verdict === "ok").length} 可以講、${claims.filter((c) => c.verdict === "no").length} 不能講`,
       detail: [...new Set(proof.map((p) => proofLabel.get(p.fact_key) ?? p.fact_key))].join("、"),
     },
-    { step: 4, ok: saved(4) && ways.length > 0, label: `賣法 ${ways.length} 種`, detail: ways.map(sellWayText).join("・") },
-  ];
-  const missing = ["商品是什麼", "誰會買", "證據與說法", "賣法"];
-  return rows.map((row) => (row.ok ? row : { ...row, label: `${missing[row.step - 1]}：還沒有`, detail: "" }));
+    sell_ways: { label: `賣法 ${ways.length} 種`, detail: ways.map(sellWayText).join("・") },
+  };
+  return data.checklist.map((item) => ({
+    key: item.key,
+    step: ITEM_STEP[item.key],
+    ok: item.ok,
+    required: item.required,
+    ...(item.ok ? met[item.key] : { label: `${item.label}：還沒有`, detail: "" }),
+  }));
 }
 
 /** Product onboarding `#/p5` 〈商品〉建好了 (prototype `R.p5` of `.harness/scratch/prototype/f41-onboarding/index.html`):
- * the card 「這個商品」 with its state chip (可以投放 / 建到一半) and one `.chk` row per step -- 商品是什麼 (from the shell's
- * `what`), 誰會買, 證據與說法, 賣法 (read here from the step GETs; only saved values count). A missing part is a red row
- * with 「去補」 to its step (`onGoStep`). Then 「用它建活動 →」 (the new campaign with the first sell-way preselected,
- * `?sell_way=`), 「再建一個商品」 and 「做跨商品組合」. A product whose four steps are saved but whose 完成 was not
- * recorded is completed once on entering (`POST …/onboarding/complete`, idempotent), like the brand's #/b7. */
+ * the card 「這個商品」 with its state chip and one `.chk` row per item of the server's checklist (`GET …/onboarding`
+ * `ready` + `checklist`, F50 Contract R): 誰會買, 證據與說法, 賣法與價格 — the chip says 可以投放 only when the server
+ * says `ready`, else 建到一半. A missing required item is a red row with 「去補」 to its step (`onGoStep`); a missing
+ * optional one is yellow. The words under a met item come from the step GETs (saved values only). Then 「用它建活動 →」
+ * (only when ready: the new campaign with the first sell-way preselected, `?sell_way=`), 「再建一個商品」 and
+ * 「做跨商品組合」. A product whose four steps are saved but whose 完成 was not recorded is completed once on entering
+ * (`POST …/onboarding/complete`, idempotent) when every required item is met, like the brand's #/b7; otherwise the
+ * red rows say what is missing. */
 export function ProductDoneStep({ brandId, productId, nav, what, completed, onGoStep }: {
   brandId: string;
   productId: string;
@@ -105,14 +115,16 @@ export function ProductDoneStep({ brandId, productId, nav, what, completed, onGo
     setLoad({ status: "loading" });
     try {
       const [status, who, evidence, sellWays] = await Promise.all([
-        completed ? Promise.resolve({ step: 5, completed: true }) : fetchProductOnboarding(brandId, productId),
+        fetchProductOnboarding(brandId, productId),
         fetchProductWho(brandId, productId),
         fetchProductEvidence(brandId, productId),
         fetchProductSellWays(brandId, productId),
       ]);
-      let { step, completed: done } = status;
-      if (!done && step >= 5) ({ step, completed: done } = await completeProductOnboarding(brandId, productId));
-      if (alive.current) setLoad({ status: "ready", data: { step, completed: done, who, evidence, sellWays } });
+      let verdict = status;
+      const requiredMet = (status.checklist ?? []).every((item) => item.ok || !item.required);
+      if (!status.completed && status.step >= 5 && requiredMet) verdict = await completeProductOnboarding(brandId, productId);
+      const data = { ready: verdict.ready === true, checklist: verdict.checklist ?? [], who, evidence, sellWays };
+      if (alive.current) setLoad({ status: "ready", data });
     } catch (err) {
       if (alive.current) setLoad({ status: "error", message: errorText(err) });
     }
@@ -128,7 +140,7 @@ export function ProductDoneStep({ brandId, productId, nav, what, completed, onGo
   }, [brandId, productId, completed]);
 
   const data = load.status === "ready" ? load.data : null;
-  const firstWay = data?.completed ? data.sellWays.sell_ways.find((w) => w.id !== null)?.id ?? null : null;
+  const firstWay = data?.ready ? data.sellWays.sell_ways.find((w) => w.id !== null)?.id ?? null : null;
 
   return (
     <div className="flex flex-col gap-4">
@@ -136,7 +148,7 @@ export function ProductDoneStep({ brandId, productId, nav, what, completed, onGo
       <section data-slot="product-checklist" aria-labelledby="product-done-title" className="rounded-xl border border-border bg-card px-[22px] py-5">
         <div className="mb-3.5 flex flex-wrap items-center justify-between gap-3">
           <h2 id="product-done-title" className="text-[15px] font-semibold">這個商品</h2>
-          {data && <StateChip ready={data.completed} />}
+          {data && <StateChip ready={data.ready} />}
         </div>
         {load.status === "loading" && (
           <div className="flex flex-col gap-2">
@@ -154,7 +166,7 @@ export function ProductDoneStep({ brandId, productId, nav, what, completed, onGo
         )}
         {data && (
           <ul>
-            {checklist(what, data).map((row) => <CheckRow key={row.step} row={row} onGoStep={onGoStep} />)}
+            {checklist(data).map((row) => <CheckRow key={row.key} row={row} onGoStep={onGoStep} />)}
           </ul>
         )}
       </section>
@@ -193,12 +205,20 @@ function StateChip({ ready }: { ready: boolean }) {
   );
 }
 
-/** Prototype `chk(c, t, d, a)`: green ✓ or red !, the label over the detail, 「去補」 on a missing part. Every row has
- * the top rule (in `R.p5` the head sits above the first row). */
+/** Prototype `chk(c, t, d, a)`: green ✓, red ! (a missing required item) or yellow ! (`i.y`, a missing optional
+ * one), the label over the detail, 「去補」 on a missing item. Every row has the top rule (in `R.p5` the head sits
+ * above the first row). */
 function CheckRow({ row, onGoStep }: { row: Row; onGoStep: (step: number) => void }) {
+  const state = row.ok ? "green" : row.required ? "red" : "yellow";
   return (
-    <li data-slot="check-row" data-state={row.ok ? "green" : "red"} className="grid grid-cols-[28px_minmax(0,1fr)_auto] items-center gap-3 border-t border-border py-[11px]">
-      <span aria-hidden="true" className={cn("grid size-6 place-items-center rounded-full text-xs font-bold text-white", row.ok ? "bg-success" : "bg-danger")}>
+    <li data-slot="check-row" data-state={state} className="grid grid-cols-[28px_minmax(0,1fr)_auto] items-center gap-3 border-t border-border py-[11px]">
+      <span
+        aria-hidden="true"
+        className={cn(
+          "grid size-6 place-items-center rounded-full text-xs font-bold text-white",
+          state === "green" ? "bg-success" : state === "red" ? "bg-danger" : "bg-warning",
+        )}
+      >
         {row.ok ? "✓" : "!"}
       </span>
       <div className="min-w-0">

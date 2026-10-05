@@ -3,7 +3,9 @@
  * the oldest); 「自訂」 under the groups appends a group (its pains checked, marked 你自訂) and hides at three; 「自訂」
  * under a group's pains checks the mapped pain and fills the quote; 下一步 sends the full list through
  * `PUT …/onboarding/who` and moves on only after the server confirmed; a group without 是誰 or without a pain keeps
- * 下一步 off with the reason in the bar. Fixtures are shaped like `app/intake/product_onboarding.py::get_who()`. No server. */
+ * 下一步 off with the reason in the bar; removing the last group of a finished product is the server's call (F50-I15,
+ * Contract R): its refusal shows and the group comes back. Fixtures are shaped like
+ * `app/intake/product_onboarding.py::get_who()`. No server. */
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
@@ -253,6 +255,27 @@ describe("WhoStep", () => {
     await userEvent.click(nextButton());
     await waitFor(() => expect(onNext).toHaveBeenCalled());
     expect(mockSave).toHaveBeenCalledWith(B, P, []);
+  });
+
+  it("建好的商品拿掉最後一群：顯示伺服器的那句話，那一群留著（前端不自己擋）", async () => {
+    const refusal = "至少留一群顧客；不賣給任何人就先封存這個商品。";
+    mockSave.mockRejectedValue(new Error(refusal));
+    const { onNext } = renderWho({
+      groups: [{ id: "cg_1", who: "上班族", pain_keys: ["effort"], quote: "「好麻煩」", when_used: "早上", source: "saved", note: "" }],
+      pain_options: PAIN_OPTIONS,
+    });
+    await screen.findByRole("group", { name: "第 1 群" });
+
+    await userEvent.click(screen.getByRole("button", { name: "拿掉第 1 群" }));
+    expect(screen.queryByRole("group", { name: "第 1 群" })).toBeNull();
+    expect(nextButton().disabled).toBe(false);
+    await userEvent.click(nextButton());
+
+    expect((await screen.findByRole("alert")).textContent).toBe(refusal);
+    expect(mockSave).toHaveBeenCalledWith(B, P, []);
+    expect(onNext).not.toHaveBeenCalled();
+    expect(input(1, "是誰").value).toBe("上班族");
+    expect(pressed(1)).toEqual(["太麻煩"]);
   });
 
   it("讀取失敗顯示原因，留返回", async () => {
