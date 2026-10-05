@@ -17,7 +17,8 @@ export interface Placement {
   statutory_warning?: { terms: { term: string; tier_label: string }[]; sentence: string; href: string } | null;
 }
 export interface SuggestionResult { id: string; revision: number; original_copy: CopyFields; suggested_copy: CopyFields; effective_copy: CopyFields; purpose: string; pending_reasons: string[]; notes: string[]; destination_entity_id: string | null; start_date: string | null; end_date: string | null; required: boolean; status: string; unknowns: string[] }
-export interface SuggestionBatch { id: string; status: string; error: string | null; created_at: string; results?: SuggestionResult[]; input_json?: { placements: { id: string; revision: number }[] }; remaining_count?: number; usage_notice?: string; retry_notice?: string; stale?: boolean }
+/** `error_code` (F50 Contract J): the AI call's own failure kind (timeout／refused／provider／truncated／…) when it did not succeed. */
+export interface SuggestionBatch { id: string; status: string; error: string | null; error_code?: string | null; created_at: string; results?: SuggestionResult[]; input_json?: { placements: { id: string; revision: number }[] }; remaining_count?: number; usage_notice?: string; retry_notice?: string; stale?: boolean }
 export interface AssetBinding { id: string; placement_revision: number; existence_status: string; evidence_level: string; stale_reason: string | null; valid_to: string | null; last_verified_at: string | null; native_id: string | null }
 export interface AssetHandoff {
   original_copy: CopyFields; suggested_copy: CopyFields; effective_copy: CopyFields;

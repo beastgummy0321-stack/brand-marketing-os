@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
+from app import background
 from app.ads import external_repository as external
 from app.ads import (
     external_sync,
@@ -76,6 +77,82 @@ class RuntimeTest(unittest.TestCase):
             request.reset_mock()
             runtime._sync_brand_accounts(self.conn, now)
             self.assertFalse([c for c in request.call_args_list if c.args[2] == brand])
+
+    def test_unreadable_bound_account_is_recorded_with_its_reason(self):
+        # F50 Contract J: `_sync_brand_accounts` never drops an account silently -- the failed
+        # request is recorded on the account's own job (Contract O names the reason), so the
+        # month budget's 「餘額不確定」 has one, and the stamped attempt backs the next tick off.
+        class Reader:
+            def accounts(self, conn, org_id, brand_id):
+                return [{"account_id": "acct-x"}] if brand_id == brand else []
+
+        brand = self.brand
+        key = runtime.channels.CHANNELS[0]["key"]
+        with (
+            patch.object(runtime.channels, "external_reader", return_value=Reader()),
+            patch.object(runtime.external_sync, "request_sync",
+                         side_effect=SourceReadError("private", "permission_denied")),
+            self.assertLogs("app.ads.runtime", "WARNING"),
+        ):
+            runtime._sync_brand_accounts(self.conn, db.now_utc())
+        job = self.conn.execute(
+            "SELECT * FROM ads_external_sync_job WHERE org_id=%s AND brand_id=%s AND platform=%s "
+            "AND source_account='acct-x'", (self.org, brand, key),
+        ).fetchone()
+        read = external_sync.outcome(job["tasks"])
+        self.assertEqual((read["state"], read["code"]), ("failed", "permission_denied"))
+        self.assertEqual(job["status"], "failed")
+        self.assertNotIn("private", str(job["tasks"]))
+        self.assertIsNotNone(job["last_attempt_at"])
+
+    def test_unreadable_account_listing_is_logged_not_silent(self):
+        class Reader:
+            def accounts(self, conn, org_id, brand_id):
+                raise RuntimeError("listing broke")
+
+        with (
+            patch.object(runtime.channels, "external_reader", return_value=Reader()),
+            self.assertLogs("app.ads.runtime", "ERROR") as logs,
+        ):
+            self.assertEqual(runtime._sync_brand_accounts(self.conn, db.now_utc()), 0)
+        self.assertTrue(any(self.brand in line for line in logs.output))
+
+    def test_a_raising_readback_keeps_health_then_fails_the_job_and_logs(self):
+        # F50 Contract J (triage #3): the swallowed step still writes its health row, then the
+        # job ends `Failed("runtime_error")` -- the wrapper raises `JobFailed`, so procrastinate
+        # marks it failed and the bell counts it.
+        with (
+            patch.object(runtime, "_sync_sources", return_value=0),
+            patch.object(runtime, "_readback", side_effect=ValueError("private readback")),
+            self.assertLogs("app.ads.runtime", "ERROR") as logs,
+        ):
+            result = runtime.run_campaign(self.org, self.brand, self.campaign)
+        self.assertIsInstance(result, background.Failed)
+        assert isinstance(result, background.Failed)
+        self.assertEqual(result.code, runtime.RUNTIME_ERROR)
+        self.assertNotIn("private", result.text or "")
+        self.assertTrue(any("readback" in line for line in logs.output))
+        value = runtime.view(self.conn, self.org, self.brand, self.campaign)
+        self.assertIn("partial", [h["code"] for h in value["health"]])
+        self.assertIsNotNone(value["last_checked_at"])
+
+        background.register(runtime.TASK, runtime.run_campaign)
+        task = background.app().tasks[runtime.TASK]
+        with (
+            patch.object(runtime, "_sync_sources", return_value=0),
+            patch.object(runtime, "_readback", side_effect=ValueError("private readback")),
+            self.assertLogs("app.ads.runtime", "ERROR"),
+            self.assertRaises(background.JobFailed) as raised,
+        ):
+            task.func(org_id=self.org, brand_id=self.brand, campaign_id=self.campaign)
+        self.assertEqual(raised.exception.code, runtime.RUNTIME_ERROR)
+
+    def test_a_clean_tick_is_done(self):
+        with (
+            patch.object(runtime, "_sync_sources", return_value=0),
+            patch.object(runtime, "_readback", return_value=0),
+        ):
+            self.assertIsNone(runtime.run_campaign(self.org, self.brand, self.campaign))
 
     def test_run_saves_health_and_reopen_does_not_execute_platform_or_ai(self):
         with patch.object(runtime, "_sync_sources", return_value=1) as sync:

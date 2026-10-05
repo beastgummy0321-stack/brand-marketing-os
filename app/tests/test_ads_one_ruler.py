@@ -660,6 +660,10 @@ TASK_ERROR_KEYS = {"errors", "error_code"}
 NOT_A_TASK_ERROR = {
     ("repository.py", "campaign_sync_state", "error_code"):
         "a campaign section's own sync state (`record_sync`), not a job task",
+    ("asset_suggestions.py", "_call_error_code", "error_code"):
+        "an AI call's `llm_task.error_code` (F50 Contract J), not a sync task",
+    ("angles.py", "run", "error_code"):
+        "an AI call's `llm_task.error_code` (F50 Contract J), not a sync task",
 }
 
 

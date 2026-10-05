@@ -10,6 +10,8 @@ from app.core import input_rules
 from app.core.db import connection, new_id, set_tenant_scope
 
 TASK = "background.ads_user_asset_preview"
+#: Slots #13: a missing original is permanent -- told at once, never "retry".
+ORIGINAL_MISSING = "原檔不存在，請重新上傳。"
 
 logger = logging.getLogger(__name__)
 
@@ -210,6 +212,11 @@ def retry_preview(conn, org, brand, asset_id):
 
 
 def process_preview(org_id, brand_id, asset_id):
+    """Make one original's poster and preview. F50 Contract J: a preview that will be retried
+    ends `Failed("preview_retry")`, a missing original `Failed("original_missing")` (the asset is
+    `error` at once, no retries), any other permanent failure `Failed("preview_failed")`; a job
+    with nothing to do (not pending, both lanes busy) is done."""
+    failure = None
     with connection() as conn:
         set_tenant_scope(conn, org_id)
         asset = repo.get_asset(conn, org_id, brand_id, asset_id)
@@ -278,24 +285,35 @@ def process_preview(org_id, brand_id, asset_id):
                 ready = True
             except Exception as exc:
                 conn.rollback()
-                reason = (
-                    str(exc)
-                    if isinstance(exc, media_probe.MediaError)
-                    else "預覽暫時無法完成，原檔保留，可重試。"
-                )
-                permanent = isinstance(exc, media_probe.MediaError)
-                conn.execute(
+                missing = isinstance(exc, storage.NotFound)
+                if missing:
+                    reason = ORIGINAL_MISSING
+                elif isinstance(exc, media_probe.MediaError):
+                    reason = str(exc)
+                else:
+                    logger.warning("preview of asset %s failed: %r", asset_id, exc)
+                    reason = "預覽暫時無法完成，原檔保留，可重試。"
+                permanent = missing or isinstance(exc, media_probe.MediaError)
+                row = conn.execute(
                     "UPDATE ads_user_asset SET status=CASE WHEN %s OR "
                     "preview_attempts>=3 THEN 'error' ELSE 'retryable' END,"
                     "error=%s,next_attempt_at=now()+interval '5 minutes',updated_at=now() "
-                    "WHERE org_id=%s AND brand_id=%s AND id=%s",
+                    "WHERE org_id=%s AND brand_id=%s AND id=%s RETURNING status",
                     (permanent, reason, org_id, brand_id, asset_id),
-                )
+                ).fetchone()
                 conn.commit()
+                if missing:
+                    code = "original_missing"
+                elif row is not None and row["status"] == "retryable":
+                    code = "preview_retry"
+                else:
+                    code = "preview_failed"
+                failure = background.Failed(code, reason)
         finally:
             release_slot(conn, slot)
         if ready:
             _settle_waiting_slots(conn, org_id, brand_id, asset_id)
+    return failure
 
 
 def _settle_waiting_slots(conn, org_id, brand_id, asset_id):

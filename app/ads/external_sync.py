@@ -648,7 +648,37 @@ def _save_page(conn, job, task, page, reader=None):
     return errors
 
 
+def job_result(conn, org_id, brand_id, job_id):
+    """F50 Contract J: what one `background.ads_external_sync` invocation reports, from the job's
+    Contract O outcome after it ran -- failed／partial -> `Failed(code, text)`, empty ->
+    `Empty("no_rows")`, found -> done (None). A job still reading (a task pending: the next page
+    is queued as its own job) is done for this invocation; a job no longer on record is done."""
+    try:
+        job = repo.get_job(conn, org_id, brand_id, job_id)
+    except ValueError:
+        return None
+    result = outcome(job["tasks"])
+    if result["state"] in {"failed", "partial"}:
+        return background.Failed(result["code"] or "source_error", result["text"])
+    if result["state"] == "empty":
+        return background.Empty("no_rows", result["text"])
+    return None
+
+
 def run_sync(org_id, brand_id, job_id):
+    """One page of one account read (module docstring); returns the job's Contract J result
+    (`job_result`) once this page is recorded."""
+    ran = _run_page(org_id, brand_id, job_id)
+    if not ran:
+        return None
+    with connection() as conn:
+        set_tenant_scope(conn, org_id)
+        return job_result(conn, org_id, brand_id, job_id)
+
+
+def _run_page(org_id, brand_id, job_id) -> bool:
+    """Read and record one page. False when nothing was read by this invocation (the account
+    lock is held elsewhere, nothing is pending, or a newer request superseded the page)."""
     with connection() as conn:
         set_tenant_scope(conn, org_id)
         job = repo.get_job(conn, org_id, brand_id, job_id)
@@ -659,14 +689,14 @@ def run_sync(org_id, brand_id, job_id):
         acquired = bool(lock_row and lock_row["ok"])
         conn.commit()
         if not acquired:
-            return  # The minute dispatcher retries durable pending jobs, across brands too.
+            return False  # The minute dispatcher retries durable pending jobs, across brands too.
         try:
             job = repo.get_job(conn, org_id, brand_id, job_id)
             pending = [
                 (key, value) for key, value in job["tasks"].items() if value["status"] == "pending"
             ]
             if not pending:
-                return
+                return False
             priority = {"list": 0, "structure": 1, "creatives": 2, "observations": 3, "monthly": 4}
             key, task = min(pending, key=lambda pair: (priority[pair[1]["section"]], pair[0]))
             conn.execute(
@@ -709,12 +739,12 @@ def run_sync(org_id, brand_id, job_id):
                 ).fetchone()
                 if latest_row is None:
                     conn.rollback()
-                    return
+                    return False
                 latest = latest_row["tasks"].get(key, {})
                 if latest.get("generation") != task.get("generation"):
                     conn.rollback()
                     _enqueue(repo.get_job(conn, org_id, brand_id, job_id))
-                    return
+                    return False
                 if task["section"] == "monthly":
                     _save_monthly(conn, job, task, page, current_account)
                     errors = []
@@ -806,12 +836,12 @@ def run_sync(org_id, brand_id, job_id):
                 ).fetchone()
                 if latest_row is None:
                     conn.rollback()
-                    return
+                    return False
                 latest = latest_row["tasks"].get(key, {})
                 if latest.get("generation") != task.get("generation"):
                     conn.rollback()
                     _enqueue(repo.get_job(conn, org_id, brand_id, job_id))
-                    return
+                    return False
                 # No raw provider/validation exception is persisted (it can include source URLs).
                 reason = "來源讀取失敗或連線已解除；已保留前次資料，可重試。"
                 if isinstance(exc, SourceReadError):
@@ -856,6 +886,7 @@ def run_sync(org_id, brand_id, job_id):
                 current = _update_task(conn, job, key, updated)
             if current["status"] == "pending":
                 _enqueue(current)
+            return True
         finally:
             conn.rollback()
             conn.execute(f"SELECT pg_advisory_unlock({ACCOUNT_LOCK_KEY})", (lock,))
@@ -896,10 +927,15 @@ def dispatch_daily(timestamp):
                     (r["org_id"], r["brand_id"], channel["key"], r["source_account"])
                     for r in reader.sync_scopes(conn)
                 )
+    # F50 Contract J: an account that cannot be requested is recorded on its own job (Contract O
+    # `record_request_failure`: the reason shows and the runtime backs off), never dropped
+    # silently; any other failure raises and fails this dispatcher job.
     for org, brand, platform, account in sorted(scopes):
         with connection() as conn:
             set_tenant_scope(conn, org)
             try:
                 request_sync(conn, org, brand, platform, account)
-            except ValueError:
+            except ValueError as exc:
                 conn.rollback()
+                record_request_failure(conn, org, brand, platform, account,
+                                       getattr(exc, "code", None))

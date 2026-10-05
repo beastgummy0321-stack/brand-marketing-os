@@ -213,6 +213,9 @@ def content(request: Request, brand_id: str, asset_id: str, kind: str):
         raise web.ApiError(409, "preview_pending", asset["error"] or "預覽尚未完成，原檔可下載。")
     try:
         data, mime = storage.get(org_id=actor.org_id, key=key)
+    except storage.NotFound:
+        # Slots #13: a missing object is permanent -- never "retry later".
+        raise web.ApiError(404, "asset_content_missing", service.ORIGINAL_MISSING) from None
     except storage.StorageError:
         raise web.ApiError(
             502, "asset_storage_unavailable", "暫時無法取得素材，請稍後重試。"
