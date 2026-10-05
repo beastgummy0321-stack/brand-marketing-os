@@ -935,7 +935,7 @@ class BrandSpendRouteTest(_MetaDailySpendTestBase):
         row = body["campaigns"][0]
         self.assertAlmostEqual(row["spend"], 4000.0, places=2)
         self.assertEqual(row["campaign_name"], "活動一（改名後）", "顯示最後一天用的名稱")
-        self.assertAlmostEqual(row["roas_platform"], 3.5, places=2)  # 花費加權：(1000*2+3000*4)/4000
+        self.assertAlmostEqual(row["roas_platform"], 3.5, places=2)  # Spend-weighted.
 
     def test_weighted_total_roas_and_null_propagation(self):
         today = org_today(web.conn, self.org_id)

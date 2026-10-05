@@ -73,7 +73,8 @@ class BrandMonthMoneyTest(unittest.TestCase):
             {"account_id": account_id, "name": "測試帳號", "currency": currency},
         ])
         main.conn.commit()
-        account = next(a for a in meta_repo.list_accounts(main.conn, self.org_id) if a["account_id"] == account_id)
+        account = next(a for a in meta_repo.list_accounts(main.conn, self.org_id)
+                       if a["account_id"] == account_id)
         meta_repo.bind(main.conn, self.org_id, brand_id, account["id"])
         meta_repo.upsert_entity_spend(
             main.conn, self.org_id, account["id"],
