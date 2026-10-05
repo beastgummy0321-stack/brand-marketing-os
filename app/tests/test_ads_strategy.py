@@ -783,6 +783,9 @@ class ProductsSectionSellWaysTest(StrategyTestBase):
     def test_bundle_lists_every_component_products_facts_and_one_price_line(self):
         """F43-I02: a bundle's knowledge is its components' (`knowledge_product_ids`)."""
         fish_oil = bi_repo.create_product(web.conn, self.brand_id, name="魚油", actor=ACTOR)
+        for product in (self.mother, fish_oil):  # F50 Contract R: a bundle takes ready products
+            bi_repo.save_customer_groups(web.conn, self.brand_id, product["id"],
+                                         [{"who": "測試客群", "pain_keys": ["cost"]}], actor=ACTOR)
         for product, value in ((self.mother, "薑黃素 95%"), (fish_oil, "rTG 型態")):
             bi_repo.create_product_fact(
                 web.conn, self.brand_id, product["id"], actor=ACTOR, fact_type="core_info",

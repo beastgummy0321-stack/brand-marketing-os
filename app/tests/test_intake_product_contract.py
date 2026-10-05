@@ -37,6 +37,9 @@ class SellWayTest(unittest.TestCase):
         self.bid = _brand(self.conn)
         self.a = repo.create_product(self.conn, self.bid, name="薑黃錠", actor=ACTOR)["id"]
         self.b = repo.create_product(self.conn, self.bid, name="魚油", actor=ACTOR)["id"]
+        for product_id in (self.a, self.b):  # F50 Contract R: bundles take ready products
+            repo.save_customer_groups(self.conn, self.bid, product_id,
+                                      [{"who": "測試客群", "pain_keys": ["cost"]}], actor=ACTOR)
 
     def _single(self, product_id, name, price, **more):
         """A base sell-way of `product_id` (F45)."""

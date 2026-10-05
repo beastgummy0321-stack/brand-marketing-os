@@ -297,8 +297,9 @@ class StepsTest(_Base):
         # F43-I06: a create with a page URL queues the product-page read
         data = self._get(self.bid, self._step(self.pid))
         self.assertEqual(
-            data,
-            {"step": 1, "completed": False, "prefill_status": "running", "prefill_error": None},
+            {k: data[k] for k in ("step", "completed", "ready", "prefill_status", "prefill_error")},
+            {"step": 1, "completed": False, "ready": False, "prefill_status": "running",
+             "prefill_error": None},
         )
         self._prefill()
         self.assertEqual(self._get(self.bid, self._step(self.pid))["prefill_status"], "done")
@@ -668,6 +669,7 @@ class SellWayNumbersTest(_Base):
         options = self.client.get(f"/api/ads/brands/{bid}/new-campaign/options")
         self.assertEqual(options.status_code, 200, options.text)
         self.assertEqual(options.json()["products"], [])  # not finished yet: nothing pickable
+        self._group(bid, pid)
         self.client.post(self._url(bid, self._step(pid, "/complete")))
         picker = {
             o["display_name"]: o
@@ -967,7 +969,9 @@ class CompleteBundleTenancyTest(_Base):
         self.assertEqual(
             bi_repo.knowledge_product_ids(web.conn, bid, created["id"]), [vit, pro]
         )
-        self.assertEqual(created["reused"]["groups"][0]["pain_labels"], ["用起來不舒服"])
+        # every component product's groups, in component order (each finished product has one)
+        self.assertEqual([g["pain_labels"] for g in created["reused"]["groups"]],
+                         [["太麻煩"], ["用起來不舒服"]])
         edited = self._ok_put(
             bid,
             f"/bundles/{created['id']}",
@@ -1031,7 +1035,7 @@ class CompleteBundleTenancyTest(_Base):
             [(c["product_name"], c["unit_price"], c["unit_cost"]) for c in preview["components"]],
             [("綜合維他命軟糖", 399.0, 90.0), ("益生菌軟糖", 459.0, 110.0)],
         )
-        self.assertEqual(preview["reused"]["groups"][0]["who"], "腸胃敏感族")
+        self.assertEqual([g["who"] for g in preview["reused"]["groups"]], ["上班族", "腸胃敏感族"])
         self.assertFalse(preview["show_close_rate"])
         self.assertIn("shipping_cost", preview["benchmarks"])
         # Nothing was written: no product / component / economics row, no bundle on the page.

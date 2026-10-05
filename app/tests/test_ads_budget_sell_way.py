@@ -27,7 +27,8 @@ class SellWayEconomicsTest(unittest.TestCase):
             web.conn, self.brand_id, name="濾掛茶", actor="測試員")["id"]
         for product_id in (self.gummy, self.tea):  # F50 Contract R: bundles take ready products
             bi_repo.save_customer_groups(web.conn, self.brand_id, product_id,
-                                         [{"who": "測試客群", "pain_keys": ["cost"]}], actor="測試員")
+                                         [{"who": "測試客群", "pain_keys": ["cost"]}],
+                                         actor="測試員")
 
     def _base(self, name: str, product_id: str, **economics) -> str:
         return bi_repo.save_sell_way(

@@ -107,15 +107,66 @@ class ProductListTest(_BaseProductsApiTest):
         item = data[0]
         self.assertEqual(
             set(item.keys()),
-            {"id", "name", "status", "fact_count", "pending_fact_count", "economics_status", "parent_id"},
+            {"id", "name", "status", "fact_count", "pending_fact_count", "economics_status", "parent_id",
+             "kind"},
         )
+        self.assertEqual(item["kind"], "knowledge")
         self.assertEqual(item["fact_count"], 2)
         self.assertEqual(item["pending_fact_count"], 1)
         self.assertEqual(item["economics_status"], "none")
         self.assertIsNone(item["parent_id"])
 
 
+class ProductListReadinessTest(_BaseProductsApiTest):
+    """F50 Contract R: the pickers' list = active knowledge products, then sellable sell-ways."""
+
+    def _ready_product(self, name):
+        pid = self._create_product(name)
+        repo.save_customer_groups(web.conn, self.bid, pid, [
+            {"who": "上班族", "pain_keys": ["effort"]}], actor=ACTOR)
+        way = repo.save_sell_way(web.conn, self.bid, name="單盒", product_id=pid, actor=ACTOR,
+                                 economics={"selling_price": 399})
+        repo.set_product_onboarding_step(web.conn, self.bid, pid, None, actor=ACTOR)
+        return pid, way["id"]
+
+    def _listed(self):
+        data = self.client.get(f"/api/products/brands/{self.bid}").json()["data"]
+        return [(item["id"], item["kind"]) for item in data]
+
+    def test_archive_hides_sell_ways_and_bundles_and_restore_brings_them_back(self):
+        tea, tea_box = self._ready_product("虛構回甘烏龍")
+        gummy, gummy_box = self._ready_product("虛構軟糖")
+        bundle = repo.save_sell_way(
+            web.conn, self.bid, name="茶點組", actor=ACTOR, economics={"selling_price": 699},
+            components=[{"sell_way_id": tea_box, "qty": 1}, {"sell_way_id": gummy_box, "qty": 1}],
+        )["id"]
+        # knowledge products in creation order; sell-ways in the wizard's order (product name)
+        everything = [(tea, "knowledge"), (gummy, "knowledge"), (tea_box, "sell_way"),
+                      (gummy_box, "sell_way"), (bundle, "sell_way")]
+        self.assertEqual(self._listed(), everything)
+        resp = self.client.post(f"/api/products/brands/{self.bid}/products/{tea}/archive")
+        self.assertEqual(resp.status_code, 204)
+        self.assertEqual(self._listed(), [(gummy, "knowledge"), (gummy_box, "sell_way")])
+        # Restoring is the one write: its sell-way and the bundle are listed again.
+        repo.update_product(web.conn, self.bid, tea, name="虛構回甘烏龍", status="active",
+                            actor=ACTOR)
+        self.assertEqual(self._listed(), everything)
+
+    def test_a_product_with_zero_groups_lists_no_sell_way(self):
+        pid, way = self._ready_product("虛構回甘烏龍")
+        repo.save_customer_groups(web.conn, self.bid, pid, [], actor=ACTOR)
+        self.assertEqual(self._listed(), [(pid, "knowledge")])
+        self.assertNotIn(way, [p["id"] for p in repo.sellable_products(web.conn, self.bid)])
+
+
 class ProductCreateTest(_BaseProductsApiTest):
+    def test_create_is_a_draft_at_step_one(self):
+        """F50 Contract R: a root product is born through product onboarding, never ready."""
+        pid = self._create_product()
+        self.assertEqual(repo.get_product(web.conn, self.bid, pid)["onboarding_step"], 1)
+        verdict = repo.product_readiness(web.conn, self.bid, pid)
+        self.assertEqual([m["key"] for m in verdict["missing"]], ["steps", "sell_ways", "groups"])
+
     def test_manual_create_returns_id_and_ignores_source_url(self):
         resp = self.client.post(f"/api/products/brands/{self.bid}",
                                  json={"name": "虛構純手動產品", "source_url": "https://ignored.example"})

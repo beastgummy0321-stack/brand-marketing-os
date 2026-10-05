@@ -40,12 +40,14 @@ class BrandDeleteTest(unittest.TestCase):
         # F43-I01: a bundle (product_component rows), a customer group and a product prefill.
         other = repo.create_product(self.conn, bid, name=f"{name}-另一個產品", actor="測試員")["id"]
         # F50 Contract R: a bundle takes ready products (one customer group each).
-        repo.save_customer_groups(self.conn, bid, other, [{"who": "測試客群", "pain_keys": ["cost"]}],
+        repo.save_customer_groups(self.conn, bid, other,
+            [{"who": "測試客群", "pain_keys": ["cost"]}],
                                   actor="測試員")
         bases = [repo.save_sell_way(self.conn, bid, name="單件", product_id=product,
                                     economics={"selling_price": 90}, actor="測試員")["id"]
                  for product in (pid, other)]  # F45: a bundle lists base sell-ways
-        repo.save_customer_groups(self.conn, bid, pid, [{"who": "測試客群", "pain_keys": ["cost"]}],
+        repo.save_customer_groups(self.conn, bid, pid,
+            [{"who": "測試客群", "pain_keys": ["cost"]}],
                                   actor="測試員")
         repo.save_sell_way(self.conn, bid, name=f"{name}-組合",
                            components=[{"sell_way_id": bases[0], "qty": 1},

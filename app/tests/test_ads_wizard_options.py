@@ -39,7 +39,12 @@ class _OptionsBase(unittest.TestCase):
         self.today = coresettings.today_for_org(web.conn, org_id=self.org_id)
 
         def product(name):
-            return bi_repo.create_product(web.conn, self.brand_id, name=name, actor=ACTOR)
+            """A knowledge product with one customer group (F50 Contract R: zero groups is not
+            ready, so its sell-ways would not be offered)."""
+            row = bi_repo.create_product(web.conn, self.brand_id, name=name, actor=ACTOR)
+            bi_repo.save_customer_groups(web.conn, self.brand_id, row["id"], [
+                {"who": f"{name}的顧客", "pain_keys": ["cost"]}], actor=ACTOR)
+            return row
 
         def sell_way(name, components, **money):
             """F45: [(product, 1)] -> a base sell-way of it; else [(base sell-way, qty)] ->
@@ -139,6 +144,40 @@ class _OptionsBase(unittest.TestCase):
 
     def _by_name(self, payload):
         return {p["name"]: p for p in payload["products"]}
+
+
+class ReadinessTest(_OptionsBase):
+    """F50 Contract R: the wizard's list is the facade's `sellable_products`."""
+
+    def _ids(self):
+        return {p["id"] for p in wizard_options.options(web.conn, self.org_id, self.brand_id)[
+            "products"]}
+
+    def test_zero_customer_groups_is_not_ready_and_not_offered(self):
+        bi_repo.save_customer_groups(web.conn, self.brand_id, self.brush["id"], [], actor=ACTOR)
+        verdict = bi_repo.product_readiness(web.conn, self.brand_id, self.brush["id"])
+        self.assertEqual(verdict, {"ready": False,
+                                   "missing": [{"key": "groups", "label": "還沒有顧客群"}]})
+        ids = self._ids()
+        self.assertNotIn(self.brush_single["id"], ids)
+        self.assertNotIn(self.duo["id"], ids)  # a bundle holding it is not sellable either
+        self.assertIn(self.cup_single["id"], ids)
+
+    def test_archive_removes_the_products_sell_ways_and_bundles_restore_brings_them_back(self):
+        before = self._ids()
+        self.assertTrue({self.brush_single["id"], self.duo["id"]} <= before)
+        bi_repo.update_product(web.conn, self.brand_id, self.brush["id"], name=self.brush["name"],
+                               status="archived", actor=ACTOR)
+        self.assertEqual(
+            bi_repo.product_readiness(web.conn, self.brand_id, self.brush["id"])["missing"][0],
+            {"key": "archived", "label": "已封存"})
+        self.assertEqual(before - self._ids(), {self.brush_single["id"], self.duo["id"]})
+        self.assertNotIn(self.brush["id"],
+                         {p["id"] for p in bi_repo.knowledge_products(web.conn, self.brand_id)})
+        # Restoring is the one write: the sell-way and the bundle come back with it.
+        bi_repo.update_product(web.conn, self.brand_id, self.brush["id"], name=self.brush["name"],
+                               status="active", actor=ACTOR)
+        self.assertEqual(self._ids(), before)
 
 
 class WizardOptionsTest(_OptionsBase):
