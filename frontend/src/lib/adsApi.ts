@@ -216,7 +216,15 @@ export interface CampaignDetail extends EntityBinding, ExternalCampaignFields {
    * also `null` while the cap or the budget is unknown. Optional only for hand-written fixtures. */
   menu?: PlanMenuRow[] | null;
   capacity?: PlanCapacity | null;
+  /** F50 Contract J (`app/ads/busy.py`): the planner call still running for this campaign, else `null`. */
+  busy?: CampaignBusy | null;
 }
+
+/** F50 Contract J: `since` = the ISO instant the running call started. */
+export interface CampaignBusy { kind: "strategy" | "plan" | "brief"; since: string }
+/** F50 Contract J: a planner refusal's 502 `error.details` (`message` already ends with 「（reason）」);
+ * `refusal` names the rule (`plan.REFUSALS`／`strategy.REFUSALS`). 409 `campaign_busy` = a call still runs. */
+export interface PlannerRefusalDetails { refusal: string; reason: string }
 
 /** F04-I08：`app/ads/judgment.py::action_line()` 的回傳形狀，加上呼叫端補的 campaign
  * 資訊——首頁的時間軸跨 Campaign，需要知道這一列屬於哪一個。 */
@@ -258,6 +266,8 @@ export interface AssetReadinessSummary {
  * 回應裡，畫面用它決定要不要提示使用者檢查一下 AI 填的內容。 */
 export interface CampaignDraft extends CampaignDetail {
   parsed: boolean;
+  /** F50 Contract J: why the sentence was not read (`brief.REFUSALS`); `null` when it was. */
+  parse_refusal?: { code: string; reason: string } | null;
 }
 
 // F40-I12: `FieldSource` / `CampaignFieldSources` / `CampaignCreateExtras` / `CampaignContextJson` live in

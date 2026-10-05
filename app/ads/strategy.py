@@ -56,6 +56,25 @@ _ROLE_LABELS = {"new": "新客", "retarget": "再行銷", "explore": "探索"}
 
 STRATEGY_FAILED_MESSAGE = "AI 沒能整理出一個可信的策略，請再試一次。"
 
+# The strategy call's timeout; `busy.py` reads it (F50 Contract J).
+TIMEOUT_S = 60.0
+
+#: F50 Contract J (R7 B3): every rule that refuses a strategy reply, code -> reason (printed after
+#: `STRATEGY_FAILED_MESSAGE`); `llm_failed` gets the provider's kind (`plan.llm_failed_reason`).
+REFUSALS = {
+    "llm_failed": plan.REFUSALS["llm_failed"],
+    "reply_unreadable": "AI 的回覆不是看得懂的格式",
+    "reply_invalid": "AI 的回覆缺了欄位，或格式不對",
+    "number_in_prose": "AI 在說明裡自己寫了數字（數字只能由程式算）",
+    "role_unavailable": "AI 分了這個品牌現在用不到的角色",
+    "pct_invalid": "AI 給的比例加起來不是 100，或有負數",
+    "role_repeated": "AI 把同一個角色分了兩次",
+}
+
+
+def _refused(code: str, task_id: str | None) -> "plan.PlannerRefused":
+    return plan.PlannerRefused("strategy_failed", code, REFUSALS[code], task_id)
+
 
 def _days(start_date, end_date) -> int:
     if start_date is None or end_date is None:
@@ -164,31 +183,39 @@ def _validate_reply(data, available: frozenset[str], names=()) -> dict | None:
     （例如沒有再行銷來源的品牌被分了 `retarget`）就整包退回 `None`——`plan.py` 會把每個
     分配到的角色展開成投放組，一個交接時拿不到受眾的再行銷組不能活到那一步。
     F48 Contract S：`rationale`／`why`／`unknowns`／`learning_goals` 去掉程式給過的名稱
-    （`names`）後還帶阿拉伯數字、`%` 或 `NT$` 就退回；`alternatives` 有給就必須是字串陣列。"""
+    （`names`）後還帶阿拉伯數字、`%` 或 `NT$` 就退回；`alternatives` 有給就必須是字串陣列。
+    F50 Contract J：`_check_reply` is the same judgement naming the rule."""
+    return _check_reply(data, available, names)[0]
+
+
+def _check_reply(data, available: frozenset[str], names=()) -> tuple[dict | None, str | None]:
+    """`_validate_reply`'s rules, returning `(payload, None)` or `(None, code)` with a code of
+    `REFUSALS` (F50 Contract J)."""
+    invalid = (None, "reply_invalid")
     if not isinstance(data, dict):
-        return None
+        return invalid
     prose = [data.get(key) for key in ("why", "unknowns", "learning_goals")]
     if _has_number([t for value in prose if isinstance(value, list) for t in value], names):
-        return None
+        return None, "number_in_prose"
     alternatives = data.get("alternatives", [])
     if not isinstance(alternatives, list) or not all(isinstance(a, str) for a in alternatives):
-        return None
+        return invalid
     allocation = data.get("allocation")
     if not isinstance(allocation, list) or not allocation:
-        return None
+        return invalid
     validated_allocation = []
     for item in allocation:
         if not isinstance(item, dict):
-            return None
+            return invalid
         role = item.get("role")
         if role not in available:
-            return None
+            return None, "role_unavailable"
         pct = item.get("pct")
         if isinstance(pct, bool) or not isinstance(pct, (int, float)):
-            return None
+            return invalid
         rationale = item.get("rationale")
         if _has_number([rationale], names):
-            return None
+            return None, "number_in_prose"
         # `label` 由程式對照 `_ROLE_LABELS` 填，不再要求模型回——那是花錢買一個我們已經知道
         # 的答案（F04-I03）。模型舊行為回了 `label` 也不理會，一律以程式的對照表為準。
         validated_allocation.append({
@@ -199,12 +226,12 @@ def _validate_reply(data, available: frozenset[str], names=()) -> dict | None:
     if not _pct_sum_valid(validated_allocation):
         # 回覆的百分比沒有大致加總到 100，或帶負數——`budget.split()` 的餘數規則會把落差整個
         # 塞進佔比最大的那一項，畫面卻照樣印模型回的原始百分比，兩邊會對不起來。
-        return None
+        return None, "pct_invalid"
     roles = [row["role"] for row in validated_allocation]
     if len(roles) != len(set(roles)):
         # 同一個 role 出現兩次：`plan.adopt_strategy` 用 role 當 key 塞金額，重複的 role 會
         # 讓其中一列的金額悄悄消失，group 日預算加總就會少於 budget_planned（§0）。
-        return None
+        return None, "role_repeated"
 
     return {
         "allocation": validated_allocation,
@@ -212,7 +239,7 @@ def _validate_reply(data, available: frozenset[str], names=()) -> dict | None:
         "unknowns": _str_list(data.get("unknowns")),
         "alternatives": alternatives,
         "learning_goals": _str_list(data.get("learning_goals"))[:3],
-    }
+    }, None
 
 
 def _apply_amounts(allocation: list[dict], total: float | None) -> list[dict]:
@@ -412,21 +439,29 @@ def generate(conn, org_id: str, brand_id: str, campaign_id: str, *, actor: str) 
         context_scope={"brand_id": brand_id, "campaign_id": campaign_id},
         knowledge_item_ids=knowledge_item_ids, brand_version=brand["knowledge_version"],
     )
-    task_row = gateway.run_task(
-        conn, PROVIDER, brand_id=brand_id, task_type="ads_strategy",
-        prompt_template_id="ads_strategy", prompt_template_version="v1",
-        system=None, messages=[{"role": "user", "content": prompt}], context=context,
-        options=gateway.TaskOptions(max_tokens=2000, timeout_s=60.0, max_retries=0),
-    )
-    if task_row["status"] != "succeeded":
-        raise ValueError("strategy_failed")
-    data = gateway.parse_json_reply(task_row.get("rendered_output") or "")
-    strategy_payload = (
-        _validate_reply(data, frozenset(available_roles), planner_context.quoted_names(ctx))
-        if data is not None else None
-    )
-    if strategy_payload is None:
-        raise ValueError("strategy_failed")
+    names = planner_context.quoted_names(ctx)
+
+    def ask(refused: list[plan.PlannerRefused]) -> tuple[dict, dict]:
+        # F50 (user ruling 2026-10-04): a retry carries the refusal at the end of the prompt.
+        text = prompt + ("\n\n" + plan.refusal_section(refused) if refused else "")
+        task_row = gateway.run_task(
+            conn, PROVIDER, brand_id=brand_id, task_type="ads_strategy",
+            prompt_template_id="ads_strategy", prompt_template_version="v1",
+            system=None, messages=[{"role": "user", "content": text}], context=context,
+            options=gateway.TaskOptions(max_tokens=2000, timeout_s=TIMEOUT_S, max_retries=0),
+        )
+        if task_row["status"] != "succeeded":
+            raise plan.PlannerRefused("strategy_failed", "llm_failed",
+                                      plan.llm_failed_reason(task_row), task_row["id"])
+        data = gateway.parse_json_reply(task_row.get("rendered_output") or "")
+        if data is None:
+            raise _refused("reply_unreadable", task_row["id"])
+        payload, code = _check_reply(data, frozenset(available_roles), names)
+        if payload is None:
+            raise _refused(code or "reply_invalid", task_row["id"])
+        return task_row, payload
+
+    task_row, strategy_payload = plan.ask_with_one_retry(conn, ask, campaign_id=campaign_id)
 
     strategy_payload["allocation"] = _apply_amounts(
         strategy_payload["allocation"], recommended_row["total"],
