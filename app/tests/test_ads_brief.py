@@ -479,6 +479,56 @@ class _SellWayBase(_BriefTestBase):
         return self._create(goal_text="", picks=picks or self._picks(), **overrides)
 
 
+class SentencePathDefaultsTest(_SellWayBase):
+    """F50 (R6 B1, planning #4／#12): 一句話建立 fills platform and cap defaults exactly like the
+    structured path, and a value the model parsed from the sentence is `parsed`, never `user`."""
+
+    def _reply(self, **fields):
+        reply = {"objective": "購買", "cap": None, "product_ids": [self.sell_way["id"]],
+                 "budget_cap": 20000, "platform": None, "period": None,
+                 "audience_hint": "上班族", "notes": None, **fields}
+        brief.PROVIDER = _fake(json.dumps(reply, ensure_ascii=False))
+
+    def _sentence(self):
+        with patch.object(brief.wizard_options, "default_platform", return_value="meta"):
+            return self._create(goal_text="夜跑背心衝一波買氣，預算兩萬")
+
+    def test_a_sentence_naming_a_sell_way_gets_its_platform_and_cap(self):
+        self._reply()
+        detail = self._sentence()
+        sources = detail["context_json"]["field_sources"]
+        self.assertEqual(detail["constraints_json"]["platform"], "meta")
+        self.assertEqual(sources["platform"], "brand")
+        self.assertEqual(detail["cap"]["own_value"], 600)  # 1000 − 300 − 100
+        self.assertEqual(sources["cap"], "break_even")
+        self.assertEqual(detail["constraints_json"]["budget"], 20000)
+        self.assertEqual((sources["budget"], sources["audience"]), ("parsed", "parsed"))
+
+    def test_a_platform_the_model_read_is_parsed(self):
+        self._reply(platform="meta")
+        sources = self._sentence()["context_json"]["field_sources"]
+        self.assertEqual(sources["platform"], "parsed")
+
+    def test_a_sentence_naming_no_sell_way_still_gets_the_brand_platform(self):
+        self._reply(product_ids=[], budget_cap=None, audience_hint=None)
+        detail = self._sentence()
+        sources = detail["context_json"]["field_sources"]
+        self.assertEqual((detail["constraints_json"]["platform"], sources["platform"]),
+                         ("meta", "brand"))
+        self.assertEqual((sources["budget"], sources["audience"], sources["cap"]),
+                         ("system", "system", "system"))
+
+    def test_chips_the_user_set_stay_the_users(self):
+        self._reply(platform="meta")
+        with patch.object(brief.wizard_options, "default_platform", return_value="meta"):
+            detail = self._create(goal_text="夜跑背心衝一波買氣",
+                                  constraints={"budget": 5000, "platform": "meta"},
+                                  picks={"audience_hint": "跑者"})
+        sources = detail["context_json"]["field_sources"]
+        self.assertEqual((sources["budget"], sources["platform"], sources["audience"]),
+                         ("user", "user", "user"))
+
+
 class StructuredCreateTest(_SellWayBase):
     """F30-I04 (Contract D): the wizard creates a campaign from picks -- sell-way, objective,
     dates and this campaign's spending cap -- with no sentence typed. The picks are the user's

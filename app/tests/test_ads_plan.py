@@ -8,6 +8,7 @@ exactly one `ads_action` row (unbound edits write none); a budget raise above th
 approved `max_daily_amount` is refused before anything is written.
 """
 
+import datetime
 import json
 import unittest
 from unittest import mock
@@ -272,6 +273,51 @@ class GroupDateOrderTest(PlanTestBase):
         )
         self.assertEqual(response.status_code, 400, response.text)
         self.assertEqual(response.json()["error"]["message"], "結束日不能早於開始日。")
+
+
+class GroupInsideCampaignWindowTest(PlanTestBase):
+    """F50 Contract I (c1-08, R6 A9): an ad set's dates lie inside its campaign's dates
+    (`input_rules.date_within`); a group dated before the campaign is a 400
+    `group_dates_outside` naming the window, and nothing is written."""
+
+    def test_a_group_dated_outside_the_campaign_is_refused_with_the_window(self):
+        campaign = self._create_adopted_campaign()
+        plan.PROVIDER = _fake(_VALID_PLAN_REPLY)
+        group = self._adopt(campaign["id"])["groups"][0]
+        detail = ads_repo.get_campaign(web.conn, self.org_id, self.brand_id, campaign["id"])
+        start, end = detail["start_date"], detail["end_date"]
+        before = (start - datetime.timedelta(days=1)).isoformat()
+        sentence = f"投放組日期要在活動期間（{start.isoformat()}～{end.isoformat()}）內。"
+
+        with self.assertRaises(plan.GroupDatesOutside) as ctx:
+            plan.update_group(web.conn, self.org_id, self.brand_id, group["id"],
+                              {"start_date": before}, actor=ACTOR)
+        self.assertEqual(str(ctx.exception), "group_dates_outside")
+        self.assertEqual(ctx.exception.sentence, sentence)
+        stored = ads_repo.get_group(web.conn, self.org_id, self.brand_id, group["id"])
+        self.assertIsNone(stored["start_date"])
+        web.conn.commit()
+
+        from fastapi.testclient import TestClient
+
+        from app import main
+
+        client = TestClient(main.app)
+        created = client.post(
+            f"/api/ads/brands/{self.brand_id}/campaigns/{campaign['id']}/groups",
+            json={"name": "新組", "role": "new", "daily_budget": 100, "start_date": before},
+        )
+        self.assertEqual(created.status_code, 400, created.text)
+        self.assertEqual(created.json()["error"],
+                         {"code": "group_dates_outside", "message": sentence, "details": None})
+        after = (end + datetime.timedelta(days=1)).isoformat()
+        patched = client.patch(f"/api/ads/brands/{self.brand_id}/groups/{group['id']}",
+                               json={"end_date": after})
+        self.assertEqual(patched.status_code, 400, patched.text)
+        self.assertEqual(patched.json()["error"]["code"], "group_dates_outside")
+        inside = client.patch(f"/api/ads/brands/{self.brand_id}/groups/{group['id']}",
+                              json={"start_date": start.isoformat(), "end_date": end.isoformat()})
+        self.assertEqual(inside.status_code, 200, inside.text)
 
 
 class BudgetCeilingTest(PlanTestBase):

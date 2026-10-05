@@ -654,6 +654,39 @@ class ReviewCycleTest(unittest.TestCase):
             client.get(base.replace(self.brand, "another-brand") + "/reviews").status_code, 200
         )
 
+    def test_api_defer_takes_revisit_on_as_an_org_calendar_date(self):
+        """F50 Contract K: today is a 400 with the deferral sentence; tomorrow is stored as
+        00:00 of that day in the org's zone."""
+        from fastapi.testclient import TestClient
+
+        from app.main import app
+
+        self.observation()
+        self.reply()
+        ready = self.run_review(self.request())
+        self.conn.commit()
+        client = TestClient(app)
+        url = (f"/api/ads/brands/{self.brand}/campaigns/{self.campaign}/reviews/"
+               f"{ready['id']}/decision")
+        today = settings.today_for_org(self.conn, org_id=self.org)
+        refused = client.post(url, json={
+            "decision": "deferred", "reason": "延後", "revisit_on": today.isoformat(),
+        })
+        self.assertEqual(refused.status_code, 400, refused.text)
+        self.assertEqual(refused.json()["error"]["message"],
+                         change_control_data.DEFERRAL_DAY_REFUSAL)
+        tomorrow = today + timedelta(days=1)
+        accepted = client.post(url, json={
+            "decision": "deferred", "reason": "延後", "revisit_on": tomorrow.isoformat(),
+        })
+        self.assertEqual(accepted.status_code, 200, accepted.text)
+        stored = self.conn.execute(
+            "SELECT status,revisit_at FROM ads_review_round WHERE id=%s", (ready["id"],)
+        ).fetchone()
+        self.assertEqual(stored["status"], "deferred")
+        self.assertEqual(stored["revisit_at"],
+                         settings.org_day_start(self.conn, org_id=self.org, day=tomorrow))
+
     def test_unsynced_day_inside_window_or_prior_period_is_refused(self):
         prior_start = self.start - timedelta(days=3)
         # A row proves its own day (F49 Contract V): keep it outside the window under test.

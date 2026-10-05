@@ -17,7 +17,7 @@ from app.ads import user_assets as service
 from app.ads import user_assets_repository as repo
 from app.ads import user_assets_routes as routes
 from app.brand_intelligence import repository as brands
-from app.core import db, settings
+from app.core import db, input_rules, settings
 from app.main import app
 
 # A 1x1 PNG with a valid IHDR: uploads are checked by content and header (F47 Contract A).
@@ -107,6 +107,26 @@ class UserAssetsTest(unittest.TestCase):
         self.assertEqual(response.json()["upload"]["status"], "failed")
         self.assertEqual(self.objects, {})
         self.assertEqual(len(repo.list_assets(self.conn, self.org, self.brand)["uploads"]), 2)
+
+    def test_an_empty_and_an_oversize_file_each_get_their_own_sentence(self):
+        """F50 Contract I (F11-empty): one cap table (`input_rules.UPLOAD_CAPS["ad_asset"]`) and
+        one sentence pair -- an empty file is never told it is too big."""
+        self.assertEqual(service.media_probe.MAX_BYTES, input_rules.UPLOAD_CAPS["ad_asset"])
+        empty = self.batch(size=0)
+        oversize = self.batch(size=51 * 1024 * 1024)
+        self.assertEqual((empty["status"], empty["error"]),
+                         ("failed", "「misleading.mp4」是空的檔案，請換一個。"))
+        self.assertEqual((oversize["status"], oversize["error"]),
+                         ("failed", "「misleading.mp4」超過 50 MB，請換一個小一點的檔案。"))
+        with self.assertRaisesRegex(ValueError, "是空的檔案"):
+            service.begin_upload(self.conn, self.org, self.brand, empty["id"])
+        item = self.batch(size=3)
+        response = self.client.put(f"{self.prefix}/uploads/{item['id']}/content", content=b"")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual((response.json()["upload"]["status"], response.json()["upload"]["error"]),
+                         ("failed", "「misleading.mp4」是空的檔案，請換一個。"))
+        with self.assertRaisesRegex(service.media_probe.MediaError, "是空的檔案"):
+            service.media_probe.preview(b"")
 
     def test_storage_success_db_failure_reconciles_without_losing_original(self):
         item = self.batch()

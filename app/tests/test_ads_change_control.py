@@ -328,6 +328,59 @@ class ChangeControlTest(unittest.TestCase):
         self.assertEqual(accepted.status_code, 200, accepted.text)
         self.assertEqual(accepted.json()["change_set"]["status"], "rejected")
 
+    def test_http_decide_takes_revisit_on_as_an_org_calendar_date(self):
+        """F50 Contract K: a deferral is a date on the org's calendar -- today (or a malformed
+        date) is a 400 with its sentence; tomorrow is stored as 00:00 of that day in the org's
+        zone. A create's `decide` takes the same field."""
+        from app.main import app
+
+        base = f"/api/ads/brands/{self.brand}/campaigns/{self.campaign}"
+        created = self.create()
+        url = base + f"/change-sets/{created['id']}/decision"
+        client = TestClient(app)
+        today = coresettings.today_for_org(self.conn, org_id=self.org)
+        tomorrow = today + timedelta(days=1)
+
+        refused = client.post(url, json={
+            "decision": "deferred", "reason": "再看看", "revisit_on": today.isoformat(),
+        })
+        self.assertEqual(refused.status_code, 400, refused.text)
+        self.assertEqual(refused.json()["error"]["message"], data.DEFERRAL_DAY_REFUSAL)
+        malformed = client.post(url, json={
+            "decision": "deferred", "reason": "再看看", "revisit_on": "10/05",
+        })
+        self.assertEqual(malformed.status_code, 400, malformed.text)
+        self.assertEqual(data.get(self.conn, self.org, self.brand, self.campaign,
+                                  created["id"])["status"], "draft")
+
+        accepted = client.post(url, json={
+            "decision": "deferred", "reason": "再看看", "revisit_on": tomorrow.isoformat(),
+        })
+        self.assertEqual(accepted.status_code, 200, accepted.text)
+        stored = self.conn.execute(
+            "SELECT status,revisit_at FROM ads_change_set WHERE id=%s", (created["id"],)
+        ).fetchone()
+        self.assertEqual(stored["status"], "deferred")
+        self.assertEqual(
+            stored["revisit_at"],
+            coresettings.org_day_start(self.conn, org_id=self.org, day=tomorrow),
+        )
+
+        body = {
+            "operation_id": "http-decide-on", "title": "暫停這則", "month": self.month,
+            "items": [{"kind": "pause", "target_id": self.ad["id"], "after": {"status": "PAUSED"},
+                       "reason": "花到上限 3 倍"}],
+        }
+        today_refused = client.post(base + "/change-sets", json={**body, "decide": {
+            "decision": "deferred", "reason": "再看看", "revisit_on": today.isoformat(),
+        }})
+        self.assertEqual(today_refused.status_code, 400, today_refused.text)
+        deferred = client.post(base + "/change-sets", json={**body, "decide": {
+            "decision": "deferred", "reason": "再看看", "revisit_on": tomorrow.isoformat(),
+        }})
+        self.assertEqual(deferred.status_code, 200, deferred.text)
+        self.assertEqual(deferred.json()["change_set"]["status"], "deferred")
+
     def _readback(self, current, body="新文案", fail=False, wrong_account=False):
         ad = copy.deepcopy(self.ad)
         ad["creative"]["fields"]["body"] = body
