@@ -2,7 +2,7 @@
 
 from collections import defaultdict
 from datetime import date, timedelta
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from zoneinfo import ZoneInfo
 
 from app import orders, workbench
 from app.ads import asset_binding_repository as bindings
@@ -12,7 +12,7 @@ from app.ads import external_sync, review_monitor_source
 from app.ads.adapters.external import SourceReadError
 from app.ads.external_repository import is_monthly_budget_row
 from app.brand_intelligence import repository as brands
-from app.core import db, settings
+from app.core import settings
 from app.llm import context_compiler
 
 METRICS = ("spend", "impressions", "clicks", "purchases", "revenue")
@@ -222,21 +222,26 @@ def snapshot(
         raise ValueError("已結案活動只能查看歷史檢討。")
     if not isinstance(start, date) or not isinstance(end, date):
         raise ValueError("請提供觀察期間。")
-    today = settings.today_for_org(conn, org_id=org)
-    if start > end or (end - start).days >= 31 or end >= today:
-        raise ValueError("每回最多檢討 31 個已完整過去的日期；今天尚未完整，不能納入。")
+    from app.ads import coverage, review_monitor  # lazy: both import this module's neighbours
+
+    _, most = review_monitor.DAYS_RANGE
+    if start > end or (end - start).days >= most:
+        raise ValueError(f"每回最多檢討 {most} 個已完整過去的日期；今天尚未完整，不能納入。")
     entity = bindings.entity(conn, org, brand, campaign_id, entity_id)
     if entity["native_kind"] != "ad":
         raise ValueError("每回檢討請選一則平台廣告。")
-    timezone = None
+    account = None
     try:
         _, account = external_sync.account_reader(
             conn, org, brand, entity["platform"], entity["source_account"]
         )
-        timezone = str(ZoneInfo(account.get("timezone_name") or ""))
-    except (SourceReadError, ValueError, ZoneInfoNotFoundError):
+    except SourceReadError:
         pass
-    if timezone and end >= db.now_utc().astimezone(ZoneInfo(timezone)).date():
+    zone = coverage.account_zone(account)
+    timezone = str(zone) if zone is not None else None
+    # F50 Contract K: the one "complete day" -- the ad account's yesterday, fail closed when the
+    # account or its zone is unknown (`coverage.account_last_complete_day`).
+    if end > coverage.account_last_complete_day(conn, org, account):
         raise ValueError("觀察結束日於來源帳戶時區尚未完整結束，請改選更早的日期。")
     prior_end = start - timedelta(days=1)
     prior_start = start - timedelta(days=(end - start).days + 1)
@@ -244,8 +249,6 @@ def snapshot(
     # rows read below cannot tell the two apart, so every campaign day of the window (current AND
     # its equal-length prior period) must be read -- the same day states triage grades with
     # (`coverage.gap`, F49 Contract V), refused here like the date guards above.
-    from app.ads import coverage
-
     gap = coverage.gap(conn, org, brand, campaign, prior_start, end)
     if gap["never_synced"]:
         # F37 Contract Q (ruling 4): never read is not "nothing missing" (F36 as-built gap).

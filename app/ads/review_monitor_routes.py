@@ -15,8 +15,11 @@ class MonitorRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     expected_revision: int = Field(ge=0)
     enabled: bool
-    window_days: int = Field(default=7, ge=1, le=31)
-    cadence_days: int = Field(default=7, ge=1, le=31)
+    # F50 Contract I: bounds and the cadence default from `review_monitor` (served as `limits`).
+    window_days: int = Field(
+        default=7, ge=service.DAYS_RANGE[0], le=service.DAYS_RANGE[1])
+    cadence_days: int = Field(
+        default=service.DEFAULT_CADENCE_DAYS, ge=service.DAYS_RANGE[0], le=service.DAYS_RANGE[1])
     reset_window: bool = False
 
 

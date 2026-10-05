@@ -1,13 +1,26 @@
 """Per-ad opt-in review scheduling. Waiting windows are durable, not rolling polling prompts."""
 
 from datetime import UTC, datetime, timedelta
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.ads import asset_binding_repository as bindings
 from app.ads import change_control_data as changes
-from app.ads import external_sync, review_evidence, review_monitor_source, review_rounds
+from app.ads import coverage, external_sync, review_evidence, review_monitor_source, review_rounds
 from app.ads.adapters.external import SourceReadError
-from app.core import db, settings
+from app.core import db
+
+# F50 Contract I (decision 11): the observation window and the review cadence, in days -- served
+# to the screens as `GET …/rules` `limits` and quoted by the refusals below.
+DAYS_RANGE = (1, 31)
+DEFAULT_CADENCE_DAYS = 7
+_DAY_DIGITS = "零一二三四五六七八九"
+
+
+def _days_text(n: int) -> str:
+    """A day count in Chinese numerals (1-99), as the refusal sentence has always read it."""
+    tens, ones = divmod(n, 10)
+    if tens == 0:
+        return _DAY_DIGITS[ones]
+    return (_DAY_DIGITS[tens] if tens > 1 else "") + "十" + (_DAY_DIGITS[ones] if ones else "")
 
 
 def _now(timestamp=None):
@@ -95,8 +108,9 @@ def put(conn, org, brand, campaign, entity, payload):
         raise ValueError("持續檢討只能設定單則平台廣告。")
     if changes.campaign(conn, org, brand, campaign)["status"] == "closed":
         raise ValueError("已結案活動不能啟用持續檢討。")
-    if any(not 1 <= payload[k] <= 31 for k in ("window_days", "cadence_days")):
-        raise ValueError("觀察窗與重看間隔請選一至三十一日。")
+    low, high = DAYS_RANGE
+    if any(not low <= payload[k] <= high for k in ("window_days", "cadence_days")):
+        raise ValueError(f"觀察窗與重看間隔請選{_days_text(low)}至{_days_text(high)}日。")
     conn.execute(
         "SELECT pg_advisory_xact_lock(hashtextextended(%s,0))", ("ads-monitor-config:" + entity,)
     )
@@ -219,7 +233,8 @@ def on_decision(conn, review, *, commit=True):
         conn.commit()
 
 
-def _source_timezone(conn, row):
+def _source_account(conn, row):
+    """The bound account of the monitored ad, `None` when it cannot be read."""
     entity = bindings.entity(
         conn, row["org_id"], row["brand_id"], row["campaign_id"], row["entity_id"]
     )
@@ -227,9 +242,9 @@ def _source_timezone(conn, row):
         _, account = external_sync.account_reader(
             conn, row["org_id"], row["brand_id"], entity["platform"], entity["source_account"]
         )
-        return ZoneInfo(account.get("timezone_name") or "")
-    except (SourceReadError, ValueError, ZoneInfoNotFoundError):
+    except SourceReadError:
         return None
+    return account
 
 
 def _checkpoint(conn, row, now, state, reason=None, *, days=False):
@@ -312,14 +327,15 @@ def _dispatch_one(conn, row, now):
         if old["status"] in {"queued", "running", "ready", "failed", "unknown"}:
             _checkpoint(conn, row, now, _state(old), old.get("error"))
             return 0
-    zone = _source_timezone(conn, row)
+    account = _source_account(conn, row)
+    zone = coverage.account_zone(account)
+    # F50 Contract K: the one "complete day" (the ad account's yesterday, fail closed).
+    last = coverage.account_last_complete_day(conn, row["org_id"], account)
     if not row["window_start"]:
         if zone is None and row["observe_after"]:
             _checkpoint(conn, row, now, "waiting", "來源帳戶時區未知；請先核對來源，暫不呼叫模型。")
             return 0
-        org_today = settings.today_for_org(conn, org_id=row["org_id"])
-        end = min(now.astimezone(zone).date(), org_today) if zone else org_today
-        end -= timedelta(days=1)
+        end = last
         start = end - timedelta(days=row["window_days"] - 1)
         if row["observe_after"] and not row["previous_id"]:
             start = row["observe_after"].astimezone(zone).date() + timedelta(days=1)
@@ -337,9 +353,7 @@ def _dispatch_one(conn, row, now):
         )
         conn.commit()
         row = {**row, "window_start": start, "window_end": end}
-    if row["window_end"] >= settings.today_for_org(conn, org_id=row["org_id"]) or (
-        zone and row["window_end"] >= now.astimezone(zone).date()
-    ):
+    if row["window_end"] > last:
         _checkpoint(conn, row, now, "waiting", "等待新廣告完整觀察窗結束，暫不呼叫模型。")
         return 0
     evidence = review_evidence.snapshot(
@@ -424,10 +438,12 @@ def required_windows(conn, org, brand, campaign):
     ).fetchall()
     if len(rows) > 500:
         raise ValueError("活動監測數量超過單次來源補回上限，請縮小活動範圍。")
-    today = settings.today_for_org(conn, org_id=org)
+    if not rows:
+        return []  # no monitor: no window, and no account read for a cutoff nobody needs
+    last = coverage.last_complete_day(conn, org, brand, campaign)
     result = []
     for row in rows:
-        end = min(row["window_end"] or today - timedelta(days=1), today - timedelta(days=1))
+        end = min(row["window_end"] or last, last)
         start = row["window_start"] or end - timedelta(days=row["window_days"] - 1)
         days = (
             (row["window_end"] - row["window_start"]).days + 1

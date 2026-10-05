@@ -258,7 +258,7 @@ def read(conn, org, brand, campaign_id) -> dict:
     }
     ads = [ad for group in detail["groups"] for ad in group["ads"]]
     entities = _entities(conn, org, brand, campaign_id, ads)
-    yesterday = settings.today_for_org(conn, org_id=org) - timedelta(days=1)
+    yesterday = coverage.last_complete_day(conn, org, brand, campaign_id)
     rows = _outcome_rows(conn, org, brand, campaign_id, [ad["id"] for ad in ads], yesterday)
     decisions = _decisions(conn, org, brand, campaign_id)
     read = coverage.load(conn, org, brand, detail, _first_row_day(rows, yesterday), yesterday)

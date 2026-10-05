@@ -20,7 +20,6 @@ prose only, and a reply whose prose carries a digit, `%` or `NT$` is refused.
 """
 
 import re
-from datetime import UTC, datetime
 
 from app.ads import (
     budget,
@@ -38,7 +37,7 @@ from app.ads import (
 from app.ads import repository as ads_repo
 from app.brand_intelligence import benchmarks
 from app.brand_intelligence import repository as bi_repo
-from app.core import rule_cards, vocab
+from app.core import db, input_rules, rule_cards, vocab
 from app.core.db import APP_DIR
 from app.llm import gateway, providers
 
@@ -624,7 +623,7 @@ def select_scenario(conn, org_id: str, brand_id: str, campaign_id: str, *,
         if not confirm_over_cap:
             raise OverCapUnconfirmed(total=total, cap=budget_cap, over=over)
         budget_basis_json["over_cap_confirmation"] = {
-            "by": actor, "at": datetime.now(UTC).isoformat(), "total": total,
+            "by": actor, "at": db.now_utc().isoformat(), "total": total,
             "cap": budget_cap, "over": over,
         }
 
@@ -714,10 +713,14 @@ def set_budget_cap(conn, org_id: str, brand_id: str, campaign_id: str, *,
     anything else is `ValueError("budget_cap_invalid")`. Internal planning number only: it never
     writes the platform, never touches `budget_planned` or the saved scenario, and is not part of
     any handoff premise -- the next scenarios read (`budget.current_scenarios`) reflects it."""
-    if budget_cap is not None and (
-        isinstance(budget_cap, bool) or not isinstance(budget_cap, int) or budget_cap <= 0
-    ):
-        raise ValueError("budget_cap_invalid")
+    if budget_cap is not None:
+        # F50 Contract I: a whole number (never a bool) > 0 through `input_rules.count`.
+        if isinstance(budget_cap, bool) or not isinstance(budget_cap, int):
+            raise ValueError("budget_cap_invalid")
+        try:
+            input_rules.count(budget_cap, "預算上限", minimum=1)
+        except input_rules.InputRuleError:
+            raise ValueError("budget_cap_invalid") from None
     ads_repo.set_budget_cap(conn, org_id, brand_id, campaign_id, budget_cap=budget_cap)
     detail = ads_repo.campaign_detail(conn, org_id, brand_id, campaign_id)
     assert detail is not None

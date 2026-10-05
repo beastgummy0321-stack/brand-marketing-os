@@ -8,9 +8,11 @@ from datetime import date
 
 from app.ads import repository as campaigns
 from app.brand_intelligence import repository as brands
+from app.core import input_rules
 from app.core.db import jsonb, new_id
 
-MAX_BYTES = 50 * 1024 * 1024
+# F50 Contract I: the one upload cap table (`input_rules.UPLOAD_CAPS`).
+MAX_BYTES = input_rules.UPLOAD_CAPS["ad_asset"]
 
 
 class PlacementConflict(ValueError):
@@ -44,7 +46,12 @@ def create_batch(conn, org, brand, files, actor):
         if isinstance(size, bool) or not isinstance(size, int) or not -(2**63) <= size < 2**63:
             raise ValueError("請提供檔案大小。")
         copy_fields = validate_copy(item.get("copy_fields") or {})
-        valid = 0 < size <= MAX_BYTES
+        try:
+            input_rules.check_upload(filename, size, path="ad_asset")
+            refusal = None
+        except input_rules.InputRuleError as exc:
+            refusal = str(exc)  # empty and oversize each say so (F50 Contract I)
+        valid = refusal is None
         conn.execute(
             "INSERT INTO ads_asset_upload(id,org_id,brand_id,batch_id,ordinal,filename,"
             "expected_size,"
@@ -60,7 +67,7 @@ def create_batch(conn, org, brand, files, actor):
                 item.get("content_type"),
                 jsonb(copy_fields),
                 "pending" if valid else "failed",
-                None if valid else "單檔必須介於 1 byte 與 50 MiB。",
+                refusal,
             ),
         )
     conn.commit()
@@ -379,8 +386,10 @@ def revise(conn, org, brand, campaign_id, placement_id, expected_revision, updat
                 new[key] = date.fromisoformat(new[key])
             except ValueError:
                 raise ValueError("安排日期格式無效。") from None
-    if new["start_date"] and new["end_date"] and new["end_date"] < new["start_date"]:
-        raise ValueError("安排結束日期不能早於開始日期。")
+    try:
+        input_rules.date_order(new["start_date"], new["end_date"], "安排開始日期", "安排結束日期")
+    except input_rules.InputRuleError as exc:
+        raise ValueError(str(exc)) from None
     if (
         new["destination_entity_id"]
         and not conn.execute(

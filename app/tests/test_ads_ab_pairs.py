@@ -9,11 +9,12 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 import app.main as main
-from app.ads import ab_pairs, coverage, external_sync, live_creative, plan
+from app.ads import ab_pairs, channels, coverage, external_sync, live_creative, plan
 from app.ads import change_control as service
 from app.ads import change_control_verify as verification
 from app.ads import external_repository as external
 from app.ads import repository as ads_repo
+from app.core import settings as coresettings
 from app.core.db import jsonb, new_id
 from app.shared import web
 from app.tests.fixtures.ads_external import outcome_seed
@@ -21,9 +22,28 @@ from app.tests.fixtures.ads_external import outcome_seed
 from .test_ads_publish_simulated import ACTOR, SimulatedPublishTestBase
 
 
+class _ZonedReader:
+    """The fixture's bound account (`fake`／`account`) in the org's zone, so the campaign's last
+    complete day (`coverage.last_complete_day`, F50 Contract K) is the org's yesterday."""
+
+    def __init__(self, zone):
+        self.zone = zone
+
+    def accounts(self, conn, org, brand):
+        return [{"account_id": "account", "timezone_name": self.zone}]
+
+
 class AbPairsTest(SimulatedPublishTestBase):
     def setUp(self):
         super().setUp()
+        real_reader = channels.external_reader
+        zoned = _ZonedReader(str(coresettings.org_timezone(web.conn, org_id=self.org_id)))
+        reader = patch.object(
+            channels, "external_reader",
+            side_effect=lambda platform: zoned if platform == "fake" else real_reader(platform),
+        )
+        reader.start()
+        self.addCleanup(reader.stop)
         campaign = self._campaign(
             start_date=self.today - timedelta(days=30), groups=1, ads_per_group=2
         )

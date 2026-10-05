@@ -382,6 +382,11 @@ class ReviewCopyEditableReadTimeTest(unittest.TestCase):
                 "end": self.end.isoformat(),
             }},
         )
+        # F50 Contract K: the fixture account is bound in the org's zone, so its last complete
+        # day is the org's yesterday (an unknown zone fails closed one day earlier).
+        zone = str(settings.org_timezone(self.conn, org_id=self.org))
+        patch.object(external_sync, "account_reader", return_value=(
+            None, {"account_id": "account", "timezone_name": zone})).start()
         self.fake = providers.FakeProvider()
         self.fake.name = "anthropic"
         patch.object(review_rounds, "PROVIDER", self.fake).start()

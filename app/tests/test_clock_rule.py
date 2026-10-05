@@ -38,28 +38,6 @@ YESTERDAY_HOMES = {"core/settings.py", "ads/coverage.py"}
 
 # (file relative to app/, rule, source text of the hit) -> the issue that removes it.
 PENDING: dict[tuple[str, str, str], str] = {
-    # rule "machine_clock"
-    ("ads/launch_settings.py", "machine_clock", "datetime.now(UTC)"): "F50-I05",
-    ("ads/manual_settings.py", "machine_clock", "datetime.now(UTC)"): "F50-I05",
-    ("ads/strategy.py", "machine_clock", "datetime.now(UTC)"): "F50-I05",
-    # rule "month_start"
-    ("ads/asset_suggestions.py", "month_start",
-     'db.now_utc().strftime("%Y-%m-01T00:00:00")'): "F50-I05",
-    ("ads/review_rounds.py", "month_start",
-     'db.now_utc().strftime("%Y-%m-01T00:00:00")'): "F50-I05",
-    # rule "yesterday"
-    ("ads/ab_pairs.py", "yesterday",
-     "settings.today_for_org(conn, org_id=org) - timedelta(days=1)"): "F50-I05",
-    ("ads/change_timeline.py", "yesterday",
-     "settings.today_for_org(conn, org_id=org) - timedelta(days=1)"): "F50-I05",
-    ("ads/connections.py", "yesterday",
-     "moment.astimezone(zone).date() - timedelta(days=1)"): "F50-I05",
-    ("ads/external_sync.py", "yesterday",
-     "now_utc().astimezone(zone) - timedelta(days=1)"): "F50-I05",
-    ("ads/triage.py", "yesterday",
-     "now_utc().astimezone(zone) - timedelta(days=1)"): "F50-I05",
-    ("ads/workspace_reads.py", "yesterday",
-     "coresettings.today_for_org(conn, org_id=org_id) - timedelta(days=1)"): "F50-I05",
 }
 
 # (file relative to app/, function) -> why it reads the queue's own clock instead of db.now_utc().

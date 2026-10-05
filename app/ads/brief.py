@@ -24,7 +24,9 @@ cap (`field_sources.cap = "sell_way"`; unset -> break-even, resolved by `targets
 request's (the page preselects the brand's goal), platform = the plan default. Request values win
 (`"user"`). `audience_hint` stays readable on old campaigns and is still accepted from the
 request, but the model's audience guess is no longer stored on a structured create (the audience
-is the groups). The sentence path gets no sell-way defaults.
+is the groups). F50 (R6 B1): the sentence path takes the platform and cap defaults of the
+sell-way the sentence named (else the brand's platform); a value the model read from the
+sentence is `"parsed"`, never `"user"`.
 
 F46-I08 (feature F46 Contract D, user ruling 2026-10-02, supersedes ads §6.47 for these three
 fields): a structured create starts from the same sell-way's previous campaign
@@ -223,6 +225,10 @@ def _validate_reply(data) -> dict | None:
     }
 
 
+# A create with no dates runs from the org's today for this many days (both the structured and
+# the sentence path); served as `GET …/rules` `limits.campaign_default_days` (F50 Contract I).
+DEFAULT_PERIOD_DAYS = 30
+
 _NAME_BASE_LIMIT = 30
 
 
@@ -322,12 +328,29 @@ def _check_extras(picks: dict) -> dict:
     }
 
 
+def _sentence_sell_way(conn, brand_id: str, product_ids: list[str] | None) -> dict | None:
+    """F50 (R6 B1): the first sell-way the sentence named that the wizard offers
+    (`wizard_options.sellable_products`), shaped like `_check_picks`' result for
+    `_sell_way_defaults`; `None` when the sentence named none."""
+    if not product_ids:
+        return None
+    by_id = {p["id"]: p for p in wizard_options.sellable_products(conn, brand_id)}
+    way = next((by_id[p] for p in product_ids if p in by_id), None)
+    if way is None:
+        return None
+    return {
+        "products": [way], "customer_group_ids": None,
+        "group_ids": [g["id"] for g in wizard_options.customer_groups(conn, brand_id, way)],
+    }
+
+
 def _sell_way_defaults(conn, org_id: str, brand_id: str, checked: dict | None) -> dict:
     """F43-I04: what the picked sell-way supplies when the request does not -- `{group_ids,
     customer_group_ids (the request's override or None), landing_url, cap}`; F46-I08 adds
     `previous` (`wizard_options.previous_values` of the sell-way's previous campaign, or None),
     `break_even` (the whole break-even of its current economics) and `platform` (the brand's
-    first connected channel). All empty on the sentence path (no sell-way picked)."""
+    first connected channel). All empty with no sell-way (a sentence that named none); the
+    caller still fills the brand's platform then (`create_draft`)."""
     if checked is None:
         return {"group_ids": [], "customer_group_ids": None, "landing_url": None, "cap": None,
                 "previous": None, "break_even": None, "platform": None}
@@ -457,13 +480,12 @@ def create_draft(conn, org_id: str, brand_id: str, *, goal_text: str, start_date
     checked = _check_picks(conn, brand_id, picks) if structured else None
     if checked is None and picks.get("customer_group_ids") not in (None, []):
         raise ValueError("customer_group_unknown")  # groups belong to a picked sell-way
-    defaults = _sell_way_defaults(conn, org_id, brand_id, checked)
     goal_composed = False
     dates_source = "user"
     if checked is not None:
         if start is None or end is None:
             today = coresettings.today_for_org(conn, org_id=org_id)
-            start, end = today, today + timedelta(days=30)
+            start, end = today, today + timedelta(days=DEFAULT_PERIOD_DAYS)
             dates_source = "system"
         if not isinstance(goal_text, str) or not goal_text.strip():
             goal_text = _compose_goal_text(checked, start, end)
@@ -541,21 +563,27 @@ def create_draft(conn, org_id: str, brand_id: str, *, goal_text: str, start_date
             fields = validated
 
     # 日期：呼叫端給了兩個就是「你說的」；兩個都沒給就看模型從句子解析出來的 `period`
-    # 算不算數（算得出來也是「你說的」——句子裡講了時間），解析不出來才落到「今天～+30 天」
-    # 那個備援（那一格才是「系統帶入」，ARCHITECTURE.md §6.1 第 11 條）。
+    # 算不算數——F50：模型讀出來的是 `"parsed"`（猜的，請確認），不是「你說的」；解析不出來
+    # 才落到「今天～+30 天」那個備援（那一格才是「系統帶入」，ARCHITECTURE.md §6.1 第 11 條）。
     if start is None:
         resolved_start, resolved_end = _resolve_period(fields["period"], today=today)
         if resolved_start is not None:
             start, end = resolved_start, resolved_end
+            dates_source = "parsed"
         else:
-            start, end = today, today + timedelta(days=30)
+            start, end = today, today + timedelta(days=DEFAULT_PERIOD_DAYS)
             dates_source = "system"
 
     # 使用者自己填的限制（chips）永遠勝過模型解析的——只在使用者沒填這一格時才補進去。
+    # F50 (planning #4／#12): a value the model parsed from the sentence is `"parsed"`, never
+    # the user's own pick.
+    parsed_keys = set()
     if fields["budget_cap"] is not None and "budget" not in constraints:
         constraints["budget"] = fields["budget_cap"]
+        parsed_keys.add("budget")
     if fields["platform"] is not None and "platform" not in constraints:
         constraints["platform"] = fields["platform"]
+        parsed_keys.add("platform")
 
     brand_product_id_set = set(brand_product_ids)
     product_ids = [p for p in fields["product_ids"] if p and p in brand_product_id_set] or None
@@ -563,6 +591,12 @@ def create_draft(conn, org_id: str, brand_id: str, *, goal_text: str, start_date
         # The user's picks win over whatever the model read back from the composed sentence.
         product_ids = checked["product_ids"]
         fields["objective"] = checked["objective"]
+        way = checked
+    else:
+        # F50 (R6 B1): the sentence path fills platform and cap defaults exactly like the
+        # structured path -- from the sell-way the sentence named, else the brand's platform.
+        way = _sentence_sell_way(conn, brand_id, product_ids)
+    defaults = _sell_way_defaults(conn, org_id, brand_id, way)
 
     # A stated value (request first, then what the sentence said) wins; F43-I04: whatever is
     # still empty comes from the picked sell-way (`defaults`), named `"sell_way"`.
@@ -572,39 +606,55 @@ def create_draft(conn, org_id: str, brand_id: str, *, goal_text: str, start_date
         audience_hint = extras["audience_hint"]
     else:
         audience_hint = extras["audience_hint"] or fields["audience_hint"]
+        if not extras["audience_hint"] and audience_hint:
+            parsed_keys.add("audience")
     if extras["cap"] is not None:
         target_cost = extras["cap"]
     else:
         # A sentence the program composed carries no cap the user stated: whatever the model
         # read as `cap` is dropped.
         target_cost = None if goal_composed else fields["cap"]
-    cap_source = "user" if target_cost is not None else "system"
+    if extras["cap"] is not None:
+        cap_source = "user"
+    else:  # F50: a cap the model read from the sentence is `parsed`, never the user's
+        cap_source = "parsed" if target_cost is not None else "system"
     # F46-I08 (Contract D): the same sell-way's previous campaign first, then the sell-way's
     # own cap, then its break-even -- each stored as the campaign's own cap, so the cap the
     # form showed is the cap saved. A previous campaign without a cap falls through.
     previous = defaults["previous"] or {}
     platform_source = "user" if constraints.get("platform") is not None else "system"
-    if checked is not None:
-        if target_cost is None and previous.get("cap") is not None:
-            target_cost, cap_source = previous["cap"], "copied"
-        if constraints.get("platform") is None:
-            if previous.get("platform") is not None:
-                constraints["platform"], platform_source = previous["platform"], "copied"
-            elif defaults["platform"] is not None:
-                constraints["platform"], platform_source = defaults["platform"], "brand"
+    if "platform" in parsed_keys:
+        platform_source = "parsed"
+    if target_cost is None and previous.get("cap") is not None:
+        target_cost, cap_source = previous["cap"], "copied"
+    if constraints.get("platform") is None:
+        if previous.get("platform") is not None:
+            constraints["platform"], platform_source = previous["platform"], "copied"
+        elif defaults["platform"] is not None:
+            constraints["platform"], platform_source = defaults["platform"], "brand"
+        elif checked is None:
+            # F50 (R6 B1): a sentence that named no sell-way still gets the structured path's
+            # platform default, the brand's first connected channel.
+            fallback = wizard_options.default_platform(conn, org_id, brand_id)
+            if fallback is not None:
+                constraints["platform"], platform_source = fallback, "brand"
     if target_cost is None and defaults["cap"] is not None:
         target_cost, cap_source = defaults["cap"], "sell_way"
     if target_cost is None and defaults["break_even"] is not None:
         target_cost, cap_source = defaults["break_even"], "break_even"
     budget_source = "user" if constraints.get("budget") is not None else "system"
+    if "budget" in parsed_keys:
+        budget_source = "parsed"
     if checked is not None and previous.get("budget") is not None \
             and float(checked["budget"]) == previous["budget"]:
         budget_source = "copied"
     landing_url = extras["landing_url"]
     landing_source = "user" if landing_url else "system"
-    if landing_url is None and defaults["landing_url"] is not None:
+    if checked is not None and landing_url is None and defaults["landing_url"] is not None:
         landing_url, landing_source = defaults["landing_url"], "sell_way"
     audience_source = "user" if audience_hint else "system"
+    if "audience" in parsed_keys:
+        audience_source = "parsed"  # the model's guess is not the user's pick (planning #12)
     customer_group_ids = None
     if checked is not None:
         if defaults["customer_group_ids"] is not None:
@@ -615,7 +665,8 @@ def create_draft(conn, org_id: str, brand_id: str, *, goal_text: str, start_date
 
     field_sources = {
         "product": "user" if product_ids else "system",
-        "objective": "user" if parsed_ok or checked is not None else "system",
+        # F50: the wizard's pick is the user's; an objective the model read is `parsed`.
+        "objective": "user" if checked is not None else "parsed" if parsed_ok else "system",
         "platform": platform_source,
         "budget": budget_source,
         "dates": dates_source,

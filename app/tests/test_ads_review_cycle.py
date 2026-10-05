@@ -9,6 +9,7 @@ from unittest.mock import patch
 from app.ads import (
     change_control,
     change_control_data,
+    channels,
     external_repository,
     review_evidence,
     review_jobs,
@@ -18,6 +19,16 @@ from app.ads import (
 from app.brand_intelligence import repository as brands
 from app.core import db, settings
 from app.llm import providers
+
+
+class _ZonedReader:
+    """The fixture's bound account; `owner.account_zone` is its stored zone (None = no zone)."""
+
+    def __init__(self, owner):
+        self.owner = owner
+
+    def accounts(self, conn, org, brand):
+        return [{"account_id": "account", "timezone_name": self.owner.account_zone}]
 
 
 class ReviewCycleTest(unittest.TestCase):
@@ -72,6 +83,15 @@ class ReviewCycleTest(unittest.TestCase):
                 },
             },
         )
+        # F50 Contract K: the fixture account (`fixture`／`account`) is bound in the org's zone,
+        # so its last complete day is the org's yesterday (`coverage.last_complete_day`).
+        self.account_zone = str(settings.org_timezone(self.conn, org_id=self.org))
+        real_reader = channels.external_reader
+        patch.object(
+            channels, "external_reader",
+            side_effect=lambda platform: _ZonedReader(self) if platform == "fixture"
+            else real_reader(platform),
+        ).start()
         self.fake = providers.FakeProvider()
         self.fake.name = "anthropic"
         patch.object(review_rounds, "PROVIDER", self.fake).start()
@@ -536,14 +556,19 @@ class ReviewCycleTest(unittest.TestCase):
 
     def test_source_timezone_never_inferred_from_org_and_no_pi_data(self):
         self.observation()
-        unknown = self.request()
+        self.account_zone = None  # the bound account has no stored zone
+        # F50 Contract K: an unknown zone fails closed -- the org's yesterday is not yet proven
+        # complete for the account (`coverage.account_last_complete_day`).
+        with self.assertRaisesRegex(ValueError, "尚未完整結束"):
+            self.request()
+        unknown = self.request(end=self.end - timedelta(days=1))
         self.assertIsNone(unknown["evidence_json"]["window"]["timezone"])
         with patch.object(
             review_evidence.external_sync,
             "account_reader",
             return_value=(None, {"timezone_name": "UTC", "access_token": "private-not-evidence"}),
         ):
-            known = self.request(end=self.end - timedelta(days=1))
+            known = self.request(end=self.end - timedelta(days=2))
         self.assertEqual(known["evidence_json"]["window"]["timezone"], "UTC")
         self.assertNotIn("private-not-evidence", json.dumps(known["evidence_json"]))
 
@@ -628,6 +653,39 @@ class ReviewCycleTest(unittest.TestCase):
         self.assertNotEqual(
             client.get(base.replace(self.brand, "another-brand") + "/reviews").status_code, 200
         )
+
+    def test_api_defer_takes_revisit_on_as_an_org_calendar_date(self):
+        """F50 Contract K: today is a 400 with the deferral sentence; tomorrow is stored as
+        00:00 of that day in the org's zone."""
+        from fastapi.testclient import TestClient
+
+        from app.main import app
+
+        self.observation()
+        self.reply()
+        ready = self.run_review(self.request())
+        self.conn.commit()
+        client = TestClient(app)
+        url = (f"/api/ads/brands/{self.brand}/campaigns/{self.campaign}/reviews/"
+               f"{ready['id']}/decision")
+        today = settings.today_for_org(self.conn, org_id=self.org)
+        refused = client.post(url, json={
+            "decision": "deferred", "reason": "延後", "revisit_on": today.isoformat(),
+        })
+        self.assertEqual(refused.status_code, 400, refused.text)
+        self.assertEqual(refused.json()["error"]["message"],
+                         change_control_data.DEFERRAL_DAY_REFUSAL)
+        tomorrow = today + timedelta(days=1)
+        accepted = client.post(url, json={
+            "decision": "deferred", "reason": "延後", "revisit_on": tomorrow.isoformat(),
+        })
+        self.assertEqual(accepted.status_code, 200, accepted.text)
+        stored = self.conn.execute(
+            "SELECT status,revisit_at FROM ads_review_round WHERE id=%s", (ready["id"],)
+        ).fetchone()
+        self.assertEqual(stored["status"], "deferred")
+        self.assertEqual(stored["revisit_at"],
+                         settings.org_day_start(self.conn, org_id=self.org, day=tomorrow))
 
     def test_unsynced_day_inside_window_or_prior_period_is_refused(self):
         prior_start = self.start - timedelta(days=3)

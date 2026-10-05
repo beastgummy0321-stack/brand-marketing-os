@@ -17,11 +17,23 @@ Every judged window is clipped to the campaign: it ends at `min(cutoff, end_date
 earlier than `start_date` (`window`, `Days.clip`), so a day the campaign did not run is never a
 missing day. Readers call this module only; nothing else reads the stored ranges (scanner:
 `test_ads_one_ruler.py`). Read-only apart from the pure `with_range`.
+
+F50 Contract K: `last_complete_day` is the one answer to "which platform day is complete" for ads
+(triage, period grades, A/B, closeout coverage, review evidence and monitors, workspace totals,
+the home month, connections, tracked zeros, change timelines): yesterday in the campaign's ad
+account zone; for a brand, the earliest over its bound accounts; an account with no valid stored
+zone, or no account at all, fails closed to the org's yesterday minus one more day (the account
+zones in use spread up to ~26 h). A clean read records its range already cut to the account's
+last complete day when it finished (`external_sync`), so no reader clips a recorded range again.
 """
 
 from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from app.ads import channels
+from app.ads.adapters.external import SourceReadError
 from app.ads.external_repository import MONTHLY_BUDGET_ATTRIBUTION_KEY
+from app.core import settings
 
 DATA, EMPTY, MISSING = "data", "empty", "missing"
 # A served list of missing days stops here (F24-I01): a wall of dates says nothing more.
@@ -105,6 +117,86 @@ def window(campaign: dict, cutoff: date, days: int) -> tuple[date, date]:
 
 def _days(start: date, end: date) -> list[date]:
     return [start + timedelta(days=i) for i in range((end - start).days + 1)]
+
+
+# ---- F50 Contract K: the last complete platform day ---------------------------------------
+
+
+def account_zone(account: dict | None):
+    """The ad account's stored zone, `None` when missing or not a valid IANA name."""
+    try:
+        return ZoneInfo((account or {}).get("timezone_name") or "")
+    except (ValueError, ZoneInfoNotFoundError):
+        return None
+
+
+def _fallback_day(conn, org_id: str) -> date:
+    """No account or no stored zone: the org's yesterday minus one more day (fail closed)."""
+    return settings.last_complete_day(conn, org_id=org_id) - timedelta(days=1)
+
+
+def account_last_complete_day(conn, org_id: str, account: dict | None) -> date:
+    """Yesterday in `account`'s own zone (`settings.last_complete_day(zone=…)`), else the
+    fail-closed fallback."""
+    zone = account_zone(account)
+    if zone is None:
+        return _fallback_day(conn, org_id)
+    return settings.last_complete_day(conn, org_id=org_id, zone=zone)
+
+
+def _campaign_account(conn, org_id: str, brand_id: str, campaign_id: str) -> dict | None:
+    """The bound account this campaign's platform entities belong to, `None` when it has none or
+    the account is no longer bound to the brand."""
+    entity = conn.execute(
+        "SELECT platform,source_account FROM ads_external_entity WHERE org_id=%s AND brand_id=%s "
+        "AND campaign_id=%s ORDER BY parent_native_id IS NOT NULL, id LIMIT 1",
+        (org_id, brand_id, campaign_id),
+    ).fetchone()
+    if entity is None:
+        return None
+    from app.ads import external_sync  # lazy: external_sync's imports reach this module
+
+    try:
+        _, account = external_sync.account_reader(
+            conn, org_id, brand_id, entity["platform"], entity["source_account"]
+        )
+    except SourceReadError:
+        return None
+    return account
+
+
+def _brand_accounts(conn, org_id: str, brand_id: str) -> list[dict]:
+    """The accounts bound on every channel, plus those of any platform the brand's campaigns
+    already read from (the simulated channel is not a `CHANNELS` row)."""
+    platforms = [channel["key"] for channel in channels.CHANNELS]
+    platforms += sorted({
+        row["platform"] for row in conn.execute(
+            "SELECT DISTINCT platform FROM ads_external_entity WHERE org_id=%s AND brand_id=%s",
+            (org_id, brand_id),
+        ).fetchall()
+    } - set(platforms))
+    found = []
+    for platform in platforms:
+        reader = channels.external_reader(platform)
+        if reader is None:
+            continue
+        try:
+            found.extend(reader.accounts(conn, org_id, brand_id))
+        except SourceReadError:
+            found.append({})  # an unreadable binding counts as an account with no zone
+    return found
+
+
+def last_complete_day(conn, org_id: str, brand_id: str, campaign_id: str | None = None) -> date:
+    """The newest platform day that has fully ended: the campaign's ad account's yesterday; with
+    no campaign, the earliest over the brand's bound accounts; unknown -> the fallback."""
+    if campaign_id is not None:
+        return account_last_complete_day(
+            conn, org_id, _campaign_account(conn, org_id, brand_id, campaign_id))
+    accounts = _brand_accounts(conn, org_id, brand_id)
+    if not accounts:
+        return _fallback_day(conn, org_id)
+    return min(account_last_complete_day(conn, org_id, account) for account in accounts)
 
 
 class Days:

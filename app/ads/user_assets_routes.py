@@ -13,7 +13,7 @@ from app import storage, workbench
 from app.ads import media_probe
 from app.ads import user_assets as service
 from app.ads import user_assets_repository as repo
-from app.core import db
+from app.core import db, input_rules
 from app.shared import web
 
 
@@ -42,6 +42,16 @@ async def _json(request):
     if not isinstance(body, dict):
         raise web.ApiError(400, "invalid_json", "上傳描述必須是物件。")
     return body
+
+
+def _oversize(conn, actor, brand_id, upload_id, size) -> str:
+    """F50 Contract I: the oversize sentence of the one upload rule, naming the file."""
+    name = repo.get_upload(conn, actor.org_id, brand_id, upload_id).get("filename") or ""
+    try:
+        input_rules.check_upload(name, size, path="ad_asset")
+    except input_rules.InputRuleError as exc:
+        return str(exc)
+    return "檔案或批次超過大小上限。"
 
 
 def _error(exc):
@@ -109,8 +119,15 @@ async def upload(request: Request, brand_id: str, upload_id: str):
             except ValueError:
                 raise web.ApiError(400, "invalid_length", "檔案大小標頭無效。") from None
             if count < 0 or count > media_probe.MAX_BYTES:
-                raise web.ApiError(413, "upload_too_large", "單檔不能超過 50 MiB。")
-        content = await _body(request, media_probe.MAX_BYTES)
+                raise web.ApiError(413, "upload_too_large", _oversize(conn, actor, brand_id,
+                                                                      upload_id, count))
+        try:
+            content = await _body(request, media_probe.MAX_BYTES)
+        except web.ApiError as exc:
+            if exc.code != "upload_too_large":
+                raise
+            raise web.ApiError(413, "upload_too_large", _oversize(
+                conn, actor, brand_id, upload_id, media_probe.MAX_BYTES + 1)) from None
         storing = asyncio.create_task(
             run_in_threadpool(
                 service.accept_upload, conn, actor.org_id, brand_id, upload_id, content
@@ -129,10 +146,12 @@ async def upload(request: Request, brand_id: str, upload_id: str):
         elif begun:
             service.fail_upload(conn, actor.org_id, brand_id, upload_id, "上傳已中斷，可重試此檔。")
         raise
-    except web.ApiError:
+    except web.ApiError as exc:
         if begun:
             service.fail_upload(
-                conn, actor.org_id, brand_id, upload_id, "檔案超過大小上限或請求無效，可重試此檔。"
+                conn, actor.org_id, brand_id, upload_id,
+                exc.message if exc.code == "upload_too_large"
+                else "檔案超過大小上限或請求無效，可重試此檔。",
             )
         raise
     except ValueError as exc:

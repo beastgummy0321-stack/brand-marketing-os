@@ -84,10 +84,12 @@ def _guarded(conn, block: str, fn):
 # ---------------------------------------------------------------------------
 
 
-def _window(conn, org_id: str, month: str) -> dict:
+def _window(conn, org_id: str, brand_id: str, month: str) -> dict:
+    """The month's days; `cutoff` = the brand's last complete platform day (F50 Contract K,
+    `coverage.last_complete_day`), never past the month's end."""
     start, end, days_in_month, day_of_month = month_summary._month_window(conn, org_id, month)
     today = coresettings.today_for_org(conn, org_id=org_id)
-    cutoff = min(end, today - timedelta(days=1))
+    cutoff = min(end, coverage.last_complete_day(conn, org_id, brand_id))
     data_days = max((cutoff - start).days + 1, 0)
     return {
         "start": start, "end": end, "days_in_month": days_in_month,
@@ -619,7 +621,7 @@ def _closed_this_month(conn, org_id, brand_id, win) -> int:
 
 def get_overview(conn, org_id: str, brand_id: str, month: str) -> dict:
     month = month_summary._require_month(month)
-    win = _window(conn, org_id, month)
+    win = _window(conn, org_id, brand_id, month)
     campaigns = _campaigns(conn, org_id, brand_id)
     caps = _Caps(conn, org_id, brand_id, campaigns)
     states = _lifecycles(campaigns, lifecycle.roots(conn, org_id, brand_id), win["today"])

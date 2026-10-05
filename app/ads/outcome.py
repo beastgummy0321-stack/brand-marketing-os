@@ -16,12 +16,13 @@ coerced into zero. `spend`/`impressions`/`clicks` of a platform row may also be 
 sums the known ones (a row with no known spend adds nothing, it is not invented).
 
 Coverage (Contract P/Q, F49 Contract V): `coverage` names the campaign-window days nobody read
-(`coverage.gap`: no row and no clean read range) over `start_date … min(end_date, org yesterday)`
+(`coverage.gap`: no row and no clean read range) over
+`start_date … min(end_date, last complete day)`
 -- today is never a complete day -- and says `never_synced` instead of a wall of dates when
 nothing was read.
 """
 
-from datetime import date, timedelta
+from datetime import date
 
 from app.core import settings as coresettings
 from app.core.db import Conn, ConnProxy
@@ -107,15 +108,16 @@ def _daily_series(rows: list) -> list:
     return [{"day": day, **_bucket(day_rows)} for day, day_rows in sorted(by_day.items())]
 
 
-def _coverage(conn: _AnyConn, org_id: str, brand_id: str, campaign: dict, today: date) -> dict:
-    """Contract P's `coverage`: the campaign window `start_date … min(end_date, org yesterday)`
-    checked day by day by `coverage.gap` (F49 Contract V, the rule triage/closeout/review share).
+def _coverage(conn: _AnyConn, org_id: str, brand_id: str, campaign: dict) -> dict:
+    """Contract P's `coverage`: the campaign window `start_date … min(end_date, last complete
+    day)` (F50 Contract K: `coverage.last_complete_day`, the campaign's ad-account day) checked
+    day by day by `coverage.gap` (F49 Contract V, the rule triage/closeout/review share).
     No window (no start date, or it starts today or later) ⇒ `expected` 0 and nothing missing;
     `never_synced` still says whether anything was ever read."""
     from app.ads import coverage  # 延遲 import 避免循環
 
     start = campaign.get("start_date")
-    yesterday = today - timedelta(days=1)
+    yesterday = coverage.last_complete_day(conn, org_id, brand_id, campaign["id"])
     end = campaign.get("end_date")
     end = min(end, yesterday) if end is not None else yesterday
     if start is None or end < start:
@@ -244,6 +246,6 @@ def summary(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str) -> dic
         "daily": daily,
         "groups": groups_table,
         "ads": ads_table,
-        "coverage": _coverage(conn, org_id, brand_id, detail, today),
+        "coverage": _coverage(conn, org_id, brand_id, detail),
         "last_data_at": last_data_at,
     }

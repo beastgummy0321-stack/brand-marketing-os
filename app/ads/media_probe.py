@@ -9,7 +9,8 @@ from pathlib import Path
 
 from app.core import input_rules
 
-MAX_BYTES = 50 * 1024 * 1024
+# F50 Contract I: the one upload cap table (`input_rules.UPLOAD_CAPS`, the Storage limit).
+MAX_BYTES = input_rules.UPLOAD_CAPS["ad_asset"]
 MAX_PIXELS = 64_000_000
 
 
@@ -41,8 +42,10 @@ def _run(args, timeout):
 
 
 def preview(content: bytes) -> dict:
-    if not content or len(content) > MAX_BYTES:
-        raise MediaError("單檔必須介於 1 byte 與 50 MiB。")
+    try:
+        input_rules.check_upload("檔案", len(content or b""), path="ad_asset")
+    except input_rules.InputRuleError as exc:
+        raise MediaError(str(exc)) from None
     mime = sniff(content)
     probe, ffmpeg = shutil.which("ffprobe"), shutil.which("ffmpeg")
     if not probe or not ffmpeg:

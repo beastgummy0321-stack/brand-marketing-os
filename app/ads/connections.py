@@ -22,9 +22,10 @@ from its last good read, so a read in flight or failed never un-proves days) and
 each of its campaigns (`coverage.load`, F49 Contract V: a day with a row, or inside one of the
 campaign's clean read ranges -- kept on a failed read, so a failure after a good read leaves only
 the unread days missing). A read proves a day only once the day was over when the read finished:
-each range ends at most the day before its finish moment (`completed_at` for a month task, the
-section's `last_success_at` for a campaign) in the account's timezone, so a day read while still
-running is never `ok`. A campaign misses its unread days that no monthly read covered either,
+F50 Contract K -- `external_sync` records each clean range already cut to the account's last
+complete day at its finish, so this page reads the ranges as stored and agrees with triage, the
+totals and the home on whether a day was read. A campaign misses its unread days that no monthly
+read covered either,
 from its first read day on and inside its own dates; an account without campaign coverage misses
 the days its monthly reads did not cover, from its first monthly day on. Days before any read are
 `none`; an account never read at all misses every day (its note says 「還沒讀取過」, not a list of
@@ -34,10 +35,11 @@ Account state, first match: `auth_expired` / `failed` (the latest account-wide r
 task, the newest `monthly` task or a read that could not be requested, judged by
 `external_sync.outcome` (F49 Contract O) -- failed, or one of its open campaigns' own sync state is
 failed / auth_expired; auth through the adapters' auth-error classifier) / `never` (no coverage
-at all) / `missing_days` / `ok`. `missing_days` are the complete days (up to yesterday) of this
-month or of the last `LOOKBACK_DAYS` days, whichever starts earlier -- so a gap just before the
-1st still shows on the 1st. The calendar covers this month only; today and later days that are
-not read yet are `future`.
+at all) / `missing_days` / `ok`. `missing_days` are the complete days (up to the account's last
+complete day, `coverage.account_last_complete_day`) of this month or of the last `LOOKBACK_DAYS`
+days, whichever starts earlier -- so a gap just before the 1st still shows on the 1st. The
+calendar covers this month only; days after that last complete day that are not read yet are
+`future`.
 
 F47 Contract H: a failed account's note is its reason, then its gap. Every source carries
 `reread` -- on an `ad_account` row in state `failed` / `missing_days` / `never` it is the body of
@@ -46,7 +48,6 @@ F47 Contract H: a failed account's note is its reason, then its gap. Every sourc
 
 import calendar
 from datetime import date, datetime, timedelta
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.ads import (
     adapters,
@@ -88,44 +89,19 @@ def _moment(value):
     return value if isinstance(value, datetime) else None
 
 
-def _proven_until(finished, zone):
-    """The last day a read finished at `finished` proves (the day before, in `zone`); `None` when
-    there is no finish moment (the ranges as recorded)."""
-    moment = _moment(finished)
-    return None if moment is None else moment.astimezone(zone).date() - timedelta(days=1)
-
-
-def _proven(start, end, finished, zone):
-    """`[start, end]` cut to the days already over when the read finished (`finished`, in the
-    account's `zone`); `None` when no day is left. No finish moment -> the range as recorded."""
-    start = start if isinstance(start, date) else date.fromisoformat(start)
-    end = end if isinstance(end, date) else date.fromisoformat(end)
-    moment = _moment(finished)
-    if moment is not None:
-        end = min(end, moment.astimezone(zone).date() - timedelta(days=1))
-    return (start, end) if start <= end else None
-
-
-def _zone(conn, org_id, account):
-    try:
-        return ZoneInfo(account.get("timezone_name") or "")
-    except (ValueError, ZoneInfoNotFoundError):
-        return coresettings.org_timezone(conn, org_id=org_id)
-
-
-def _monthly_ranges(tasks, zone) -> list:
+def _monthly_ranges(tasks) -> list:
+    """The ranges the account's month reads proved, as recorded (F50 Contract K: a clean read is
+    stored already cut to the account's last complete day when it finished, so nothing is clipped
+    here): each month task's carried `last_covered` and, once succeeded, its own proof."""
     ranges = []
     for key, task in tasks.items():
         if not key.startswith("monthly:"):
             continue
-        proofs = [task.get("last_covered") or {}]
-        if task.get("status") == "succeeded":
-            proofs.append(task)
-        for proof in proofs:
+        for proof in (task.get("last_covered") or {}, external_sync.proven(task) or {}):
             if proof.get("start") and proof.get("end"):
-                proven = _proven(proof["start"], proof["end"], proof.get("completed_at"), zone)
-                if proven:
-                    ranges.append(proven)
+                start, end = date.fromisoformat(proof["start"]), date.fromisoformat(proof["end"])
+                if start <= end:
+                    ranges.append((start, end))
     return ranges
 
 
@@ -181,15 +157,16 @@ def _account(conn, org_id, brand_id, channel, account, span, accounts_cache):
     """One bound account: its source row and its calendar row."""
     platform, account_id = channel["key"], account["account_id"]
     today, window_start = span["today"], span["window_start"]
-    yesterday = today - timedelta(days=1)
+    # F50 Contract K: the account's last complete day -- the cutoff triage, totals and the home
+    # read for this account's campaigns too.
+    yesterday = coverage.account_last_complete_day(conn, org_id, account)
     job = conn.execute(
         "SELECT * FROM ads_external_sync_job WHERE org_id=%s AND brand_id=%s AND platform=%s "
         "AND source_account=%s",
         (org_id, brand_id, platform, account_id),
     ).fetchone()
     tasks = dict(job["tasks"] or {}) if job else {}
-    zone = _zone(conn, org_id, account)
-    monthly = _monthly_ranges(tasks, zone)
+    monthly = _monthly_ranges(tasks)
     moments = [job["last_success_at"]] if job else []
     failures = []  # (error_code, error text)
     newest_month = max((key for key in tasks if key.startswith("monthly:")), default=None)
@@ -212,12 +189,8 @@ def _account(conn, org_id, brand_id, channel, account, span, accounts_cache):
     affected = []
     campaign_covered = False
     for campaign in _account_campaigns(conn, org_id, brand_id, platform, account_id):
-        observed = ((campaign.get("context_json") or {}).get("external_sync") or {}).get(
-            "observations"
-        ) or {}
         read = coverage.load(
             conn, org_id, brand_id, campaign, window_start, yesterday,
-            proven_until=_proven_until(observed.get("last_success_at"), zone),
         ) if window_start <= yesterday else None
         sync = repository.campaign_sync_state(
             conn, org_id, brand_id, campaign, accounts_cache=accounts_cache,
@@ -278,7 +251,7 @@ def _account(conn, org_id, brand_id, channel, account, span, accounts_cache):
     def day_state(day: date) -> str:
         if day > today:
             return "future"
-        if day == today:
+        if day > yesterday:  # not complete for the account yet
             return "ok" if _covered(ranges, day) else "future"
         if day in missing:
             return "missing"

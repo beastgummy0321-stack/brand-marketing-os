@@ -90,13 +90,13 @@ def _read(conn, org, brand, campaign_row, items):
     days) from the first day after the earliest verification through the last recorded read day
     (or yesterday, whichever is later) -- `None` when no item is verified."""
     from app.ads import coverage  # Lazy: see module docstring for the import cycle this avoids.
-    from app.core import settings
 
     verified = [item["verified_at"] for item in items if item.get("verified_at")]
     if not verified:
         return None
     start = min(verified).date() + timedelta(days=1)
-    yesterday = settings.today_for_org(conn, org_id=org) - timedelta(days=1)
+    # F50 Contract K: the campaign's last complete platform day, the one every reader shares.
+    yesterday = coverage.last_complete_day(conn, org, brand, campaign_row["id"])
     end = max([start, yesterday, *(e for _, e in coverage.recorded(campaign_row))])
     return coverage.load(conn, org, brand, campaign_row, start, end)
 

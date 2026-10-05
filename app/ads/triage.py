@@ -1,19 +1,18 @@
 """app/ads/triage.py — F18-I02: classify every imported ad of a campaign by program against its
 own previous window. Pure reads: no LLM call, no platform write (ARCHITECTURE.md §0 "程式整理，
 LLM 判斷"). Platform-neutral (ARCHITECTURE.md §6.14/§6.15, F18 feature Decisions): no platform
-literal in this file, no adapter import, no `attribution_key` parsing -- window resolution reuses
-`app/ads/external_sync.py::account_reader`, metrics reuse `app/ads/review_evidence.py::aggregate`,
+literal in this file, no adapter import, no `attribution_key` parsing -- the judged cutoff is
+`coverage.last_complete_day` (F50 Contract K), metrics reuse
+`app/ads/review_evidence.py::aggregate`,
 never a second, divergent definition of "known".
 """
 
 from collections import defaultdict
 from datetime import timedelta
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.ads import (
     change_control_data,
     coverage,
-    external_sync,
     learning_rank,
     lifecycle,
     month_budget,
@@ -27,7 +26,6 @@ from app.ads import (
     triage_ladder,
     triage_scale,
 )
-from app.ads.adapters.external import SourceReadError
 from app.core import interrupts
 from app.core.db import now_utc
 from app.core.settings import today_for_org
@@ -276,36 +274,11 @@ def _read_days(conn, org_id, brand_id, campaign, cutoff):
 
 
 def _judged_cutoff(conn, org_id, brand_id, campaign):
-    """The last day this campaign is judged on: the account's last complete day, never past the
+    """The last day this campaign is judged on: its ad account's last complete day (F50 Contract
+    K, `coverage.last_complete_day` -- the one answer every reader shares), never past the
     campaign's own end date (`coverage.window`) -- an ended campaign is judged up to its end."""
-    cutoff = _account_cutoff(conn, org_id, brand_id, campaign["id"])
+    cutoff = coverage.last_complete_day(conn, org_id, brand_id, campaign["id"])
     return coverage.window(campaign, cutoff, 1)[1]
-
-
-def _account_cutoff(conn, org_id, brand_id, campaign_id):
-    """Last COMPLETE day in the AD ACCOUNT's own timezone (issue Done #4) -- same guard
-    `review_evidence.py::snapshot()` applies for "today is not a complete day", resolved for
-    whichever connected account this campaign's entities belong to (`external_sync.account_reader`,
-    same seam F18-I01's `external_sync.py::run_sync` uses). Unknown/unreachable account timezone
-    fails closed to `today_for_org - 2 days` (review fix: the real-world timezone spread is up to
-    ~26h, so "yesterday" alone is not always guaranteed complete)."""
-    today = today_for_org(conn, org_id=org_id)
-    fallback = today - timedelta(days=2)
-    entity = conn.execute(
-        "SELECT platform,source_account FROM ads_external_entity WHERE org_id=%s AND brand_id=%s "
-        "AND campaign_id=%s LIMIT 1",
-        (org_id, brand_id, campaign_id),
-    ).fetchone()
-    if entity is None:
-        return fallback
-    try:
-        _, account = external_sync.account_reader(
-            conn, org_id, brand_id, entity["platform"], entity["source_account"]
-        )
-        zone = ZoneInfo(account.get("timezone_name") or "")
-    except (SourceReadError, ValueError, ZoneInfoNotFoundError):
-        return fallback
-    return (now_utc().astimezone(zone) - timedelta(days=1)).date()
 
 
 def _previous_range(start, days):
@@ -533,6 +506,24 @@ def reasons() -> dict:
     }
 
 
+def limits() -> dict:
+    """F50 Contract I (decision 11): the limits the screens quote, read from the constants that
+    enforce them -- `review_monitor.DAYS_RANGE`／`DEFAULT_CADENCE_DAYS`,
+    `brief.DEFAULT_PERIOD_DAYS`, `change_control_data.COPY_ITEMS_MAX`,
+    `input_rules.UPLOAD_CAPS["ad_asset"]` (in MB)."""
+    from app.ads import brief, change_control_data, review_monitor  # lazy: they import triage
+    from app.core import input_rules
+
+    low, high = review_monitor.DAYS_RANGE
+    return {
+        "review_days": {"min": low, "max": high},
+        "review_cadence_default": review_monitor.DEFAULT_CADENCE_DAYS,
+        "campaign_default_days": brief.DEFAULT_PERIOD_DAYS,
+        "copy_items_max": change_control_data.COPY_ITEMS_MAX,
+        "upload_max_mb": input_rules.UPLOAD_CAPS["ad_asset"] // (1024 * 1024),
+    }
+
+
 def rules() -> dict:
     """F48 Contract R-API: every threshold, label and glossary sentence the screens print, read
     from this module and `learning_rank` (the two ruler modules) and `experiments.DEFAULT_RULES`
@@ -546,6 +537,7 @@ def rules() -> dict:
     unsold = _figure(STOP_LOSS_SPEND_MULTIPLE)
     return {
         "reasons": reasons(),
+        "limits": limits(),
         "grade": {
             "watch_band": WATCH_BAND, "unsold_spend_multiple": STOP_LOSS_SPEND_MULTIPLE,
             "min_results": MIN_RESULT_EVENTS, "min_days": WINDOW_STEPS[0],

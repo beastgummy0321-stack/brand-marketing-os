@@ -5,7 +5,7 @@ from datetime import date, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app import background
-from app.ads import channels, lifecycle, tracked_zero
+from app.ads import channels, coverage, lifecycle, tracked_zero
 from app.ads import external_repository as repo
 from app.ads.adapters.external import SourceReadError
 from app.ads.external_models import ExternalObservation
@@ -261,14 +261,39 @@ def _enqueue(job):
         )
 
 
+def _proven_end(conn, org_id, task, account) -> date | None:
+    """F50 Contract K: the last day a clean read of `[task.start, task.end]` proves --
+    `min(task.end, the account's last complete day now)` (`coverage.account_last_complete_day`);
+    `None` when no day of the range is over yet."""
+    if not task.get("start") or not task.get("end"):
+        return None
+    start, end = date.fromisoformat(task["start"]), date.fromisoformat(task["end"])
+    end = min(end, coverage.account_last_complete_day(conn, org_id, account))
+    return end if start <= end else None
+
+
+def proven(task) -> dict | None:
+    """The range a month task proved (`{start, end}`, already clipped when recorded): a
+    succeeded task's own `covered`; a task recorded before F50 its requested range as stored."""
+    if task.get("status") != "succeeded":
+        return None
+    if "covered" in task:
+        return task["covered"]
+    if task.get("start") and task.get("end"):
+        return {"start": task["start"], "end": task["end"]}
+    return None
+
+
 def _last_covered(old):
     """F30-I14: the last range a month task finished reading, carried across the reset below so
     the days it proved stay provable while the next read runs or after it fails. A succeeded task
-    is its own proof; otherwise the proof it already carried survives."""
+    is its own proof (`proven`); otherwise the proof it already carried survives."""
     if not old:
         return None
-    if old.get("status") == "succeeded" and old.get("start") and old.get("end"):
-        return {"start": old["start"], "end": old["end"], "completed_at": old.get("completed_at")}
+    if old.get("status") == "succeeded":
+        covered = proven(old)
+        if covered:
+            return {**covered, "completed_at": old.get("completed_at")}
     return old.get("last_covered")
 
 
@@ -704,58 +729,59 @@ def run_sync(org_id, brand_id, job_id):
                     "error_code": "partial_source_page" if errors else None,
                     "status": "pending" if page.cursor else "failed" if errors else "succeeded",
                 }
-                if not page.cursor and not errors:
+                finished = not page.cursor and not errors
+                # F50 Contract K: a clean read proves its days only up to the account's last
+                # complete day when it finished -- recorded clipped, so no reader clips again.
+                proven_end = (
+                    _proven_end(conn, org_id, task, current_account) if finished else None
+                )
+                if finished:
                     updated["completed_at"] = now_utc()
+                    if task["section"] == "monthly":
+                        updated["covered"] = (
+                            {"start": task["start"], "end": proven_end.isoformat()}
+                            if proven_end is not None else None
+                        )
                 if task["section"] not in {"list", "monthly"}:
                     state = {
                         "status": "partial" if errors else "syncing" if page.cursor else "success",
                         "last_attempt_at": now_utc(),
                         "error": "；".join(errors) if errors else None,
                     }
-                    if not page.cursor and not errors:
+                    if finished:
                         state["last_success_at"] = now_utc()
+                        if task["section"] == "observations" and proven_end is not None:
+                            state["coverage"] = {
+                                "start": task["start"], "end": proven_end.isoformat(),
+                            }
                         if task["section"] == "observations":
-                            state["coverage"] = {"start": task["start"], "end": task["end"]}
                             # F18-I01: derive conditional tracked zeros in this same transaction,
                             # only once this section's read for the covered window is complete
                             # and clean (no cursor, no errors) -- same place coverage is recorded.
-                            # The cutoff for "day is complete" is the AD ACCOUNT's own timezone
-                            # (review-arbitrated 2026-09-21 deviation from the issue's
-                            # `today_for_org` wording) -- same guard review_evidence.py's
-                            # `snapshot()` uses for "today is not a complete day" (§6.15), just
-                            # keyed by the account currently synced instead of the org.
+                            # The cutoff for "day is complete" is the one ads answer
+                            # (`coverage.account_last_complete_day`, F50 Contract K) for the
+                            # account just read; an unknown zone fails closed to the fallback.
                             try:
-                                zone = ZoneInfo(current_account.get("timezone_name") or "")
-                            except (ValueError, ZoneInfoNotFoundError):
-                                # Fail-closed, not fail-loud: an unknown/invalid account timezone
-                                # means the cutoff can't be resolved, so derivation is skipped
-                                # entirely (rows stay unknown) -- the platform read already
-                                # succeeded and that page must still be kept, not rolled back.
-                                zone = None
-                            if zone is not None:
-                                last_complete_day = (
-                                    now_utc().astimezone(zone) - timedelta(days=1)
-                                ).date()
-                                try:
-                                    tracked_zero.apply(
-                                        conn,
-                                        org_id,
-                                        brand_id,
-                                        task["campaign_id"],
-                                        date.fromisoformat(task["start"]),
-                                        date.fromisoformat(task["end"]),
-                                        last_complete_day,
-                                    )
-                                except SourceReadError:
-                                    raise
-                                except Exception as exc:
-                                    # Never a source read failure -- the platform read already
-                                    # succeeded; this is our own derivation rule breaking.
-                                    raise SourceReadError(
-                                        "推定 0 規則執行失敗，"
-                                        "已讀到的成效本身不受影響，可重新同步。",
-                                        "derive_failed",
-                                    ) from exc
+                                tracked_zero.apply(
+                                    conn,
+                                    org_id,
+                                    brand_id,
+                                    task["campaign_id"],
+                                    date.fromisoformat(task["start"]),
+                                    date.fromisoformat(task["end"]),
+                                    coverage.account_last_complete_day(
+                                        conn, org_id, current_account),
+                                )
+                            except SourceReadError:
+                                raise
+                            except Exception as exc:
+                                # Never a source read failure -- the platform read already
+                                # succeeded; this is our own derivation rule breaking.
+                                raise SourceReadError(
+                                    "推定 0 規則執行失敗，"
+                                    "已讀到的成效本身不受影響，可重新同步。",
+                                    "derive_failed",
+                                ) from exc
                     repo.record_sync(
                         conn,
                         org_id,

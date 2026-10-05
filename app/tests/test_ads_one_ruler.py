@@ -63,15 +63,18 @@ import app.main as main
 from app.ads import (
     ab_pairs,
     ads_learnings,
+    brief,
     budget,
+    change_control_data,
     experiments,
     learning_rank,
     month_summary,
     queue_done,
+    review_monitor,
     triage,
 )
 from app.brand_intelligence import repository as brands
-from app.core import db
+from app.core import db, input_rules
 
 ADS_DIR = Path(__file__).resolve().parent.parent / "ads"
 # (file relative to app/ads, enclosing function) pairs allowed to read `class`.
@@ -1155,7 +1158,18 @@ class RulesEndpointTest(unittest.TestCase):
         response = TestClient(main.app).get(f"/api/ads/brands/{self.brand}/rules")
         self.assertEqual(response.status_code, 200, response.text)
         body = response.json()
-        self.assertEqual(set(body), {"grade", "ab", "labels", "glossary", "reasons"})
+        self.assertEqual(set(body), {"grade", "ab", "labels", "glossary", "reasons", "limits"})
+        # F50 Contract I (decision 11): the limits the screens quote, from the owning constants.
+        self.assertEqual(body["limits"], {
+            "review_days": {"min": review_monitor.DAYS_RANGE[0],
+                            "max": review_monitor.DAYS_RANGE[1]},
+            "review_cadence_default": review_monitor.DEFAULT_CADENCE_DAYS,
+            "campaign_default_days": brief.DEFAULT_PERIOD_DAYS,
+            "copy_items_max": change_control_data.COPY_ITEMS_MAX,
+            "upload_max_mb": input_rules.UPLOAD_CAPS["ad_asset"] // (1024 * 1024),
+        })
+        self.assertEqual(body["limits"]["review_days"], {"min": 1, "max": 31})
+        self.assertEqual(body["limits"]["upload_max_mb"], 50)
         # F49 Contract Q: the wait reasons, as `triage.reasons()` builds them.
         self.assertEqual(body["reasons"], triage.reasons())
         self.assertEqual(body["grade"], {
