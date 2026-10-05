@@ -935,7 +935,7 @@ class BrandSpendRouteTest(_MetaDailySpendTestBase):
         row = body["campaigns"][0]
         self.assertAlmostEqual(row["spend"], 4000.0, places=2)
         self.assertEqual(row["campaign_name"], "活動一（改名後）", "顯示最後一天用的名稱")
-        self.assertAlmostEqual(row["roas"], 3.5, places=2)  # 花費加權：(1000*2+3000*4)/4000
+        self.assertAlmostEqual(row["roas_platform"], 3.5, places=2)  # 花費加權：(1000*2+3000*4)/4000
 
     def test_weighted_total_roas_and_null_propagation(self):
         today = org_today(web.conn, self.org_id)
@@ -946,21 +946,21 @@ class BrandSpendRouteTest(_MetaDailySpendTestBase):
         self.assertEqual(resp.status_code, 200)
         body = resp.json()
         self.assertEqual(len(body["campaigns"]), 2)
-        self.assertAlmostEqual(body["total"]["spend"], 4000.0, places=2)
+        self.assertAlmostEqual(body["totals"][0]["spend"], 4000.0, places=2)
         # 花費加權：(1000*2 + 3000*4) / 4000 = 3.5，不是天真平均 (2+4)/2=3。
-        self.assertAlmostEqual(body["total"]["roas"], 3.5, places=2)
+        self.assertAlmostEqual(body["totals"][0]["roas_platform"], 3.5, places=2)
 
         # 加一檔未追蹤的活動：任何一列 roas 是 None，總計就整組回 None——不能假裝
         # 那筆花費的營收被算進去了。
         self._insert_row("c3", today, 500, None)
         resp = self.client.get(f"/api/meta/brands/{self.brand_id}/spend", headers=self.auth)
         body = resp.json()
-        self.assertAlmostEqual(body["total"]["spend"], 4500.0, places=2)
-        self.assertIsNone(body["total"]["roas"])
+        self.assertAlmostEqual(body["totals"][0]["spend"], 4500.0, places=2)
+        self.assertIsNone(body["totals"][0]["roas_platform"])
         # 但個別已追蹤的活動小計還是各自的真實數字，不會被拖成 None。
         by_id = {c["campaign_id"]: c for c in body["campaigns"]}
-        self.assertAlmostEqual(by_id["c1"]["roas"], 2.0, places=2)
-        self.assertIsNone(by_id["c3"]["roas"])
+        self.assertAlmostEqual(by_id["c1"]["roas_platform"], 2.0, places=2)
+        self.assertIsNone(by_id["c3"]["roas_platform"])
 
     def test_rows_outside_this_month_are_excluded(self):
         today = org_today(web.conn, self.org_id)
@@ -969,7 +969,7 @@ class BrandSpendRouteTest(_MetaDailySpendTestBase):
         resp = self.client.get(f"/api/meta/brands/{self.brand_id}/spend", headers=self.auth)
         body = resp.json()
         self.assertEqual(body["campaigns"], [], "上個月的花費不該算進本月總計")
-        self.assertEqual(body["total"]["spend"], 0.0)
+        self.assertEqual(body["totals"], [])
 
     def test_brand_with_no_bound_account_has_empty_summary(self):
         empty_brand = bi_repo.create_brand(

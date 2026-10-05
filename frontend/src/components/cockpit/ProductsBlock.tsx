@@ -53,7 +53,7 @@ export function ProductsBlock({ brandId, scope }: { brandId: string; scope: stri
             type="button"
             variant="link"
             className="h-auto p-0 text-[13px]"
-            disabled={products.isFetching}
+            busy={products.isFetching}
             onClick={() => void products.refetch()}
           >
             重新載入

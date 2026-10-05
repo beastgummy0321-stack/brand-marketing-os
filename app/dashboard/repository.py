@@ -80,9 +80,12 @@ def brand_month_money(conn, *, org_id: str, brand_id: str, today: str) -> dict:
     account_ids = meta_repo.bound_account_ids_for_brand(conn, org_id, brand_id)
     # level="campaign"（票 S1）：meta_entity_spend 三層共用一張表，這裡只看月報要的
     # campaign 層總花費，不然 adset／ad 層的列會被一起加進來，變成三倍。
-    spend = meta_repo.spend_summary(
+    totals = meta_repo.spend_by_currency(
         conn, org_id, account_ids, month_start, month_end, level="campaign",
-    )["total"]["spend"]
+    )["totals"]
+    spend_by_currency = [{"currency": t["currency"], "spend": t["spend"]} for t in totals]
+    mixed_currency = any(t["currency"] != "TWD" for t in totals)
+    spend = sum(t["spend"] for t in totals) if not mixed_currency else None
 
     revenue_summary = orders_repo.channel_revenue_summary(conn, brand_id, since=since, until=until)
     revenue = revenue_summary["revenue"]
@@ -96,11 +99,13 @@ def brand_month_money(conn, *, org_id: str, brand_id: str, today: str) -> dict:
     roas = round(revenue / spend, 2) if spend and revenue is not None else None
 
     return {
-        "spend": spend,
+        "spend_by_currency": spend_by_currency,
+        "currency": "TWD",
         "revenue": revenue,
         "margin": margin,
         "margin_unknown_sku_count": margin_unknown_sku_count,
-        "roas": roas,
+        "roas_all_channels": roas,
+        "roas_unknown": "mixed_currency" if mixed_currency else None,
         "has_orders": revenue_summary["has_rows"],
         "marketplace_uncalibrated": revenue_summary["marketplace_uncalibrated"],
     }

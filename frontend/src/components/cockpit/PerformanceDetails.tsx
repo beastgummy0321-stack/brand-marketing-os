@@ -1,3 +1,4 @@
+import { Figure } from "@/components/layout/Figure";
 import { useEffect, useState, type ReactNode } from "react";
 import { CoordinateQuadrantChart } from "@/components/cockpit/CoordinateQuadrantChart";
 import {
@@ -11,7 +12,7 @@ import {
   COORDINATE_DIMENSIONS,
   type CoordinateDimension,
 } from "@/lib/coordinatesApi";
-import { formatCurrency, formatMetaRoas, formatMoney, formatRoas } from "@/lib/format";
+import { formatCurrency, formatMetaRoas, formatMoney } from "@/lib/format";
 import {
   fetchCreativePerformance,
   type CreativePerformanceCurrency,
@@ -68,11 +69,12 @@ export function MonthMoneySection({ brandId }: { brandId: string }) {
   }
 
   const {
-    spend,
+    spend_by_currency: spendByCurrency,
     revenue,
     margin,
     margin_unknown_sku_count: unknownSkuCount,
-    roas,
+    roas_all_channels: roas,
+    roas_unknown: roasUnknown,
     has_orders: hasOrders,
     marketplace_uncalibrated: marketplaceUncalibrated,
   } = state.data;
@@ -98,19 +100,19 @@ export function MonthMoneySection({ brandId }: { brandId: string }) {
           "其中平台商店的數字來自還沒拿真實匯出檔驗證過的匯入程式，這部分還不能全信。"}
       </p>
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <MoneyTile label="本月花費" value={formatCurrency(spend)} />
+        <MoneyTile label="本月花費" value={spendByCurrency.length ? spendByCurrency.map((row) => <span className="block" key={row.currency}>{formatMoney(row.spend, row.currency)}</span>) : "不明"} />
         <MoneyTile label="本月營收（全通路）" value={revenueText} />
         <MoneyTile label="本月毛利（官網）" value={marginText} />
         <MoneyTile
           label="全通路 ROAS（營收 ÷ 花費，非平台回報）"
-          value={formatRoas(roas)}
+          value={<Figure basis="roas_all_channels" value={roas} unknown={roasUnknown === "mixed_currency" ? "幣別不同，無法合併計算" : "不明"} />}
         />
       </div>
     </section>
   );
 }
 
-function MoneyTile({ label, value }: { label: string; value: string }) {
+function MoneyTile({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div className="rounded-md border border-border p-3">
       <p className="text-xs text-muted-foreground">{label}</p>

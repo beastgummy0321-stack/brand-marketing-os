@@ -71,9 +71,25 @@ class SpendFreshnessAndAttributionTest(unittest.TestCase):
         self._write_row()
         body = self._spend()
         self.assertIsNone(body["last_pull_at"])  # the account never finished a pull
-        self.assertEqual(body["total"]["spend"], 1200)
+        self.assertEqual(body["totals"][0]["spend"], 1200)
         self.assertIsNotNone(body["data_pulled_at"])
         self.assertEqual(body["attribution_label"], "點擊後 7 天＋瀏覽後 1 天")
+
+    def test_totals_never_sum_different_currencies(self):
+        self._write_row()
+        meta_repo.upsert_accounts(web.conn, self.org_id, [
+            {"account_id": "act-usd", "name": "USD account", "currency": "USD"},
+        ])
+        account = next(a for a in meta_repo.list_accounts(web.conn, self.org_id)
+                       if a["currency"] == "USD")
+        self.account_id = account["id"]
+        meta_repo.bind(web.conn, self.org_id, self.brand_id, self.account_id)
+        self._write_row()
+        body = self._spend()
+        self.assertNotIn("total", body)
+        self.assertEqual([(t["currency"], t["spend"], t["roas_platform"])
+                          for t in body["totals"]], [("TWD", 1200, 2.2), ("USD", 1200, 2.2)])
+        self.assertEqual([c["currency"] for c in body["campaigns"]], ["TWD", "USD"])
 
     def test_no_rows_means_both_unknown(self):
         body = self._spend()

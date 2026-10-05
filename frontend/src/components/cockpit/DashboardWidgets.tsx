@@ -1,3 +1,5 @@
+import { Figure } from "@/components/layout/Figure";
+import { formatMoney } from "@/lib/format";
 import { useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
@@ -13,7 +15,6 @@ import {
   type CoordinateDimension,
 } from "@/lib/coordinatesApi";
 import { splitPlottable } from "@/lib/quadrant";
-import { formatMetaRoas } from "@/lib/format";
 
 export const number = (value: number) =>
   value.toLocaleString("zh-TW", { maximumFractionDigits: 2 });
@@ -35,58 +36,25 @@ export function WidgetHeader({
   );
 }
 export function SpendDistribution({ data }: { data: MetaSpendSummary }) {
-  const rows = [...data.campaigns]
-    .sort((a, b) => b.spend - a.spend)
-    .slice(0, 5);
-  const max = Math.max(1, ...rows.map((r) => r.spend));
   return (
     <>
       <WidgetHeader title="活動花費分布" />
       <div className="surface-body">
-        <p className="metric-number mb-1">{number(data.total.spend)}</p>
-        <p className="mb-7 text-xs text-muted-foreground">
-          本月累計 · 依廣告帳戶回報金額
-        </p>
-        {!rows.length ? (
-          <EmptyState
-            title="尚無花費資料"
-            description="連接 Meta 並完成每日資料拉取後，這裡會顯示花費最高的活動。"
-
-            actionHref="/settings?tab=meta"
-            actionLabel="連接 Meta"
-          />
-        ) : (
-          <div className="grid gap-5">
-            {rows.map((row, i) => (
-              <div key={row.campaign_id}>
-                <div className="mb-2 flex justify-between gap-3 text-xs">
-                  <span className="truncate" title={row.campaign_name}>
-                    {row.campaign_name}
-                  </span>
-                  <span className="numeric">{number(row.spend)}</span>
-                </div>
-                <div className="h-2.5 rounded bg-muted">
-                  <div
-                    className="chart-bar"
-                    style={{
-                      width: `${(row.spend / max) * 100}%`,
-                      background: [
-                        "var(--color-primary)",
-                        "var(--color-chart-spend)",
-                        "var(--color-chart-aqua)",
-                        "var(--color-chart-soft)",
-                        "var(--color-chart-rest)",
-                      ][i],
-                    }}
-                  />
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-        <p className="mt-5 text-xs text-muted-foreground">
-          依花費排序，最多顯示 5 個活動。
-        </p>
+        {!data.campaigns.length ? (
+          <EmptyState title="尚無花費資料" description="連接 Meta 並完成每日資料拉取後，這裡會顯示花費最高的活動。" actionHref="/settings?tab=meta" actionLabel="連接 Meta" />
+        ) : data.totals.map((total) => {
+          const rows = data.campaigns.filter((row) => row.currency === total.currency).sort((a, b) => b.spend - a.spend).slice(0, 5);
+          const max = Math.max(1, ...rows.map((row) => row.spend));
+          return <section key={total.currency} className="mb-6">
+            <p className="metric-number mb-1">{formatMoney(total.spend, total.currency)}</p>
+            <p className="mb-7 text-xs text-muted-foreground">本月累計 · {total.currency} · 依廣告帳戶回報金額</p>
+            <div className="grid gap-5">{rows.map((row, i) => <div key={row.campaign_id}>
+              <div className="mb-2 flex justify-between gap-3 text-xs"><span className="truncate" title={row.campaign_name}>{row.campaign_name}</span><span className="numeric">{formatMoney(row.spend, row.currency)}</span></div>
+              <div className="h-2.5 rounded bg-muted"><div className="chart-bar" style={{ width: `${row.spend / max * 100}%`, background: ["var(--color-primary)", "var(--color-chart-spend)", "var(--color-chart-aqua)", "var(--color-chart-soft)", "var(--color-chart-rest)"][i] }} /></div>
+            </div>)}</div>
+          </section>;
+        })}
+        <p className="mt-5 text-xs text-muted-foreground">每種幣別各自依花費排序，最多顯示 5 個活動。</p>
       </div>
     </>
   );
@@ -120,17 +88,17 @@ export function CampaignTable({ data }: { data: MetaSpendSummary }) {
           </thead>
           <tbody>
             {data.campaigns.slice(current * 5, current * 5 + 5).map((row) => (
-              <tr key={row.campaign_id} className="border-t border-border">
+              <tr key={`${row.currency}:${row.campaign_id}`} className="border-t border-border">
                 <td className="max-w-52">
                   <span className="line-clamp-2" title={row.campaign_name}>
                     {row.campaign_name}
                   </span>
                 </td>
-                <td>{number(row.spend)}</td>
+                <td>{formatMoney(row.spend, row.currency)}</td>
                 <td>{number(row.impressions)}</td>
                 <td>{number(row.clicks)}</td>
                 <td className="font-medium text-primary">
-                  {formatMetaRoas(row.roas)}
+                  <Figure basis="roas_platform" value={row.roas_platform} />
                 </td>
               </tr>
             ))}
@@ -153,7 +121,7 @@ export function CampaignTable({ data }: { data: MetaSpendSummary }) {
           <Button
             size="sm"
             variant="ghost"
-            disabled={!current}
+            disabledReason={!current ? "已是第一頁" : null}
             onClick={() => setPage(current - 1)}
           >
             上一頁
@@ -161,7 +129,7 @@ export function CampaignTable({ data }: { data: MetaSpendSummary }) {
           <Button
             size="sm"
             variant="ghost"
-            disabled={current + 1 >= pageCount}
+            disabledReason={current + 1 >= pageCount ? "已是最後一頁" : null}
             onClick={() => setPage(current + 1)}
           >
             下一頁
@@ -256,7 +224,7 @@ export function PerformanceWidget({
   const breakeven = diagnosis.data?.breakeven.roas ?? null;
   const sorted = [...points].sort((a, b) => b.spend - a.spend).slice(0, 5);
   const max = Math.ceil(
-    Math.max(1, breakeven ?? 0, ...sorted.map((p) => Math.max(p.low, p.high))) *
+    Math.max(1, breakeven ?? 0, ...sorted.map((p) => Math.max(p.low, p.high))) * // ZERO_OK: axis minimum, not a reported figure
       1.15,
   );
   return (
@@ -365,8 +333,8 @@ export function PerformanceWidget({
         active?.untagged.ad_count ? (
           <p className="mt-2 text-xs text-muted-foreground">
             零花費 {noSpend.length} 項 · 未追蹤營收 {noRevenue.length} 項 ·
-            未標座標 {active?.untagged.ad_count ?? 0} 則（花費{" "}
-            {number(active?.untagged.spend ?? 0)} {selected?.currency}）
+            未標座標 {active?.untagged.ad_count ?? "不明"} 則（花費{" "}
+            {active ? number(active.untagged.spend) : "不明"} {selected?.currency}）
           </p>
         ) : (
           // Full coverage: say so, so "all matched" never looks like "not computed".

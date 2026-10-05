@@ -146,13 +146,17 @@ def unbind_account(request: Request, brand_id: str, ad_account_id: str):
 
 # ---- 票 05：品牌頁的本月花費／成效 ---------------------------------------------------
 
-class CampaignSpendOut(BaseModel):
-    campaign_id: str
-    campaign_name: str
+class SpendTotalOut(BaseModel):
+    currency: str
     spend: float
     impressions: int
     clicks: int
-    roas: float | None  # None＝未追蹤，前端據此顯示「未追蹤」，不是 0
+    roas_platform: float | None
+
+
+class CampaignSpendOut(SpendTotalOut):
+    campaign_id: str
+    campaign_name: str
 
 
 class SpendSummaryResponse(BaseModel):
@@ -162,7 +166,7 @@ class SpendSummaryResponse(BaseModel):
     data_pulled_at: datetime | None
     attribution_label: str | None
     campaigns: list[CampaignSpendOut]
-    total: CampaignSpendOut
+    totals: list[SpendTotalOut]
 
 
 @router.get("/brands/{brand_id}/spend", response_model=SpendSummaryResponse)
@@ -180,26 +184,17 @@ def brand_spend(request: Request, brand_id: str):
     today = coresettings.today_for_org(web.conn, org_id=actor.org_id)
     month_start = today.replace(day=1)
     month_end = (month_start + timedelta(days=32)).replace(day=1)
-    summary = repo.spend_summary(
+    summary = repo.spend_by_currency(
         web.conn, actor.org_id, account_ids, month_start, month_end, level="campaign",
     )
-    # repo.spend_summary 票 S1 起回 entity_id／entity_name（三層共用一支函式）——這支端點
-    # 的 HTTP 回應形狀不變（票 S1 D2）：對回 campaign_id／campaign_name，
-    # frontend/src/lib/metaApi.ts、CockpitPage.tsx 一個字都不用改。多出來的 ctr／cpc／
-    # cpm／cpa 四個鍵，CampaignSpendOut 沒有對應欄位，Pydantic v2 預設 extra="ignore"
-    # 會安靜丟掉，不會 500。
     campaigns = [
         CampaignSpendOut(
-            campaign_id=e["entity_id"], campaign_name=e["entity_name"], spend=e["spend"],
-            impressions=e["impressions"], clicks=e["clicks"], roas=e["roas"],
+            campaign_id=e["entity_id"], campaign_name=e["entity_name"], currency=e["currency"],
+            spend=e["spend"], impressions=e["impressions"], clicks=e["clicks"],
+            roas_platform=e["roas_platform"],
         )
         for e in summary["entities"]
     ]
-    total = CampaignSpendOut(
-        campaign_id="total", campaign_name="總計", spend=summary["total"]["spend"],
-        impressions=summary["total"]["impressions"], clicks=summary["total"]["clicks"],
-        roas=summary["total"]["roas"],
-    )
     freshness = repo.spend_freshness(
         web.conn, actor.org_id, account_ids, month_start, month_end, level="campaign",
     )
@@ -208,7 +203,7 @@ def brand_spend(request: Request, brand_id: str):
         data_pulled_at=freshness["data_pulled_at"],
         attribution_label=freshness["attribution_label"],
         campaigns=campaigns,
-        total=total,
+        totals=[SpendTotalOut(**t) for t in summary["totals"]],
     )
 
 

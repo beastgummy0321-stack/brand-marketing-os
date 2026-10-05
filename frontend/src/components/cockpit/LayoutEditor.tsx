@@ -112,7 +112,7 @@ export function LayoutEditor({
                   variant="ghost"
                   size="icon-sm"
                   aria-label={`${widgetLabels[w.id]}上移`}
-                  disabled={i === 0}
+                  disabledReason={i === 0 ? "已在最上方" : null}
                   onClick={() =>
                     onChange(reorderWidgets(view, w.id, view.widgets[i - 1].id))
                   }
@@ -123,7 +123,7 @@ export function LayoutEditor({
                   variant="ghost"
                   size="icon-sm"
                   aria-label={`${widgetLabels[w.id]}下移`}
-                  disabled={i === view.widgets.length - 1}
+                  disabledReason={i === view.widgets.length - 1 ? "已在最下方" : null}
                   onClick={() =>
                     onChange(reorderWidgets(view, w.id, view.widgets[i + 1].id))
                   }

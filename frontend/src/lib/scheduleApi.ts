@@ -4,7 +4,7 @@
  * 票 07 settled 段「API — 字面契約」直接寫死回應形狀，這裡逐欄對照，不套用別支
  * feature 的信封慣例。 */
 import type { Coordinate, CoordinateDimension } from "./coordinatesApi";
-import { apiFetch, errorMessageFrom, throwIfFailed } from "./http";
+import { apiFetch, readJson } from "./http";
 
 export interface ScheduleSplit {
   label: string;
@@ -307,9 +307,7 @@ export interface RejectEntryInput {
 
 async function getJson<T>(path: string): Promise<T> {
   const res = await apiFetch(path);
-  if (res.status === 404) throw new Error("找不到這個品牌。");
-  await throwIfFailed(res, `讀取失敗（狀態碼 ${res.status}）`);
-  return (await res.json()) as T;
+  return readJson<T>(res, `讀取失敗（狀態碼 ${res.status}）`);
 }
 
 export function fetchSchedule(brandId: string): Promise<ScheduleState> {
@@ -333,17 +331,7 @@ export async function createSchedulePlan(
       end_date: input.endDate,
     }),
   });
-  if (!res.ok) {
-    let message = `排程失敗（狀態碼 ${res.status}）`;
-    try {
-      const data = (await res.json()) as { error?: { message?: string } };
-      message = errorMessageFrom(data, message);
-    } catch {
-      // 回應不是 JSON，用預設訊息。
-    }
-    throw new Error(message);
-  }
-  return (await res.json()) as ScheduleState;
+  return readJson<ScheduleState>(res, `排程失敗（狀態碼 ${res.status}）`);
 }
 
 /** 票 09：選定一個既有方案，展開成三層結構。回傳形狀跟 `fetchSchedule`／
@@ -355,17 +343,7 @@ export async function expandPlanIntoTree(brandId: string, planIndex: number): Pr
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ plan_index: planIndex }),
   });
-  if (!res.ok) {
-    let message = `展開失敗（狀態碼 ${res.status}）`;
-    try {
-      const data = (await res.json()) as { error?: { message?: string } };
-      message = errorMessageFrom(data, message);
-    } catch {
-      // 回應不是 JSON，用預設訊息。
-    }
-    throw new Error(message);
-  }
-  return (await res.json()) as ScheduleState;
+  return readJson<ScheduleState>(res, `展開失敗（狀態碼 ${res.status}）`);
 }
 
 /** 票 11：把已展開的樹跟通路那邊實際發布的成果對起來——比對規則、儲存位置全部凍結在
@@ -377,17 +355,7 @@ export async function bindScheduleTree(brandId: string): Promise<ScheduleState> 
     headers: { "content-type": "application/json" },
     body: JSON.stringify({}),
   });
-  if (!res.ok) {
-    let message = `配對失敗（狀態碼 ${res.status}）`;
-    try {
-      const data = (await res.json()) as { error?: { message?: string } };
-      message = errorMessageFrom(data, message);
-    } catch {
-      // 回應不是 JSON，用預設訊息。
-    }
-    throw new Error(message);
-  }
-  return (await res.json()) as ScheduleState;
+  return readJson<ScheduleState>(res, `配對失敗（狀態碼 ${res.status}）`);
 }
 
 /** 票 01（ADR 0040）：核准目前展開的活動樹——金額、雜湊全部在後端算，這裡不接受、也
@@ -399,17 +367,7 @@ export async function approveScheduleTree(brandId: string): Promise<ScheduleStat
     headers: { "content-type": "application/json" },
     body: JSON.stringify({}),
   });
-  if (!res.ok) {
-    let message = `核准失敗（狀態碼 ${res.status}）`;
-    try {
-      const data = (await res.json()) as { error?: { message?: string } };
-      message = errorMessageFrom(data, message);
-    } catch {
-      // 回應不是 JSON，用預設訊息。
-    }
-    throw new Error(message);
-  }
-  return (await res.json()) as ScheduleState;
+  return readJson<ScheduleState>(res, `核准失敗（狀態碼 ${res.status}）`);
 }
 
 /** 票 01（ADR 0040）：撤回目前有效的核准——舊列留著（`revoked_at` 標記），不會被刪除。 */
@@ -418,17 +376,7 @@ export async function revokeScheduleApproval(brandId: string): Promise<ScheduleS
     `/api/schedule/brands/${encodeURIComponent(brandId)}/tree/approve/revoke`,
     { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({}) },
   );
-  if (!res.ok) {
-    let message = `撤回失敗（狀態碼 ${res.status}）`;
-    try {
-      const data = (await res.json()) as { error?: { message?: string } };
-      message = errorMessageFrom(data, message);
-    } catch {
-      // 回應不是 JSON，用預設訊息。
-    }
-    throw new Error(message);
-  }
-  return (await res.json()) as ScheduleState;
+  return readJson<ScheduleState>(res, `撤回失敗（狀態碼 ${res.status}）`);
 }
 
 /** 票 T2b（ADR 0053）：結算目前這個檔期——算法全部在後端，這裡不接受、也不送任何金額
@@ -438,17 +386,7 @@ export async function settleSchedulePeriod(brandId: string, periodId: string): P
     `/api/schedule/brands/${encodeURIComponent(brandId)}/periods/${encodeURIComponent(periodId)}/settle`,
     { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({}) },
   );
-  if (!res.ok) {
-    let message = `結算失敗（狀態碼 ${res.status}）`;
-    try {
-      const data = (await res.json()) as { error?: { message?: string } };
-      message = errorMessageFrom(data, message);
-    } catch {
-      // 回應不是 JSON，用預設訊息。
-    }
-    throw new Error(message);
-  }
-  return (await res.json()) as ScheduleState;
+  return readJson<ScheduleState>(res, `結算失敗（狀態碼 ${res.status}）`);
 }
 
 /** 票 10-feedback-entries：拒絕整批方案——每條意見變一列規則，再用凍結參數重新排程，
@@ -468,17 +406,7 @@ export async function rejectSchedulePlans(
       })),
     }),
   });
-  if (!res.ok) {
-    let message = `送出失敗（狀態碼 ${res.status}）`;
-    try {
-      const data = (await res.json()) as { error?: { message?: string } };
-      message = errorMessageFrom(data, message);
-    } catch {
-      // 回應不是 JSON，用預設訊息。
-    }
-    throw new Error(message);
-  }
-  return (await res.json()) as ScheduleState;
+  return readJson<ScheduleState>(res, `送出失敗（狀態碼 ${res.status}）`);
 }
 
 /** 票 T5（ADR 0057）：本月每個座標維度的花費／成效——沒有查詢參數，窗口固定是這個日曆月
@@ -591,17 +519,7 @@ export async function runDiagnosis(brandId: string): Promise<Diagnosis> {
     headers: { "content-type": "application/json" },
     body: JSON.stringify({}),
   });
-  if (!res.ok) {
-    let message = `判讀失敗（狀態碼 ${res.status}）`;
-    try {
-      const data = (await res.json()) as { error?: { message?: string } };
-      message = errorMessageFrom(data, message);
-    } catch {
-      // 回應不是 JSON，用預設訊息。
-    }
-    throw new Error(message);
-  }
-  return (await res.json()) as Diagnosis;
+  return readJson<Diagnosis>(res, `判讀失敗（狀態碼 ${res.status}）`);
 }
 
 /** 票 02：「採用」一條建議 → 品牌規則卡（`app/schedule/routes.py` `_run_diagnosis_adopt`）。
@@ -624,17 +542,7 @@ export async function adoptSuggestion(
       body: JSON.stringify({ suggestion_index: suggestionIndex }),
     },
   );
-  if (!res.ok) {
-    let message = `採用失敗（狀態碼 ${res.status}）`;
-    try {
-      const data = (await res.json()) as { error?: { message?: string } };
-      message = errorMessageFrom(data, message);
-    } catch {
-      // 回應不是 JSON，用預設訊息。
-    }
-    throw new Error(message);
-  }
-  return (await res.json()) as DiagnosisAdoptResult;
+  return readJson<DiagnosisAdoptResult>(res, `採用失敗（狀態碼 ${res.status}）`);
 }
 
 // ---- 票 past-ads/03（ADR 0067）：投放史頁面——讀老廣告的成效排名，owner 自己標座標 ----
@@ -721,17 +629,7 @@ export async function tagHistoryAd(
       body: JSON.stringify(body),
     },
   );
-  if (!res.ok) {
-    let message = `標記失敗（狀態碼 ${res.status}）`;
-    try {
-      const data = (await res.json()) as { error?: { message?: string } };
-      message = errorMessageFrom(data, message);
-    } catch {
-      // 回應不是 JSON，用預設訊息。
-    }
-    throw new Error(message);
-  }
-  return (await res.json()) as TagHistoryAdResult;
+  return readJson<TagHistoryAdResult>(res, `標記失敗（狀態碼 ${res.status}）`);
 }
 
 /** 票 past-ads/09（ADR 0067 §1.9 amendment）：owner 按「重新抓素材」——清掉這批 id 的
@@ -752,15 +650,5 @@ export async function refetchHistoryCreatives(
       body: JSON.stringify({ external_ids: externalIds }),
     },
   );
-  if (!res.ok) {
-    let message = `重新抓素材失敗（狀態碼 ${res.status}）`;
-    try {
-      const data = (await res.json()) as { error?: { message?: string } };
-      message = errorMessageFrom(data, message);
-    } catch {
-      // 回應不是 JSON，用預設訊息。
-    }
-    throw new Error(message);
-  }
-  return (await res.json()) as RefetchHistoryCreativesResult;
+  return readJson<RefetchHistoryCreativesResult>(res, `重新抓素材失敗（狀態碼 ${res.status}）`);
 }

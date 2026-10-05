@@ -52,12 +52,14 @@ export async function fetchArchivedBrands(): Promise<ArchivedBrand[]> {
  * 不是 0。票 12：revenue 是全通路加總（官網、平台商店、實體店…），margin 仍然只有官網
  * ——只有官網訂單有品項與成本，見 CockpitPage.tsx MonthMoneySection 檔頭說明。 */
 export interface BrandMonthMoney {
-  spend: number;
+  spend_by_currency: { currency: string; spend: number }[];
+  currency: string;
   revenue: number | null;
   margin: number | null;
   /** 有營收但沒登記單位成本的 SKU 數——毛利算不出來時，畫面用這個數字講清楚原因。 */
   margin_unknown_sku_count: number;
-  roas: number | null;
+  roas_all_channels: number | null;
+  roas_unknown: "mixed_currency" | null;
   /** 這個品牌本月以外是不是曾經有過任何訂單；false＝空態，不是零收入。 */
   has_orders: boolean;
   /** 這段區間內是否有任何平台商店（marketplace）通路的營收列——蝦皮等平台的欄位對照

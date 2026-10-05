@@ -1,3 +1,4 @@
+vi.mock("@/lib/figures", async (actual) => ({ ...await actual<typeof import("@/lib/figures")>(), useFigureBases: () => ({roas_platform: {label: "平台回報", formula: "平台回報的購買金額 ÷ 花費", unit: "ratio"}}) }));
 import { render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
@@ -90,14 +91,14 @@ describe("CampaignTable 剛配對的活動", () => {
   it("表格下方說明剛配對的活動要等下一次每日讀取", () => {
     const total = {
       campaign_id: "total", campaign_name: "總計", spend: 1200, impressions: 3000, clicks: 90,
-      roas: 2.2,
+      roas_platform: 2.2, currency: "TWD",
     };
     const data: MetaSpendSummary = {
       last_pull_at: null,
       data_pulled_at: null,
       attribution_label: null,
       campaigns: [{ ...total, campaign_id: "c-1", campaign_name: "活動一" }],
-      total,
+      totals: [total],
     };
     render(
       <MemoryRouter>
