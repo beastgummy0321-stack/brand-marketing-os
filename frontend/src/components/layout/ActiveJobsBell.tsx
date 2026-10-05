@@ -1,3 +1,4 @@
+import { Link } from "react-router-dom";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import {
   ACTIVE_JOB_KIND_LABELS,
@@ -91,10 +92,8 @@ function JobRow({ job, onPick }: { job: ActiveJob; onPick: () => void }) {
   const ahead = job.position - 1;
   return (
     <li className="border-t border-border">
-      {/* B0-16: action_url is a full `/app/...` path from the backend, so a plain <a>, not a
-       * react-router <Link> (which would prepend the `/app` basename a second time). */}
-      <a
-        href={job.action_url}
+      <Link
+        to={job.action_url}
         onClick={onPick}
         className="grid grid-cols-[22px_minmax(0,1fr)_auto] items-center gap-2.5 py-2.5 text-[13px] hover:text-primary"
       >
@@ -118,7 +117,7 @@ function JobRow({ job, onPick }: { job: ActiveJob; onPick: () => void }) {
               ? `前面還有 ${ahead} 件`
               : "下一個就輪到"}
         </span>
-      </a>
+      </Link>
     </li>
   );
 }

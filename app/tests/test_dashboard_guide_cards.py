@@ -41,7 +41,7 @@ class ConversionGoalMissingRuleTest(unittest.TestCase):
         card = guide_cards.RULES["conversion_goal_missing"](facts)
         self.assertIsNotNone(card)
         self.assertIn("廣告目標", card["title"])
-        self.assertEqual(card["action_url"], f"/app/brands/{BRAND_ID}/library")
+        self.assertEqual(card["action_url"], f"/brands/{BRAND_ID}/library")
 
     def test_does_not_trigger_when_conversion_goal_set(self):
         self.assertIsNone(guide_cards.RULES["conversion_goal_missing"](_facts()))
@@ -59,7 +59,7 @@ class PastAdsPendingRuleTest(unittest.TestCase):
         facts = _facts(advertising_history="has_history", imported_ad_count=0)
         card = guide_cards.RULES["past_ads_pending"](facts)
         self.assertIsNotNone(card)
-        self.assertEqual(card["action_url"], f"/app/brands/{BRAND_ID}/intake/history")
+        self.assertEqual(card["action_url"], f"/brands/{BRAND_ID}/intake/history")
 
     def test_does_not_trigger_when_already_imported(self):
         facts = _facts(advertising_history="has_history", imported_ad_count=3)
@@ -81,7 +81,7 @@ class PastAdsPendingRuleTest(unittest.TestCase):
             conversion_goal=None,
             advertising_history="has_history",
             imported_ad_count=0,
-            intake_draft={"step": 2, "resume_path": f"/app/brands/{BRAND_ID}/intake"},
+            intake_draft={"step": 2, "resume_path": f"/brands/{BRAND_ID}/intake"},
         )
         cards = guide_cards.build(facts)
         self.assertIn("投放過廣告", cards[0]["title"])
@@ -93,7 +93,7 @@ class PendingFactsRuleTest(unittest.TestCase):
         card = guide_cards.RULES["pending_facts"](facts)
         self.assertIsNotNone(card)
         self.assertIn("3", card["title"])
-        self.assertEqual(card["action_url"], f"/app/brands/{BRAND_ID}/library?tab=facts")
+        self.assertEqual(card["action_url"], f"/brands/{BRAND_ID}/library?tab=facts")
 
     def test_does_not_trigger_when_count_zero(self):
         facts = _facts(pending_facts_count=0)
@@ -107,7 +107,7 @@ class BuildPriorityAndCapTest(unittest.TestCase):
     def test_cards_come_back_in_registration_order(self):
         facts = _facts(
             conversion_goal=None,
-            intake_draft={"step": 2, "resume_path": f"/app/brands/{BRAND_ID}/intake"},
+            intake_draft={"step": 2, "resume_path": f"/brands/{BRAND_ID}/intake"},
             pending_facts_count=2,
         )
         # 三條規則刻意同時滿足各自的觸發條件，純粹測 build() 的排序，
@@ -122,7 +122,7 @@ class BuildPriorityAndCapTest(unittest.TestCase):
         facts = _facts(pending_facts_count=1)
         cards = guide_cards.build(facts)
         self.assertEqual(len(cards), 1)
-        self.assertEqual(cards[0]["action_url"], f"/app/brands/{BRAND_ID}/library?tab=facts")
+        self.assertEqual(cards[0]["action_url"], f"/brands/{BRAND_ID}/library?tab=facts")
 
 
 if __name__ == "__main__":

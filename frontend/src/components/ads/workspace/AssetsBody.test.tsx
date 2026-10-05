@@ -390,7 +390,7 @@ describe("AssetsBody — uploading into a slot", () => {
 });
 
 describe("AssetsBody — two halves (F35 Contract T)", () => {
-  const SET_HREF = "/app/brands/brd_1/workbench/packs/pk_9/sets/wb_set_1";
+  const SET_HREF = "/brands/brd_1/workbench/packs/pk_9/sets/wb_set_1";
   const copy1 = { source: "workbench" as const, label: "工作檯第 1 版", headline: "讀書工作通勤，少一個步驟", body: "免配水、免拆包裝，一顆 50 mg，思緒不被打斷。", description: null };
   const copy2 = { source: "placement" as const, label: "已確認", headline: "通勤路上，一顆就好", body: "捷運上不用找水，包裝單手撕開。", description: "免配水" };
   /** The realistic draft: one copy-only, one ready, one image-only, one missing (the drill-6 names, longest first). */
@@ -699,7 +699,7 @@ describe("AssetsBody — F40-I09: the tab updates itself and says what each slot
 });
 
 describe("AssetsBody — F44-I05: a blocked slot says why and offers its exit (prototype f44-blocked-slot)", () => {
-  const SET_HREF = "/app/brands/brd_1/workbench/packs/pk_9/sets/wb_set_1";
+  const SET_HREF = "/brands/brd_1/workbench/packs/pk_9/sets/wb_set_1";
   const thumbOf = (id: string) => `https://scontent.example/creative/${id}.jpg`;
   const waiting = (headline: string, body: string) => ({ source: "placement" as const, label: "待確認", headline, body, description: "每天兩顆" });
   const NAME_READY = "通勤族・三盒組優惠價";
@@ -1009,7 +1009,7 @@ describe("AssetsBody — F44-I05: a blocked slot says why and offers its exit (p
 });
 
 describe("AssetsBody — F45-I08: 處理中, 等你 and 卡住 told apart (prototype f45-slot-states #/c1/assets, Contract W)", () => {
-  const SET = (n: number) => `/app/brands/brd_1/workbench/packs/pk_9/sets/wb_set_${n}`;
+  const SET = (n: number) => `/brands/brd_1/workbench/packs/pk_9/sets/wb_set_${n}`;
   const thumbOf = (id: string) => `https://scontent.example/creative/${id}.jpg`;
   const placed = (label: string, body: string, headline: string | null = null) => ({ source: "placement" as const, label, headline, body, description: null });
   const NAMES = {
@@ -1231,7 +1231,7 @@ describe("AssetsBody — F45-I08: 處理中, 等你 and 卡住 told apart (proto
 });
 
 describe("AssetsBody — F49 Contract T: every slot state told in the served words (drill-11 R2 B5／P4)", () => {
-  const SET = "/app/brands/brd_1/workbench/packs/pk_9/sets/wb_set_2";
+  const SET = "/brands/brd_1/workbench/packs/pk_9/sets/wb_set_2";
   const thumbOf = (id: string) => `https://scontent.example/creative/${id}.jpg`;
   const placed = (label: string, body: string) => ({ source: "placement" as const, label, headline: null, body, description: null });
   const N = {

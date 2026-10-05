@@ -11,7 +11,7 @@ class StudioProgressTest(_WorkbenchPackApiTestBase):
     def test_generation_states_and_tenant_scoped_destination(self):
         pack_id = self._submit_pack([self._one_set("p2", {"copy": 1})])
         brief_id = self._briefs(pack_id)[0]["id"]
-        url = f"/app/brands/{self.brand_id}/workbench/packs/{pack_id}/sets/{brief_id}"
+        url = f"/brands/{self.brand_id}/workbench/packs/{pack_id}/sets/{brief_id}"
         self.assertEqual(
             workbench.set_action_url(web.conn, self.org_id, self.brand_id, brief_id), url
         )

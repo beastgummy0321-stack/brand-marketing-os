@@ -133,7 +133,7 @@ export function CockpitPage({ brandId }: { brandId: string }) {
         title="找不到這個品牌"
         description="請從品牌總覽選擇你有權限的品牌。"
         actionHref="/"
-        actionInternal
+
         actionLabel="品牌總覽"
       />
     );

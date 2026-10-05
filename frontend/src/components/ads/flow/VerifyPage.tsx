@@ -308,7 +308,7 @@ export function VerifyPage({ brandId, campaignId, setId }: {
           description="網址可能過期，或這份清單已經被另一份取代。"
           actionHref={homeHref}
           actionLabel="回投放中心"
-          actionInternal
+
         />
       </div>
     );
@@ -336,7 +336,7 @@ export function VerifyPage({ brandId, campaignId, setId }: {
           description="請到活動的「變更與核對」查看完整內容並逐項處理。"
           actionHref={campaignChangesPath(brandId, campaignId)}
           actionLabel="前往變更與核對"
-          actionInternal
+
         />
       </div>
     );

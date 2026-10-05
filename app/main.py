@@ -150,7 +150,7 @@ class _SpaStaticFiles(StaticFiles):
 
 _FRONTEND_DIST = web.BASE_DIR.parent / "frontend" / "dist"
 if _FRONTEND_DIST.is_dir():
-    app.mount("/app", _SpaStaticFiles(directory=_FRONTEND_DIST, html=True), name="react-shell")
+    app.mount(web.app_url("/").rstrip("/"), _SpaStaticFiles(directory=_FRONTEND_DIST, html=True), name="react-shell")
 
 @app.middleware("http")
 async def _db_connection_middleware(request: Request, call_next):
@@ -178,7 +178,7 @@ async def _db_connection_middleware(request: Request, call_next):
 
 @app.get("/")
 def brand_overview(brand: str | None = None):
-    destination = f"/app/brands/{brand}" if brand else "/app/"
+    destination = web.app_url(f"/brands/{brand}") if brand else web.app_url("/")
     return RedirectResponse(destination, status_code=303)
 
 
@@ -490,7 +490,7 @@ def _error_page(message: str) -> str:
     return (
         "<!doctype html><html><head><meta charset=\"utf-8\"><title>行銷作業系統</title></head>"
         "<body style=\"font-family:sans-serif;text-align:center;padding:4rem 1rem;\">"
-        f"<p>{message}</p><p><a href=\"/app/\">回首頁</a></p>"
+        f"<p>{message}</p><p><a href=\"{web.app_url('/')}\">回首頁</a></p>"
         "</body></html>"
     )
 

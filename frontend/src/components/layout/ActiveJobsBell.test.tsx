@@ -1,3 +1,4 @@
+import { MemoryRouter } from "react-router-dom";
 /** frontend/src/components/layout/ActiveJobsBell.test.tsx — F29-I05 (feature Contract G; prototype
  * v10 `topRight()`/`renderJobs()`, demos `jobs:ok` and `jobs:fail`): the top-bar pill says what
  * runs now and how many wait, the panel lists each job with its place in the whole queue and
@@ -27,7 +28,7 @@ function job(overrides: Partial<ActiveJob>): ActiveJob {
     status: "queued",
     stage: "讀取廣告平台成效中",
     started_at: "",
-    action_url: "/app/brands/brd_bughunt/ads/connections",
+    action_url: "/brands/brd_bughunt/ads/connections",
     position: 1,
     task_name: "background.ads_external_sync",
     scope: {},
@@ -40,8 +41,8 @@ function job(overrides: Partial<ActiveJob>): ActiveJob {
 const QUEUE: ActiveJobsSnapshot = {
   data: [
     job({ status: "running", position: 1, waited_seconds: 70, started_at: "2026-09-23T02:39:00Z" }),
-    job({ kind: "ads_angles", task_name: "background.ads_angles", position: 3, scope: { campaign_id: "cmp_daily", entity_id: "ent_1" }, action_url: "/app/brands/brd_bughunt/ads/campaigns/cmp_daily/detail" }),
-    job({ kind: "workbench_generate", task_name: "background.workbench_generate", position: 4, action_url: "/app/brands/brd_bughunt/workbench" }),
+    job({ kind: "ads_angles", task_name: "background.ads_angles", position: 3, scope: { campaign_id: "cmp_daily", entity_id: "ent_1" }, action_url: "/brands/brd_bughunt/ads/campaigns/cmp_daily/detail" }),
+    job({ kind: "workbench_generate", task_name: "background.workbench_generate", position: 4, action_url: "/brands/brd_bughunt/workbench" }),
     job({ kind: "ads_review", task_name: "background.ads_review_round", position: 5, waited_seconds: 5 }),
   ],
   total: 5,
@@ -58,14 +59,14 @@ beforeEach(() => {
 describe("ActiveJobsBell", () => {
   it("pill: what runs now and how many of yours wait", async () => {
     vi.mocked(fetchActiveJobs).mockResolvedValue(QUEUE);
-    render(<ActiveJobsBell />);
+    render(<MemoryRouter><ActiveJobsBell /></MemoryRouter>);
     const pill = await screen.findByRole("button", { name: /正在同步成效・還有 3 件排隊/ });
     expect(pill.getAttribute("aria-expanded")).toBe("false");
   });
 
   it("panel: position over the whole queue, 前面還有 N 件, today's line; Escape returns focus to the pill", async () => {
     vi.mocked(fetchActiveJobs).mockResolvedValue(QUEUE);
-    render(<ActiveJobsBell />);
+    render(<MemoryRouter><ActiveJobsBell /></MemoryRouter>);
     const pill = await screen.findByRole("button", { name: /正在同步成效/ });
     await userEvent.click(pill);
 
@@ -80,7 +81,7 @@ describe("ActiveJobsBell", () => {
     expect(rows[1].textContent).toContain("3");
     expect(rows[1].textContent).toContain("前面還有 2 件");
     expect(rows[3].textContent).toContain("前面還有 4 件");
-    expect(within(rows[1]).getByRole("link").getAttribute("href")).toBe("/app/brands/brd_bughunt/ads/campaigns/cmp_daily/detail");
+    expect(within(rows[1]).getByRole("link").getAttribute("href")).toBe("/brands/brd_bughunt/ads/campaigns/cmp_daily/detail");
     expect(panel.textContent).toContain("今天做完 12 件・失敗 0 件");
     expect(document.activeElement?.textContent).toBe("關閉");
 
@@ -91,26 +92,26 @@ describe("ActiveJobsBell", () => {
 
   it("讀取於 prints 08:30 for 00:30Z with the org in Taipei, whatever the runner's zone (F50-I14, Contract K)", async () => {
     vi.mocked(fetchActiveJobs).mockResolvedValue({ ...QUEUE, generated_at: "2026-10-03T00:30:00Z" });
-    render(<ActiveJobsBell />);
+    render(<MemoryRouter><ActiveJobsBell /></MemoryRouter>);
     await userEvent.click(await screen.findByRole("button", { name: /正在同步成效/ }));
     expect(screen.getByRole("dialog", { name: "背景工作" }).textContent).toContain("讀取於 10/03 08:30");
   });
 
   it("nothing of yours queued behind the running one: no 「還有 0 件」", async () => {
     vi.mocked(fetchActiveJobs).mockResolvedValue({ ...QUEUE, data: [QUEUE.data[0]], total: 1, other_count: 0 });
-    render(<ActiveJobsBell />);
+    render(<MemoryRouter><ActiveJobsBell /></MemoryRouter>);
     expect(await screen.findByRole("button", { name: /^正在同步成效 ›$|正在同步成效$/ })).toBeTruthy();
   });
 
   it("only queued: says where the first one stands", async () => {
     vi.mocked(fetchActiveJobs).mockResolvedValue({ ...QUEUE, data: [QUEUE.data[1]], total: 3, other_count: 2 });
-    render(<ActiveJobsBell />);
+    render(<MemoryRouter><ActiveJobsBell /></MemoryRouter>);
     expect(await screen.findByRole("button", { name: /整理廣告主打排隊中・前面還有 2 件/ })).toBeTruthy();
   });
 
   it("empty but read fine: says nothing runs, still shows today's line", async () => {
     vi.mocked(fetchActiveJobs).mockResolvedValue({ ...QUEUE, data: [], total: 0, other_count: 0, done_today: 3, failed_today: 1 });
-    render(<ActiveJobsBell />);
+    render(<MemoryRouter><ActiveJobsBell /></MemoryRouter>);
     await userEvent.click(await screen.findByRole("button", { name: /沒有背景工作在跑/ }));
     const panel = screen.getByRole("dialog", { name: "背景工作" });
     expect(panel.textContent).toContain("目前沒有你的背景工作在跑");
@@ -119,7 +120,7 @@ describe("ActiveJobsBell", () => {
 
   it("failed read: its own state with 重試, never an empty list; retry reads again", async () => {
     vi.mocked(fetchActiveJobs).mockRejectedValueOnce(new Error("讀取失敗（狀態碼 500）")).mockResolvedValue(QUEUE);
-    render(<ActiveJobsBell />);
+    render(<MemoryRouter><ActiveJobsBell /></MemoryRouter>);
     const pill = await screen.findByRole("button", { name: /背景工作讀取失敗・點開重試/ });
     await userEvent.click(pill);
 
@@ -140,7 +141,7 @@ describe("ActiveJobsBell", () => {
       total: 1, other_count: 0, worker_alive: false, stalled: true,
     };
     vi.mocked(fetchActiveJobs).mockResolvedValue(stalled);
-    render(<ActiveJobsBell />);
+    render(<MemoryRouter><ActiveJobsBell /></MemoryRouter>);
     const pill = await screen.findByRole("button", { name: /背景程式停了・工作還排著/ });
     expect(pill.textContent).not.toContain("前面還有");
     await userEvent.click(pill);
@@ -160,7 +161,7 @@ describe("ActiveJobsBell", () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
       vi.mocked(fetchActiveJobs).mockResolvedValueOnce(QUEUE).mockRejectedValue(new Error("down"));
-      render(<ActiveJobsBell />);
+      render(<MemoryRouter><ActiveJobsBell /></MemoryRouter>);
       await screen.findByRole("button", { name: /正在同步成效/ });
       await vi.advanceTimersByTimeAsync(8000);
       expect(await screen.findByRole("button", { name: /背景工作讀取失敗/ })).toBeTruthy();

@@ -9,7 +9,6 @@ import {
   type CampaignSlots, type Slot, type SlotCopy, type SlotCopyOption, type SlotJob, type SlotStatutory,
 } from "@/lib/adsSlotsApi";
 import type { CopyFields } from "@/lib/adsUserAssetsApi";
-import { internalHref } from "@/lib/internalHref";
 import { useApiRead } from "@/lib/useApiRead";
 import { Chip, ReadFailed, SlotTile, type ChipTone } from "../patterns";
 
@@ -188,7 +187,7 @@ export function FailedSlot({ slot, workbenchHref }: { slot: Slot; workbenchHref:
       status={<StateChip slot={slot} />} reason={{ text: slot.state_text ?? "", terms: [] }}
       actions={
         <Button variant="outline" size="sm" className={GO} asChild>
-          <Link to={internalHref(slot.workbench_href ?? workbenchHref)}>到工作檯重新產生 →</Link>
+          <Link to={slot.workbench_href ?? workbenchHref}>到工作檯重新產生 →</Link>
         </Button>
       } />
   );
@@ -206,7 +205,7 @@ export function WaitingSlot({ slot, workbenchHref, checking, checked, onConfirm,
   if (next?.action === "pick_on_workbench") {
     actions = (
       <Button variant="outline" size="sm" className={GO} asChild>
-        <Link to={internalHref(slot.workbench_href ?? workbenchHref)}>{next.text} →</Link>
+        <Link to={slot.workbench_href ?? workbenchHref}>{next.text} →</Link>
       </Button>
     );
   } else if (next?.action === "confirm_copy" && slot.ad_id !== null) {
@@ -249,7 +248,7 @@ export function BlockedSlot({ slot, uploading, checking, checked, onPick, onPick
       actions={slot.ad_id !== null && <>
         {blocked.fix === "copy" && <Button variant="outline" size="sm" className={GO} aria-label={`改這句文案：${slot.name}`} onClick={onEdit}>改這句文案</Button>}
         {blocked.fix === "copy" && (slot.workbench_href
-          ? <Button variant="link" size="xs" className="h-auto px-0" asChild><Link to={internalHref(slot.workbench_href)}>到工作檯換一版 →</Link></Button>
+          ? <Button variant="link" size="xs" className="h-auto px-0" asChild><Link to={slot.workbench_href}>到工作檯換一版 →</Link></Button>
           : <Button variant="link" size="xs" className="h-auto px-0" aria-label={`換一版文案：${slot.name}`} onClick={onPickCopy}>換一版文案</Button>)}
         {blocked.fix === "file" && <UploadAction slot={slot} busy={uploading} onPick={onPick} label="換一張" className={GO} />}
         <Button variant="link" size="xs" className="h-auto px-0" disabled={checking} aria-label={`${checking ? "檢查中…" : "再檢查一次"}：${slot.name}`} onClick={onRecheck}>
@@ -300,7 +299,7 @@ export function MissingSlot({ slot, workbenchHref, busy, onPick }: {
 }) {
   // Only a planned ad takes an upload (an imported campaign's slots are platform ads, always ready).
   const canUpload = slot.ad_id !== null;
-  const to = internalHref(slot.workbench_href ?? workbenchHref);
+  const to = slot.workbench_href ?? workbenchHref;
   // F49 Contract T: the tile names its ad (like every other tile) over the served chip and sentence; a video-format
   // slot says what it needs instead of the sentence.
   const status = <>
@@ -329,7 +328,7 @@ export function CopyOnlySlot({ slot, workbenchHref, busy, onPick }: {
       imageActions={video ? <VideoPlaceholder slot={slot} busy={busy} onPick={onPick} /> : <UploadAction slot={slot} busy={busy} onPick={onPick} />}
       extra={slot.workbench_href || slot.statutory ? <>
         {slot.statutory && <StatutoryLine statutory={slot.statutory} />}
-        {slot.workbench_href && <Button variant="link" size="xs" asChild><Link to={internalHref(slot.workbench_href)}>看圖片提示詞</Link></Button>}
+        {slot.workbench_href && <Button variant="link" size="xs" asChild><Link to={slot.workbench_href}>看圖片提示詞</Link></Button>}
       </> : undefined}
       status={<><StateChip slot={slot} /><StateLine slot={slot} /></>} />
   );

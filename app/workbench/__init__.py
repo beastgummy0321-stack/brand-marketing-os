@@ -48,6 +48,8 @@ docstring for why "explicit None" and "omitted" are not the same thing here).
 
 from fastapi import FastAPI
 
+from app.shared.web import app_path
+
 
 def prepare_material_pack(conn, org_id, brand_id, pack):
     from app.workbench.material_handoff import prepare
@@ -143,7 +145,7 @@ def set_action_url(conn, org_id: str, brand_id: str, brief_id: str) -> str | Non
     brief = workbench_repo.get_brief(conn, org_id, brand_id, brief_id)
     if brief is None or not brief.get("pack_id"):
         return None
-    return f"/app/brands/{brand_id}/workbench/packs/{brief['pack_id']}/sets/{brief_id}"
+    return app_path(f"/brands/{brand_id}/workbench/packs/{brief['pack_id']}/sets/{brief_id}")
 
 
 def validate_claims(conn, org_id: str, brand_id: str, product_id: str | None, value, *,

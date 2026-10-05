@@ -1,3 +1,4 @@
+import { campaignPath } from "@/lib/adsRoutes";
 /** F22-I02: shared, presentation-free logic for the v7 three-step "light" repair flow
  * (`docs/design/ads/prototype-v7-ads-center.html` `confirmPage()`/`handoff()`/`verify()`).
  * Kept separate from `ConfirmPage.tsx` so I03 (到平台完成) and I04 (核對結果) reuse the same
@@ -73,9 +74,6 @@ export function isCleanupTriageItem(item: QueueItem | null): boolean {
   return !!item && isCleanupKind(item.kind_key);
 }
 
-const brandPath = (brandId: string) => `/brands/${encodeURIComponent(brandId)}`;
-const campaignPath = (brandId: string, campaignId: string) =>
-  `${brandPath(brandId)}/ads/campaigns/${encodeURIComponent(campaignId)}`;
 
 /** `changes/:setId/confirm|handoff|verify` — the canonical route once a change set exists
  * (feature Decisions "Agent choice — routes"). */
@@ -115,7 +113,7 @@ export function cleanupProposePath(brandId: string, campaignId: string): string 
 /** F25-I01 Home rows Decisions: a `refresh_creative` row's button always goes here — there is no
  * change-set flow for it, so it never routes through `changeStepPath`/`proposeBudgetPath`. */
 export function materialWorkbenchPath(brandId: string, campaignId: string): string {
-  return `${campaignPath(brandId, campaignId)}?tab=assets&material_new=1`;
+  return campaignPath(brandId, campaignId, { tab: "assets", material_new: 1 });
 }
 
 /** F29-I14: the campaign detail page (`…/campaigns/:c/detail`, v10 `#/camp/<c>/perf`) — where an A/B pair's
@@ -136,7 +134,7 @@ export function abSteps(confirmHref?: string, handoffHref?: string): { label: st
 /** Multi-item sets, and any change-item kind this flow doesn't render, fall back to the existing
  * workspace change list instead of being re-interpreted (feature Decisions "Multi-item sets"). */
 export function campaignChangesPath(brandId: string, campaignId: string): string {
-  return `${campaignPath(brandId, campaignId)}?tab=changes`;
+  return campaignPath(brandId, campaignId, { tab: "changes" });
 }
 
 /** F48 Contract R "reason texts": a draft's reason is the sentence the backend built from that ad's (or owner's) own

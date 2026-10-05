@@ -16,7 +16,7 @@ export function RulesTab({ brandId, productId, rules }: { brandId: string; produ
           description="品牌層的規則仍然適用。"
           actionHref={`/brands/${brandId}/library?tab=rules`}
           actionLabel="到品牌智庫新增"
-          actionInternal
+
         />
       ) : (
         <div className="overflow-x-auto rounded-md border border-border">

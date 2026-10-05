@@ -2,7 +2,6 @@ import { Link } from "react-router-dom";
 import type { DashboardBrandCard } from "@/lib/api";
 import { formatCurrency, formatMomPct } from "@/lib/format";
 import { ArrowUpRight } from "lucide-react";
-import { internalHref } from "@/lib/internalHref";
 import { cn } from "@/lib/utils";
 
 /** 品牌卡片（票 02-overview-cards）：健康度燈號＋本月營收環比＋檔期狀態＋
@@ -51,7 +50,7 @@ export function BrandCard({ card }: { card: DashboardBrandCard }) {
       </div>
 
       {card.next_step ? (
-        <Link to={internalHref(card.next_step.action_url)} className="border-t border-border pt-4 text-sm text-primary hover:underline">
+        <Link to={card.next_step.action_url} className="border-t border-border pt-4 text-sm text-primary hover:underline">
           {card.next_step.title} →
         </Link>
       ) : card.health === "green" ? (

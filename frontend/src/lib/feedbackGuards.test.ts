@@ -147,7 +147,7 @@ function blankComments(text: string): string {
   return out;
 }
 
-type RuleName = "envelope" | "message-branch" | "disabled";
+type RuleName = "envelope" | "message-branch" | "disabled" | "href";
 
 interface Rule {
   /** Which sources the rule reads (path relative to `src/`, `/` separators). */
@@ -210,7 +210,25 @@ function disabledLines(code: string): number[] {
   return [...out].sort((a, b) => a - b);
 }
 
+function hrefLines(code: string): number[] {
+  const hits = new Set<number>();
+  code.split("\n").forEach((line, i) => {
+    if (/\/ads\/campaigns\/\$\{|\binternalHref\b|tab=performance|onChangeTab\(["']performance["']|tab:\s*["']performance["']/.test(line)) hits.add(i + 1);
+  });
+  for (const match of code.matchAll(/<a\s[\s\S]*?>/g)) {
+    if (/href=\{/.test(match[0]) && !/target=["']_blank["']/.test(match[0])) {
+      hits.add(code.slice(0, match.index).split("\n").length);
+    }
+  }
+  return [...hits].sort((a, b) => a - b);
+}
+
 const RULES: Record<RuleName, Rule> = {
+  href: {
+    applies: (rel) => (rel.startsWith("components/") || rel.startsWith("lib/")) && rel !== "lib/adsRoutes.ts" && !rel.startsWith("lib/guards/"),
+    lines: hrefLines,
+    excuse: "HREF_OK:",
+  },
   envelope: {
     applies: (rel) => (rel.startsWith("components/") || rel.startsWith("lib/")) && NOT_TRANSLATOR(rel),
     hit: (line, rel) => ENVELOPE_PATTERNS.some((p) => p.test(line)) || (API_CLIENT.test(rel) && OWN_ERROR_CLASS.test(line)),
@@ -313,7 +331,7 @@ describe("feedback guards (F51 Contract H／C／D ratchets)", () => {
   const files = sourceFiles();
   const allow = allowed();
 
-  for (const rule of ["envelope", "message-branch", "disabled"] as const) {
+  for (const rule of ["envelope", "message-branch", "disabled", "href"] as const) {
     it(`${rule}: every hit is in a file an F51 issue still lists, or excused inline`, () => {
       expect(ratchet(rule, files, allow).unlisted).toEqual([]);
     });
@@ -390,4 +408,12 @@ describe("feedback guards (F51 Contract H／C／D ratchets)", () => {
     expect(scan("disabled", "components/x/Y.tsx", "<button\n  disabled={first} // DISABLED_OK: structural\n>").excused).toEqual([2]);
     expect(RULES.disabled.applies("lib/guards/F51-I06.allow.ts")).toBe(false);
   });
+});
+
+it("href detectors catch duplicate builders and internal raw anchors", () => {
+  expect(hrefLines('const p = `/brands/${b}/ads/campaigns/${c}`')).toEqual([1]);
+  expect(hrefLines('go("?tab=performance")')).toEqual([1]);
+  expect(hrefLines('<a\n href={path}>open</a>')).toEqual([1]);
+  expect(hrefLines('<a href={path} target="_blank">open</a>')).toEqual([]);
+  expect(hrefLines('<Link to={path}>open</Link>')).toEqual([]);
 });

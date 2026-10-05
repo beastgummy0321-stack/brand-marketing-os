@@ -41,6 +41,7 @@ from app.intake import ai
 from app.intake import product_onboarding as po
 from app.intake import repository as ir
 from app.llm import gateway, providers
+from app.shared.web import app_path
 
 _log = logging.getLogger(__name__)
 
@@ -444,7 +445,7 @@ def background_intake_product_prefill(org_id: str, brand_id: str, product_id: st
                 "AI 讀完商品頁，可以回去確認" if error is None
                 else "商品頁沒讀成，可以重試或自己填",
                 product["name"]),
-            action_url=f"/app/brands/{brand_id}/products/{product_id}/onboarding",
+            action_url=app_path(f"/brands/{brand_id}/products/{product_id}/onboarding"),
         )
         if error is not None:
             raise error

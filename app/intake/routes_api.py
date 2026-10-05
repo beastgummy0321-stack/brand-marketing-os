@@ -25,7 +25,7 @@ from app.core.db import new_id, now_iso
 from app.intake import ai, onboarding, state
 from app.intake import repository as ir
 from app.shared import web
-from app.shared.web import JSONResponse, clean, require_actor, require_brand
+from app.shared.web import JSONResponse, app_path, clean, require_actor, require_brand
 
 router = APIRouter()
 
@@ -141,7 +141,7 @@ def _notify_step_done(conn, brand_id: str, brand_name: str, ok: bool, *, verbs: 
     background_job.notify(
         conn, brand_id, category="intake_ai_step_done", dedupe_key=new_id("itkjob"),
         message=core_interrupts.notice(verbs[0] if ok else verbs[1], brand_name),
-        action_url=f"/app/brands/{brand_id}/intake",
+        action_url=app_path(f"/brands/{brand_id}/intake"),
     )
 
 
