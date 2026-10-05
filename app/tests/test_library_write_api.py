@@ -66,6 +66,26 @@ class LibraryWriteApiTest(unittest.TestCase):
         self.assertIn("fact_type", resp.json()["errors"])
         self.assertEqual(repo.list_brand_facts(web.conn, brand_id), [])
 
+    def test_unknown_types_are_refused_by_the_writer(self):
+        """F50 Contract I: a misspelled type is refused (400, under its field) by the writer every
+        route passes through (`vocab.require`), never stored and silently ignored."""
+        brand_id = self._new_brand("事實品牌")
+        for path, body, field in (
+                ("facts", {"fact_type": "xyz", "label": "定位", "value": "平價", "status": "pending"},
+                 "fact_type"),
+                ("rules", {"rule_type": "xyz", "content": "不講第一", "severity": "hard"},
+                 "rule_type"),
+                ("channels", {"channel_type": "pharmacy", "name": "藥局", "identifier": "x"},
+                 "channel_type")):
+            resp = self.client.post(f"/api/library/brands/{brand_id}/{path}", json=body)
+            self.assertEqual(resp.status_code, 400, path)
+            self.assertIn("只能選", resp.json()["errors"][field])
+        self.assertEqual(repo.list_brand_facts(web.conn, brand_id), [])
+        resp = self.client.post(f"/api/library/brands/{brand_id}/edit",
+                                json={"name": "新名稱", "status": "active", "persona": "robot"})
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("人設只能選", resp.json()["errors"]["persona"])
+
     def test_fact_edit_refuses_policy_both_ways(self):
         """F42-I01: a fact cannot be turned into a policy, and a policy fact cannot be edited
         through the library (its sentence is composed from the registry params)."""

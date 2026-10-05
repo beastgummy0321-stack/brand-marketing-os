@@ -28,10 +28,9 @@ from typing import cast
 from app import ads, workbench
 from app.brand_intelligence import benchmarks as bi_benchmarks
 from app.brand_intelligence import repository as bi_repo
-from app.core import vocab
+from app.core import input_rules, vocab
 from app.core.db import Conn
 from app.intake import repository as ir
-from app.intake import state
 
 STEP_WHAT, STEP_WHO, STEP_EVIDENCE, STEP_SELL_WAYS, STEP_DONE = range(1, 6)
 STEP_LABELS = {
@@ -180,10 +179,8 @@ def _check_name(value, label: str = "商品名稱") -> str:
 
 
 def _check_url(value, label: str) -> str | None:
-    url = str(value or "").strip()
-    if url and state.invalid_url([url]):
-        raise ValueError(f"{label}「{url}」不是有效的網址，請以 https:// 或 http:// 開頭。")
-    return url or None
+    """Blank = none; else a full http(s) address (F50 Contract I, `input_rules.url`)."""
+    return input_rules.url(value, label, optional=True)
 
 
 def _ai(block) -> dict:
@@ -322,35 +319,32 @@ def _benchmarks(show_close_rate: bool) -> dict:
     }
 
 
-def _number(item: dict, key: str, label: str, owner: str) -> float | None:
-    value = item.get(key)
-    if value is None or value == "":
-        return None
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ValueError(f"「{owner}」的{label}請填數字。")
-    if value < 0:
-        raise ValueError(f"「{owner}」的{label}不能是負數。")
-    return value
-
-
 def _check_money(item: dict, owner: str, show_close_rate: bool, *, composed: bool) -> dict:
-    """The raw money inputs of one sell-way / bundle -> `save_sell_way`'s `economics`. Empty list
-    price / cost / cap = derived / break-even; a composed sell-way's empty price = derived."""
-    price = _number(item, "price", "售價", owner)
-    if price == 0 or (price is None and not composed):
-        raise ValueError(f"「{owner}」的售價要大於 0。")
-    close_rate = _number(item, "close_rate", "成交率", owner) if show_close_rate else None
-    if close_rate is not None and not 0 < close_rate <= 1:
-        raise ValueError(f"「{owner}」的成交率要在 0 到 1 之間（例如 0.2＝20%）。")
+    """The raw money inputs of one sell-way / bundle -> `save_sell_way`'s `economics`, each
+    through the one input-rule table (F50 Contract I) with the owner in the label (「「單盒」的售價
+    要大於 0。」). Empty list price / cost / cap = derived / break-even; a composed sell-way's empty
+    price = derived. Prices and the cap are > 0, costs >= 0, 售價 <= 原價."""
+    of = f"「{owner}」的"
+    price = input_rules.positive(item.get("price"), f"{of}售價", optional=composed)
+    list_price = input_rules.positive(item.get("list_price"), f"{of}原價", optional=True)
+    input_rules.ordered_pair(price, list_price, "售價", "原價")
+    close_rate = (
+        input_rules.within(item.get("close_rate"), f"{of}成交率", bi_repo.CLOSE_RATE_BOUNDS,
+                           optional=True)
+        if show_close_rate else None
+    )
     assumptions = item.get("assumptions") or []
     if not isinstance(assumptions, list) or not all(a in _ASSUMPTION_FIELDS for a in assumptions):
         raise ValueError("「參考值」只能標在成本、運費或成交率。")
     return {
         "selling_price": price,
-        "list_price": _number(item, "list_price", "原價", owner),
-        "unit_variable_cost": _number(item, "cost", "成本", owner),
-        "shipping_cost": _number(item, "shipping", "運費成本", owner),
-        "cap_per_sale": _number(item, "cap_per_sale", "每筆上限", owner),
+        "list_price": list_price,
+        "unit_variable_cost": input_rules.non_negative(item.get("cost"), f"{of}成本",
+                                                       optional=True),
+        "shipping_cost": input_rules.non_negative(item.get("shipping"), f"{of}運費成本",
+                                                  optional=True),
+        "cap_per_sale": input_rules.positive(item.get("cap_per_sale"), f"{of}每筆上限",
+                                             optional=True),
         "close_rate": close_rate,
         "assumptions": [a for a in _ASSUMPTION_FIELDS if a in assumptions] or None,
     }
@@ -1156,8 +1150,7 @@ def _check_row_components(item: dict, name: str) -> list | None:
         qty = comp.get("qty") if isinstance(comp, dict) else None
         if not base:
             raise ValueError(f"「{name}」的內容要選一種賣法。")
-        if isinstance(qty, bool) or not isinstance(qty, int) or qty <= 0:
-            raise ValueError(f"「{name}」裡「{base}」的數量要是正整數。")
+        qty = input_rules.count(qty, f"「{name}」裡「{base}」的數量", minimum=1)
         if base.casefold() in seen:
             raise ValueError(f"「{name}」裡「{base}」重複了，改數量就好。")
         seen.add(base.casefold())
@@ -1389,9 +1382,7 @@ def _check_components(conn: Conn, brand_id: str, value) -> list:
         label = f"{product.get('name', '')}・{way['display_name']}"
         if product.get("status") != "active" or product.get("onboarding_step") is not None:
             raise ValueError(f"「{product.get('name', '')}」還沒建完，建完才能放進組合。")
-        qty = item.get("qty", 1)
-        if isinstance(qty, bool) or not isinstance(qty, int) or qty <= 0:
-            raise ValueError(f"「{label}」的數量要是正整數。")
+        qty = input_rules.count(item.get("qty", 1), f"「{label}」的數量", minimum=1)
         if way_id in seen:
             raise ValueError(f"「{label}」在組合裡重複了，改數量就好。")
         seen.add(way_id)

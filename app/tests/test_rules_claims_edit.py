@@ -22,10 +22,10 @@ class RuleClaimEditTest(unittest.TestCase):
         rule = repo.create_rule(self.conn, brand["id"], rule_type="tone", content="舊內容",
                                  severity="soft", actor="測試員")
         after = repo.update_rule(self.conn, brand["id"], rule["id"], actor="測試員",
-                                  rule_type="banned_word", content="新內容", severity="hard")
+                                  rule_type="forbidden_word", content="新內容", severity="hard")
         self.assertEqual(after["content"], "新內容")
         self.assertEqual(after["severity"], "hard")
-        self.assertEqual(after["rule_type"], "banned_word")
+        self.assertEqual(after["rule_type"], "forbidden_word")
         # 落地確認：重新查一次也要是新值
         self.assertEqual(repo.get_rule(self.conn, brand["id"], rule["id"])["content"], "新內容")
 

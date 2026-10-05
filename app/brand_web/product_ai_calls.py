@@ -35,11 +35,12 @@ def run_product_scan(conn, brand_id: str, product_id: str, product_name: str, ur
     else:
         parts.append("（沒有抓到這個網址的內容，請完全依產品名稱與品牌背景推測，並在說明裡註明是推測。）")
     parts.append(
-        "請整理這個產品的事實，只整理「產品線」「價格帶」「受眾」「語調」「法規風險」"
-        "這五類看得出根據的內容，每類最多一條，看不出來的類別就不要列（可以是空陣列）。\n"
+        f"請整理這個產品的事實，只整理{product_ai.scan_types_text()}"
+        "這幾類看得出根據的內容，core_info 最多兩條（產品線與規格一條、價格帶一條），"
+        "audience 最多一條，看不出來的類別就不要列（可以是空陣列）。\n"
         "另外，如果頁面上有清楚寫出「售價」，選填回傳 price（金額與幣別代碼，例如 TWD／USD；"
         "看不出售價或不確定就整個不要回傳 price 這個欄位，不要用 0 或亂猜）。\n"
-        '只回傳 JSON：{"facts": [{"fact_type": "五類其中之一", "label": "短標題", "value": "完整說明"}], '
+        '只回傳 JSON：{"facts": [{"fact_type": "上面類別的英文代號其中之一", "label": "短標題", "value": "完整說明"}], '
         '"price": {"amount": 數字, "currency": "幣別代碼"}}（沒有售價就不要有 price 這個 key）'
     )
     # 跨層禁止裸 SQL（CrossLayerRawSqlScanTest），走 repository 公開進入點

@@ -252,9 +252,15 @@ class ProductsPageTest(_Base):
         )
         again = self.client.post(self._url(bid, "/products"), json={"name": " 綜合維他命軟糖 "})
         self.assertEqual(again.json()["data"], {"product_id": pid, "created": False})
-        for body in ({"name": ""}, {"name": "x", "page_url": "shop.example"}):
+        for body in ({"name": ""}, {"name": "x", "page_url": "shop.example"},
+                     {"name": "x", "page_url": "https://"}):
             resp = self.client.post(self._url(bid, "/products"), json=body)
             self.assertEqual(resp.status_code, 400, body)
+        # F50 Contract I: a scheme alone is not a URL (`input_rules.url`, one sentence).
+        self.assertEqual(
+            resp.json()["error"],
+            "商品頁網址「https://」不是完整的網址，請從 https:// 開始，例如 https://example.com。",
+        )
 
     def test_sell_way_and_bundle_ids_are_not_products(self):
         bid = self._brand()
@@ -463,9 +469,13 @@ class StepsTest(_Base):
         self.assertNotIn("close_rate", data["assumptions"])
         for rows, message in (
             ([], "至少要有一種賣法"),
-            ([{"name": "單盒", "price": -1}], "售價不能是負數"),
-            ([{"name": "單盒", "price": 0}], "售價要大於 0"),
-            ([{"name": "單盒"}], "售價要大於 0"),  # a base needs its price
+            ([{"name": "單盒", "price": -1}], "「單盒」的售價要大於 0。"),
+            ([{"name": "單盒", "price": 0}], "「單盒」的售價要大於 0。"),
+            ([{"name": "單盒"}], "「單盒」的售價請填數字。"),  # a base needs its price
+            # F50 Contract I: one rule per field on every path (the store refuses the same).
+            ([{"name": "單盒", "price": 399, "cap_per_sale": 0}], "「單盒」的每筆上限要大於 0。"),
+            ([{"name": "單盒", "price": 1280, "list_price": 999}],
+             "售價（1280）不能大於原價（999）。"),
             ([{"name": "單盒", "price": 399, "cost": -5}], "不能是負數"),
             ([{"name": "單盒", "qty": 1, "price": 399}], "不用填數量"),  # F45: no qty key
             ([{"name": "單盒", "price": 399}, {"name": "單盒", "price": 1}], "重複"),
@@ -482,7 +492,7 @@ class StepsTest(_Base):
             (
                 [{"name": "單盒", "price": 399},
                  {"name": "三盒", "components": [{"base": "單盒", "qty": 0}]}],
-                "正整數",
+                "「三盒」裡「單盒」的數量要是 1 以上的整數。",
             ),
         ):
             resp = self._put(self.bid, self._step(self.pid, "/sell-ways"), {"sell_ways": rows})

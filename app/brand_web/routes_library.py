@@ -51,12 +51,10 @@ COST_CUSTOMER_VOICE_EXTRACTION = cv_mod.COST_CUSTOMER_VOICE_EXTRACTION
 _ASSET_KINDS = ("image/jpeg", "image/png", "image/webp", "image/gif")
 _UNSAFE_ASSET_FILENAME_CHARS = re.compile(r"[^A-Za-z0-9._-]+")
 
-# 上傳大小上限。50 MiB **不是這裡挑的數字**——它是 `supabase/config.toml` `[storage]` 的
-# `file_size_limit`，Storage 本來就會擋。這裡先擋一次的理由只有一個：`await file.read()`
-# 會把整個 body 讀進記憶體之後才輪到 Storage 說不行，而那時錯誤是英文的 Storage 例外，
-# 不是使用者看得懂的一句話（bucket 註解自稱「callers already validate in Chinese」，
-# 但呼叫端只驗了格式沒驗大小）。
-_MAX_ASSET_BYTES = 50 * 1024 * 1024
+# 上傳大小上限：F50 Contract I 的 `input_rules.UPLOAD_CAPS["library_asset"]`（50 MiB＝
+# `supabase/config.toml` `[storage]` 的 `file_size_limit`）。路由在 `await file.read()` 之前
+# 先用同一張表擋一次，免得整個 body 讀進記憶體之後才收到英文的 Storage 例外。
+_UPLOAD_PATH = "library_asset"
 
 
 def _safe_asset_filename(name: str) -> str:
@@ -77,10 +75,10 @@ def save_official_asset(brand_id: str, *, org_id: str, actor: str, asset_kind: s
     filename = filename or ""
     if not filename:
         return False, "請選擇一個圖檔上傳。"
-    if len(content) > _MAX_ASSET_BYTES:  # 路由已擋一次；這裡是給非 HTTP 呼叫端的第二道
-        return False, "這個檔案超過 50 MB，請壓小一點再上傳。"
-    # F47 Contract A: the content decides (not the extension) and is the stored type.
+    # F47 Contract A: the content decides (not the extension) and is the stored type; F50
+    # Contract I: empty and oversize files get the one table's sentences.
     try:
+        input_rules.check_upload(filename, len(content), path=_UPLOAD_PATH)
         content_type = input_rules.check_image_upload(filename, content, _ASSET_KINDS)
     except input_rules.InputRuleError as exc:
         return False, str(exc)
@@ -310,8 +308,11 @@ async def asset_upload_api(request: Request, brand_id: str, asset_kind: str = Fo
                            file: UploadFile = File(...)):
     actor = require_actor(request)
     brand = require_brand(brand_id, actor)
-    if (file.size or 0) > _MAX_ASSET_BYTES:
-        return JSONResponse({"detail": "這個檔案超過 50 MB，請壓小一點再上傳。"}, status_code=400)
+    if file.size:  # the size is known before the body is read: refuse an oversize file now
+        try:
+            input_rules.check_upload(file.filename or "", file.size, path=_UPLOAD_PATH)
+        except input_rules.InputRuleError as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
     ok, detail = save_official_asset(
         brand_id, org_id=brand["org_id"], actor=str(actor.user_id), asset_kind=asset_kind,
         product_id=product_id, title=title, filename=file.filename or "", content=await file.read(),
@@ -345,6 +346,8 @@ def channel_edit_api(request: Request, brand_id: str, channel_id: str,
     try:
         repo.update_channel(web.conn, brand_id, channel_id, actor=str(actor.user_id), channel_type=channel_type,
                              name=clean(name), identifier=clean(identifier), status=status)
+    except input_rules.InputRuleError as exc:
+        return JSONResponse({"errors": {"channel_type": str(exc)}}, status_code=400)
     except ValueError:
         raise NotFoundKind("自有渠道")
     return Response(status_code=200)
@@ -448,6 +451,10 @@ async def customer_voice_submit(request: Request, brand_id: str):
     raw_text = clean(body.get("raw_text") or "")
     if not source_channel:
         return JSONResponse({"error": "請選擇這段原話是從哪裡來的。"}, status_code=400)
+    try:  # checked before the paid extraction; the writer runs the same check
+        md.require("customer_voice_source", source_channel)
+    except input_rules.InputRuleError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
     if not raw_text:
         return JSONResponse({"error": "請貼上顧客的原文內容。"}, status_code=400)
 

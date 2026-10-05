@@ -21,7 +21,6 @@
 
 
 from datetime import date, timedelta
-from decimal import Decimal
 
 import psycopg
 
@@ -602,6 +601,7 @@ def create_brand_fact(conn: Conn, brand_id: str, *, actor: str, fact_type: str,
     """`params_json` (F42-I04, optional): structured detail of `value` (e.g. a `tone` fact's
     `{"tones": [...]}` from brand onboarding). Policy facts are still refused here."""
     _require(fact_type, "brand_fact.fact_type 為必填")
+    fact_type = vocab.require("brand_fact", fact_type)
     _require(label, "brand_fact.label 為必填")
     _require(value, "brand_fact.value 為必填")
     _require(actor, "actor 為必填")
@@ -746,6 +746,7 @@ def _desired_policy(item) -> tuple[tuple, dict]:
         disclosure = vocab.policy_sentence(key, params)
         return (key,), {"label": vocab.COOLING_OFF_EXEMPT_LABEL,
                         "params_json": {"disclosure": disclosure}, "value": disclosure}
+    key = vocab.require("policy", key)
     clean_params = vocab.normalize_policy_params(key, params)
     return (key,), {"label": vocab.POLICY_TYPES_BY_KEY[key]["label"], "params_json": clean_params,
                     "value": vocab.policy_sentence(key, clean_params)}
@@ -938,6 +939,7 @@ def update_brand_fact(conn: Conn, brand_id: str, fact_id: str, *, actor: str,
     edit that does not pass it (e.g. the library's fact form) clears it -- stale structure must
     not outlive the value it described (the onboarding reader then falls back to `value`)."""
     _require(fact_type, "brand_fact.fact_type 為必填")
+    fact_type = vocab.require("brand_fact", fact_type)
     _require(label, "brand_fact.label 為必填")
     _require(value, "brand_fact.value 為必填")
     _require(actor, "actor 為必填")
@@ -1048,6 +1050,7 @@ def create_product_fact(conn: Conn, brand_id: str, product_id: str, *, actor: st
     """`fact_key` (F43-I01): required on a `proof` fact (one of `PROOF_FACT_KEYS`), ignored on
     the other types."""
     _require(fact_type, "product_fact.fact_type 為必填")
+    fact_type = vocab.require("product_fact", fact_type)
     _require(label, "product_fact.label 為必填")
     _require(value, "product_fact.value 為必填")
     _require(actor, "actor 為必填")
@@ -1116,6 +1119,7 @@ def update_product_fact(conn: Conn, brand_id: str, product_id: str, fact_id: str
     `proof` type and passes no key keeps its current key (the old product page's fact form has no
     key field)."""
     _require(fact_type, "product_fact.fact_type 為必填")
+    fact_type = vocab.require("product_fact", fact_type)
     _require(label, "product_fact.label 為必填")
     _require(value, "product_fact.value 為必填")
     _require(actor, "actor 為必填")
@@ -1226,6 +1230,10 @@ def get_product_economics(conn: Conn | ConnProxy, brand_id: str, product_id: str
 
 _ASSUMPTION_FIELDS = frozenset({"cost", "shipping", "close_rate"})
 
+# F50 Contract I: the one 成交率 range of every economics path (stored 0–1 until F50-I04 moves it
+# to a 0–100 percent). Readers: this module, product onboarding, the products economics route.
+CLOSE_RATE_BOUNDS = input_rules.Bounds(0, 1, low_open=True, hint="例如 0.2＝20%")
+
 
 class _Keep:
     """Sentinel: a `save_product_economics` argument that was not passed keeps its stored value."""
@@ -1277,16 +1285,18 @@ def _write_product_economics(conn: Conn, brand_id: str, product_id: str, *, acto
     # F47 Contract A (`app.core.input_rules`): keep exactly what was sent or refuse naming the
     # field -- never coerce. Shipping is >= 0 on every path (lead decision, F47 Contract A;
     # same as the sell-way pre-check).
-    input_rules.positive(selling_price, "售價", optional=allow_empty_price)
-    input_rules.non_negative(fixed_cost, "固定成本", optional=True)
-    input_rules.non_negative(unit_variable_cost, "單位變動成本", optional=True)
-    input_rules.non_negative(shipping_cost, "運費", optional=True)
+    selling_price = input_rules.positive(selling_price, "售價", optional=allow_empty_price)
+    fixed_cost = input_rules.non_negative(fixed_cost, "固定成本", optional=True)
+    unit_variable_cost = input_rules.non_negative(unit_variable_cost, "單位變動成本", optional=True)
+    shipping_cost = input_rules.non_negative(shipping_cost, "運費", optional=True)
     if not isinstance(list_price, _Keep):
-        input_rules.positive(list_price, "原價", optional=True)
+        list_price = input_rules.positive(list_price, "原價", optional=True)
+        input_rules.ordered_pair(selling_price, list_price, "售價", "原價")
     if not isinstance(cap_per_sale, _Keep):
-        input_rules.positive(cap_per_sale, "每筆上限", optional=True)
-    if close_rate is not None and not (0 < close_rate <= 1):
-        raise ValueError("product_economics.close_rate 必須介於 0（不含）到 1（含）之間")
+        cap_per_sale = input_rules.positive(cap_per_sale, "每筆上限", optional=True)
+    close_rate = input_rules.within(close_rate, "成交率", CLOSE_RATE_BOUNDS, optional=True)
+    effective_from = input_rules.iso_date(effective_from, "生效日", optional=True)
+    effective_to = input_rules.iso_date(effective_to, "失效日", optional=True)
     if assumptions is not None and not set(assumptions) <= _ASSUMPTION_FIELDS:
         raise ValueError(f"product_economics.assumptions 只能是 {sorted(_ASSUMPTION_FIELDS)}")
     before = get_product_economics(conn, brand_id, product_id, raw=True)
@@ -1488,6 +1498,15 @@ def _display_name(conn: Conn | ConnProxy, brand_id: str, product: dict) -> str:
 _SELL_WAY_MONEY = ("selling_price", "list_price", "unit_variable_cost", "shipping_cost",
                    "cap_per_sale", "fixed_cost")
 _SELL_WAY_ECONOMICS = frozenset({*_SELL_WAY_MONEY, "close_rate", "currency", "assumptions"})
+# (field, label, rule) of each money field: prices and the cap are > 0, costs are >= 0.
+_SELL_WAY_MONEY_RULES = (
+    ("selling_price", "售價", input_rules.positive),
+    ("list_price", "原價", input_rules.positive),
+    ("unit_variable_cost", "成本", input_rules.non_negative),
+    ("shipping_cost", "運費", input_rules.non_negative),
+    ("cap_per_sale", "每筆上限", input_rules.positive),
+    ("fixed_cost", "固定成本", input_rules.non_negative),
+)
 
 
 def _check_base_product(conn: Conn, brand_id: str, product_id) -> dict:
@@ -1513,8 +1532,7 @@ def _check_components(conn: Conn, brand_id: str, components, sell_way_id: str | 
         qty = item.get("qty") if isinstance(item, dict) else None
         if not isinstance(base_id, str) or not base_id:
             raise ValueError("組合裡的每一項都要指定一個基本賣法（sell_way_id）")
-        if isinstance(qty, bool) or not isinstance(qty, int) or qty <= 0:
-            raise ValueError("組合裡的數量要是正整數")
+        qty = input_rules.count(qty, "組合裡的數量", minimum=1)
         if base_id in seen:
             raise ValueError("同一個基本賣法在組合裡只能列一次，改數量就好")
         seen.add(base_id)
@@ -1544,16 +1562,20 @@ def _check_sell_way_economics(economics, *, composed: bool) -> dict:
     unknown = set(economics) - _SELL_WAY_ECONOMICS
     if unknown:
         raise ValueError(f"economics 沒有這些欄位：{'、'.join(sorted(unknown))}")
-    for field in _SELL_WAY_MONEY:
-        value = economics.get(field)
-        if value is None:
-            continue
-        if isinstance(value, bool) or not isinstance(value, (int, float, Decimal)) or value < 0:
-            raise ValueError(f"{field} 要是 0 以上的數字")
-    price = economics.get("selling_price")
-    if (price is None and not composed) or (price is not None and price <= 0):
-        raise ValueError("售價要大於 0")
-    return economics
+    # F50 Contract I: each field through the one input-rule table (a composed sell-way's empty
+    # price is derived from its bases; every other empty value is unset).
+    checked = dict(economics)
+    for field, label, rule in _SELL_WAY_MONEY_RULES:
+        if field in economics:
+            checked[field] = rule(economics[field], label,
+                                  optional=composed or field != "selling_price")
+    if not composed and "selling_price" not in economics:
+        input_rules.positive(None, "售價")
+    input_rules.ordered_pair(checked.get("selling_price"), checked.get("list_price"), "售價", "原價")
+    if "close_rate" in economics:
+        checked["close_rate"] = input_rules.within(economics["close_rate"], "成交率",
+                                                   CLOSE_RATE_BOUNDS, optional=True)
+    return checked
 
 
 def _write_components(conn: Conn, org_id: str, brand_id: str, sell_way_id: str, components: list,
@@ -1964,6 +1986,7 @@ def create_rule(conn: Conn, brand_id: str, *, actor: str, rule_type: str, conten
                  severity: str, product_id: str | None = None,
                  source_reference_id: str | None = None) -> dict:
     _require(rule_type, "rule.rule_type 為必填")
+    rule_type = vocab.require("rule", rule_type)
     _require(content, "rule.content 為必填")
     _require(actor, "actor 為必填")
     if severity not in ("hard", "soft"):
@@ -2006,6 +2029,7 @@ def update_rule(conn: Conn, brand_id: str, rule_id: str, *, actor: str,
                  source_reference_id: str | None = None) -> dict:
     """編輯規則內容，比照 update_brand_fact：人工編輯直接生效（決策 0013）。"""
     _require(rule_type, "rule.rule_type 為必填")
+    rule_type = vocab.require("rule", rule_type)
     _require(content, "rule.content 為必填")
     _require(actor, "actor 為必填")
     if severity not in ("hard", "soft"):
@@ -2096,8 +2120,7 @@ def create_claim(conn: Conn, brand_id: str, *, actor: str, claim_text: str,
                   evidence_source_reference_id: str | None = None) -> dict:
     _require(claim_text, "claim.claim_text 為必填")
     _require(actor, "actor 為必填")
-    if claim_type not in ("approved", "high_risk", "forbidden"):
-        raise ValueError("claim.claim_type 只能是 approved / high_risk / forbidden")
+    claim_type = vocab.require("claim", claim_type)
     claim_id = new_id("clm")
     ts = now_utc()
     row = {
@@ -2133,8 +2156,7 @@ def update_claim(conn: Conn, brand_id: str, claim_id: str, *, actor: str,
     """編輯宣稱內容，比照 update_brand_fact：人工編輯直接生效（決策 0013）。"""
     _require(claim_text, "claim.claim_text 為必填")
     _require(actor, "actor 為必填")
-    if claim_type not in ("approved", "high_risk", "forbidden"):
-        raise ValueError("claim.claim_type 只能是 approved / high_risk / forbidden")
+    claim_type = vocab.require("claim", claim_type)
     before = get_claim(conn, brand_id, claim_id)
     if before is None:
         raise ValueError(f"找不到宣稱：{claim_id}")
@@ -2195,6 +2217,8 @@ def create_source_reference(conn: Conn, brand_id: str, *, actor: str, title: str
     _require(source_type, "source_reference.source_type 為必填")
     _require(captured_date, "source_reference.captured_date 為必填")
     _require(actor, "actor 為必填")
+    captured_date = input_rules.iso_date(captured_date, "擷取日期")
+    published_date = input_rules.iso_date(published_date, "發布日期", optional=True)
     src_id = new_id("src")
     ts = now_utc()
     row = {
@@ -2280,7 +2304,7 @@ def delete_official_asset(conn: Conn, brand_id: str, asset_id: str, *, actor: st
 # ---------------------------------------------------------------------------
 
 def create_brand_performance_baseline(conn: Conn, brand_id: str, *, actor: str,
-                                       metric: str, value: float, as_of_date: str, created_by: str,
+                                       metric: str, value: float, as_of_date, created_by: str,
                                        product_id: str | None = None, unit: str | None = None,
                                        basis_note: str | None = None,
                                        source_cycle_id: str | None = None,
@@ -2291,6 +2315,7 @@ def create_brand_performance_baseline(conn: Conn, brand_id: str, *, actor: str,
     _require(actor, "actor 為必填")
     if value is None:
         raise ValueError("brand_performance_baseline.value 為必填")
+    as_of_date = input_rules.iso_date(as_of_date, "基準日期")
     baseline_id = new_id("bpb")
     ts = now_utc()
     row = {
@@ -2380,6 +2405,7 @@ def create_customer_voice(conn: Conn, brand_id: str, *, actor: str, raw_text: st
                            llm_task_id: str | None = None) -> dict:
     _require(raw_text, "customer_voice.raw_text 為必填")
     _require(source_channel, "customer_voice.source_channel 為必填")
+    source_channel = vocab.require("customer_voice_source", source_channel)
     _require(actor, "actor 為必填")
     if source_type not in ("manual", "crawler"):
         raise ValueError("customer_voice.source_type 只能是 manual 或 crawler")

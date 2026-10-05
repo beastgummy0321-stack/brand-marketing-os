@@ -42,20 +42,20 @@ def _fake_response(text: str, in_tok: int = 100, out_tok: int = 50) -> ProviderR
 
 
 _GOOD_FACTS = json.dumps({"facts": [
-    {"fact_type": "產品線", "label": "單一品項", "value": "目前只有一款 60 錠裝。"},
-    {"fact_type": "價格帶", "label": "中價位", "value": "單罐約 690 元，落在市場中段。"},
+    {"fact_type": "core_info", "label": "單一品項", "value": "目前只有一款 60 錠裝。"},
+    {"fact_type": "core_info", "label": "中價位", "value": "單罐約 690 元，落在市場中段。"},
 ]}, ensure_ascii=False)
 
 _FACTS_WITH_PRICE = json.dumps({"facts": [
-    {"fact_type": "產品線", "label": "單一品項", "value": "目前只有一款 60 錠裝。"},
+    {"fact_type": "core_info", "label": "單一品項", "value": "目前只有一款 60 錠裝。"},
 ]}, ensure_ascii=False)
 _FACTS_WITH_PRICE_OBJ = json.loads(_FACTS_WITH_PRICE)
 _FACTS_WITH_PRICE_OBJ["price"] = {"amount": 690, "currency": "twd"}
 _FACTS_WITH_PRICE = json.dumps(_FACTS_WITH_PRICE_OBJ, ensure_ascii=False)
 
 _RESCAN_ONE_OVERLAP_ONE_NEW = json.dumps({"facts": [
-    {"fact_type": "產品線", "label": "單一品項", "value": "重複標籤，這條不該再入庫。"},
-    {"fact_type": "受眾", "label": "上班族", "value": "常見於下午茶時段購買。"},
+    {"fact_type": "core_info", "label": "單一品項", "value": "重複標籤，這條不該再入庫。"},
+    {"fact_type": "audience", "label": "上班族", "value": "常見於下午茶時段購買。"},
 ]}, ensure_ascii=False)
 
 
@@ -360,6 +360,32 @@ class ProductRescanTest(_BaseProductScanTest):
         ).fetchone()
         self.assertEqual(rows["c"], 1)
         self.assertEqual(len(product_ai.PROVIDER.calls), 1)
+
+
+
+class ScanVocabularyTest(unittest.TestCase):
+    """F50 Contract I (lead ruling 2026-10-05): the scan stores `product_fact` rows, so its types
+    are product-fact vocab keys; a reply in the old five-type words is mapped (產品線／價格帶 ->
+    core_info, 受眾 -> audience) and its brand-level types (語調, 法規風險) are left out."""
+
+    def test_scan_types_are_product_fact_vocab_keys(self):
+        self.assertEqual(product_ai.PRODUCT_SCAN_FACT_TYPES, ("core_info", "audience"))
+
+    def test_old_words_map_and_brand_level_types_are_dropped(self):
+        reply = json.dumps({"facts": [
+            {"fact_type": "產品線", "label": "單一品項", "value": "一款 60 錠裝。"},
+            {"fact_type": "價格帶", "label": "中價位", "value": "單罐約 690 元。"},
+            {"fact_type": "受眾", "label": "上班族", "value": "下午茶時段購買。"},
+            {"fact_type": "語調", "label": "親切", "value": "口吻輕鬆。"},
+            {"fact_type": "法規風險", "label": "功效", "value": "不可宣稱療效。"},
+        ]}, ensure_ascii=False)
+        result = product_ai.parse_product_handoff_reply(reply)
+        self.assertEqual([(f["fact_type"], f["label"]) for f in result["facts"]],
+                         [("core_info", "單一品項"), ("core_info", "中價位"), ("audience", "上班族")])
+
+    def test_an_unknown_type_fails_the_reply(self):
+        reply = json.dumps({"facts": [{"fact_type": "xyz", "label": "a", "value": "b"}]})
+        self.assertIsNone(product_ai.parse_product_handoff_reply(reply))
 
 
 if __name__ == "__main__":

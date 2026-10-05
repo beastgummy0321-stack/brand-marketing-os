@@ -503,19 +503,19 @@ class ContextCompilerTest(unittest.TestCase):
             severity="hard", actor="小陳",
         )
         fact_1 = repo.create_product_fact(
-            self.conn, brand["id"], product_1["id"], fact_type="ingredient", label="成分",
+            self.conn, brand["id"], product_1["id"], fact_type="core_info", label="成分",
             value="產品1專屬事實內容", status="confirmed", confirmed_by="小陳", actor="小陳",
         )
         repo.create_product_fact(
-            self.conn, brand["id"], product_2["id"], fact_type="ingredient", label="成分",
+            self.conn, brand["id"], product_2["id"], fact_type="core_info", label="成分",
             value="產品2專屬事實內容", status="confirmed", confirmed_by="小陳", actor="小陳",
         )
         rule_1 = repo.create_rule(
-            self.conn, brand["id"], product_id=product_1["id"], rule_type="claim",
+            self.conn, brand["id"], product_id=product_1["id"], rule_type="policy",
             content="產品1專屬規則內容", severity="hard", actor="小陳",
         )
         repo.create_rule(
-            self.conn, brand["id"], product_id=product_2["id"], rule_type="claim",
+            self.conn, brand["id"], product_id=product_2["id"], rule_type="policy",
             content="產品2專屬規則內容", severity="hard", actor="小陳",
         )
 
@@ -541,7 +541,7 @@ class ContextCompilerTest(unittest.TestCase):
         brand = repo.create_brand(self.conn, name="品牌D（Compiler測試）", client_name=None, actor="小陳", org_id=db.DEV_ORG_ID)
         product = repo.create_product(self.conn, brand["id"], name="產品D-1", actor="小陳")
         repo.create_rule(
-            self.conn, brand["id"], product_id=product["id"], rule_type="claim",
+            self.conn, brand["id"], product_id=product["id"], rule_type="policy",
             content="產品專屬規則不該出現在品牌層", severity="hard", actor="小陳",
         )
         repo.create_claim(

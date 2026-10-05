@@ -49,7 +49,7 @@ class MaterialsInHandTest(unittest.TestCase):
         )
         bi_repo.create_customer_voice(
             web.conn, self.brand_id, actor=ACTOR, raw_text="吃了三週真的有感",
-            source_channel="LINE", source_type="manual", extraction=[],
+            source_channel="other", source_type="manual", extraction=[],
         )
         bi_repo.set_media_capability(web.conn, self.brand_id, "photo", actor=ACTOR)
         product_id = bi_repo.create_product(

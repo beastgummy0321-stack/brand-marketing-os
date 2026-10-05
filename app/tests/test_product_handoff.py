@@ -36,8 +36,8 @@ def _fake_response(text: str, in_tok: int = 100, out_tok: int = 50) -> ProviderR
 
 
 _GOOD_JSON = json.dumps({"facts": [
-    {"fact_type": "產品線", "label": "單一品項", "value": "目前只有一款 60 錠裝。"},
-    {"fact_type": "受眾", "label": "上班族", "value": "常見於下午茶時段購買。"},
+    {"fact_type": "core_info", "label": "單一品項", "value": "目前只有一款 60 錠裝。"},
+    {"fact_type": "audience", "label": "上班族", "value": "常見於下午茶時段購買。"},
 ], "price": {"amount": 690, "currency": "twd"}}, ensure_ascii=False)
 
 # 「含前後廢話」：外部 AI 常會在 JSON 前後多寫幾句話，解析要能忽略它們。
@@ -82,17 +82,20 @@ class HandoffPageTest(_BaseHandoffTest):
                                   label="單一產區直送定位", value="主打單一產區的烏龍與紅茶。",
                                   status="confirmed", confirmed_by=ACTOR)
         bi_repo.create_product_fact(web.conn, self.brand["id"], self.product_id, actor=ACTOR,
-                                    fact_type="產品線", label="既有規格", value="一包 150 公克。",
+                                    fact_type="core_info", label="既有規格", value="一包 150 公克。",
                                     status="pending")
         resp = self.client.get(self._handoff_url())
         self.assertEqual(resp.status_code, 200)
         prompt_text = resp.json()["data"]["prompt_text"]
         self.assertIn("單一產區直送定位", prompt_text)
         self.assertIn("既有規格", prompt_text)
+        self.assertIn("待確認・核心資訊", prompt_text)  # the type reads as its vocab label
         self.assertIn("虛構回甘烏龍", prompt_text)
-        # 嚴格回覆格式要求：五類 facts、選填 price，跟 run_product_scan 同形狀
+        # 嚴格回覆格式要求：facts 的類別（product-fact vocab keys）、選填 price，跟 run_product_scan
+        # 同形狀；語調／法規風險是品牌事實，不在商品調研裡問（F50 lead ruling 2026-10-05）。
         for fact_type in product_ai.PRODUCT_SCAN_FACT_TYPES:
             self.assertIn(fact_type, prompt_text)
+        self.assertNotIn("法規風險", prompt_text)
         self.assertIn("price", prompt_text)
 
 
@@ -118,7 +121,7 @@ class HandoffPasteDirectParseTest(_BaseHandoffTest):
 
     def test_same_label_deduped_against_existing_fact(self):
         bi_repo.create_product_fact(web.conn, self.brand["id"], self.product_id, actor=ACTOR,
-                                    fact_type="產品線", label="單一品項", value="舊資料。",
+                                    fact_type="core_info", label="單一品項", value="舊資料。",
                                     status="confirmed", confirmed_by=ACTOR)
         product_ai.PROVIDER = FakeProvider(response=_fake_response("不該被呼叫"))
         resp = self._post(_GOOD_JSON)
