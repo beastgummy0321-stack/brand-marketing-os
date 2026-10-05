@@ -6,6 +6,7 @@ Scans (AST) every `app/ads/**.py` outside `app/ads/adapters/**`, every `app/dash
 keyword argument names and class fields (a pydantic response model's field):
 
 - a bare `roas`, `roas_conservative` or `roas_optimistic` fails (the basis is unnamed);
+- `roas_unknown` is the unavailable-reason metadata, not a numeric figure;
 - any other `roas_*` name must be a basis code of `app/core/figures.py::BASES`.
 
 A value such as `metric == "roas"` (a metric name in a brief or an experiment) is not a key and is
@@ -68,7 +69,7 @@ def _violations(source: str) -> list[tuple[str, int]]:
     """Bare names and `roas_*` names that are not a basis code."""
     return [
         (name, line) for name, line in _key_names(ast.parse(source))
-        if name in BARE or name not in figures.BASES
+        if name != "roas_unknown" and (name in BARE or name not in figures.BASES)
     ]
 
 
@@ -86,6 +87,10 @@ def _pending() -> dict:
 
 
 class DetectorTest(unittest.TestCase):
+    def test_unknown_reason_is_metadata_but_unknown_numeric_names_still_fail(self):
+        self.assertEqual(_violations("x = {'roas_unknown': 'mixed_currency'}"), [])
+        self.assertEqual(_violations("x = {'roas_made_up': 1}"), [("roas_made_up", 1)])
+
     def test_bare_and_unknown_basis_names_are_hits_values_are_not(self):
         source = (
             "x = {'roas': 1, 'roas_conservative': 2, 'roas_all_spend': 3, 'roas_made_up': 4}\n"
