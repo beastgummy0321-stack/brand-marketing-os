@@ -472,7 +472,7 @@ function KvNumbers({ campaign: c, workspace: ws }: { campaign: CampaignDetail; w
           )}
           <span className={label}>
             {cap ? <>{who}{cap.basis === "break_even" ? "暫用" : "的"}<Term k={cap.basis === "break_even" ? "break_even" : "cap"} value={c.cap.break_even}>{cap.basis === "break_even" ? "打平線" : "上限"}</Term> {formatAmount(cap.value)}</> : "沒設上限"}
-            ROAS <Figure basis="roas_all_spend" value={t?.roas_all_spend ?? null} alt={{basis: "roas_tracked_spend", value: t?.roas_tracked_spend ?? null}} />
+            <span className="block">ROAS <Figure basis="roas_all_spend" value={t?.roas_all_spend ?? null} alt={{basis: "roas_tracked_spend", value: t?.roas_tracked_spend ?? null}} /></span>
           </span>
         </div>
         {closed ? (
