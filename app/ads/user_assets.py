@@ -16,6 +16,14 @@ ORIGINAL_MISSING = "原檔不存在，請重新上傳。"
 logger = logging.getLogger(__name__)
 
 
+class AssetFileMissing(ValueError):
+    """F51 Contract C: the retried upload has no stored original to reconcile (the retry route
+    answers 409 `asset_file_missing`; the library then reads the batch for a fresh descriptor)."""
+
+    def __init__(self):
+        super().__init__("沒有可核對的原檔，請重新上傳此檔。")
+
+
 def acquire_slot(conn, org, brand, kind="upload"):
     for lane in range(2):
         key = f"ads-{kind}:{org}:{brand}:{lane}"
@@ -177,7 +185,7 @@ def reconcile_upload(conn, org, brand, upload_id):
         enqueue_preview(asset)
         return repo.get_upload(conn, org, brand, upload_id)
     if not upload["storage_key"] or not upload["sha256"]:
-        raise ValueError("沒有可核對的原檔，請重新上傳此檔。")
+        raise AssetFileMissing()
     conn.commit()
     try:
         content, _ = storage.get(org_id=org, key=upload["storage_key"])

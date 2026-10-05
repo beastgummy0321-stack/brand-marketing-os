@@ -35,7 +35,7 @@ function useKiritimati() {
 vi.mock("./workspace/ChangesTab", () => ({ ChangesTab: () => null }));
 vi.mock("./ReviewTracking", () => ({ ReviewTracking: () => null }));
 vi.mock("@/lib/auth", () => ({ getOrgId: () => "org_test" }));
-vi.mock("@/lib/http", () => ({ apiFetch: vi.fn() }));
+vi.mock("@/lib/http", async () => ({ ...(await vi.importActual<typeof import("@/lib/http")>("@/lib/http")), apiFetch: vi.fn() }));
 vi.mock("@/lib/adsReviewApi", () => ({
   getReviews: vi.fn(), getReview: vi.fn(), createReview: vi.fn(), decideReview: vi.fn(),
 }));

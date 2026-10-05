@@ -1,3 +1,4 @@
+import { ApiResponseError, isRejected } from "@/lib/http";
 import { useEffect, useRef, useState } from "react";
 import { Folder, FileText } from "lucide-react";
 import { Button } from "@/components/layout/ui/button";
@@ -10,7 +11,6 @@ import {
 } from "@/components/layout/ui/dialog";
 import { COORDINATE_DIMENSIONS, type Coordinate, type CoordinateDimension } from "@/lib/coordinatesApi";
 import {
-  AdsApiError,
   createAd,
   createGroup,
   patchAd,
@@ -101,7 +101,7 @@ type AdErrors = { name: string | null; coords: string | null; other: string | nu
 const NO_AD_ERRORS: AdErrors = { name: null, coords: null, other: null };
 function adErrorsFrom(err: unknown, fallback: string): AdErrors {
   const message = err instanceof Error ? err.message : fallback;
-  const code = err instanceof AdsApiError ? err.code : null;
+  const code = err instanceof ApiResponseError ? err.code : null;
   if (code === "name_forbidden") return { ...NO_AD_ERRORS, name: message };
   if (code === "coordinate_unavailable") return { ...NO_AD_ERRORS, coords: message };
   return { ...NO_AD_ERRORS, other: message };
@@ -210,7 +210,7 @@ export function GroupPanel({
     } catch (err) {
       setError({
         text: err instanceof Error ? err.message : "更新投放組失敗，請稍後再試。",
-        dates: err instanceof AdsApiError && err.code === "group_dates_outside",
+        dates: isRejected(err, "group_dates_outside"),
       });
     } finally {
       setSaving(false);

@@ -1,5 +1,6 @@
 /** F28-I09: the strategy tab's 「一個上限」 card — own／暫用打平／沒設上限 states, the integer NT$ input saved through
  * `PUT .../target` with the revision guard, the 409 reload path, and the mid ruler fed by triage (none for drafts). */
+import { ApiResponseError } from "@/lib/http";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
@@ -7,7 +8,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { getCampaign, type CampaignDetail } from "@/lib/adsApi";
 import {
-  getTarget, getTriage, putTarget, TriageRequestRejected, type CampaignTarget, type CapView, type TriageItem,
+  getTarget, getTriage, putTarget, type CampaignTarget, type CapView, type TriageItem,
 } from "@/lib/adsTriageApi";
 import { fetchProductList } from "@/lib/productsApi";
 import { CapBlock } from "./CapBlock";
@@ -178,7 +179,7 @@ describe("CapBlock", () => {
 
   it("409 target_conflict: says so and offers a re-read, never a silent overwrite", async () => {
     const user = userEvent.setup();
-    vi.mocked(putTarget).mockRejectedValue(new TriageRequestRejected("目標設定已被更新", "target_conflict"));
+    vi.mocked(putTarget).mockRejectedValue(new ApiResponseError("目標設定已被更新", 409, {}, { code: "target_conflict" }));
     vi.mocked(getCampaign).mockResolvedValue(campaign(OWN));
     const { onCampaignChange } = renderBlock(campaign(NONE));
     await user.type(await screen.findByLabelText("每賣一筆最多花多少（上限）"), "300");

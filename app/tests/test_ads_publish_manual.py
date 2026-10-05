@@ -265,6 +265,36 @@ class PublishWritesOneApprovalTest(PublishTestBase):
         self.assertEqual(self._approvals(detail["id"]), [])
         self.assertEqual(self._actions(detail["id"]), [])
 
+    def test_publish_route_answers_month_budget_blocked_with_its_reason(self):
+        """F51 Contract C: the manual publish route answered a month-budget refusal with the
+        sentence as its code; it now answers 409 `month_budget_blocked` with `details.reason`."""
+        from fastapi.testclient import TestClient
+
+        from app.ads import month_budget
+        from app.main import app
+
+        detail = self._adopted_campaign()
+        self._ready_material(detail)
+        web.conn.commit()
+        content_hash = change_control_data.digest(change_control_launch.snapshot(
+            web.conn, self.org_id, self.brand_id, detail["id"]))
+        client = TestClient(app)
+        url = f"/api/ads/brands/{self.brand_id}/campaigns/{detail['id']}/publish"
+        for reason, sentence in month_budget.BLOCKED_TEXT.items():
+            with mock.patch.object(change_control_launch.month_budget, "preflight",
+                                   side_effect=month_budget.MonthBudgetBlocked(reason)):
+                response = client.post(url, json={
+                    "adapter": "manual", "operation_id": f"blocked-{reason}",
+                    "content_hash": content_hash,
+                })
+            self.assertEqual(response.status_code, 409, response.text)
+            error = response.json()["error"]
+            self.assertEqual(
+                (error["code"], error["message"], error["details"]),
+                ("month_budget_blocked", sentence, {"reason": reason}),
+            )
+        self.assertEqual(self._approvals(detail["id"]), [])
+
     def test_launch_lost_response_replays_same_atomic_approval_and_action(self):
         detail = self._adopted_campaign()
         self._ready_material(detail)

@@ -487,6 +487,25 @@ def save(conn, org, brand, *, month, currency, amount, expected_revision, actor)
     return view(conn, org, brand, month)
 
 
+# F51 Contract C: why `preflight` refuses a spend increase -- the one table of the three reasons and
+# their sentences (`change_control_launch.month_fit` reads the uncertain one). Every route that runs
+# `preflight` answers 409 `month_budget_blocked` with `details.reason` = the key.
+BLOCKED_TEXT = {
+    "month_not_current": "新增花費請在執行月份重新確認月預算與最新資料。",
+    "balance_unknown": "餘額尚不確定，暫不能核准新增花費；可補資料、檢視或核准降低風險的操作。",
+    "over_month_total": "這份變更超過本月總額；尚未讀回完成的降額不能先釋放額度。",
+}
+
+
+class MonthBudgetBlocked(ValueError):
+    """`preflight`'s refusal: `code` is a `BLOCKED_TEXT` key, the message its sentence. A
+    `ValueError`, so a caller that only knows `ValueError` still refuses (409) as before."""
+
+    def __init__(self, code: str):
+        super().__init__(BLOCKED_TEXT[code])
+        self.code = code
+
+
 def preflight(conn, org, brand, month, items):
     lock(conn, org, brand)
     increases = []
@@ -504,10 +523,10 @@ def preflight(conn, org, brand, month, items):
     if not increases:
         return {"can_increase": False, "notice": NOTICE}
     if month != settings.today_for_org(conn, org_id=org).strftime("%Y-%m"):
-        raise ValueError("新增花費請在執行月份重新確認月預算與最新資料。")
+        raise MonthBudgetBlocked("month_not_current")
     budget = view(conn, org, brand, month, additional=items)
     if budget["amount"] is None or budget["uncertainties"]:
-        raise ValueError("餘額尚不確定，暫不能核准新增花費；可補資料、檢視或核准降低風險的操作。")
+        raise MonthBudgetBlocked("balance_unknown")
     if budget["available"] is None or budget["available"] < 0:
-        raise ValueError("這份變更超過本月總額；尚未讀回完成的降額不能先釋放額度。")
+        raise MonthBudgetBlocked("over_month_total")
     return budget

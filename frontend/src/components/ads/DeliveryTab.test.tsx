@@ -3,6 +3,7 @@
  * the in-fold next-step button, numbers, budget and 新增節點 sit in the closed campaign-wide 「調整結構（進階）」. No node
  * is selected by default. F35 ruling 3: the material hand-off (「開始做素材 →」／「前往素材 →」) is the action bar's
  * primary with its hint, not a button in the fold. The tree itself is covered in `workspace/StructureTab.test.tsx`. */
+import { ApiResponseError } from "@/lib/http";
 import type { ReactElement } from "react";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -10,7 +11,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 
 import type { AdRow, CampaignDetail, DeliveryGroupRow } from "@/lib/adsApi";
-import { AdsApiError, adoptStrategy, dispatchPack, getCampaign, patchAd, patchGroup } from "@/lib/adsApi";
+import { adoptStrategy, dispatchPack, getCampaign, patchAd, patchGroup } from "@/lib/adsApi";
 import { fetchCoordinates, type Coordinate } from "@/lib/coordinatesApi";
 import { fetchChannels } from "@/lib/adsLaunchApi";
 import { DeliveryTab } from "./DeliveryTab";
@@ -24,7 +25,6 @@ vi.mock("@/components/layout/WorkspaceContext", () => ({
 }));
 
 vi.mock("@/lib/adsApi", async () => ({
-  AdsApiError: (await vi.importActual<typeof import("@/lib/adsApi")>("@/lib/adsApi")).AdsApiError,
   adoptStrategy: vi.fn(),
   dispatchPack: vi.fn(),
   getCampaign: vi.fn(),
@@ -668,7 +668,7 @@ describe("DeliveryTab: one budget, the period's menu and carried ads (F48-I10)",
 
   it("a refused ad save: name_forbidden beside the name, coordinate_unavailable beside the coordinates, in the server's words", async () => {
     const user = userEvent.setup();
-    vi.mocked(patchAd).mockRejectedValueOnce(new AdsApiError("廣告名稱寫了「治療」，這是你標了不能講的話", "name_forbidden"));
+    vi.mocked(patchAd).mockRejectedValueOnce(new ApiResponseError("廣告名稱寫了「治療」，這是你標了不能講的話", 400, {}, { code: "name_forbidden" }));
     renderTab(campaign());
     await user.click(screen.getByRole("button", { name: "進階：編輯這一組（投放組）" }));
     await user.click(screen.getByRole("button", { name: /^廣告一/ }));
@@ -681,7 +681,7 @@ describe("DeliveryTab: one budget, the period's menu and carried ads (F48-I10)",
     expect(alert.parentElement?.contains(name)).toBe(true);
     expect(name.getAttribute("aria-invalid")).toBe("true");
 
-    vi.mocked(patchAd).mockRejectedValueOnce(new AdsApiError("這期不能用這個優惠：這個賣法沒有登記這種優惠", "coordinate_unavailable"));
+    vi.mocked(patchAd).mockRejectedValueOnce(new ApiResponseError("這期不能用這個優惠：這個賣法沒有登記這種優惠", 400, {}, { code: "coordinate_unavailable" }));
     await user.type(name, "好");
     await user.click(screen.getByRole("button", { name: "儲存變更" }));
     const coords = await screen.findByText("這期不能用這個優惠：這個賣法沒有登記這種優惠");
@@ -692,7 +692,7 @@ describe("DeliveryTab: one budget, the period's menu and carried ads (F48-I10)",
   it("F50 Contract I (c1-08): a group date outside the campaign prints the server's sentence under the dates", async () => {
     const user = userEvent.setup();
     const sentence = "投放組日期要在活動期間（2026-01-01～2026-01-15）內。";
-    vi.mocked(patchGroup).mockRejectedValueOnce(new AdsApiError(sentence, "group_dates_outside"));
+    vi.mocked(patchGroup).mockRejectedValueOnce(new ApiResponseError(sentence, 400, {}, { code: "group_dates_outside" }));
     renderTab(campaign());
     await user.click(screen.getByRole("button", { name: "進階：編輯這一組（投放組）" }));
     await user.click(screen.getByRole("button", { name: /^投放組/ }));

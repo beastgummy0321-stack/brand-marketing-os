@@ -5,8 +5,8 @@
  * F46 Contract L: `getCoordinateLearnings` reads what the closed campaigns taught — every ad of a
  * closed internal campaign ranked by cost per sale with its 留下／換掉 verdict, written at closeout.
  * See `app/ads/learning_view.py`; numbers are the stored ones, never recomputed here. */
-import { apiFetch } from "./http";
-import { BASE, parseJsonOrThrow } from "./adsApi";
+import { apiFetch, readJson } from "./http";
+import { BASE } from "./adsApi";
 import type { CampaignObjectiveFamily } from "./adsTriageApi";
 
 export interface AdsLearning {
@@ -27,7 +27,7 @@ export interface AdsLearning {
 
 export async function getAdsLearnings(brandId: string, signal?: AbortSignal): Promise<AdsLearning[]> {
   const res = await apiFetch(`${BASE}/brands/${encodeURIComponent(brandId)}/learnings`, { signal });
-  const data = await parseJsonOrThrow<{ learnings: AdsLearning[] }>(res, "讀取品牌學習紀錄失敗。");
+  const data = await readJson<{ learnings: AdsLearning[] }>(res, "讀取品牌學習紀錄失敗。");
   return data.learnings;
 }
 
@@ -118,5 +118,5 @@ export async function getCoordinateLearnings(
     `${BASE}/brands/${encodeURIComponent(brandId)}/coordinate-learnings${qs ? `?${qs}` : ""}`,
     { signal },
   );
-  return parseJsonOrThrow<CoordinateLearnings>(res, "讀取投放學到的失敗。");
+  return readJson<CoordinateLearnings>(res, "讀取投放學到的失敗。");
 }

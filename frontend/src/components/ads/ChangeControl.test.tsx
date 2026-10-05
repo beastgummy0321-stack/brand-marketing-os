@@ -1,3 +1,4 @@
+import { ApiResponseError } from "@/lib/http";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
@@ -180,7 +181,7 @@ describe("ChangeControl 核准與逐項核對", () => {
   it("明確拒絕的保存可修正內容，不誤判成回應遺失而鎖死", async () => {
     const user = userEvent.setup();
     vi.mocked(api.getChangeControl).mockResolvedValue({ targets: [target], change_sets: [] });
-    vi.mocked(api.createChangeSet).mockRejectedValue(new api.ChangeRequestRejected("原清單仍有未核對的操作"));
+    vi.mocked(api.createChangeSet).mockRejectedValue(new ApiResponseError("原清單仍有未核對的操作", 409, {}, { code: "change_control_unavailable" }));
     render(page()); await openAdvanced();
     await user.click((await screen.findAllByRole("button", { name: "建立變更清單" }))[0]);
     await user.type(screen.getByLabelText("變更 1 原因"), "測試");
@@ -237,7 +238,7 @@ describe("MonthlyBudgetPanel", () => {
     const user = userEvent.setup();
     const onSaved = vi.fn();
     vi.mocked(api.getMonthlyBudget).mockResolvedValue({ ...budget, amount: null, revision: 0, known_spend: null });
-    vi.mocked(api.saveMonthlyBudget).mockRejectedValue(new api.ChangeRequestRejected("每月品牌總額要大於 0。"));
+    vi.mocked(api.saveMonthlyBudget).mockRejectedValue(new ApiResponseError("每月品牌總額要大於 0。", 409, {}, { code: "monthly_budget_unavailable" }));
     render(<MemoryRouter><MonthlyBudgetPanel brandId="brand_a" month="2026-09" onSaved={onSaved} /></MemoryRouter>);
     await user.click(await screen.findByRole("button", { name: "設定月總額" }));
     expect(document.activeElement).toBe(screen.getByLabelText("每月品牌總額"));

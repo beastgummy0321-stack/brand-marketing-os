@@ -156,6 +156,44 @@ class ChangeControlTest(unittest.TestCase):
             self.approve(first)
         self.assertEqual(self.count("approval"), 0)
 
+    def test_approve_route_codes_month_budget_apart_from_a_premise_change(self):
+        """F51 Contract C: a month-budget refusal answers 409 `month_budget_blocked` with
+        `details.reason`; a premise change stays `change_control_unavailable` (the confirm page
+        rebuilds once only on that one)."""
+        from app.ads import month_budget
+        from app.main import app
+
+        client = TestClient(app)
+        base = f"/api/ads/brands/{self.brand}/campaigns/{self.campaign}"
+        first = self.create()
+        self.conn.commit()
+        url = base + f"/change-sets/{first['id']}/approve"
+        for reason, sentence in month_budget.BLOCKED_TEXT.items():
+            with patch(
+                "app.ads.month_budget.preflight",
+                side_effect=month_budget.MonthBudgetBlocked(reason),
+            ):
+                response = client.post(url, json={"content_hash": first["content_hash"]})
+            self.assertEqual(response.status_code, 409, response.text)
+            error = response.json()["error"]
+            self.assertEqual(
+                (error["code"], error["message"], error["details"]),
+                ("month_budget_blocked", sentence, {"reason": reason}),
+            )
+        self.assertEqual(self.count("approval"), 0)
+        self.entity(
+            "3",
+            "ad",
+            parent_native_kind="adset",
+            parent_native_id="2",
+            creative={"fields": {"body": "外部已修改"}},
+        )
+        self.conn.commit()
+        response = client.post(url, json={"content_hash": first["content_hash"]})
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertEqual(response.json()["error"]["code"], "change_control_unavailable")
+        self.assertIn("設定已改變", response.json()["error"]["message"])
+
     def test_normal_sync_and_unrelated_budget_do_not_invalidate_copy(self):
         first = self.create()
         self.entity(

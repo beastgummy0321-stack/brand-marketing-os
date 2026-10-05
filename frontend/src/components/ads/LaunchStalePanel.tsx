@@ -1,7 +1,8 @@
+import { isRejected } from "@/lib/http";
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { Button } from "@/components/layout/ui/button";
-import { assignPlannedMaterial, getPlannedMaterials, HandoffRequestRejected, reapproveLaunch, revertLaunch, type HandoffItem, type HandoffWorkspace, type LaunchDiffRow, type LaunchStale, type PlannedMaterialWorkspace } from "@/lib/adsHandoffApi";
+import { assignPlannedMaterial, getPlannedMaterials, reapproveLaunch, revertLaunch, type HandoffItem, type HandoffWorkspace, type LaunchDiffRow, type LaunchStale, type PlannedMaterialWorkspace } from "@/lib/adsHandoffApi";
 import { formatInstant, useOrgClock } from "@/lib/orgClock";
 import { ActionBar, CampaignChip, Chip, ConfirmSheet, DiffRow, FlowHeader, formatAmount, ProgressSegments, ResultHero, TodoRow, WarnButton, type SegmentState } from "./patterns";
 
@@ -85,7 +86,7 @@ export function LaunchStalePanel({ brandId, campaignId, stale, items, onDecided,
       if (signal.aborted) return;
       setSheet(false);
       // 409: the plan moved again (or the decision no longer applies) — show the newest difference, never a success.
-      onReload({ tone: "error", text: err instanceof HandoffRequestRejected ? `沒有完成：${reason(err)}已重新載入最新的差異，請再看一次。` : `${reason(err)}已重新載入，請確認目前狀態後再決定。` });
+      onReload({ tone: "error", text: isRejected(err) ? `沒有完成：${reason(err)}已重新載入最新的差異，請再看一次。` : `${reason(err)}已重新載入，請確認目前狀態後再決定。` });
     } finally { if (!signal.aborted) setBusy(""); }
   }
   async function reassign(adId: string, placementId: string, revision: number) {

@@ -1,4 +1,4 @@
-import { apiFetch, errorMessageFrom } from "./http";
+import { apiFetch, readJson, throwIfFailed } from "./http";
 import { BASE } from "./adsApi";
 import type { NativeObservation } from "./adsExternalApi";
 
@@ -27,18 +27,11 @@ export interface AssetHandoff {
 }
 export interface BindingCandidate { entity_id: string; name: string | null; native_id: string; native_label?: string; native_status?: string }
 export interface VersionMetrics { observations: (NativeObservation & { binding_id: string; attributed?: boolean; unattributed_reason?: string | null })[]; totals: null; [key: string]: unknown }
-export class AssetApiError extends Error {
-  status: number; details?: unknown;
-  constructor(message: string, status: number, details?: unknown) { super(message); this.status = status; this.details = details; }
-}
 export const userAssetPath = (brand: string) => `${BASE}/brands/${encodeURIComponent(brand)}/user-assets`;
 export const placementPath = (brand: string, campaign: string, id?: string) => `${BASE}/brands/${encodeURIComponent(brand)}/campaigns/${encodeURIComponent(campaign)}/placements${id ? `/${encodeURIComponent(id)}` : ""}`;
 const suggestionPath = (brand: string, campaign: string) => `${BASE}/brands/${encodeURIComponent(brand)}/campaigns/${encodeURIComponent(campaign)}/asset-suggestions`;
 export async function assetRequest<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await apiFetch(path, init);
-  const data = await res.json().catch(() => null);
-  if (!res.ok) throw new AssetApiError(errorMessageFrom(data, "素材操作失敗，請稍後重試。"), res.status, data?.error?.details);
-  return data as T;
+  return readJson<T>(await apiFetch(path, init), "素材操作失敗，請稍後重試。");
 }
 const json = (body: unknown, method = "POST"): RequestInit => ({ method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 export const listUserAssets = (brand: string, cursor?: string | null, uploadCursor?: string | null, signal?: AbortSignal) => assetRequest<AssetLibrary>(`${userAssetPath(brand)}?${new URLSearchParams({ ...(cursor ? { cursor } : {}), ...(uploadCursor ? { upload_cursor: uploadCursor } : {}) })}`, { signal });
@@ -61,6 +54,6 @@ export const bindingAction = (brand: string, campaign: string, p: Placement, act
 export const versionMetrics = (brand: string, campaign: string, p: Placement, start: string, end: string) => assetRequest<VersionMetrics>(`${placementPath(brand, campaign, p.id)}/version-metrics?${new URLSearchParams({ revision: String(p.revision), start, end })}`);
 export async function assetBlob(brand: string, id: string, kind: "download" | "preview" | "thumbnail", signal?: AbortSignal): Promise<Blob> {
   const res = await apiFetch(`${userAssetPath(brand)}/${encodeURIComponent(id)}/${kind}`, { signal });
-  if (!res.ok) throw new AssetApiError(errorMessageFrom(await res.json().catch(() => null), "讀取原檔或預覽失敗。"), res.status);
+  await throwIfFailed(res, "讀取原檔或預覽失敗。");
   return res.blob();
 }

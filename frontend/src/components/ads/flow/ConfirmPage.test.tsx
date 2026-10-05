@@ -8,7 +8,8 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation, useParams } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as changeApi from "@/lib/adsChangeApi";
-import { ChangeRequestRejected, type ChangeItem, type ChangeSet, type MonthlyBudget } from "@/lib/adsChangeApi";
+import type { ChangeItem, ChangeSet, MonthlyBudget } from "@/lib/adsChangeApi";
+import { ApiNetworkError, ApiResponseError } from "@/lib/http";
 import * as triageApi from "@/lib/adsTriageApi";
 import type { PauseView, QueueItem, QueuePayload, QueueScale, TriageItem } from "@/lib/adsTriageApi";
 import * as anglesApi from "@/lib/adsAnglesApi";
@@ -458,7 +459,7 @@ describe("ConfirmPage（F22-I02）拒絕／暫緩 sheet", () => {
   it("暫緩被拒（例如時間已過）：顯示原因，不留下草稿、也不另外送決定", async () => {
     const user = userEvent.setup();
     await openSheet(user);
-    vi.mocked(changeApi.createChangeSet).mockRejectedValue(new changeApi.ChangeRequestRejected("暫緩請選擇未來的重看時間。"));
+    vi.mocked(changeApi.createChangeSet).mockRejectedValue(new ApiResponseError("暫緩請選擇未來的重看時間。", 400, {}, { code: "revisit_on_invalid" }));
     await user.click(screen.getByRole("button", { name: "保存" }));
     expect(await screen.findByText("暫緩請選擇未來的重看時間。")).toBeTruthy();
     expect(changeApi.createChangeSet).toHaveBeenCalledTimes(1);
@@ -496,12 +497,12 @@ describe("ConfirmPage（F22-I02）沒收到伺服器回應", () => {
     const user = userEvent.setup();
     vi.mocked(triageApi.getQueue).mockResolvedValue(queue([queueItem()]));
     vi.mocked(changeApi.createChangeSet)
-      .mockRejectedValueOnce(new Error("未收到伺服器回應，結果尚未確認。請沿用原操作重試，不要重做平台操作。"))
+      .mockRejectedValueOnce(new ApiNetworkError(true))
       .mockResolvedValueOnce(changeSet());
     vi.mocked(changeApi.approveChangeSet).mockResolvedValue(changeSet({ status: "approved" }));
     renderAt(proposePath);
     await user.click(await screen.findByRole("button", { name: /核准暫停，接著到平台操作/ }));
-    expect(await screen.findByText(/未收到伺服器回應/)).toBeTruthy();
+    expect(await screen.findByText(new ApiNetworkError(true).message)).toBeTruthy();
     const firstBody = vi.mocked(changeApi.createChangeSet).mock.calls[0][2];
 
     await user.click(screen.getByRole("button", { name: /核准暫停，接著到平台操作/ }));
@@ -611,7 +612,7 @@ describe("ConfirmPage（F25-I03）propose/budget 路由", () => {
     await waitFor(() => expect(changeApi.approveChangeSet).toHaveBeenCalled());
   });
 
-  it("月預算放不下的 409：顯示後端訊息，不重建草稿", async () => {
+  it("月預算放不下的 409（`month_budget_blocked`）：顯示後端訊息，不重建草稿——看代碼不看句子", async () => {
     const user = userEvent.setup();
     vi.mocked(triageApi.getQueue).mockResolvedValue(queue([scaleQueueItem()]));
     vi.mocked(changeApi.getMonthlyBudget).mockResolvedValue({
@@ -621,22 +622,28 @@ describe("ConfirmPage（F25-I03）propose/budget 路由", () => {
     vi.mocked(changeApi.createChangeSet).mockResolvedValue(changeSet({
       items: [changeItem({ kind: "budget", target_id: "aex_owner_G", before: { daily_amount: 1000 }, after: { daily_amount: 1200 } })],
     }));
+    // F51 Contract C: a reworded sentence still stops — the branch reads the code, never the text.
     vi.mocked(changeApi.approveChangeSet).mockRejectedValue(
-      new ChangeRequestRejected("這份變更超過本月總額；尚未讀回完成的降額不能先釋放額度。"),
+      new ApiResponseError("這個月的錢不夠這次加碼（改寫過的句子）", 409, {}, {
+        code: "month_budget_blocked", details: { reason: "over_month_total" },
+      }),
     );
     renderAt(proposeBudgetPath);
     await user.click(await screen.findByRole("button", { name: /核准加碼，接著到平台操作/ }));
-    expect(await screen.findByText("這份變更超過本月總額；尚未讀回完成的降額不能先釋放額度。")).toBeTruthy();
+    expect(await screen.findByText("這個月的錢不夠這次加碼（改寫過的句子）")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "重新檢查" })).toBeNull();
     expect(changeApi.createChangeSet).toHaveBeenCalledTimes(1);
+    expect(changeApi.approveChangeSet).toHaveBeenCalledTimes(1);
   });
 
-  it("前提變了的 409（非月預算訊息，暫停提議）：仍照既有規則靜默重建一次再核准", async () => {
+  it("前提變了的 409（`change_control_unavailable`，暫停提議）：仍照既有規則靜默重建一次再核准", async () => {
     const user = userEvent.setup();
     vi.mocked(triageApi.getQueue).mockResolvedValue(queue([queueItem()]));
     const draft = changeSet();
     vi.mocked(changeApi.createChangeSet).mockResolvedValueOnce(draft).mockResolvedValueOnce({ ...draft, id: "acs_rebuilt" });
     vi.mocked(changeApi.approveChangeSet)
-      .mockRejectedValueOnce(new ChangeRequestRejected("這項變更所依據的設定已改變，請依現況重新建立清單。"))
+      // A sentence that reads like the month budget's: only the code decides.
+      .mockRejectedValueOnce(new ApiResponseError("這份變更超過本月總額（改寫過的句子）", 409, {}, { code: "change_control_unavailable" }))
       .mockResolvedValueOnce({ ...draft, id: "acs_rebuilt", status: "approved" });
     renderAt(proposePath);
     await user.click(await screen.findByRole("button", { name: /核准暫停，接著到平台操作/ }));
@@ -719,7 +726,7 @@ describe("ConfirmPage（F40-I08）本月預算放得下：三個狀態", () => {
     const rebuilt = { ...draft, id: "acs_rebuilt" };
     vi.mocked(changeApi.createChangeSet).mockResolvedValueOnce(draft).mockResolvedValueOnce(rebuilt);
     vi.mocked(changeApi.getChangeControl).mockResolvedValue({ targets: [], change_sets: [rebuilt] });
-    vi.mocked(changeApi.approveChangeSet).mockRejectedValueOnce(new ChangeRequestRejected("這項變更所依據的設定已改變，請依現況重新建立清單。"));
+    vi.mocked(changeApi.approveChangeSet).mockRejectedValueOnce(new ApiResponseError("這項變更所依據的設定已改變，請依現況重新建立清單。", 409, {}, { code: "change_control_unavailable" }));
     renderAt(proposeBudgetPath);
     await user.click(await screen.findByRole("button", { name: /核准加碼，接著到平台操作/ }));
 
@@ -755,7 +762,7 @@ describe("ConfirmPage（F40-I08）本月預算放得下：三個狀態", () => {
     vi.mocked(changeApi.getChangeControl).mockResolvedValue({ targets: [], change_sets: [rebuilt] });
     // Real latency: the answer lands after the page has re-rendered.
     vi.mocked(changeApi.approveChangeSet).mockImplementation(() => new Promise((_, reject) =>
-      setTimeout(() => reject(new ChangeRequestRejected("這個物件已有相同操作待核對，請先處理原清單。")), 50)));
+      setTimeout(() => reject(new ApiResponseError("這個物件已有相同操作待核對，請先處理原清單。", 409, {}, { code: "change_control_unavailable" })), 50)));
     renderAt(proposeBudgetPath);
     await user.click(await screen.findByRole("button", { name: /核准加碼，接著到平台操作/ }));
     await user.click(await screen.findByRole("button", { name: "重新檢查" }));

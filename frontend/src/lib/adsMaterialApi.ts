@@ -1,4 +1,4 @@
-import { apiFetch, errorMessageFrom } from "./http";
+import { apiFetch, readJson } from "./http";
 import { BASE } from "./adsApi";
 import type { CopyFields } from "./adsUserAssetsApi";
 
@@ -40,16 +40,9 @@ export function promptInput(prompt: MaterialPrompt): MaterialPrompt {
   if (prompt.source === "manual") return { source: "manual", text: prompt.text, ...(prompt.origin ? { origin: prompt.origin } : {}) };
   return { source: "workbench", set_id: prompt.set_id, version_id: prompt.version_id, card_index: prompt.card_index };
 }
-export class MaterialRequestError extends Error {
-  status: number;
-  constructor(message: string, status: number) { super(message); this.status = status; }
-}
 export const materialPath = (brand: string, campaign: string) => `${BASE}/brands/${encodeURIComponent(brand)}/campaigns/${encodeURIComponent(campaign)}/material-tasks`;
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await apiFetch(path, init);
-  const body = await response.json().catch(() => null);
-  if (!response.ok) throw new MaterialRequestError(errorMessageFrom(body, "素材任務尚未完成，請重新讀取確認已保存的內容。"), response.status);
-  return body as T;
+  return readJson<T>(await apiFetch(path, init), "素材任務尚未完成，請重新讀取確認已保存的內容。");
 }
 export const listMaterialTasks = (brand: string, campaign: string, signal?: AbortSignal) => request<{ tasks: MaterialTask[]; truncated?: boolean }>(materialPath(brand, campaign), { signal });
 export const getMaterialTask = (brand: string, campaign: string, id: string, signal?: AbortSignal) => request<{ task: MaterialTask }>(`${materialPath(brand, campaign)}/${encodeURIComponent(id)}`, { signal });

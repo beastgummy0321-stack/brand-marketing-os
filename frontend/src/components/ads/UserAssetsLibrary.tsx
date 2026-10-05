@@ -1,8 +1,9 @@
+import { isRejected } from "@/lib/http";
 import { useAssetDraftGuard } from "./useAssetDraftGuard";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/layout/ui/button";
 import { Textarea } from "@/components/layout/ui/textarea";
-import { listUserAssets, createUploadBatch, putUpload, retryUpload, getUploadBatch, AssetApiError, retryPreview, type AssetLibrary, type AssetUpload, type CopyFields } from "@/lib/adsUserAssetsApi";
+import { listUserAssets, createUploadBatch, putUpload, retryUpload, getUploadBatch, retryPreview, type AssetLibrary, type AssetUpload, type CopyFields } from "@/lib/adsUserAssetsApi";
 import { AuthAssetMedia } from "./AuthAssetMedia";
 import { Chip } from "./patterns";
 
@@ -90,8 +91,8 @@ function Library({ brandId, onSelection, onBusy, onAttach, onAttachAsset, readOn
       let upload: AssetUpload;
       try { upload = (await retryUpload(brandId, u.id)).upload; }
       catch (e) {
-        // Narrow legacy error plus a fresh durable descriptor, never arbitrary 409.
-        if (!(e instanceof AssetApiError) || e.status !== 409 || e.message !== "沒有可核對的原檔，請重新上傳此檔。") throw e;
+        // Only the missing-original refusal plus a fresh durable descriptor, never arbitrary 409.
+        if (!isRejected(e, "asset_file_missing")) throw e;
         const { batch } = await getUploadBatch(brandId, u.batch_id, signal);
         const fresh = batch.uploads.find(row => row.id === u.id);
         if (!fresh || (fresh.status !== "complete" && (fresh.storage_key !== null && fresh.sha256 !== null))) throw e;

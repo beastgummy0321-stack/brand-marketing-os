@@ -24,8 +24,8 @@
  *   starts from the organisation's own today for 30 days. Errors: 400 `objective_unavailable`,
  *   `objective_unknown`, `budget_invalid`, `products_required`, `product_unknown`,
  *   `dates_required`, `end_before_start`. */
-import { apiFetch } from "./http";
-import { BASE, parseJsonOrThrow, type CampaignDraft } from "./adsApi";
+import { apiFetch, readJson } from "./http";
+import { BASE, type CampaignDraft } from "./adsApi";
 import type { CampaignCreateExtras } from "./adsCampaignTypes";
 
 /** One customer group of a sell-way's knowledge products (`product_customer_group`). */
@@ -126,7 +126,7 @@ const brandPath = (brandId: string) => `${BASE}/brands/${encodeURIComponent(bran
 
 export async function getWizardOptions(brandId: string): Promise<WizardOptions> {
   const res = await apiFetch(`${brandPath(brandId)}/new-campaign/options`);
-  return parseJsonOrThrow<WizardOptions>(res, "讀取商品與目標失敗。");
+  return readJson<WizardOptions>(res, "讀取商品與目標失敗。");
 }
 
 export async function createCampaignFromPicks(
@@ -138,6 +138,6 @@ export async function createCampaignFromPicks(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(picks),
   });
-  const data = await parseJsonOrThrow<{ campaign: CampaignDraft }>(res, "建立活動失敗。");
+  const data = await readJson<{ campaign: CampaignDraft }>(res, "建立活動失敗。");
   return data.campaign;
 }

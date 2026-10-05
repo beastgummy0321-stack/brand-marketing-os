@@ -9,7 +9,8 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 
 import type { AdRow, CampaignDetail, CampaignPerformance, DeliveryGroupRow } from "@/lib/adsApi";
-import { closeCampaign, CoverageMissingError, getPerformance } from "@/lib/adsApi";
+import { closeCampaign, coverageGapOf, getPerformance } from "@/lib/adsApi";
+import { ApiResponseError } from "@/lib/http";
 import { getCoordinateLearnings, type CoordinateLearnings, type LearningCampaign } from "@/lib/adsLearningsApi";
 import { readComparison } from "@/lib/adsExperimentApi";
 import { readSimulation } from "@/lib/adsSimulationApi";
@@ -453,8 +454,8 @@ describe("F37 結案對話框：缺日不放行，重讀仍失敗才可跳過", 
     const utils = render(view(syncing));
     return { c, onCampaignChange, rerenderSyncing: (s: boolean) => utils.rerender(view(s)) };
   }
-  const gap = (can_skip: boolean) => new CoverageMissingError("有 2 天還沒讀到平台資料，先重新讀取平台。", {
-    missing_days: ["2026-09-27", "2026-09-28"], never_synced: false, can_skip,
+  const gap = (can_skip: boolean) => new ApiResponseError("有 2 天還沒讀到平台資料，先重新讀取平台。", 409, {}, {
+    code: "coverage_missing", details: { missing_days: ["2026-09-27", "2026-09-28"], never_synced: false, can_skip },
   });
   beforeEach(() => {
     vi.clearAllMocks();
@@ -509,8 +510,8 @@ describe("F37 結案對話框：缺日不放行，重讀仍失敗才可跳過", 
 
   it("從沒讀過：說先讀取再結案，不列日子", async () => {
     const user = userEvent.setup();
-    vi.mocked(closeCampaign).mockRejectedValue(new CoverageMissingError("這個活動還沒讀過平台資料，先重新讀取平台。", {
-      missing_days: [], never_synced: true, can_skip: false,
+    vi.mocked(closeCampaign).mockRejectedValue(new ApiResponseError("這個活動還沒讀過平台資料，先重新讀取平台。", 409, {}, {
+      code: "coverage_missing", details: { missing_days: [], never_synced: true, can_skip: false },
     }));
     renderClose();
     await user.click(await screen.findByRole("button", { name: "立即結案" }));
@@ -642,29 +643,30 @@ describe("F36-I09 組織時鐘：提前結案說明", () => {
 });
 
 // F37 Contract S: the real `closeCampaign` reads the standard envelope's `error.details` (F37-I03) and
-// throws `CoverageMissingError`; any other 409 stays a plain Error with the server's message.
+// throws an `ApiResponseError` coded `coverage_missing` whose details `coverageGapOf` reads; any other 409 has
+// no gap and keeps the server's message.
 describe("closeCampaign 409 coverage_missing", () => {
   afterEach(() => { vi.unstubAllGlobals(); });
   const reply = (status: number, body: unknown) => vi.fn(async () => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } }));
 
-  it("reads error.details into CoverageMissingError and sends skip_missing", async () => {
+  it("reads error.details into the coverage gap and sends skip_missing", async () => {
     const { closeCampaign: realClose } = await vi.importActual<typeof import("@/lib/adsApi")>("@/lib/adsApi");
     const fetchMock = reply(409, { error: { code: "coverage_missing", message: "有 2 天還沒讀到平台資料，先重新讀取平台。",
       details: { missing_days: ["2026-09-27", "2026-09-28"], never_synced: false, can_skip: true } } });
     vi.stubGlobal("fetch", fetchMock);
     const err = await realClose("brd_1", "cmp_1", { skip_missing: true }).catch((e: unknown) => e);
-    expect(err).toBeInstanceOf(CoverageMissingError);
-    expect(err).toMatchObject({ missing_days: ["2026-09-27", "2026-09-28"], never_synced: false, can_skip: true, message: "有 2 天還沒讀到平台資料，先重新讀取平台。" });
+    expect(err).toMatchObject({ code: "coverage_missing", status: 409, message: "有 2 天還沒讀到平台資料，先重新讀取平台。" });
+    expect(coverageGapOf(err)).toEqual({ missing_days: ["2026-09-27", "2026-09-28"], never_synced: false, can_skip: true });
     const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(JSON.parse(init.body as string)).toEqual({ reason: null, skip_missing: true });
   });
 
-  it("another 409 is a plain Error with the server message", async () => {
+  it("another 409 has no coverage gap and keeps the server message", async () => {
     const { closeCampaign: realClose } = await vi.importActual<typeof import("@/lib/adsApi")>("@/lib/adsApi");
     vi.stubGlobal("fetch", reply(409, { error: { code: "campaign_locked", message: "已鎖定" } }));
     const err = await realClose("brd_1", "cmp_1").catch((e: unknown) => e);
-    expect(err).not.toBeInstanceOf(CoverageMissingError);
-    expect((err as Error).message).toBe("已鎖定");
+    expect(coverageGapOf(err)).toBeNull();
+    expect(err).toMatchObject({ code: "campaign_locked", message: "已鎖定" });
   });
 });
 

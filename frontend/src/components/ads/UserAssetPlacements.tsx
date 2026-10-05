@@ -1,3 +1,4 @@
+import { ApiResponseError } from "@/lib/http";
 import { useAssetDraftGuard } from "./useAssetDraftGuard";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
@@ -6,7 +7,7 @@ import { Textarea } from "@/components/layout/ui/textarea";
 import { type CampaignDetail } from "@/lib/adsApi";
 import type { NativeEntity } from "@/lib/adsExternalApi";
 import { getHandoff } from "@/lib/adsHandoffApi";
-import { AssetApiError, attachUpload, attachAsset, listPlacements, listSuggestionBatches, getSuggestionBatch, suggestAssets, confirmPlacement, revisePlacement, type CopyFields, type Placement, type SuggestionBatch, type SuggestionResult } from "@/lib/adsUserAssetsApi";
+import { attachUpload, attachAsset, listPlacements, listSuggestionBatches, getSuggestionBatch, suggestAssets, confirmPlacement, revisePlacement, type CopyFields, type Placement, type SuggestionBatch, type SuggestionResult } from "@/lib/adsUserAssetsApi";
 import { UserAssetsLibrary, CopyEditor, COPY_FIELDS } from "./UserAssetsLibrary";
 import { AssetHandoffPanel } from "./AssetHandoffPanel";
 import { Chip } from "./patterns";
@@ -81,7 +82,7 @@ function Placements({ brandId, campaign, onChanged }: { brandId: string; campaig
       for (const p of targets) {
         try { await revisePlacement(brandId, campaign.id, p.id, { apply_copy: copy, expected_revision: p.revision }); done++; }
         catch (e) {
-          if (e instanceof AssetApiError && e.status === 409) { setError(`${p.filename} 已有新版本，套用停在這件（已套 ${done} 件）；重新讀取安排後再套一次。`); break; }
+          if (e instanceof ApiResponseError && e.status === 409) { setError(`${p.filename} 已有新版本，套用停在這件（已套 ${done} 件）；重新讀取安排後再套一次。`); break; }
           throw e;
         }
       }
@@ -131,13 +132,13 @@ function PlacementEditor({ brandId, campaignId, placement: p, history, entities,
     try {
       const { placement } = await revisePlacement(brandId, campaignId, p.id, { ...draft, expected_revision: base, destination_entity_id: draft.destination_entity_id || null, start_date: draft.start_date || null, end_date: draft.end_date || null });
       setBase(placement.revision); setDraft(from(placement)); setBaseline(JSON.stringify(from(placement))); await onReload();
-    } catch (e) { setError(e instanceof Error ? e.message : String(e)); if (e instanceof AssetApiError && e.status === 409) await onReload(); }
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)); if (e instanceof ApiResponseError && e.status === 409) await onReload(); }
     finally { setBusy(false); }
   }
   async function confirm(batchId: string | null) {
     if (dirty || conflict || busy) return; setBusy(true); setError("");
     try { const { placement } = await confirmPlacement(brandId, campaignId, p, batchId); if (placement.pending_reasons?.length) setError(placement.pending_reasons.join("；")); await onReload(); }
-    catch (e) { setError(e instanceof Error ? e.message : String(e)); if (e instanceof AssetApiError && e.status === 409) await onReload(); }
+    catch (e) { setError(e instanceof Error ? e.message : String(e)); if (e instanceof ApiResponseError && e.status === 409) await onReload(); }
     finally { setBusy(false); }
   }
   return <article className="rounded-md border border-border p-4"><div className="flex flex-wrap items-center gap-3">{!readOnly && <input aria-label={`納入建議 ${p.filename}`} type="checkbox" checked={selected} onChange={e => onSelect(e.target.checked)} />}<h3 className="font-semibold">{p.filename} · 第 {p.revision} 版</h3><span className="text-sm">{p.required ? "必用" : "選用"} · {p.confirmed_at ? "已確認內部安排" : "待處理"}</span>{p.confirmed_at ? <Chip tone="ok">已確認</Chip> : blankCount(p) === 0 ? <Chip tone="accent">文案齊了</Chip> : <Chip tone="warn">缺 {blankCount(p)} 欄</Chip>}{dirty &&<span className="text-sm text-warning">有未儲存編輯</span>}</div>

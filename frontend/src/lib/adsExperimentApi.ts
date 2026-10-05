@@ -1,5 +1,5 @@
-import { apiFetch } from "./http";
-import { BASE, parseJsonOrThrow } from "./adsApi";
+import { apiFetch, readJson } from "./http";
+import { BASE } from "./adsApi";
 export interface ComparisonWindow { start: string | null; end: string | null }
 export interface ComparisonSettingsValues {
   min_days: number;
@@ -43,10 +43,10 @@ export interface ComparisonState {
 }
 function path(brand: string, campaign: string) { return `${BASE}/brands/${encodeURIComponent(brand)}/campaigns/${encodeURIComponent(campaign)}/comparison`; }
 export async function readComparison(brand: string, campaign: string): Promise<ComparisonState> {
-  return parseJsonOrThrow(await apiFetch(path(brand,campaign)), "讀取比較提案失敗。");
+  return readJson(await apiFetch(path(brand,campaign)), "讀取比較提案失敗。");
 }
 export async function confirmComparison(brand: string, campaign: string, fingerprint: string): Promise<ComparisonState> {
-  return parseJsonOrThrow(await apiFetch(path(brand,campaign), {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({fingerprint,controls_checked:true})}), "確認比較計畫失敗。");
+  return readJson(await apiFetch(path(brand,campaign), {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({fingerprint,controls_checked:true})}), "確認比較計畫失敗。");
 }
 export async function saveComparisonSettings(
   brand: string,
@@ -54,7 +54,7 @@ export async function saveComparisonSettings(
   revision: string,
   overrides: ComparisonOverrides,
 ): Promise<ComparisonState> {
-  return parseJsonOrThrow(await apiFetch(path(brand,campaign), {
+  return readJson(await apiFetch(path(brand,campaign), {
     method:"PUT",
     headers:{"Content-Type":"application/json"},
     body:JSON.stringify({revision,overrides}),

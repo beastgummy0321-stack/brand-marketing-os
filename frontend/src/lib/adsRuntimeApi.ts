@@ -1,5 +1,5 @@
-import { apiFetch } from "./http";
-import { BASE, parseJsonOrThrow } from "./adsApi";
+import { apiFetch, readJson } from "./http";
+import { BASE } from "./adsApi";
 
 export interface ReviewMonitor {
   id: string; entity_id: string; entity_name: string | null; revision: number; enabled: boolean;
@@ -18,10 +18,10 @@ export interface RuntimeData {
 }
 const route = (brand: string, campaign: string) => `${BASE}/brands/${encodeURIComponent(brand)}/campaigns/${encodeURIComponent(campaign)}`;
 export async function getRuntime(brand: string, campaign: string, signal?: AbortSignal) {
-  return parseJsonOrThrow<RuntimeData>(await apiFetch(`${route(brand, campaign)}/runtime`, { signal }), "暫時讀不到追蹤進度；已保存的檢討與操作仍保留，請重新讀取。");
+  return readJson<RuntimeData>(await apiFetch(`${route(brand, campaign)}/runtime`, { signal }), "暫時讀不到追蹤進度；已保存的檢討與操作仍保留，請重新讀取。");
 }
 export async function saveMonitor(brand: string, campaign: string, entity: string, value: { expected_revision: number; enabled: boolean; window_days: number; cadence_days: number; reset_window: boolean }, signal?: AbortSignal) {
-  return parseJsonOrThrow<{ monitor: ReviewMonitor }>(await apiFetch(`${route(brand, campaign)}/review-monitors/${encodeURIComponent(entity)}`, {
+  return readJson<{ monitor: ReviewMonitor }>(await apiFetch(`${route(brand, campaign)}/review-monitors/${encodeURIComponent(entity)}`, {
     method: "PUT", signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify(value),
   }), "設定尚未確認保存，請先重新讀取；不會操作平台投放。");
 }

@@ -24,8 +24,8 @@
  *   triage read failed. `closing` = an approved pause the readback has not confirmed yet.
  * - Timeline rows are newest first (`created_at DESC, id DESC`), at most 50 (`truncated` says
  *   there are more); superseded and deferred sets are not listed. */
-import { apiFetch } from "./http";
-import { BASE, parseJsonOrThrow, type CampaignLifecycle, type RunningAds } from "./adsApi";
+import { apiFetch, readJson } from "./http";
+import { BASE, type CampaignLifecycle, type RunningAds } from "./adsApi";
 import type { TriageGrade, TriageSampleView } from "./adsTriageApi";
 import type { SlotState } from "./adsSlotsApi";
 
@@ -145,16 +145,11 @@ export interface CampaignTimeline { rows: TimelineRow[]; truncated: boolean }
 async function read<T>(
   brand: string, campaign: string, path: string, failure: string, signal?: AbortSignal,
 ): Promise<T> {
-  try {
-    const response = await apiFetch(
-      `${BASE}/brands/${encodeURIComponent(brand)}/campaigns/${encodeURIComponent(campaign)}/${path}`,
-      { signal },
-    );
-    return await parseJsonOrThrow<T>(response, failure);
-  } catch (error) {
-    if (error instanceof TypeError) throw new Error("未收到伺服器回應，請重試。");
-    throw error;
-  }
+  const response = await apiFetch(
+    `${BASE}/brands/${encodeURIComponent(brand)}/campaigns/${encodeURIComponent(campaign)}/${path}`,
+    { signal },
+  );
+  return readJson<T>(response, failure);
 }
 
 export function getCampaignWorkspace(

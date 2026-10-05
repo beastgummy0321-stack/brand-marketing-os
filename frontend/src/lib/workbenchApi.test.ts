@@ -3,9 +3,9 @@
  * 不連任何伺服器。 */
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("@/lib/http", () => ({
+vi.mock("@/lib/http", async () => ({
+  ...(await vi.importActual<typeof import("@/lib/http")>("@/lib/http")),
   apiFetch: vi.fn(),
-  errorMessageFrom: vi.fn(),
 }));
 
 import { apiFetch } from "@/lib/http";

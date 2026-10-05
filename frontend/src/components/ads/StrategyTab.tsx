@@ -1,3 +1,4 @@
+import { isRejected } from "@/lib/http";
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { ArrowRight } from "lucide-react";
@@ -10,7 +11,6 @@ import { useWorkspace } from "@/components/layout/WorkspaceContext";
 import type { CoordinateLearnings } from "@/lib/adsLearningsApi";
 import { formatDay, orgDateOf, resolveOrgTimezone } from "@/lib/orgClock";
 import {
-  AdsApiError,
   adoptStrategy,
   generateStrategy,
   getCampaign,
@@ -219,7 +219,7 @@ export function StrategyTab({
     } catch (err) {
       // A 502 carries the served sentence with the refusal reason; a 409 `campaign_busy` its served sentence.
       setGenerateError(errorText(err, "產生策略失敗，請稍後再試。"));
-      if (err instanceof AdsApiError && err.code === "campaign_busy") setBusyRefused(true);
+      if (isRejected(err, "campaign_busy")) setBusyRefused(true);
     } finally {
       setGenerating(false);
     }
@@ -232,7 +232,7 @@ export function StrategyTab({
       await action();
     } catch (err) {
       setPrimaryError(errorText(err, fallback));
-      if (err instanceof AdsApiError && err.code === "campaign_busy") setBusyRefused(true);
+      if (isRejected(err, "campaign_busy")) setBusyRefused(true);
     } finally {
       setPrimaryBusy(false);
     }

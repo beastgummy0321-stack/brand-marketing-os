@@ -250,11 +250,27 @@ class LaunchStaleTest(unittest.TestCase):
             patch.object(
                 change_control_launch.month_budget,
                 "preflight",
-                side_effect=ValueError("這份變更超過本月總額；尚未讀回完成的降額不能先釋放額度。"),
+                side_effect=month_budget.MonthBudgetBlocked("over_month_total"),
             ),
             self.assertRaisesRegex(ValueError, "超過本月總額"),
         ):
             self.reapprove(stale)
+        # F51 Contract C: the launch re-approval route answers each reason with its own code.
+        client = TestClient(__import__("app.main", fromlist=["app"]).app)
+        body = {"change_set_id": stale["change_set_id"], "content_hash": stale["content_hash"]}
+        for reason, sentence in month_budget.BLOCKED_TEXT.items():
+            with patch.object(
+                change_control_launch.month_budget,
+                "preflight",
+                side_effect=month_budget.MonthBudgetBlocked(reason),
+            ):
+                response = client.post(f"{self.base}/launch/reapprove", json=body)
+            self.assertEqual(response.status_code, 409, response.text)
+            error = response.json()["error"]
+            self.assertEqual(
+                (error["code"], error["message"], error["details"]),
+                ("month_budget_blocked", sentence, {"reason": reason}),
+            )
         self.assertEqual(self.change_set(set_id)["status"], "approved")
         self.assertEqual(
             self.conn.execute(

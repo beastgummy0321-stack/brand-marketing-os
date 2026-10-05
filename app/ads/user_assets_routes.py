@@ -173,6 +173,8 @@ def retry_upload(request: Request, brand_id: str, upload_id: str):
         raise _error(exc) from exc
     try:
         return {"upload": service.reconcile_upload(conn, actor.org_id, brand_id, upload_id)}
+    except service.AssetFileMissing as exc:
+        raise web.ApiError(409, "asset_file_missing", str(exc)) from exc
     except ValueError as exc:
         raise _error(exc) from exc
     finally:

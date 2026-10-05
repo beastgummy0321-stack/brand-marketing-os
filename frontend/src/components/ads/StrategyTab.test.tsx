@@ -1,6 +1,7 @@
 /** frontend/src/components/ads/StrategyTab.test.tsx — F28-I09: the strategy tab is 一個上限 → 這一期的總預算 → 預算怎麼分
  * → two folds, with one bottom bar. These tests pin the bar's order of precedence (open over-cap sheet > unsaved pick >
  * adopt > the workspace's next step), that nothing is chosen or saved for the user, and the imported campaign's shape. */
+import { ApiResponseError } from "@/lib/http";
 import { useState, type ReactElement } from "react";
 import { act, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -8,7 +9,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 
 import type { AdsBudgetBasisJson, BudgetScenarioRow, CampaignDetail, DeliveryGroupRow, StrategyBasis } from "@/lib/adsApi";
-import { AdsApiError, adoptStrategy, generateStrategy, getCampaign, patchCampaign, selectScenario } from "@/lib/adsApi";
+import { adoptStrategy, generateStrategy, getCampaign, patchCampaign, selectScenario } from "@/lib/adsApi";
 import { getTriage, type CapView } from "@/lib/adsTriageApi";
 import type { CoordinateLearnings } from "@/lib/adsLearningsApi";
 import { getLaunchSettings, type LaunchSettingsValues, type LaunchSettingsView } from "@/lib/adsLaunchSettingsApi";
@@ -617,7 +618,7 @@ describe("F50 Contract J (R7 B4／B3): a running planner call survives a reload;
 
   it("a 409 campaign_busy prints the served sentence and keeps re-reading until the call is done", async () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
-    vi.mocked(generateStrategy).mockRejectedValue(new AdsApiError("上一次還在處理，等它好了再看。", "campaign_busy"));
+    vi.mocked(generateStrategy).mockRejectedValue(new ApiResponseError("上一次還在處理，等它好了再看。", 409, {}, { code: "campaign_busy" }));
     vi.mocked(getCampaign)
       .mockResolvedValueOnce(campaign({ budget_basis_json: {}, busy: { kind: "strategy", since: SINCE } }))
       .mockResolvedValueOnce(campaign({ busy: null }));
@@ -635,7 +636,7 @@ describe("F50 Contract J (R7 B4／B3): a running planner call survives a reload;
   it("a 502 planner refusal prints the served message with its reason, not a fixed sentence", async () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     const served = "產生策略失敗，請稍後再試。（模型的分配加起來不是 100%）";
-    vi.mocked(generateStrategy).mockRejectedValue(new AdsApiError(served, "strategy_failed"));
+    vi.mocked(generateStrategy).mockRejectedValue(new ApiResponseError(served, 502, {}, { code: "strategy_failed" }));
     mount(campaign({ budget_basis_json: {} }));
     await user.click(await screen.findByRole("button", { name: "產生策略" }));
     expect(await screen.findByText(served)).toBeTruthy();
@@ -647,7 +648,7 @@ describe("F50 Contract J (R7 B4／B3): a running planner call survives a reload;
   it("a 502 on 照這個方式進行 prints the served message with its reason in the bar", async () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     const served = "展開投放結構失敗，請稍後再試。（有一組沒有綁定顧客群）";
-    vi.mocked(adoptStrategy).mockRejectedValue(new AdsApiError(served, "plan_failed"));
+    vi.mocked(adoptStrategy).mockRejectedValue(new ApiResponseError(served, 502, {}, { code: "plan_failed" }));
     mount(campaign({ budget_planned: 30000, budget_scenario: "cap" }));
     await user.click(await screen.findByRole("button", { name: "照這個方式進行 →" }));
     expect(await screen.findByText(served)).toBeTruthy();

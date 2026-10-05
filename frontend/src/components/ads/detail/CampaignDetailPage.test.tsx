@@ -5,6 +5,7 @@
  * F40-I06 (prototype `#/perf`, `#/detail`): the 「這期狀態列」 on top of `CampaignPerfBody` (five cells, the backend's
  * period grade, the data-status chips, 重新讀取平台／結案這一期 opening the shared close dialog, closed／imported states)
  * and the two program lines under the ruler title (local ads never built, platform ads not built here). */
+import { ApiResponseError } from "@/lib/http";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
@@ -17,7 +18,7 @@ import { closeCampaign, getPerformance, listCampaigns } from "@/lib/adsApi";
 import { getCoordinateLearnings, type CoordinateLearnings } from "@/lib/adsLearningsApi";
 import type { ChangeSet } from "@/lib/adsChangeApi";
 import type { MaterialTask } from "@/lib/adsMaterialApi";
-import { MaterialRequestError, cancelMaterialTask, createReplaceRequest, listMaterialTasks } from "@/lib/adsMaterialApi";
+import { cancelMaterialTask, createReplaceRequest, listMaterialTasks } from "@/lib/adsMaterialApi";
 import type { CampaignDataStatus, CampaignTriage, QueueCleanup, QueueItem, QueuePayload, TriageClosedBlock, TriageItem } from "@/lib/adsTriageApi";
 import { getQueue, getTriage } from "@/lib/adsTriageApi";
 import { CampaignDetailPage, CampaignPerfBody, dataStatusChip, missingDaysLabel, programLines, windowLabel } from "./CampaignDetailPage";
@@ -638,8 +639,8 @@ describe("換掉這一則 (F29-I13, v10 row menu)", () => {
   it("a failed create or cancel keeps the page, says why on the row and keeps the old state", async () => {
     vi.mocked(getTriage).mockResolvedValue(triage(dailyAds()));
     vi.mocked(listMaterialTasks).mockResolvedValue({ tasks: [task("a6")] });
-    vi.mocked(createReplaceRequest).mockRejectedValue(new MaterialRequestError("網路中斷，請再試一次。", 503));
-    vi.mocked(cancelMaterialTask).mockRejectedValue(new MaterialRequestError("此素材需求已被核准的變更清單採用，不能取消。", 409));
+    vi.mocked(createReplaceRequest).mockRejectedValue(new ApiResponseError("網路中斷，請再試一次。", 503));
+    vi.mocked(cancelMaterialTask).mockRejectedValue(new ApiResponseError("此素材需求已被核准的變更清單採用，不能取消。", 409, {}, { code: "material_task_in_use" }));
     renderPage();
 
     const created = await screen.findByTestId("ad-row-a7");
@@ -661,7 +662,7 @@ describe("換掉這一則 (F29-I13, v10 row menu)", () => {
     const items = dailyAds();
     vi.mocked(getTriage).mockResolvedValue(triage(items));
     vi.mocked(getQueue).mockResolvedValue(dailyQueue(items));
-    vi.mocked(listMaterialTasks).mockRejectedValueOnce(new MaterialRequestError("素材任務讀取失敗", 500));
+    vi.mocked(listMaterialTasks).mockRejectedValueOnce(new ApiResponseError("素材任務讀取失敗", 500));
     renderPage();
 
     expect(await screen.findByText(/^素材需求讀不到（素材任務讀取失敗）/)).toBeTruthy();

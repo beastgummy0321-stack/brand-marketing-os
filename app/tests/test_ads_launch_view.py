@@ -873,11 +873,12 @@ class LaunchViewTest(unittest.TestCase):
         )
 
     def refused(self):
+        """The month preflight's refusal reason (F51 Contract C); None if approved."""
         try:
             self.publish_for_real()
-        except ValueError:
-            return True
-        return False
+        except month_budget.MonthBudgetBlocked as exc:
+            return exc.code
+        return None
 
     def test_the_list_step_without_a_month_budget_is_unset_and_approve_refuses(self):
         fit = self.view()["month_budget"]
@@ -885,7 +886,7 @@ class LaunchViewTest(unittest.TestCase):
         self.assertIsNone(fit["amount"])
         self.assertEqual(fit["blocker"], "unset")
         self.assertEqual(fit["blocker_text"], f"要先設 {self.month_number()} 月月預算")
-        self.assertTrue(self.refused())
+        self.assertEqual(self.refused(), "balance_unknown")
 
     def test_the_list_step_month_fit_mirrors_the_approve_preflight(self):
         month = self.today.strftime("%Y-%m")
@@ -900,7 +901,7 @@ class LaunchViewTest(unittest.TestCase):
             self.assertEqual(fit["available"], 100.0)
             self.assertLess(fit["available"] - fit["extra"], 0)
             self.assertEqual(fit["amount"], 100.0)
-            self.assertTrue(self.refused())
+            self.assertEqual(self.refused(), "over_month_total")
         # An unverified balance: the preflight's own sentence.
         with patch.object(
             month_budget, "_inventory", side_effect=lambda *a: ([], [], ["帳戶尚未核對"])
@@ -909,9 +910,9 @@ class LaunchViewTest(unittest.TestCase):
             self.assertEqual(fit["blocker"], "uncertain")
             self.assertEqual(
                 fit["blocker_text"],
-                "餘額尚不確定，暫不能核准新增花費；可補資料、檢視或核准降低風險的操作。",
+                month_budget.BLOCKED_TEXT["balance_unknown"],
             )
-            self.assertTrue(self.refused())
+            self.assertEqual(self.refused(), "balance_unknown")
         with clean:
             # Large enough: no blocker, and `extra` is exactly what the approval reserves.
             self.set_month_budget(10_000_000)
@@ -933,7 +934,7 @@ class LaunchViewTest(unittest.TestCase):
             self.assertEqual(fit["reserved_increases"], 0)
             self.assertEqual(fit["available"], before["available"])
             self.assertGreaterEqual(fit["available"] - fit["extra"], 0)
-            self.assertFalse(self.refused())
+            self.assertIsNone(self.refused())
             after = month_budget.view(self.conn, self.org, self.brand, month)
             self.assertEqual(after["reserved_increases"], fit["extra"])
             # Approved steps carry no card.

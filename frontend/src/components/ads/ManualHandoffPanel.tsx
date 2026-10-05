@@ -1,3 +1,4 @@
+import { isRejected } from "@/lib/http";
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Button } from "@/components/layout/ui/button";
@@ -5,7 +6,7 @@ import { Input } from "@/components/layout/ui/input";
 import { Textarea } from "@/components/layout/ui/textarea";
 import { useWorkspace } from "@/components/layout/WorkspaceContext";
 import { existingCampaigns, externalView, type NativeEntity, type SourceAccount } from "@/lib/adsExternalApi";
-import { checkHandoff, createNewAdHandoff, getHandoff, HandoffRequestRejected, reconsiderHandoff, refreshHandoffSources, reportHandoff, type HandoffIdentity, type HandoffItem, type HandoffWorkspace, type NewAdHandoffRequest } from "@/lib/adsHandoffApi";
+import { checkHandoff, createNewAdHandoff, getHandoff, reconsiderHandoff, refreshHandoffSources, reportHandoff, type HandoffIdentity, type HandoffItem, type HandoffWorkspace, type NewAdHandoffRequest } from "@/lib/adsHandoffApi";
 import { useSyncOutcome } from "@/lib/useSyncOutcome";
 import { currentBudgetMonth } from "./MonthlyBudgetPanel";
 import { formatInstant, useOrgClock } from "@/lib/orgClock";
@@ -291,7 +292,7 @@ function NewAdForm({ brandId, campaignId, scope, data }: { brandId: string; camp
       navigate(changeHref(result.id));
     } catch (err) {
       if (signal.aborted) return;
-      if (err instanceof HandoffRequestRejected) { sessionStorage.removeItem(storageKey); setPending(null); }
+      if (isRejected(err)) { sessionStorage.removeItem(storageKey); setPending(null); }
       setError(message(err));
     } finally { if (!signal.aborted) setBusy(false); }
   }

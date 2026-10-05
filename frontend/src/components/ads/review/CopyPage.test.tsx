@@ -2,8 +2,9 @@
  * `@/lib/adsReviewApi`／`@/lib/adsTriageApi`／`@/lib/adsChangeApi`，不打真的 API。覆蓋 Done 3/4：
  * 承接 adjust 建議的 suggested_copy（沒有 adjust 建議就留白並一行說明）、目前→新版的即時行差異
  * 標記、保存只送非空欄位並附 `review_id`/`recommendation_id`（有 adjust 建議才附）、保存失敗兩種
- * 分流（`ChangeRequestRejected` 顯示後端訊息保留草稿／沒收到回應顯示 banner 且主按鈕停用、banner
+ * 分流（4xx `ApiResponseError` 顯示後端訊息保留草稿／沒收到回應顯示 banner 且主按鈕停用、banner
  * 自己的按鈕沿用同一份草稿重試）、走錯步驟轉去看證據頁、`ready`（還沒決定）一樣能畫這頁。 */
+import { ApiResponseError } from "@/lib/http";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation, useParams } from "react-router-dom";
@@ -299,10 +300,10 @@ describe("CopyPage（F23-I04）保存", () => {
 });
 
 describe("CopyPage（F23-I04）保存失敗", () => {
-  it("4xx（ChangeRequestRejected）：顯示後端訊息、保留草稿，主按鈕不停用", async () => {
+  it("4xx（ApiResponseError rejected）：顯示後端訊息、保留草稿，主按鈕不停用", async () => {
     const user = userEvent.setup();
     vi.mocked(reviewApi.getReview).mockResolvedValue(review());
-    vi.mocked(changeApi.createChangeSet).mockRejectedValue(new changeApi.ChangeRequestRejected("這則廣告已超過 30 天，請重新檢討。"));
+    vi.mocked(changeApi.createChangeSet).mockRejectedValue(new ApiResponseError("這則廣告已超過 30 天，請重新檢討。", 409, {}, { code: "change_control_unavailable" }));
     renderAt(copyPath());
     await screen.findByDisplayValue("輕鬆帶走，每天剛剛好");
     await user.click(screen.getByRole("button", { name: /加入變更清單/ }));

@@ -1,10 +1,11 @@
+import { isRejected } from "@/lib/http";
 import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Plus, RefreshCw } from "lucide-react";
 import { Button } from "@/components/layout/ui/button";
 import { Badge } from "@/components/layout/ui/badge";
 import { getOrgId } from "@/lib/auth";
-import { getMaterialTask, listMaterialTasks, materialPath, MaterialRequestError, saveMaterialOperation, type MaterialMode, type MaterialOperation, type MaterialTask } from "@/lib/adsMaterialApi";
+import { getMaterialTask, listMaterialTasks, materialPath, saveMaterialOperation, type MaterialMode, type MaterialOperation, type MaterialTask } from "@/lib/adsMaterialApi";
 import { MaterialTaskEditor, materialModes } from "./MaterialTaskEditor";
 import { ReadFailed } from "./patterns";
 
@@ -63,7 +64,7 @@ function Panel({ brandId, campaignId, onSaved, refreshKey = 0, draft = false }: 
       setParams(previous => { const next = new URLSearchParams(previous); next.set("material", result.task.id); next.delete("material_new"); return next; }, { replace: true });
     } catch (err) {
       if (signal.aborted) return;
-      if (err instanceof MaterialRequestError && err.status >= 400 && err.status < 500) { sessionStorage.removeItem(key); setPending(null); }
+      if (isRejected(err)) { sessionStorage.removeItem(key); setPending(null); }
       setError(err instanceof Error ? err.message : "未收到保存結果。請沿用同一次操作核對，不要再建立另一份需求。");
     } finally { if (!signal.aborted) setBusy(false); }
   }

@@ -11,13 +11,14 @@ import { AssetsTab } from "./AssetsTab";
 import { nextStep } from "./nextStep";
 import { NewCampaignPage } from "./NewCampaignPage";
 import { createCampaignFromPicks, getWizardOptions } from "@/lib/adsWizardApi";
-import { listUserAssets, createUploadBatch, putUpload, retryUpload, getUploadBatch, attachUpload, assetBlob, listPlacements, listSuggestionBatches, suggestAssets, getSuggestionBatch, revisePlacement, confirmPlacement, assetHandoff, AssetApiError, type AssetLibrary, type Placement, type AssetUpload, type SuggestionBatch } from "@/lib/adsUserAssetsApi";
+import { listUserAssets, createUploadBatch, putUpload, retryUpload, getUploadBatch, attachUpload, assetBlob, listPlacements, listSuggestionBatches, suggestAssets, getSuggestionBatch, revisePlacement, confirmPlacement, assetHandoff, type AssetLibrary, type Placement, type AssetUpload, type SuggestionBatch } from "@/lib/adsUserAssetsApi";
 import * as materialApi from "@/lib/adsMaterialApi";
 import { existingCampaigns, externalView, type NativeEntity } from "@/lib/adsExternalApi";
 import { getHandoff, type HandoffWorkspace } from "@/lib/adsHandoffApi";
 import type { CampaignDetail } from "@/lib/adsApi";
 
-vi.mock("@/lib/http", () => ({ apiFetch: vi.fn(), errorMessageFrom: () => "error" }));
+vi.mock("@/lib/http", async () => ({ ...(await vi.importActual<typeof import("@/lib/http")>("@/lib/http")), apiFetch: vi.fn() }));
+import { ApiResponseError } from "@/lib/http";
 vi.mock("@/components/layout/WorkspaceContext", () => ({ useWorkspace: () => ({ scope: "u:o", identity: { user: { id: "u", email: "a@example.com" }, org: { id: "o", name: "測試", kind: "personal", role: "owner", timezone: "Asia/Taipei", today: "2026-09-28" }, orgs: [] } }) }));
 vi.mock("@/lib/adsWizardApi", () => ({ getWizardOptions: vi.fn(), createCampaignFromPicks: vi.fn() }));
 vi.mock("@/lib/adsUserAssetsApi", async importOriginal => ({ ...await importOriginal<object>(), listUserAssets: vi.fn(), createUploadBatch: vi.fn(), putUpload: vi.fn(), retryUpload: vi.fn(), getUploadBatch: vi.fn(), attachUpload: vi.fn(), assetBlob: vi.fn(), listPlacements: vi.fn(), listSuggestionBatches: vi.fn(), suggestAssets: vi.fn(), getSuggestionBatch: vi.fn(), revisePlacement: vi.fn(), confirmPlacement: vi.fn(), assetHandoff: vi.fn() }));
@@ -124,7 +125,10 @@ describe("durable upload UI", () => {
   it("freshly checks an unsaved descriptor before retrying selected bytes, but rejects a lock conflict", async () => {
     const failed = { ...upload("u1", "failed"), storage_key: null, sha256: null };
     vi.mocked(listUserAssets).mockResolvedValue({ ...library(), uploads: [failed] });
-    vi.mocked(retryUpload).mockRejectedValueOnce(new AssetApiError("此檔案正在上傳，請稍候。", 409)).mockRejectedValueOnce(new AssetApiError("沒有可核對的原檔，請重新上傳此檔。", 409));
+    // F51 Contract C: the retry branch reads `asset_file_missing`, never the sentence (reworded here on purpose).
+    vi.mocked(retryUpload)
+      .mockRejectedValueOnce(new ApiResponseError("此檔案正在上傳，請稍候。", 409, {}, { code: "user_asset_unavailable" }))
+      .mockRejectedValueOnce(new ApiResponseError("原檔不在伺服器上（改寫過的句子）", 409, {}, { code: "asset_file_missing" }));
     vi.mocked(getUploadBatch).mockResolvedValue({ batch: { id: "batch1", uploads: [failed] } });
     vi.mocked(putUpload).mockResolvedValue({ upload: upload() });
     render(<UserAssetsLibrary brandId="b1" />); const user = userEvent.setup();
@@ -196,7 +200,7 @@ describe("placement and evidence UI", () => {
   });
   it("stops apply-to-all at a 409 and names the conflicting file", async () => {
     vi.mocked(listPlacements).mockResolvedValue({ placements: [placement("p2"), placement("p3")] });
-    vi.mocked(revisePlacement).mockRejectedValueOnce(new AssetApiError("素材版本已更新", 409));
+    vi.mocked(revisePlacement).mockRejectedValueOnce(new ApiResponseError("素材版本已更新", 409, {}, { code: "placement_copy_conflict" }));
     viewPlacements(); const user = userEvent.setup();
     await user.type(await screen.findByLabelText("套用標題"), "統一標題");
     await user.click(screen.getByRole("button", { name: "套用到 2 件待處理" }));
@@ -225,7 +229,7 @@ describe("placement and evidence UI", () => {
   });
   it("409 loads the current revision but retains local text and extra original fields", async () => {
     vi.mocked(listPlacements).mockResolvedValueOnce({ placements: [placement()] }).mockResolvedValue({ placements: [placement("p1", 2)] });
-    vi.mocked(revisePlacement).mockRejectedValue(new AssetApiError("素材版本已更新", 409));
+    vi.mocked(revisePlacement).mockRejectedValue(new ApiResponseError("素材版本已更新", 409, {}, { code: "placement_copy_conflict" }));
     viewPlacements(); const user = userEvent.setup();
     // The editor of an unconfirmed card is open by default (prototype #/placements).
     await user.clear(await screen.findByLabelText("p1.png安排標題")); await user.type(screen.getByLabelText("p1.png安排標題"), "我的修改");

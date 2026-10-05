@@ -3,7 +3,7 @@
  * `app/ads/triage.py`/`app/ads/triage_routes.py` and the `target` routes in `app/ads/routes.py`
  * exactly — types are read shapes, not re-worded (labels come from the backend `label` field).
  * Same fetch helper and error style as `frontend/src/lib/adsChangeApi.ts`. */
-import { apiFetch } from "./http";
+import { apiFetch, readJson } from "./http";
 import { BASE } from "./adsApi";
 import type { CampaignSyncState, DeliveryView } from "./adsApi";
 import type { AlertSeverity } from "./api";
@@ -549,41 +549,13 @@ const brandPath = (brand: string) => `${BASE}/brands/${encodeURIComponent(brand)
 const campaignPath = (brand: string, campaign: string) =>
   `${brandPath(brand)}/campaigns/${encodeURIComponent(campaign)}`;
 
-/** F19-I06: carries the error envelope's `code` (`app/shared/web.py::ApiError`, e.g.
- * `"target_conflict"`) so callers can branch on it instead of matching the Chinese message —
- * `code` is `null` when the response wasn't the standard `{"error":{...}}` shape at all. */
-export class TriageRequestRejected extends Error {
-  code: string | null;
-  constructor(message: string, code: string | null = null) {
-    super(message);
-    this.code = code;
-  }
-}
-
+/** F51 Contract H: a failure is the shared `ApiResponseError`; callers branch on its `code` (e.g.
+ * `"target_conflict"`, `app/shared/web.py::ApiError`) or `isRejected`, never on the Chinese message. */
 async function json<T>(path: string, method: string, body?: unknown, signal?: AbortSignal): Promise<T> {
-  let response: Response;
-  try {
-    response = await apiFetch(path, { method, signal, ...(body === undefined ? {} : {
-      headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-    }) });
-  } catch (error) {
-    if (error instanceof TypeError) throw new Error("未收到伺服器回應，結果尚未確認。請重試。");
-    throw error;
-  }
-  if (!response.ok) {
-    let code: string | null = null;
-    let message = "目前無法完成，請稍後重試。";
-    try {
-      const data = (await response.json()) as { error?: { code?: string; message?: string } };
-      if (data.error?.code) code = data.error.code;
-      if (data.error?.message) message = data.error.message;
-    } catch {
-      // 回應不是 JSON，用預設訊息，`code` 維持 `null`。
-    }
-    if (response.status >= 400 && response.status < 500) throw new TriageRequestRejected(message, code);
-    throw new Error(message);
-  }
-  return (await response.json()) as T;
+  const response = await apiFetch(path, { method, signal, ...(body === undefined ? {} : {
+    headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  }) });
+  return readJson<T>(response, "目前無法完成，請稍後重試。");
 }
 
 /** F48 Contract R-API: served unwrapped (`{grade, ab, labels, glossary}`). */

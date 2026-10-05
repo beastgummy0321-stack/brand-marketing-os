@@ -1,5 +1,5 @@
-import { apiFetch } from "./http";
-import { BASE, parseJsonOrThrow } from "./adsApi";
+import { apiFetch, readJson } from "./http";
+import { BASE } from "./adsApi";
 import type { ChangeSet } from "./adsChangeApi";
 import type { NativeEntity, SyncJob } from "./adsExternalApi";
 import type { SettingsReadback } from "./adsLaunchSettingsApi";
@@ -74,22 +74,12 @@ export interface NewAdHandoffRequest {
    * this handoff answers a review round's material step, never guessed from context. */
   replaces_entity_id?: string;
 }
-export class HandoffRequestRejected extends Error {}
 const path = (brand: string, campaign: string) => `${BASE}/brands/${encodeURIComponent(brand)}/campaigns/${encodeURIComponent(campaign)}`;
 async function request<T>(url: string, method: string, body: unknown, signal?: AbortSignal): Promise<T> {
-  try {
-    const response = await apiFetch(url, { method, signal, ...(body === undefined ? {} : {
-      headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-    }) });
-    try { return await parseJsonOrThrow<T>(response, "尚未收到可確認的結果，請沿用原操作重試。"); }
-    catch (error) {
-      if (response.status >= 400 && response.status < 500) throw new HandoffRequestRejected(error instanceof Error ? error.message : "請修正內容後重試。");
-      throw error;
-    }
-  } catch (error) {
-    if (error instanceof TypeError) throw new Error("未收到伺服器回應，結果尚未確認。請重試同一次操作，不要在平台重建廣告。");
-    throw error;
-  }
+  const response = await apiFetch(url, { method, signal, ...(body === undefined ? {} : {
+    headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  }) });
+  return readJson<T>(response, "尚未收到可確認的結果，請沿用原操作重試。");
 }
 export const getHandoff = (brand: string, campaign: string, signal?: AbortSignal) => request<HandoffWorkspace>(`${path(brand, campaign)}/handoff`, "GET", undefined, signal);
 export async function reportHandoff(brand: string, campaign: string, id: string, signal?: AbortSignal) {

@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.ads import change_control as service
 from app.ads import change_control_data as data
 from app.ads import change_control_verify as verify
+from app.ads import month_budget
 from app.shared import web
 
 
@@ -72,6 +73,10 @@ def _run(request, brand_id, campaign_id, function, *args):
     actor = web.require_actor(request)
     try:
         return function(web.conn, actor.org_id, brand_id, campaign_id, *args)
+    except month_budget.MonthBudgetBlocked as exc:
+        # F51 Contract C: the month cannot take the spend -- not a premise change to rebuild for.
+        web.conn.rollback()
+        raise web.ApiError(409, "month_budget_blocked", str(exc), {"reason": exc.code}) from None
     except ValueError as exc:
         web.conn.rollback()
         raise web.ApiError(409, "change_control_unavailable", str(exc)) from None
