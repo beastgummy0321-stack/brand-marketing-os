@@ -1,4 +1,4 @@
-import { createContext, useContext, useRef, type KeyboardEvent, type ReactNode } from "react";
+import { createContext, useContext, useId, useRef, type KeyboardEvent, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { Thumb } from "./LoopPieces";
 
@@ -48,7 +48,7 @@ export function PickGroup({ label, value, onChange, children, className }: {
   );
 }
 
-export function PickCard({ value, title, note, badge, thumbnailUrl, icon, disabled = false, disabledNote = "尚未開放" }: {
+export function PickCard({ value, title, note, badge, thumbnailUrl, icon, disabled = false, disabledNote = "尚未開放", disabledReason, busy = false }: {
   value: string;
   title: string;
   note?: ReactNode;
@@ -58,35 +58,40 @@ export function PickCard({ value, title, note, badge, thumbnailUrl, icon, disabl
   icon?: ReactNode;
   disabled?: boolean;
   disabledNote?: string;
+  disabledReason?: string | null;
+  busy?: boolean;
 }) {
   const ctx = useContext(Ctx);
   const checked = ctx?.value === value;
   const product = thumbnailUrl !== undefined;
-  const words = disabled ? disabledNote : note;
+  const reasonId = useId();
+  const reason = disabledReason || (disabled ? disabledNote : null);
+  const unavailable = Boolean(busy || reason);
+  const words = reason || note;
   return (
     <button type="button" role="radio" aria-checked={checked} data-slot="pick-card" data-value={value}
-      data-variant={disabled ? "reserved" : checked ? "picked" : "open"} disabled={disabled}
+      data-variant={unavailable ? "reserved" : checked ? "picked" : "open"} disabled={unavailable} aria-busy={busy || undefined} aria-describedby={reason ? reasonId : undefined}
       tabIndex={checked || ctx?.value == null ? 0 : -1} onClick={() => ctx?.pick(value)}
       className={cn("flex rounded-xl border text-left transition-colors disabled:cursor-default disabled:opacity-100",
         product ? "items-center gap-3 p-3" : "flex-col items-start gap-1.5 p-[18px]",
-        disabled ? "border-border bg-muted text-muted-foreground"
+        unavailable ? "border-border bg-muted text-muted-foreground"
           : checked ? "border-primary bg-accent/50 shadow-[0_0_0_1px_var(--color-primary)]" : "border-border bg-card hover:border-primary")}>
       {product
         ? <Thumb url={thumbnailUrl} size={52} />
         : icon !== undefined && (
           <span aria-hidden="true" className={cn("grid size-11 place-items-center rounded-xl text-xl",
-            disabled ? "bg-card text-muted-foreground" : "bg-accent text-accent-foreground")}>{icon}</span>
+            unavailable ? "bg-card text-muted-foreground" : "bg-accent text-accent-foreground")}>{icon}</span>
         )}
       {product ? (
         <span className="min-w-0">
           <b className="block font-semibold [overflow-wrap:anywhere]">{title}</b>
-          {words && <span className="block text-xs text-muted-foreground">{words}</span>}
+          {words && <span id={reason ? reasonId : undefined} className="block text-xs text-muted-foreground">{words}</span>}
           {badge && <span className="mt-1 block">{badge}</span>}
         </span>
       ) : (
         <>
           <b className="text-base font-semibold">{title}</b>
-          {words && <span className="text-xs text-muted-foreground">{words}</span>}
+          {words && <span id={reason ? reasonId : undefined} className="text-xs text-muted-foreground">{words}</span>}
           {badge}
         </>
       )}

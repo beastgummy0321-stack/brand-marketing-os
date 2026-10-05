@@ -9,7 +9,7 @@ import { useAdsRules, watchLine, watchTenths } from "./rules";
  * (Feature F28 "Home overview"); segment width is the bucket amount. `data-slot="grade-band"`. */
 
 export interface BandAd { entity_id: string; name: string; thumbnail_url: string | null; spend: number | null }
-export interface BandBucket { grade: Grade | "ungraded"; amount: number; count: number; ads: BandAd[] }
+export interface BandBucket { grade: Grade | "ungraded"; amount: number | null; count: number | null; ads: BandAd[] }
 
 const SEGMENTS = [
   { grade: "on_target", box: "bg-success/10", text: "text-success", outline: "" },
@@ -32,11 +32,12 @@ export function GradeBand({ buckets, spent, spentLabel, cap }: {
   cap: { value: number; basis: "own" | "break_even" } | null;
 }) {
   const of = (grade: BandBucket["grade"]) => buckets.find((b) => b.grade === grade);
-  const okAmount = of("on_target")?.amount ?? 0;
-  const pct = spent ? Math.round((okAmount / spent) * 100) : null;
-  const thinAmount = of("insufficient")?.amount ?? 0;
-  const ungradedAmount = buckets.filter((b) => b.grade === "ungraded" || b.grade === "no_target").reduce((s, b) => s + b.amount, 0);
-  const rest = thinAmount + ungradedAmount;
+  const okAmount = of("on_target")?.amount ?? null;
+  const pct = spent !== null && spent > 0 && okAmount !== null ? Math.round((okAmount / spent) * 100) : null;
+  const thinAmount = of("insufficient")?.amount ?? null;
+  const ungradedAmount = buckets.filter((b) => b.grade === "ungraded" || b.grade === "no_target").reduce<number | null>((sum, b) => sum === null || b.amount === null ? null : sum + b.amount, 0);
+  // Known amounts retain their visual width even when another bucket is unknown.
+  const rest = [thinAmount, ungradedAmount].filter((v): v is number => v !== null).reduce((sum, v) => sum + v, 0);
   const T = cap?.value ?? null;
   // F48 Contract R-API: the words and the 偏貴 band are the served rules; until they load, words print without numbers.
   const rules = useAdsRules();
@@ -46,16 +47,16 @@ export function GradeBand({ buckets, spent, spentLabel, cap }: {
 
   const segments = SEGMENTS.flatMap((seg) => {
     const bucket = of(seg.grade);
-    if (!bucket || (!bucket.count && !bucket.amount)) return [];
-    const ads = bucket.ads.slice().sort((x, y) => (y.spend ?? 0) - (x.spend ?? 0));
-    const amount = <span className="numeric whitespace-nowrap">{formatAmount(bucket.amount)} 元</span>;
+    if (!bucket || (bucket.count === 0 && bucket.amount === 0)) return [];
+    const ads = bucket.ads.slice().sort((x, y) => (y.spend ?? -Infinity) - (x.spend ?? -Infinity));
+    const amount = <span className="numeric whitespace-nowrap">{bucket.amount === null ? "不明" : formatAmount(bucket.amount)} 元</span>;
     if (seg.grade === "on_target") {
       return [(
-        <div key={seg.grade} data-grade={seg.grade} className={cn("flex min-w-[140px] flex-col justify-between overflow-hidden rounded p-3 first:rounded-l-[10px] last:rounded-r-[10px]", seg.box)} style={{ flex: `${bucket.amount} 1 0` }}>
+        <div key={seg.grade} data-grade={seg.grade} className={cn("flex min-w-[140px] flex-col justify-between overflow-hidden rounded p-3 first:rounded-l-[10px] last:rounded-r-[10px]", seg.box)} style={{ flex: `${bucket.amount === null ? 1 : bucket.amount} 1 0` }}>
           <div className={cn("flex justify-between gap-2", seg.text)}><b>{word("on_target")}</b><span className="font-semibold">{amount}</span></div>
           <div className="flex items-end gap-1.5">
             {ads.slice(0, OK_THUMBS.length).map((a, i) => <Thumb key={a.entity_id} url={a.thumbnail_url} size={OK_THUMBS[i]} />)}
-            <span className="ml-1.5 text-xs whitespace-nowrap text-muted-foreground">{bucket.count} 則</span>
+            <span className="ml-1.5 text-xs whitespace-nowrap text-muted-foreground">{bucket.count ?? "不明"} 則</span>
           </div>
         </div>
       )];
@@ -63,14 +64,14 @@ export function GradeBand({ buckets, spent, spentLabel, cap }: {
     const small = seg.grade === "wasted";
     const top = ads[0];
     return [(
-      <div key={seg.grade} data-grade={seg.grade} className={cn("flex min-w-[72px] flex-col justify-between overflow-hidden rounded p-3 first:rounded-l-[10px] last:rounded-r-[10px]", small && "px-2 py-2.5", seg.box, seg.outline)} style={{ flex: `${bucket.amount} 1 0` }}>
+      <div key={seg.grade} data-grade={seg.grade} className={cn("flex min-w-[72px] flex-col justify-between overflow-hidden rounded p-3 first:rounded-l-[10px] last:rounded-r-[10px]", small && "px-2 py-2.5", seg.box, seg.outline)} style={{ flex: `${bucket.amount === null ? 1 : bucket.amount} 1 0` }}>
         <div className={seg.text}>
           <b className={cn(small && "text-[13px]")}>{word(seg.grade)}</b>
           <div className={cn(small ? "text-xs" : "text-[13px]")}>{amount}</div>
         </div>
         <div className="flex flex-col gap-1">
           {top && <Thumb url={top.thumbnail_url} size={ONE_THUMB[seg.grade]} />}
-          <span className={cn("text-[11px] leading-snug [overflow-wrap:anywhere]", seg.text)}>{bucket.count > 1 || !top ? `${bucket.count} 則` : short(top.name, 6)}</span>
+          <span className={cn("text-[11px] leading-snug [overflow-wrap:anywhere]", seg.text)}>{bucket.count === null || bucket.count > 1 || !top ? `${bucket.count ?? "不明"} 則` : short(top.name, 6)}</span>
         </div>
       </div>
     )];
@@ -84,12 +85,12 @@ export function GradeBand({ buckets, spent, spentLabel, cap }: {
   return (
     <div data-slot="grade-band" className="flex flex-col gap-4">
       <div className="flex flex-wrap items-baseline gap-3.5">
-        <span className={cn("numeric text-4xl leading-tight font-semibold tracking-tight", pct === null ? "text-muted-foreground" : "text-success")}>{pct === null ? "—" : `${pct}%`}</span>
+        <span className={cn("numeric text-4xl leading-tight font-semibold tracking-tight", pct === null ? "text-muted-foreground" : "text-success")}>{pct === null ? "不明" : `${pct}%`}</span>
         <span className="text-[17px] font-medium">的廣告費花得划算</span>
         <span className="numeric ml-auto text-[13px] text-muted-foreground">{spentLabel} {spent === null ? "未知" : `${formatAmount(spent)} 元`}</span>
       </div>
       <div className="flex h-32 gap-1">
-        {segments.length ? segments : <div className={cn("flex-1 rounded-[10px]", HATCH)} aria-label="還沒有花費" />}
+        {segments.length ? segments : <div className={cn("flex-1 rounded-[10px]", HATCH)} aria-label={spent === 0 ? "還沒有花費" : "花費分級不明"} />}
       </div>
       {/* v10 `homeBand()` legend: every grade word is a glossary `Term` (the sentence lives in glossary.ts); the
           shared cap's values follow in brackets only when every campaign has the same one. */}
@@ -99,8 +100,8 @@ export function GradeBand({ buckets, spent, spentLabel, cap }: {
         {legend("border border-warning/80 bg-warning/10", <><Term k="watch">{word("watch")}</Term>＝超過上限{tenths !== null && `不到 ${tenths} 成`}{band !== null && `（${formatAmount(T)}–${formatAmount(band)}）`}</>)}
         {legend("border border-danger bg-danger/10", <><Term k="over">{word("over")}</Term>＝超過{tenths !== null && ` ${tenths} 成`}以上{band !== null && `（${formatAmount(band)} 以上）`}</>)}
         {legend("border border-danger bg-danger/20", <><Term k="wasted">{word("wasted")}</Term>＝花了錢一筆都沒賣</>)}
-        {legend("bg-muted", <><Term k="thin">{word("too_new")}</Term> {formatAmount(thinAmount)} 元</>)}
-        {ungradedAmount > 0 && legend(HATCH, `未分級 ${formatAmount(ungradedAmount)} 元`)}
+        {legend("bg-muted", <><Term k="thin">{word("too_new")}</Term> {thinAmount === null ? "不明" : formatAmount(thinAmount)} 元</>)}
+        {(ungradedAmount === null || ungradedAmount > 0) && legend(HATCH, `未分級 ${ungradedAmount === null ? "不明" : formatAmount(ungradedAmount)} 元`)}
       </div>
     </div>
   );

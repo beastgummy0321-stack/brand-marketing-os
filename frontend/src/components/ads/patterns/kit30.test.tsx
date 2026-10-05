@@ -434,3 +434,23 @@ describe("TodoRow v10 states", () => {
     expect(rows[3].firstElementChild?.textContent).toBe("4");
   });
 });
+
+
+it("reason and busy cards cannot be selected by click or radio keyboard navigation", async () => {
+  const pick = vi.fn();
+  render(<PickGroup label="可選目標" value="open" onChange={pick}>
+    <PickCard value="open" title="可選" />
+    <PickCard value="off" title="不可選" disabledReason="先完成商品資料" />
+    <PickCard value="busy" title="讀取中" busy />
+    <PickCard value="last" title="最後一項" />
+  </PickGroup>);
+  const user = userEvent.setup();
+  const off = screen.getByRole("radio", {name: /不可選/});
+  expect(document.getElementById(off.getAttribute("aria-describedby")!)?.textContent).toBe("先完成商品資料");
+  await user.click(off);
+  await user.click(screen.getByRole("radio", {name: "讀取中"}));
+  expect(pick).not.toHaveBeenCalled();
+  screen.getByRole("radio", {name: "可選"}).focus();
+  await user.keyboard("{ArrowRight}");
+  expect(pick).toHaveBeenCalledWith("last");
+});

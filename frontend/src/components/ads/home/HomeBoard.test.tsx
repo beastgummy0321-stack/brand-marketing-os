@@ -1,3 +1,4 @@
+vi.mock("@/lib/figures", async (actual) => ({ ...await actual<typeof import("@/lib/figures")>(), useFigureBases: () => ({earn_after_cost_and_ads: {label: "扣掉商品成本和廣告費", formula: "成交數 ×（售價 − 成本含運）− 廣告費", unit: "money"}}) }));
 /** frontend/src/components/ads/home/HomeBoard.test.tsx — the v10 home blocks (F28-I08 board D, F29-I11), rendered on
  * their own with realistic shapes (longest names, imported campaign, no-cap draft, decimal costs, unknown values).
  * Unknown numbers print the prototype's unknown words, never 0; money goes through the kit formatter; glossary words
@@ -12,6 +13,7 @@ import { CampaignRows } from "./CampaignRows";
 import { MonthMoney } from "./MonthMoney";
 import { NextDates } from "./NextDates";
 import { QualityBand } from "./QualityBand";
+import { QueueRow } from "./QueueRow";
 import { TodayDecisions } from "./TodayDecisions";
 // F50 Contract K: the org clock reads the workspace org zone; dates assert Asia/Taipei output, never the runner's.
 vi.mock("@/components/layout/WorkspaceContext", () => ({ useWorkspace: () => ({ scope: "user:org", identity: { user: { id: "u", email: "a@example.com" }, org: { id: "o", name: "測試", kind: "personal", role: "owner", timezone: "Asia/Taipei", today: "2026-10-01" }, orgs: [] } }) }));
@@ -40,7 +42,7 @@ function campaign(overrides: Partial<HomeCampaign> = {}): HomeCampaign {
 
 function home(overrides: Partial<HomeOverview> = {}): HomeOverview {
   return {
-    month: "2026-09", day_of_month: 23, days_in_month: 30, currency: "TWD", spent: 22000,
+    closed_this_month: 0, month: "2026-09", day_of_month: 23, days_in_month: 30, currency: "TWD", spent: 22000,
     money: {
       purchases: 158, cost_per_purchase: 139.24, cap: { value: 450, basis: "own", break_even: 520 }, earn_after_cost_and_ads: 60163.5, earn_missing: [], excluded: [],
       previous_same_period: { days: 22, purchases: 118, cost_per_purchase: 221.37 },
@@ -65,8 +67,9 @@ const wrap = (node: React.ReactNode) => render(<MemoryRouter>{node}</MemoryRoute
 describe("MonthMoney", () => {
   it("prints the rounded earn, whole-yuan cost per purchase, the shared cap and last month's same days", () => {
     wrap(<MonthMoney brandId="b" state={ready(home())} onRetry={vi.fn()} scaleHref={null} onBudgetClosed={vi.fn()} />);
-    expect(screen.getByText("扣掉廣告費，這個月估計多賺")).toBeTruthy();
-    expect(screen.getByText("約 NT$60,000")).toBeTruthy();
+    expect(screen.getByText("這個月估計多賺")).toBeTruthy();
+    expect(screen.getByText("60,000 TWD")).toBeTruthy();
+    expect(screen.getByText("扣掉商品成本和廣告費")).toBeTruthy();
     expect(screen.getByText("NT$139 元")).toBeTruthy();
     expect(screen.getByText(byPlain("每個活動各有上限，目前都是 450"))).toBeTruthy();
     expect(screen.getByText(byPlain("・有賺（打平 520）"))).toBeTruthy();
@@ -106,14 +109,14 @@ describe("MonthMoney", () => {
 
   it("a loss prints 少賺 with the absolute amount; another currency keeps its code", () => {
     wrap(<MonthMoney brandId="b" state={ready(home({ currency: "USD", money: { ...home().money!, earn_after_cost_and_ads: -1499.5 } }))} onRetry={vi.fn()} scaleHref={null} onBudgetClosed={vi.fn()} />);
-    expect(screen.getByText("扣掉廣告費，這個月估計少賺")).toBeTruthy();
-    expect(screen.getByText("約 USD 1,000")).toBeTruthy();
+    expect(screen.getByText("這個月估計少賺")).toBeTruthy();
+    expect(screen.getByText("1,000 USD")).toBeTruthy();
   });
 
   it("the pace block failing alone says so once; the money column stays", () => {
     wrap(<MonthMoney brandId="b" state={ready(home({ pace: null }))} onRetry={vi.fn()} scaleHref={null} onBudgetClosed={vi.fn()} />);
     expect(screen.getByText("預算進度暫時讀取不到")).toBeTruthy();
-    expect(screen.getByText("約 NT$60,000")).toBeTruthy();
+    expect(screen.getByText("60,000 TWD")).toBeTruthy();
   });
 });
 
@@ -129,7 +132,7 @@ describe("QualityBand", () => {
     const h = home({ spent: null, quality: null, campaigns: [campaign(), campaign({ campaign_id: "cmp_gap", missing_days: ["2026-09-03"] })] });
     wrapOnHome(<QualityBand state={ready(h)} onRetry={vi.fn()} />);
     expect(screen.getByText("9 月已花還不完整（09/03 沒讀到），先不分級")).toBeTruthy();
-    expect(screen.getByRole("link", { name: "重新讀取平台" }).getAttribute("href")).toBe("/brands/b/ads/campaigns/cmp_gap?tab=performance");
+    expect(screen.getByRole("link", { name: "重新讀取平台" }).getAttribute("href")).toBe("/brands/b/ads/campaigns/cmp_gap?tab=perf");
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
@@ -514,4 +517,11 @@ describe("TodayDecisions", () => {
     expect(screen.getByText(`上次成功 ${p(d.getMonth() + 1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}・已保存的決定都還在`)).toBeTruthy();
     expect(screen.getByRole("button", { name: "重新讀取" })).toBeTruthy();
   });
+});
+
+
+it("queue rows preserve an unknown readable count", () => {
+  wrap(<QueueRow brandId="b" item={row("unknown", "refresh_creative", {refresh: undefined})} recovering={false} />);
+  expect(screen.getByText("能判讀的素材只剩 不明 則")).toBeTruthy();
+  expect(screen.queryByText(/只剩 0 則/)).toBeNull();
 });

@@ -1,3 +1,4 @@
+import { campaignPath } from "@/lib/adsRoutes";
 import { Link } from "react-router-dom";
 import { Button } from "@/components/layout/ui/button";
 import { Skeleton } from "@/components/layout/Skeleton";
@@ -52,7 +53,7 @@ function HandoffChip({ brandId, campaignId, handoff }: { brandId: string; campai
   const check = handoff.state === "check";
   return (
     <Button asChild variant="link" className="h-auto p-0 no-underline hover:no-underline">
-      <Link to={`/brands/${brandId}/ads/campaigns/${campaignId}?tab=changes`}>
+      <Link to={campaignPath(brandId, campaignId, {tab:"changes"})}>
         <Chip tone={check ? "warn" : "accent"}>{check ? "等核對" : "等你到 Meta 完成"} →</Chip>
       </Link>
     </Button>
@@ -81,12 +82,12 @@ function runningText(c: HomeCampaign, timezone: string): string {
 }
 
 /** The month's empty rows: no campaign in progress; the ones closed this month are named, never 「還沒有活動」. */
-function EmptyRows({ brandId, closed }: { brandId: string; closed: number }) {
-  if (closed <= 0) return <p className="border-t border-border px-6 py-3.5 text-sm text-muted-foreground">還沒有活動</p>;
+function EmptyRows({ brandId, closed }: { brandId: string; closed: number | null }) {
+  if (closed === 0) return <p className="border-t border-border px-6 py-3.5 text-sm text-muted-foreground">還沒有活動</p>;
   return (
     <p className="border-t border-border px-6 py-3.5 text-sm text-muted-foreground">
       這個月沒有進行中的活動・
-      <Link to={`/brands/${brandId}/ads/campaigns`} className="font-medium text-primary hover:underline">已結案 {closed} 個</Link>
+      <Link to={`/brands/${brandId}/ads/campaigns`} className="font-medium text-primary hover:underline">已結案 {closed ?? "不明"} 個</Link>
     </p>
   );
 }
@@ -115,7 +116,7 @@ export function CampaignRows({ brandId, state, onRetry }: {
         </div>
       )}
       {state.status === "ready" && campaigns && campaigns.length === 0 && (
-        <EmptyRows brandId={brandId} closed={state.home.closed_this_month ?? 0} />
+        <EmptyRows brandId={brandId} closed={state.home.closed_this_month ?? null} />
       )}
       {state.status === "ready" && campaigns?.map((c) => (
         c.draft ? <DraftRow key={c.campaign_id} brandId={brandId} c={c} /> : <LiveRow key={c.campaign_id} brandId={brandId} c={c} spent={state.home.spent} />
@@ -127,7 +128,7 @@ export function CampaignRows({ brandId, state, onRetry }: {
 function NameLink({ brandId, c }: { brandId: string; c: HomeCampaign }) {
   return (
     <Button asChild variant="link" className="h-auto min-w-0 shrink justify-start p-0 text-left text-sm font-semibold whitespace-normal text-foreground [overflow-wrap:anywhere]">
-      <Link to={`/brands/${brandId}/ads/campaigns/${c.campaign_id}`}>{c.name}</Link>
+      <Link to={campaignPath(brandId, c.campaign_id)}>{c.name}</Link>
     </Button>
   );
 }
@@ -181,10 +182,10 @@ function LiveRow({ brandId, c, spent }: { brandId: string; c: HomeCampaign; spen
       <div className="text-right">
         <Button asChild variant="link" className="h-auto p-0">
           {closeout
-            ? <Link to={`/brands/${brandId}/ads/campaigns/${c.campaign_id}?tab=perf&close=1`}>結案這一期 →</Link>
+            ? <Link to={campaignPath(brandId, c.campaign_id, {tab:"perf",close:1})}>結案這一期 →</Link>
             : reconnect
             ? <Link to={`/brands/${brandId}/ads/connections`}>重新連線 →</Link>
-            : <Link to={`/brands/${brandId}/ads/campaigns/${c.campaign_id}`}>打開 →</Link>}
+            : <Link to={campaignPath(brandId, c.campaign_id)}>打開 →</Link>}
         </Button>
       </div>
     </div>
@@ -197,7 +198,7 @@ function DraftRow({ brandId, c }: { brandId: string; c: HomeCampaign }) {
   const todo = [d.cap_missing ? "設上限" : "", miss ? `補 ${miss} 張圖` : ""].filter(Boolean);
   const start = d.start_date ? `${monthDay(d.start_date)} 開始` : "還沒定開始日";
   const tl = capLabel(c.cap);
-  const href = `/brands/${brandId}/ads/campaigns/${c.campaign_id}${d.cap_missing ? "?tab=strategy" : ""}`;
+  const href = campaignPath(brandId, c.campaign_id, {tab:d.cap_missing ? "strategy" : undefined});
   return (
     <div className={cn(GRID, "border-t border-border bg-background/50 py-3.5")}>
       <div className="min-w-0">

@@ -1,3 +1,4 @@
+import { Figure } from "@/components/layout/Figure";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { Button } from "@/components/layout/ui/button";
@@ -148,18 +149,18 @@ function MoneyColumn({ home }: { home: HomeOverview }) {
       <div className="flex flex-col gap-1">
         {rounded === null ? (
           <>
-            <span className="text-sm font-semibold text-muted-foreground">扣掉廣告費，這個月估計多賺</span>
+            <span className="text-sm font-semibold text-muted-foreground">這個月估計多賺</span>
             <span className="text-xl font-medium text-muted-foreground/80">
-              {money === null ? "暫時讀取不到" : `算不出來・${missing.length ? missing.join("、") : "資料不完整"}`}
+              <Figure basis="earn_after_cost_and_ads" value={null} currency={home.currency} unknown={money === null ? "暫時讀取不到" : `算不出來・${missing.length ? missing.join("、") : "資料不完整"}`} />
             </span>
           </>
         ) : (
           <>
             <span className={cn("text-[13px] font-semibold", gain ? "text-success" : "text-danger")}>
-              扣掉廣告費，這個月估計{gain ? "多賺" : "少賺"}
+              這個月估計{gain ? "多賺" : "少賺"}
             </span>
-            <span className={cn("numeric text-4xl leading-tight font-semibold tracking-tight", gain ? "text-success" : "text-danger")}>
-              約 {prefix}{formatAmount(Math.abs(rounded))}
+            <span className={cn("numeric flex items-baseline gap-2 text-4xl leading-tight font-semibold tracking-tight", gain ? "text-success" : "text-danger")}>
+              約 <Figure basis="earn_after_cost_and_ads" value={Math.abs(rounded)} currency={home.currency} className="min-w-0" />
             </span>
           </>
         )}
@@ -176,7 +177,7 @@ function MoneyColumn({ home }: { home: HomeOverview }) {
           <span className="text-sm text-muted-foreground">{capText(home)}</span>
           <MoneyTag cost={cpp} breakEven={cap?.break_even ?? null} />
         </div>
-        <MoneyMeter value={cpp} cap={cap && cap.basis ? { value: cap.value, basis: cap.basis } : null} max={Math.max(600, (cpp ?? 0) * 1.3)} size="lg"
+        <MoneyMeter value={cpp} cap={cap && cap.basis ? { value: cap.value, basis: cap.basis } : null} max={cpp === null ? 600 : Math.max(600, cpp)} size="lg"
           capLabel={cap?.basis === "break_even" ? "各活動打平線" : "各活動上限"} />
       </div>
 
@@ -219,6 +220,7 @@ function PaceColumn({ home, scaleHref, onAdjust }: { home: HomeOverview; scaleHr
           spent={home.spent}
           daily={daily}
           projected={projected}
+          budgetToDate={pace?.budget_to_date ?? null}
         />
       )}
       <div className="mt-1.5 flex flex-wrap items-center gap-3 rounded-[10px] bg-accent px-3.5 py-3">

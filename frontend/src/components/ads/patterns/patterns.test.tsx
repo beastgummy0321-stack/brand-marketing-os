@@ -297,7 +297,7 @@ describe("v9 pieces（F28-I07）", () => {
     expect(screen.getByText("秋季新色預告…")).toBeTruthy();
     expect(screen.getByText("未分級 520 元")).toBeTruthy();
     rerender(<GradeBand buckets={buckets} spent={null} spentLabel="9 月已花" cap={null} />);
-    expect(screen.getByText("—")).toBeTruthy();
+    expect(screen.getByText("不明")).toBeTruthy();
     expect(screen.getByText("9 月已花 未知")).toBeTruthy();
     // v10 legend: grade words are glossary terms; the shared cap's values show only when one cap is shared.
     const legend = document.querySelector('[data-part="band-legend"]') as HTMLElement;
@@ -325,8 +325,8 @@ describe("v9 pieces（F28-I07）", () => {
   it("PaceChart 沒月預算（未設或 0）什麼都不畫、說「還沒設月預算」，不會出現 NaN；已花未知不印已花", async () => {
     const { PaceChart } = await import("./PaceChart");
     const days = [{ day: 10, cumulative: 8000 }, { day: 23, cumulative: 22000 }];
-    const { container, rerender } = render(<PaceChart month={9} dayOfMonth={23} daysInMonth={30} budget={60000} spent={22000} daily={days} projected={28696} />);
-    expect(screen.getByRole("img", { name: "預算 60,000，已花 22,000，照預算今天應花到 46,000" })).toBeTruthy();
+    const { container, rerender } = render(<PaceChart month={9} dayOfMonth={23} daysInMonth={30} budget={60000} spent={22000} daily={days} projected={28696} budgetToDate={43210} />);
+    expect(screen.getByRole("img", { name: "預算 60,000，已花 22,000，照預算今天應花到 43,210" })).toBeTruthy();
     expect(container.querySelector('[data-part="pace-line"]')).toBeTruthy();
     rerender(<PaceChart month={9} dayOfMonth={23} daysInMonth={30} budget={null} spent={null} daily={[]} projected={null} />);
     expect(container.querySelector("svg")).toBeNull();
@@ -342,14 +342,14 @@ describe("v9 pieces（F28-I07）", () => {
     const { ScenarioBars } = await import("./ScenarioBars");
     const onSelect = vi.fn();
     const rows = [
-      { key: "cons", label: "保守", total: 18000, overCap: null },
+      { key: "cons", label: "保守", total: 18000, overCap: null, caption: "約 37 筆購買" },
       { key: "cap", label: "照預算上限", total: 30000, overCap: null, recommended: true, saved: true },
       { key: "agg", label: "積極", total: 111600, overCap: 81600 },
       { key: "grow", label: "穩定成長", total: null, overCap: null },
     ];
     const { container } = render(<ScenarioBars rows={rows} budgetCap={30000} selected="cap" onSelect={onSelect} resultCap={450} />);
     expect(screen.getByText("超出 81,600")).toBeTruthy();
-    expect(screen.getByText("約 40 筆購買")).toBeTruthy();
+    expect(screen.getByText("約 37 筆購買")).toBeTruthy();
     expect(container.querySelectorAll('[data-part="over"]')).toHaveLength(1);
     expect(screen.getByRole("radio", { name: /照預算上限/ }).getAttribute("aria-checked")).toBe("true");
     expect(screen.queryByRole("radio", { name: /穩定成長/ })).toBeNull();
@@ -790,7 +790,7 @@ describe("served rules（F48-I08 Contract R-API）", () => {
     const tenths = String(Math.round((G.watch_band - 1) * 10));
     expect(legend).toContain(`${L.watch}＝超過上限不到 ${tenths} 成（450–${450 * G.watch_band}）`);
     expect(legend).toContain(`${L.over}＝超過 ${tenths} 成以上（${450 * G.watch_band} 以上）`);
-    expect(legend).toContain(`${L.too_new} 0 元`);
+    expect(legend).toContain(`${L.too_new} 不明 元`);
   });
 
   it("a changed rule moves every piece with it: legend, ruler zones, meter colour, chip word, glossary", async () => {
@@ -849,4 +849,13 @@ describe("served rules（F48-I08 Contract R-API）", () => {
       expect(term.textContent).toBe("上限");
     });
   });
+});
+
+
+it("unknown grade counts and amounts stay unknown", async () => {
+  const { GradeBand } = await import("./GradeBand");
+  render(<GradeBand spent={null} spentLabel="本月" cap={null} buckets={[{grade: "on_target", amount: null, count: null, ads: []}]} />);
+  expect(screen.getByText("不明 則")).toBeTruthy();
+  expect(screen.getAllByText("不明 元").length).toBeGreaterThan(0);
+  expect(screen.getByText("不明")).toBeTruthy();
 });

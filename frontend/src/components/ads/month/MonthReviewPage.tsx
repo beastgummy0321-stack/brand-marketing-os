@@ -30,7 +30,7 @@ function WeeklySpend({ home }: { home: HomeOverview }) {
   const pace = home.pace;
   const budget = pace?.budget_amount ?? null;
   const bars: WeekBar[] = pace ? weekBars(home.month, home.days_in_month, pace.daily, budget) : [];
-  const top = Math.max(1, ...bars.flatMap((w) => [w.spend ?? 0, w.pace ?? 0])) * 1.1;
+  const top = Math.max(1, ...bars.flatMap((w) => [w.spend, w.pace].filter((v): v is number => v !== null))) * 1.1;
   const px = (v: number) => Math.round((v / top) * CHART_H);
   const cols = { gridTemplateColumns: `repeat(${Math.max(bars.length, 1)}, minmax(0, 1fr))` };
   return (
@@ -126,8 +126,8 @@ function SuggestionCard({ brandId, month, suggestion, onDismissed }: {
       <div className="flex flex-wrap gap-2">
         {suggestion.action_url
           ? <Button size="sm" variant="outline" asChild><Link to={suggestion.action_url}>{actionLabel}</Link></Button>
-          : <Button size="sm" variant="outline" disabled>{actionLabel}</Button>}
-        <Button size="sm" variant="ghost" disabled={busy} onClick={skip}>先不要</Button>
+          : <Button size="sm" variant="outline" disabledReason="提議連結目前無法取得，請重新整理再試。">{actionLabel}</Button>}
+        <Button size="sm" variant="ghost" busy={busy} onClick={skip}>先不要</Button>
       </div>
     </section>
   );
@@ -159,8 +159,8 @@ function Suggestions({ brandId, month, summary }: { brandId: string; month: stri
   const suggestions = summary.suggestions.filter((s) => !hidden.has(`s:${s.key}`));
   const worse = summary.rejected.worse.filter((r) => !hidden.has(`s:cleanup:${r.campaign_id}`));
   return (
-    <section aria-label={`${monthNum(shiftMonth(month, 1))} 月建議`}>
-      <h2 className="mt-2 mb-2.5 text-[15px] font-semibold">{monthNum(shiftMonth(month, 1))} 月建議</h2>
+    <section aria-label={`依 ${monthNum(month)} 月結果，給 ${monthNum(shiftMonth(month, 1))} 月的建議`}>
+      <h2 className="mt-2 mb-2.5 text-[15px] font-semibold">依 {monthNum(month)} 月結果，給 {monthNum(shiftMonth(month, 1))} 月的建議</h2>
       {suggestions.length + worse.length === 0
         ? <p className="text-sm text-muted-foreground">這個月沒有要給下個月的建議。</p>
         : (
@@ -210,7 +210,7 @@ export function MonthReviewPage({ brandId }: { brandId: string }) {
           description="活動照常投放，這裡只整理帳"
           actions={
             <>
-              <Button size="sm" variant="outline" disabled={!view} onClick={() => view && downloadMonthCsv(month, view.grades.rows)}>下載 CSV</Button>
+              <Button size="sm" variant="outline" disabledReason={!view ? "先載入這個月的資料" : undefined} onClick={() => view && downloadMonthCsv(month, view.grades.rows)}>下載 CSV</Button>
               <div role="group" aria-label="月份" className="flex gap-1.5">{[lastMonth, thisMonth].map(monthButton)}</div>
             </>
           }

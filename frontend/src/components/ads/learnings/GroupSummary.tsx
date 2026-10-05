@@ -8,14 +8,15 @@ import { learnMoney } from "./LearningsTable";
  * draws no cap line and no 低於／高於上限 chip; `cost_per_sale: null` prints 沒賣出 with an empty bar.
  * The cap label is printed on the first bar and wherever the cap changes from the bar above. */
 export function GroupSummary({ groups }: { groups: LearningGroup[] }) {
-  const scale = Math.max(1, ...groups.map((g) => Math.max(g.cap ?? 0, g.cost_per_sale ?? 0))) * 1.12;
+  const scale = Math.max(1, ...groups.flatMap((g) => [g.caps_differ ? null : g.cap, g.cost_per_sale].filter((v): v is number => v !== null))) * 1.12;
   return (
     <div role="list" aria-label="各顧客群每筆成本" className="flex flex-col gap-2.5 pt-3.5">
       {groups.map((g, i) => {
         const per = g.cost_per_sale;
-        const judged = per !== null && g.cap !== null;
-        const ok = judged && per <= (g.cap as number);
-        const showCapLabel = g.cap !== null && (i === 0 || groups[i - 1].cap !== g.cap);
+        const cap = g.caps_differ ? null : g.cap;
+        const judged = per !== null && cap !== null;
+        const ok = judged && per <= (cap as number);
+        const showCapLabel = cap !== null && (i === 0 || groups[i - 1].caps_differ || groups[i - 1].cap !== g.cap);
         return (
           <div
             key={g.customer_group_id}
@@ -25,7 +26,7 @@ export function GroupSummary({ groups }: { groups: LearningGroup[] }) {
           >
             <div className="min-w-0 max-[900px]:[grid-area:gn]">
               <b className="block text-sm [overflow-wrap:anywhere]">{g.who}</b>
-              <span className="text-xs text-muted-foreground">{g.ads} 則・花 {learnMoney(g.spend)}・成交 {g.sales}</span>
+              <span className="text-xs text-muted-foreground">{g.ads} 則・花 {learnMoney(g.spend)}・成交 {g.sales ?? "不明"}</span>
             </div>
             <div aria-hidden="true" className="relative h-[22px] rounded-md bg-muted max-[900px]:mt-3.5 max-[900px]:[grid-area:tr]">
               {per !== null && (
@@ -34,11 +35,11 @@ export function GroupSummary({ groups }: { groups: LearningGroup[] }) {
                   style={{ width: `${(per / scale) * 100}%` }}
                 />
               )}
-              {g.cap !== null && (
-                <div className="absolute -top-1 -bottom-1 w-0.5 bg-foreground" style={{ left: `${(g.cap / scale) * 100}%` }}>
+              {cap !== null && (
+                <div className="absolute -top-1 -bottom-1 w-0.5 bg-foreground" style={{ left: `${(cap / scale) * 100}%` }}>
                   {showCapLabel && (
                     <em className="absolute -top-[18px] left-1/2 -translate-x-1/2 whitespace-nowrap text-[11px] not-italic text-foreground">
-                      上限 {learnMoney(g.cap)}
+                      上限 {learnMoney(cap)}
                     </em>
                   )}
                 </div>
@@ -47,8 +48,9 @@ export function GroupSummary({ groups }: { groups: LearningGroup[] }) {
             <div className="flex items-center justify-end gap-2 text-[13px] max-[900px]:[grid-area:gv]">
               <span className="text-muted-foreground">每筆</span>
               <b className={cn("text-base tabular-nums", per === null && "text-sm font-medium text-muted-foreground")}>
-                {per === null ? "沒賣出" : learnMoney(per)}
+                {per === null ? (g.sales === 0 ? "沒賣出" : "不明") : learnMoney(per)}
               </b>
+              {g.caps_differ && <span className="text-xs text-muted-foreground">各活動上限或幣別不同</span>}
               {judged && <Chip tone={ok ? "ok" : "bad"}>{ok ? "低於上限" : "高於上限"}</Chip>}
             </div>
           </div>

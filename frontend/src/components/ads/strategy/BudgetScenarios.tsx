@@ -92,7 +92,7 @@ export function BudgetScenarios({ brandId, campaign: c, picked, onPick, pending,
   if (!scenarios) return null;
 
   const rows: ScenarioRow[] = scenarios.scenarios.map((r) => ({
-    key: r.key, label: r.label, total: r.total, overCap: r.over_cap,
+    key: r.key, label: r.label, total: r.total, overCap: r.over_cap, caption: r.caption,
     recommended: r.key === scenarios.recommended, saved: r.key === saved,
   }));
   const days = periodDays(c.start_date, c.end_date);

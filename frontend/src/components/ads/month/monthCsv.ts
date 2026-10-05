@@ -1,3 +1,4 @@
+import { campaignFlowPath } from "@/lib/adsRoutes";
 /** F29-I15: the month review's plain-text facts — money words, dates, the weekly split of the pace data and the
  * month CSV (prototype v10 `csvMonth()`), built in the browser from the numbers the screen already shows (Feature
  * F29 decisions: no endpoint). Unknown numbers stay empty cells / 「未知」, never 0. */
@@ -29,8 +30,7 @@ export function countWord(n: number): string {
 
 /** The cleanup proposal of a campaign (the queue's own cleanup `action_url`). */
 export function cleanupHref(brandId: string, campaignId: string): string {
-  const b = encodeURIComponent(brandId), c = encodeURIComponent(campaignId);
-  return `/brands/${b}/ads/campaigns/${c}/propose/cleanup/${c}`;
+  return campaignFlowPath(brandId, campaignId, ["propose", "cleanup", campaignId]);
 }
 
 /** One bar of 「每週花費 vs 預算步調」 (prototype `MONTHS[m].weeks`): days 1–7, 8–14, 15–21, 22–28, then the rest. */

@@ -252,7 +252,7 @@ function ZoneLabels({ rules, starts }: { rules: AdsRules; starts: number[] }) {
     if (!el || !width) { setLayout(null); return; }
     const spans = [...el.querySelectorAll<HTMLElement>("[data-zone]")];
     const caption = el.querySelector<HTMLElement>("[data-part='axis-caption']");
-    setLayout(zoneLabelLayout(width, starts.map((pct) => (pct / 100) * width), spans.map((sp) => sp.offsetWidth), caption?.offsetWidth ?? 0));
+    setLayout(zoneLabelLayout(width, starts.map((pct) => (pct / 100) * width), spans.map((sp) => sp.offsetWidth), caption?.offsetWidth ?? 0 /* ZERO_OK: an absent DOM caption occupies zero pixels. */));
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `key` names `starts` by value.
   }, [width, key]);
   return (

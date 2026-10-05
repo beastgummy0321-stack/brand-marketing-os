@@ -1,3 +1,4 @@
+vi.mock("@/lib/figures", async (actual) => ({ ...await actual<typeof import("@/lib/figures")>(), useFigureBases: () => ({earn_after_cost_and_ads: {label: "扣掉商品成本和廣告費", formula: "成交數 ×（售價 − 成本含運）− 廣告費", unit: "money"}}) }));
 /** frontend/src/components/ads/AdsHomePage.test.tsx — F28-I08: the ads-centre home as board D (prototype v9
  * `home()`). Page-level behaviour only: the two requests (`GET …/home` and the brand queue) load and fail on their
  * own, today's decisions are the open cleanup／worse／refresh rows (three cards, the rest in one fold), the 調整 entry
@@ -35,7 +36,7 @@ vi.mock("@/lib/adsStatusApi", async () => {
 
 function home(overrides: Partial<HomeOverview> = {}): HomeOverview {
   return {
-    month: "2026-09", day_of_month: 23, days_in_month: 30, currency: "TWD", spent: 22000,
+    closed_this_month: 0, month: "2026-09", day_of_month: 23, days_in_month: 30, currency: "TWD", spent: 22000,
     money: {
       purchases: 158, cost_per_purchase: 139.24, cap: { value: 450, basis: "own", break_even: 520 }, earn_after_cost_and_ads: 60163.5, earn_missing: [], excluded: [],
       previous_same_period: { days: 22, purchases: 118, cost_per_purchase: 221.37 },
@@ -291,7 +292,7 @@ describe("AdsHomePage (F28-I08 board D)", () => {
     renderPage();
     expect(await screen.findByText("今天的判斷讀取失敗")).toBeTruthy();
     expect(screen.getByRole("button", { name: "判斷讀取失敗 ↓" })).toBeTruthy();
-    expect(await screen.findByText("約 NT$60,000")).toBeTruthy();
+    expect(await screen.findByText("60,000 TWD")).toBeTruthy();
     expect(screen.getByText("65%")).toBeTruthy();
     expect(screen.getByRole("link", { name: "日常商品推廣・轉換" })).toBeTruthy();
     await userEvent.click(screen.getByRole("button", { name: "重新讀取" }));
@@ -308,7 +309,7 @@ describe("AdsHomePage (F28-I08 board D)", () => {
     expect(await screen.findByRole("link", { name: "查原因 →" })).toBeTruthy();
     expect(screen.queryByText(/NT\$0/)).toBeNull();
     await userEvent.click(screen.getAllByRole("button", { name: "重新讀取" })[0]);
-    expect(await screen.findByText("約 NT$60,000")).toBeTruthy();
+    expect(await screen.findByText("60,000 TWD")).toBeTruthy();
   });
 
   it("a running platform read holds the judgement: 同步中 chip, skeleton cards, and 今天 waits", async () => {
@@ -485,7 +486,7 @@ describe("AdsHomePage (F29-I10) one queue read for the count and the cards", () 
     let resolveQueue!: (q: QueuePayload) => void;
     vi.mocked(refreshQueue).mockReturnValue(new Promise<QueuePayload>((res) => { resolveQueue = res; }));
     renderPage();
-    expect(await screen.findByText("約 NT$60,000")).toBeTruthy();
+    expect(await screen.findByText("60,000 TWD")).toBeTruthy();
     expect(screen.getByText("正在整理今天的判斷")).toBeTruthy();
     const section = screen.getByRole("region", { name: /需要你決定/ });
     expect(section.querySelector('[aria-busy="true"]')).toBeTruthy();

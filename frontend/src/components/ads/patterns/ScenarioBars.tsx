@@ -12,6 +12,7 @@ export interface ScenarioRow {
   total: number | null;
   /** Amount above the budget cap (API `over_cap`); > 0 draws the hatched over segment. */
   overCap: number | null;
+  caption?: string;
   recommended?: boolean;
   saved?: boolean;
 }
@@ -23,7 +24,7 @@ const GRID = "grid w-full grid-cols-[118px_minmax(0,1fr)_150px] items-center gap
 /** `.sc` rows under a `預算上限` line: each scenario total as a bar up to the budget cap, the part above it hatched,
  * with the cap as one vertical line through every row. Picking a row only reports `onSelect`; the over-cap
  * confirmation is the caller's (`ConfirmSheet variant="over-cap"`). */
-export function ScenarioBars({ rows, budgetCap, selected, onSelect, resultCap = null, missingText = "要先設上限", label = "預算情境" }: {
+export function ScenarioBars({ rows, budgetCap, selected, onSelect, missingText = "要先設上限", label = "預算情境" }: {
   rows: ScenarioRow[];
   /** API `budget_cap`; null draws no cap line. */
   budgetCap: number | null;
@@ -34,8 +35,8 @@ export function ScenarioBars({ rows, budgetCap, selected, onSelect, resultCap = 
   missingText?: string;
   label?: string;
 }) {
-  const totals = rows.map((r) => r.total ?? 0);
-  const max = budgetCap !== null ? Math.max(budgetCap * 1.25, ...totals) : Math.max(1, ...totals) * 1.1;
+  const totals = rows.flatMap((r) => r.total === null ? [] : [r.total]);
+  const max = budgetCap !== null ? Math.max(1, budgetCap * 1.25, ...totals) : Math.max(1, ...totals) * 1.1;
   const pc = (v: number) => (v / max) * 100;
   return (
     <div data-slot="scenario-bars" role="radiogroup" aria-label={label}>
@@ -56,12 +57,12 @@ export function ScenarioBars({ rows, budgetCap, selected, onSelect, resultCap = 
             </div>
           );
         }
-        const over = (row.overCap ?? 0) > 0;
+        const over = row.overCap !== null && row.overCap > 0;
         const within = budgetCap !== null ? Math.min(row.total, budgetCap) : row.total;
         const on = selected === row.key;
         const caption = over
           ? <span className="font-semibold text-warning">超出 {formatAmount(row.overCap)}</span>
-          : resultCap ? `約 ${formatAmount(Math.floor(row.total / resultCap))} 筆購買` : budgetCap !== null ? "在預算上限內" : null;
+          : row.caption || (row.overCap === null ? "是否超出預算不明" : "在預算上限內");
         return (
           <button
             key={row.key} type="button" role="radio" aria-checked={on} data-key={row.key} onClick={() => onSelect(row.key)}
