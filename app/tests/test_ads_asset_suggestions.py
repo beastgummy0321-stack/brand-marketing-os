@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import psycopg
 
-from app import workbench
+from app import background, workbench
 from app.ads import asset_suggestion_policy as policy
 from app.ads import asset_suggestions as suggestions
 from app.ads import external_repository as external
@@ -498,7 +498,9 @@ class SuggestionsTest(unittest.TestCase):
         self.assertEqual(reply.status_code, 200, reply.text)
         self.assertEqual(reply.json()["placement"]["status"], "manual_ready")
 
-    def test_abandoned_running_becomes_unknown_without_releasing_or_sending(self):
+    def test_abandoned_running_becomes_unknown_and_settles_its_reservation(self):
+        # Slots #7: a batch marked `unknown` releases its hold (a stuck batch never keeps eating
+        # the org's AI budget); nothing is sent again.
         row = self.placement()
         batch = self.request([row])
         self.conn.execute(
@@ -510,14 +512,55 @@ class SuggestionsTest(unittest.TestCase):
         suggestions.dispatch_pending(0)
         result = suggestions.get_batch(self.conn, self.org, self.brand, self.campaign, batch["id"])
         self.assertEqual(result["status"], "unknown")
-        self.assertEqual(
-            self.conn.execute(
-                "SELECT settlement FROM ads_asset_suggestion_reservation WHERE batch_id=%s",
-                (batch["id"],),
-            ).fetchone()["settlement"],
-            "held",
-        )
+        self.assertEqual(result["error"], suggestions.UNKNOWN_ERROR)
+        reserve = self.conn.execute(
+            "SELECT settlement,known_failed_cost FROM ads_asset_suggestion_reservation "
+            "WHERE batch_id=%s",
+            (batch["id"],),
+        ).fetchone()
+        self.assertEqual((reserve["settlement"], float(reserve["known_failed_cost"])),
+                         ("settled", 0.0))
         self.assertEqual(len(self.fake.calls), 0)
+
+    def test_a_provider_refusal_reaches_the_batch_with_its_own_words_and_kind(self):
+        # Slots #7 / F50 Contract J: the call's own error and `error_code` are the batch's, never
+        # a generic sentence; the job fails with that kind.
+        row = self.placement()
+        self.fake.exception = providers.ProviderError("模型婉拒本次請求：內容不適合")
+        batch = self.request([row])
+        result = suggestions.run(self.org, self.brand, self.campaign, batch["id"])
+        self.assertEqual(result, background.Failed("refused", "模型婉拒本次請求：內容不適合"))
+        done = suggestions.get_batch(self.conn, self.org, self.brand, self.campaign, batch["id"])
+        self.assertEqual((done["status"], done["error"], done["error_code"]),
+                         ("failed", "模型婉拒本次請求：內容不適合", "refused"))
+        # A timed-out call says so, with its kind.
+        other = self.placement()
+        self.fake.exception = providers.ProviderTimeoutError("AI 服務逾時未回應")
+        timed = self.request([other], "timeout")
+        result = suggestions.run(self.org, self.brand, self.campaign, timed["id"])
+        assert isinstance(result, background.Failed)
+        self.assertEqual(result.code, "timeout")
+        done = suggestions.get_batch(self.conn, self.org, self.brand, self.campaign, timed["id"])
+        self.assertEqual((done["error"], done["error_code"]), ("AI 服務逾時未回應", "timeout"))
+
+    def test_a_refused_reply_and_a_clean_batch_report_their_outcome(self):
+        row = self.placement()
+        self.reply([row])
+        self.fake.response.output_text = "x" * (policy.OUTPUT_CHARS + 1)
+        batch = self.request([row])
+        result = suggestions.run(self.org, self.brand, self.campaign, batch["id"])
+        assert isinstance(result, background.Failed)
+        self.assertEqual(result.code, suggestions.REPLY_INVALID)
+        done = suggestions.get_batch(self.conn, self.org, self.brand, self.campaign, batch["id"])
+        # The program's own refusal stays the batch's sentence; the call row says why.
+        self.assertIn("16,384", done["error"])
+        self.assertEqual(done["error_code"], "program_refused")
+        ok = self.placement()
+        self.reply([ok])
+        clean = self.request([ok], "clean")
+        self.assertIsNone(suggestions.run(self.org, self.brand, self.campaign, clean["id"]))
+        done = suggestions.get_batch(self.conn, self.org, self.brand, self.campaign, clean["id"])
+        self.assertEqual((done["status"], done["error_code"]), ("succeeded", None))
 
     def test_text_only_provider_reply_is_parsed(self):
         row = self.placement()

@@ -10,6 +10,7 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 from starlette.requests import Request
 
+from app import background, storage
 from app.ads import external_repository as external
 from app.ads import repository as campaigns
 from app.ads import slots
@@ -609,6 +610,60 @@ class UserAssetsTest(unittest.TestCase):
         self.assertEqual(asset["preview_attempts"], 3)
         self.assertEqual(asset["status"], "error")
         self.assertEqual(self.objects[asset["storage_key"]][0], CONTENT)
+
+    def test_preview_job_outcomes_name_retry_and_permanent_failures(self):
+        # F50 Contract J: a preview that will be retried fails its job `preview_retry` (the bell
+        # counts it); the last attempt and a broken file fail `preview_failed`.
+        asset_id = self.original()["asset_id"]
+        with (
+            patch.object(service.storage, "get", side_effect=RuntimeError("temporary")),
+            self.assertLogs("app.ads.user_assets", "WARNING"),
+        ):
+            first = service.process_preview(self.org, self.brand, asset_id)
+            self.assertEqual(first, background.Failed(
+                "preview_retry", "預覽暫時無法完成，原檔保留，可重試。"))
+            service.process_preview(self.org, self.brand, asset_id)
+            last = service.process_preview(self.org, self.brand, asset_id)
+        self.assertIsInstance(last, background.Failed)
+        assert isinstance(last, background.Failed)
+        self.assertEqual(last.code, "preview_failed")
+        broken = self.upload_bytes(OTHER_CONTENT, None)["asset_id"]
+        with patch.object(
+            service.media_probe, "preview", side_effect=service.media_probe.MediaError("損毀")
+        ):
+            self.assertEqual(service.process_preview(self.org, self.brand, broken),
+                             background.Failed("preview_failed", "損毀"))
+        # Nothing to do (already in error) is done.
+        self.assertIsNone(service.process_preview(self.org, self.brand, broken))
+        # Through the registered wrapper a failure raises, so procrastinate marks it failed.
+        background.register(service.TASK, service.process_preview)
+        service.retry_preview(self.conn, self.org, self.brand, asset_id)
+        with (
+            patch.object(service.storage, "get", side_effect=RuntimeError("temporary")),
+            self.assertLogs("app.ads.user_assets", "WARNING"),
+            self.assertRaises(background.JobFailed) as raised,
+        ):
+            background.app().tasks[service.TASK].func(
+                org_id=self.org, brand_id=self.brand, asset_id=asset_id)
+        self.assertEqual(raised.exception.code, "preview_retry")
+
+    def test_missing_original_is_an_error_at_once_and_its_content_is_404(self):
+        # Slots #13: `storage.NotFound` is permanent -- the asset is `error` with its sentence on
+        # the first attempt (no retries), and the content route answers 404, not "retry later".
+        asset_id = self.original()["asset_id"]
+        with patch.object(service.storage, "get", side_effect=storage.NotFound("gone")):
+            result = service.process_preview(self.org, self.brand, asset_id)
+            response = self.client.get(f"{self.prefix}/{asset_id}/download")
+        self.assertEqual(result, background.Failed("original_missing", service.ORIGINAL_MISSING))
+        asset = repo.get_asset(self.conn, self.org, self.brand, asset_id)
+        self.assertEqual((asset["status"], asset["error"], asset["preview_attempts"]),
+                         ("error", service.ORIGINAL_MISSING, 1))
+        self.assertEqual(response.status_code, 404, response.text)
+        self.assertIn(service.ORIGINAL_MISSING, response.text)
+        # Any other storage failure is still "try again later".
+        with patch.object(service.storage, "get", side_effect=storage.StorageError("down")):
+            self.assertEqual(
+                self.client.get(f"{self.prefix}/{asset_id}/download").status_code, 502)
 
     def test_cancel_during_storage_waits_before_unlock_and_preserves_complete(self):
         item = self.batch()
