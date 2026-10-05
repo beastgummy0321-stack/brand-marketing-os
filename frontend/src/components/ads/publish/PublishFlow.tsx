@@ -1,3 +1,5 @@
+import { campaignFlowPath } from "@/lib/adsRoutes";
+export { campaignPath } from "@/lib/adsRoutes";
 import { createContext, useContext, type ReactNode } from "react";
 import type { CampaignDetail } from "@/lib/adsApi";
 import type { LaunchField, LaunchItem, LaunchItemKind, LaunchItemState, LaunchStep, LaunchView } from "@/lib/adsLaunchApi";
@@ -17,10 +19,8 @@ const URL_STEPS: { key: PublishUrlStep; label: string }[] = [
   { key: "verify", label: "讀回核對" },
 ];
 
-export const campaignPath = (brandId: string, campaignId: string) =>
-  `/brands/${encodeURIComponent(brandId)}/ads/campaigns/${encodeURIComponent(campaignId)}`;
 export const publishPath = (brandId: string, campaignId: string, step: PublishUrlStep) =>
-  `${campaignPath(brandId, campaignId)}/publish/${step}`;
+  campaignFlowPath(brandId, campaignId, ["publish", step]);
 
 /** The URL a reported launch step lives at: a stale launch is decided on the platform step (prototype `pubStale()`). */
 export const urlOfStep = (step: LaunchStep): PublishUrlStep => (step === "stale" ? "platform" : step);

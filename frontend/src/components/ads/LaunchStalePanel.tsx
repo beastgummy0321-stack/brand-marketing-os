@@ -1,3 +1,4 @@
+import { campaignPath } from "@/lib/adsRoutes";
 import { isRejected } from "@/lib/http";
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
@@ -107,7 +108,7 @@ export function LaunchStalePanel({ brandId, campaignId, stale, items, onDecided,
   const count = (state: SegmentState) => states.filter(s => s === state).length;
   const campaign = launchItems.find(item => item.planned_kind === "campaign");
   const approved = when(stale.approved_at, timezone), edited = when(stale.changed_at, timezone);
-  const assetsHref = `/brands/${encodeURIComponent(brandId)}/ads/campaigns/${encodeURIComponent(campaignId)}?tab=assets`;
+  const assetsHref = campaignPath(brandId, campaignId, {tab: "assets"});
 
   return (
     <div className="flex max-w-[1260px] flex-col gap-4">
@@ -143,7 +144,7 @@ export function LaunchStalePanel({ brandId, campaignId, stale, items, onDecided,
                 <div className="flex flex-wrap items-center justify-end gap-2 pb-3 text-xs text-warning">
                   <span>{next ? `素材已修訂，換成第 ${next.revision} 版才能重新核准` : "素材已修訂，先到素材頁指派確認過的版本"}</span>
                   {next
-                    ? <Button size="sm" variant="outline" disabled={Boolean(busy)} onClick={() => void reassign(ad.id, next.id, next.revision)}>{busy === "assign" ? "換版中…" : `改用第 ${next.revision} 版`}</Button>
+                    ? <Button size="sm" variant="outline" busy={Boolean(busy)} onClick={() => void reassign(ad.id, next.id, next.revision)}>{busy === "assign" ? "換版中…" : `改用第 ${next.revision} 版`}</Button>
                     : <Button size="sm" variant="outline" asChild><Link to={assetsHref}>到素材頁指派</Link></Button>}
                 </div>
               )}
@@ -187,8 +188,8 @@ export function LaunchStalePanel({ brandId, campaignId, stale, items, onDecided,
             variant="revert"
             title="改回核准時的設定？"
             actions={<>
-              <Button variant="ghost" disabled={Boolean(busy)} onClick={() => setSheet(false)}>取消</Button>
-              <WarnButton disabled={Boolean(busy)} onClick={() => void decide("revert")}>{busy === "revert" ? "改回中…" : "改回，沿用原本的核准"}</WarnButton>
+              <Button variant="ghost" busy={Boolean(busy)} onClick={() => setSheet(false)}>取消</Button>
+              <WarnButton busy={Boolean(busy)} onClick={() => void decide("revert")}>{busy === "revert" ? "改回中…" : "改回，沿用原本的核准"}</WarnButton>
             </>}
           >
             {stale.diff.map((row, i) => <div key={`${row.field}:${i}`}>{row.field_label}：{printed(row.after)} → {printed(row.before)}</div>)}
@@ -199,9 +200,9 @@ export function LaunchStalePanel({ brandId, campaignId, stale, items, onDecided,
       <ActionBar hint={needsMaterial.length ? "先換成確認過的素材版本，才能重新核准" : "重新核准不會改動平台"}>
         <div className="flex flex-wrap items-center justify-end gap-2">
           {stale.revertible
-            ? <Button variant="outline" disabled={Boolean(busy)} onClick={() => setSheet(true)}>改回核准時的設定</Button>
+            ? <Button variant="outline" busy={Boolean(busy)} onClick={() => setSheet(true)}>改回核准時的設定</Button>
             : <p className="max-w-[360px] text-xs text-warning">{stale.revert_blocker ?? "這些變更無法自動改回；請用現在的方案重新核准。"}</p>}
-          <Button disabled={Boolean(busy) || needsMaterial.length > 0} onClick={() => void decide("reapprove")}>{busy === "reapprove" ? "重新核准中…" : "用現在的方案重新核准 →"}</Button>
+          <Button busy={Boolean(busy)} disabledReason={needsMaterial.length > 0 ? "先補齊變更後需要的素材" : undefined} onClick={() => void decide("reapprove")}>{busy === "reapprove" ? "重新核准中…" : "用現在的方案重新核准 →"}</Button>
         </div>
       </ActionBar>
     </div>

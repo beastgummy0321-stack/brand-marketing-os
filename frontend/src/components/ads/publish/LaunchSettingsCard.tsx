@@ -136,8 +136,8 @@ export function LaunchSettingsCard({ brandId, campaign, locked, onSaved, onCampa
   const positionsError = serverErrors.find((e) => e.field === "placement.positions");
   const pixelError = serverErrors.find((e) => e.field === "pixel_id");
   const bidError = serverErrors.find((e) => e.field === "bid_amount");
-  const pending_count = campaign.manual_handoff?.pending_count ?? 0;
-  const foldLabel = `進階設定${utmBad ? "・UTM 格式不對" : ""}${pending_count ? `・${pending_count} 組設定待補` : ""}`;
+  const pending_count = campaign.manual_handoff?.pending_count ?? null;
+  const foldLabel = `進階設定${utmBad ? "・UTM 格式不對" : ""}${pending_count === null ? "・待補設定數不明" : pending_count > 0 ? `・${pending_count} 組設定待補` : ""}`;
 
   return (
     <section aria-label="投放設定" data-slot="launch-settings-card" className="surface px-[22px] py-5">

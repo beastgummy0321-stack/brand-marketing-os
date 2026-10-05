@@ -29,20 +29,14 @@ function Tile({ label, value, note, unknown = false }: { label: string; value: s
   );
 }
 
-/** The cap tile follows the campaign's one cap (own cap, or the break-even line standing in); without the campaign
- * read it falls back to the launch summary's own cap. */
-function capTile(campaign: CampaignDetail | null, ownCap: number | null) {
-  const purchase = !campaign || campaign.cap.result_kind === "purchase";
-  const label = purchase ? "每賣一筆的上限" : `每次${campaign.cap.result_label}的上限`;
-  const who = campaign ? campaign.name.split("・")[0] || campaign.name : null;
-  const value = campaign ? campaign.cap.value : ownCap;
-  const basis = campaign ? campaign.cap.basis : ownCap === null ? null : "own";
-  if (value === null || basis === null) {
-    return { label, value: "沒設上限", unknown: true, note: "還沒設上限，上架後先不打「划算／太貴」的分數，設好就會開始打" };
-  }
+/** The cap's value and basis require the campaign read; a launch summary cannot supply its basis. */
+function capTile(campaign: CampaignDetail) {
+  const label = campaign.cap.result_kind === "purchase" ? "每賣一筆的上限" : `每次${campaign.cap.result_label}的上限`;
+  const who = campaign.name.split("・")[0] || campaign.name;
+  const {value, basis} = campaign.cap;
+  if (value === null || basis === null) return {label, value: "沒設上限", unknown: true, note: "還沒設上限，上架後先不打「划算／太貴」的分數，設好就會開始打"};
   const amount = formatAmount(value) ?? "";
-  const note = basis === "break_even" ? `${who ?? ""}暫用打平線 ${amount}` : `${who ?? ""}的上限 ${amount}`;
-  return { label, value: `${amount} 元`, unknown: false, note };
+  return {label, value: `${amount} 元`, unknown: false, note: basis === "break_even" ? `${who}暫用打平線 ${amount}` : `${who}的上限 ${amount}`};
 }
 
 /** F41-I05: the launch view's month block handed to the month-budget card as it is — the backend already gives the
@@ -108,7 +102,7 @@ export function PublishList({ brandId, campaignId, name, campaign, campaignFaile
     } finally { setBusy(false); }
   }
 
-  const cap = capTile(campaign, s.cap);
+  const cap = campaign ? capTile(campaign) : null;
   const missing = view.deferred_ads.length;
   const daily = formatAmount(s.daily_total);
   const confirms = view.approval_confirms ?? [];
@@ -119,7 +113,9 @@ export function PublishList({ brandId, campaignId, name, campaign, campaignFaile
       <section aria-label="上架摘要" className="surface grid grid-cols-4 px-[22px] py-5">
         <Tile label="要建的東西" value={`${s.campaigns + s.groups + s.ads} 項`} note={`活動 ${s.campaigns}・廣告組 ${s.groups}・廣告 ${s.ads}`} />
         <Tile label="每日預算合計" value={daily ?? "未設定"} unknown={daily === null} note={periodText(s.start, s.end)} />
-        <Tile label={cap.label} value={cap.value} unknown={cap.unknown} note={cap.note} />
+        {cap ? <Tile label={cap.label} value={cap.value} unknown={cap.unknown} note={cap.note} /> : <div className="min-w-0 border-l border-border px-5 py-0.5" aria-label="每筆上限">
+          {campaignFailed ? <ReadFailed what={`上限資料讀不到：${campaignFailed}`} onRetry={onCampaignRetry} /> : <p role="status" className="text-sm text-muted-foreground">讀取上限…</p>}
+        </div>}
         <Tile label="素材" value={`${s.slots_ready}／${s.slots_total}`}
           note={missing ? `缺圖的那 ${missing} 則先不建立，不會花到錢；補上圖後再加上去` : "都齊了"} />
       </section>
@@ -173,11 +169,11 @@ export function PublishList({ brandId, campaignId, name, campaign, campaignFaile
       ) : (
         <ActionBar back={{ label: "素材", to: `${campaignPath(brandId, campaignId)}?tab=assets` }}
           exit={{ label: "先不要，回投放中心", to: `/brands/${encodeURIComponent(brandId)}/ads` }}
-          hint={blocker === null ? "核准不會改動平台" : pageBlocker ?? undefined}>
+          hint={blocker === null ? "核准不會改動平台" : undefined}>
           {pageBlocker === null && monthBlocker && (
             <span role="status" className="inline-flex items-center gap-1.5 text-xs font-medium text-warning">⚠ {monthBlocker}</span>
           )}
-          <Button disabled={busy || blocker !== null} onClick={() => void approve()}>{busy ? "核准中…" : "核准上架清單 →"}</Button>
+          <Button busy={busy} disabledReason={blocker ?? undefined} onClick={() => void approve()}>{busy ? "核准中…" : "核准上架清單 →"}</Button>
         </ActionBar>
       )}
     </div>

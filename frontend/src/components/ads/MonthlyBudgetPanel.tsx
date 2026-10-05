@@ -113,7 +113,7 @@ function BudgetPanel({ brandId, month, refresh = 0, compact = false, startEditin
             <label className="text-sm">幣別<Input aria-label="月預算幣別" value={currency} maxLength={3} placeholder="例如 TWD" onChange={e => setCurrency(e.target.value.toUpperCase())} disabled={busy || budget.revision > 0} /></label>
             <label className="text-sm">每月品牌總額<Input ref={amountRef} aria-label="每月品牌總額" type="number" step="any" inputMode="decimal" value={amount} onChange={e => setAmount(e.target.value)} disabled={busy} /></label>
           </div>
-          <div className="flex flex-wrap gap-2"><Button type="submit" disabled={busy || !/^[A-Z]{3}$/.test(currency)} disabledReason={!busy && !/^[A-Z]{3}$/.test(currency) ? "幣別請填三個英文字母，例如 TWD" : undefined}>{busy ? "保存中…" : "確認月總額"}</Button><Button type="button" variant="outline" disabled={busy} onClick={() => setEditing(false)}>取消修改</Button></div>
+          <div className="flex flex-wrap gap-2"><Button type="submit" busy={busy} disabledReason={!busy && !/^[A-Z]{3}$/.test(currency) ? "幣別請填三個英文字母，例如 TWD" : undefined}>{busy ? "保存中…" : "確認月總額"}</Button><Button type="button" variant="outline" busy={busy} onClick={() => setEditing(false)}>取消修改</Button></div>
         </form>}
       </>}
       {error && <div role="alert" className="space-y-2 text-sm text-destructive"><p>{error}</p><Button size="sm" variant="outline" onClick={() => setReload(value => value + 1)}>重新讀取月預算</Button></div>}

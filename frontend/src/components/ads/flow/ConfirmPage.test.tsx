@@ -714,7 +714,7 @@ describe("ConfirmPage（F40-I08）本月預算放得下：三個狀態", () => {
     // 「← 回到剛才的核准」 after saving.
     expect(screen.getByRole("link", { name: "設定 9 月月預算 →" }).getAttribute("href"))
       .toBe(`/brands/brd_1/ads?budget=edit&return=${encodeURIComponent(proposeBudgetPath)}`);
-    expect(screen.getByText("⚠ 要先設 9 月月預算")).toBeTruthy();
+    expect(screen.getByText("要先設 9 月月預算")).toBeTruthy();
     expect((screen.getByRole("button", { name: "核准加碼，接著到平台操作 →" }) as HTMLButtonElement).disabled).toBe(true);
     expect(changeApi.createChangeSet).not.toHaveBeenCalled();
   });
@@ -735,7 +735,7 @@ describe("ConfirmPage（F40-I08）本月預算放得下：三個狀態", () => {
     expect(text).toContain("要重新檢查");
     expect(text).toContain("，這批內容要重新對一次");
     expect(text).not.toContain("還能花");
-    expect(screen.getByText("⚠ 內容變了，先按「重新檢查」")).toBeTruthy();
+    expect(screen.getByText("內容變了，先按「重新檢查」")).toBeTruthy();
     expect((screen.getByRole("button", { name: "核准加碼，接著到平台操作 →" }) as HTMLButtonElement).disabled).toBe(true);
     expect(screen.queryByRole("alert")).toBeNull();
     expect(changeApi.createChangeSet).toHaveBeenCalledTimes(1);
@@ -1220,11 +1220,11 @@ describe("ConfirmPage（F45-I06）暫停提議頁讀廣告本身", () => {
     renderAt(`${proposePath}?from=perf`);
     expect(await screen.findByRole("heading", { name: "提議：暫停這則廣告" })).toBeTruthy();
     const card = document.querySelector("[data-state=active]") as HTMLElement;
-    expect(seen(card)).toContain("花費NT$ 1,420");
+    expect(seen(card)).toContain("花費1,420 幣別不明");
     expect(seen(card)).toContain("成交0 筆");
     expect(seen(card)).toContain("每筆成本—");
     expect(within(card).getByText("沒賣出", { selector: "[data-slot=chip]" }).getAttribute("data-grade")).toBe("wasted");
-    expect(seen(card)).toContain("花到 NT$ 1,350 還一筆都沒賣，就算「沒賣出」（上限 × 3）");
+    expect(seen(card)).toContain("花到 1,350 幣別不明 還一筆都沒賣，就算「沒賣出」（上限 × 3）");
     expect(screen.getByText("這則廣告自己的數字・08/25～09/21・9 天")).toBeTruthy();
     expect(seen(card)).toContain(`原因：${PAUSE_REASON_TEXT}`);
     expect(screen.getByText("✓ 不會新增花費")).toBeTruthy();
@@ -1252,9 +1252,9 @@ describe("ConfirmPage（F45-I06）暫停提議頁讀廣告本身", () => {
     expect(await screen.findByText("第 2 件／共 2 件")).toBeTruthy();
     const card = document.querySelector("[data-state=active]") as HTMLElement;
     expect(seen(card)).toContain("成交5 筆");
-    expect(seen(card)).toContain("每筆成本NT$ 676");
-    expect(seen(card)).toContain("每筆 NT$ 676");
-    expect(seen(card)).toContain("上限 NT$ 450");
+    expect(seen(card)).toContain("每筆成本676 幣別不明");
+    expect(seen(card)).toContain("每筆 676 幣別不明");
+    expect(seen(card)).toContain("上限 450 幣別不明");
     expect(within(card).getByText("太貴")).toBeTruthy();
   });
 
@@ -1403,4 +1403,11 @@ describe("ConfirmPage（F49-I11）下一件跟著 served position", () => {
     const close = await screen.findByRole("link", { name: "結案這一期 →" });
     expect(close.getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_9?tab=perf&close=1");
   });
+});
+
+
+it("prints a USD budget proposal in its served owner currency", async () => {
+  vi.mocked(triageApi.getQueue).mockResolvedValue(queue([scaleQueueItem({ scale: scale({ owner: { ...scale().owner, currency: "USD" } }) })]));
+  renderAt(proposeBudgetPath);
+  expect(await screen.findByText("1,000 USD → 1,200 USD")).toBeTruthy();
 });

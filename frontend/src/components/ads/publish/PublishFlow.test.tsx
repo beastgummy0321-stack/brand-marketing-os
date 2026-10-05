@@ -557,3 +557,15 @@ describe("讀回核對", () => {
     expect(screen.getByTestId("where").textContent).toBe("/brands/brd_1/ads/campaigns/cmp_1/publish/verify");
   });
 });
+
+
+it("a failed campaign read never fabricates a cap basis from the launch summary", async () => {
+  vi.mocked(getCampaign).mockRejectedValue(new Error("活動來源中斷"));
+  vi.mocked(fetchLaunchView).mockResolvedValue(view({ summary: { ...view().summary, cap: 450 } }));
+  renderAt("list");
+  const summary = await screen.findByRole("region", { name: "上架摘要" });
+  expect(await within(summary).findByText(/上限資料讀不到：活動來源中斷/)).toBeTruthy();
+  expect(within(summary).queryByText("450")).toBeNull();
+  expect(within(summary).getByRole("button", { name: /重試/ })).toBeTruthy();
+  expect(await screen.findByText("活動資料讀不到，先按重試")).toBeTruthy();
+});

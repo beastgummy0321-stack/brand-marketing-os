@@ -89,7 +89,7 @@ export function PublishVerify({ brandId, campaignId, name, view, platform, onVie
   ];
   const settingsNote = fields.length ? `・投放設定 ${nMatch} 項對上了` : "";
   // Declared fields: confirmed by the approval, named in the note, never counted as 讀不到.
-  const atApproval = view.items.reduce((s, i) => s + (i.confirmed_at_approval?.length ?? 0), 0);
+  const atApproval = view.items.reduce((s, i) => s + (i.confirmed_at_approval?.length ?? 0), 0); // ZERO_OK: Absent legacy approval-confirmation list means no such confirmations were recorded.
   const approvalNote = atApproval ? `・${atApproval} 項核准時已確認` : "";
 
   const hero = all
@@ -118,7 +118,7 @@ export function PublishVerify({ brandId, campaignId, name, view, platform, onVie
     : dev + nDiff > 0
       ? <Button asChild><Link to={publishPath(brandId, campaignId, "platform")}>回平台改 →</Link></Button>
       : readAgainOnly
-        ? <Button disabled={busy !== null} onClick={() => void readAgain()}>{readAgainLabel}</Button>
+        ? <Button busy={busy !== null} onClick={() => void readAgain()}>{readAgainLabel}</Button>
       : todo + awaiting > 0 || unread === 0
         ? <Button asChild><Link to={publishPath(brandId, campaignId, "platform")}>繼續建剩下的 →</Link></Button>
         : <Button disabled>回活動總覽 →</Button>;
@@ -150,7 +150,7 @@ export function PublishVerify({ brandId, campaignId, name, view, platform, onVie
                   <b className="min-w-0 font-semibold [overflow-wrap:anywhere]">{fieldText(byKey.get(u.key)?.value ?? null)}</b>
                   {u.confirmed ? <Chip tone="ok">你確認一樣</Chip> : <>
                     <UnreadChip />
-                    <Button size="sm" variant="outline" disabled={busy !== null} onClick={() => void confirmField(item, u.key)}>
+                    <Button size="sm" variant="outline" busy={busy !== null} onClick={() => void confirmField(item, u.key)}>
                       {busy === `${item.id}:${u.key}` ? "記錄中…" : "我看過了，一樣"}
                     </Button>
                   </>}
@@ -180,7 +180,7 @@ export function PublishVerify({ brandId, campaignId, name, view, platform, onVie
           </div>
           {fields.map((field) => (
             <ReadbackRow key={field.key} field={field} platform={platform.label} action={field.state === "unreadable" ? (
-              <Button size="sm" variant="outline" disabled={busy !== null} onClick={() => void confirmSetting(field.key)}>
+              <Button size="sm" variant="outline" busy={busy !== null} onClick={() => void confirmSetting(field.key)}>
                 {busy === `setting:${field.key}` ? "記錄中…" : "我看過了，一樣"}
               </Button>
             ) : undefined} />
@@ -191,7 +191,7 @@ export function PublishVerify({ brandId, campaignId, name, view, platform, onVie
       {error && <p role="alert" className="text-sm text-danger">{error}</p>}
       <ActionBar back={{ label: "到平台完成", to: publishPath(brandId, campaignId, "platform") }} hint={waitingOnEye ? "全部核對完才算上架完成" : undefined}>
         {/* When reading again is the primary action, it is the one button (no second outline twin). */}
-        {!readAgainOnly && <Button variant="outline" disabled={busy !== null} onClick={() => void readAgain()}>{readAgainLabel}</Button>}
+        {!readAgainOnly && <Button variant="outline" busy={busy !== null} onClick={() => void readAgain()}>{readAgainLabel}</Button>}
         {primary}
       </ActionBar>
     </div>

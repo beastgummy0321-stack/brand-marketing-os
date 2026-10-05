@@ -283,7 +283,7 @@ export function HandoffPage({ brandId, campaignId, setId }: {
           back={leave}
           hint="系統會逐則讀回平台核對"
         >
-          <Button disabled={busy} onClick={() => void handleCleanupDone(changeSet.items)}>{busy ? "處理中…" : "我都做完了，開始核對 →"}</Button>
+          <Button busy={busy} onClick={() => void handleCleanupDone(changeSet.items)}>{busy ? "處理中…" : "我都做完了，開始核對 →"}</Button>
         </ActionBar>}
       </div>
     );
@@ -373,7 +373,7 @@ export function HandoffPage({ brandId, campaignId, setId }: {
         back={leave}
         hint="系統會讀回平台核對"
       >
-        <Button disabled={busy} onClick={() => void handleDone(item)}>{busy ? "處理中…" : "我做完了，開始核對 →"}</Button>
+        <Button busy={busy} onClick={() => void handleDone(item)}>{busy ? "處理中…" : "我做完了，開始核對 →"}</Button>
       </ActionBar>}
     </div>
   );
