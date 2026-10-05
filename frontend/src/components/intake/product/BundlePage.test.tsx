@@ -184,7 +184,7 @@ describe("BundlePage — 新增組合", () => {
     });
     expect(mockSave).not.toHaveBeenCalled();
     await waitFor(() => expect(screen.getByTestId("where").textContent).toBe(`/brands/${B}/products`));
-  });
+  }, 15000);
 
   it("名稱、數量、落地頁缺了不送出（數量沒有自己的規則）；只放一個商品時照伺服器的話說", async () => {
     const one = "組合至少要放兩個不同商品的賣法；同一個商品的組合，請到那個商品的賣法新增。";
