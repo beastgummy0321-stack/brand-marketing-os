@@ -10,6 +10,7 @@ from pydantic import BaseModel
 import app.shared.web as web
 from app.background import enqueue as background_enqueue
 from app.background import is_active as background_is_active
+from app.background import outcome as background_outcome
 from app.core import settings as coresettings
 from app.core.audit import write_audit
 from app.meta import daily_pull, graph
@@ -218,11 +219,21 @@ class BackfillStartResponse(BaseModel):
     running: bool  # 起這支端點的意義：不管是不是剛才才起的，回應當下一定是 true
 
 
+class BackfillOutcome(BaseModel):
+    """F50 Contract J（R7 A12）：最近一次補拉怎麼結束的——`background.outcome()` 原樣給。
+    `state` running／failed／empty／done；`code`／`text` 是失敗或沒資料的原因。"""
+    state: str
+    code: str | None
+    text: str | None
+    finished_at: datetime | None
+
+
 class BackfillStatusResponse(BaseModel):
     running: bool
     earliest_spend_date: date | None
     latest_spend_date: date | None
     ad_rows: int
+    outcome: BackfillOutcome | None  # None＝這個組織從沒排過補拉
 
 
 @router.post("/brands/{brand_id}/backfill", response_model=BackfillStartResponse)
@@ -257,6 +268,11 @@ def get_backfill_status(request: Request, brand_id: str):
     if not account_ids:
         raise web.ApiError(409, "no_bound_account", "這個品牌還沒綁定 Meta 廣告帳戶。")
     status = daily_pull.backfill_status(web.conn, actor.org_id, account_ids)
+    lock = daily_pull.backfill_lock(actor.org_id)
+    found = background_outcome(lock)
+    outcome = (BackfillOutcome(state=found["state"], code=found["code"], text=found["text"],
+                               finished_at=found["finished_at"])
+               if found is not None else None)
     return BackfillStatusResponse(
-        running=background_is_active(daily_pull.backfill_lock(actor.org_id)), **status,
+        running=background_is_active(lock), outcome=outcome, **status,
     )

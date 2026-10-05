@@ -886,6 +886,51 @@ class TreeDispatchRequestTest(_ScheduleApiTestBase):
         self.assertEqual(pack_row["context_json"]["goal"], VALID_OBJECTIVE_LABEL)
 
 
+class TreePackFailureTest(_ScheduleApiTestBase):
+    """F50-I10（feature Contract J，slots #14）：以前 `submit_pack()` 一拋，樹照樣
+    `succeeded`、每個節點 「missing」、`last_error: None`——沒有人知道為什麼沒有素材工單。
+    現在原因寫在樹那一列的 `structured_output_json.pack_error`，job 以 `pack_failed` 失敗，
+    品牌那一頁的 briefs 照實說出原因，而樹本身照常顯示（展開是真的成功了）。"""
+
+    def test_raising_submit_pack_stores_the_reason_and_the_brand_state_names_it(self):
+        schedule_jobs.PROVIDER = _fake(_fenced_plans([_one_plan()]))
+        resp = self._post(plan_count=1)
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self._run_worker()
+
+        schedule_jobs.PROVIDER = _fake(_tree_fenced(_one_tree_nodes()))
+        resp = self.client.post(
+            f"/api/schedule/brands/{self.brand['id']}/tree", json={"plan_index": 0}
+        )
+        self.assertEqual(resp.status_code, 200, resp.text)
+        with mock.patch("app.workbench.submit_pack", side_effect=RuntimeError("pack boom")):
+            self._run_worker()
+
+        tree_row = web.conn.execute(
+            "SELECT id, status, structured_output_json FROM llm_task"
+            " WHERE brand_id = %s AND task_type = %s ORDER BY started_at DESC LIMIT 1",
+            (self.brand["id"], schedule_state.TREE_TASK_TYPE),
+        ).fetchone()
+        self.assertEqual(tree_row["status"], "succeeded", "展開本身成功，樹那一列不改成失敗")
+        pack_error = tree_row["structured_output_json"]["pack_error"]
+        self.assertEqual(pack_error["code"], "pack_failed")
+        self.assertIn("pack boom", pack_error["text"])
+
+        found = background_module.outcome(
+            schedule_state.job_lock(schedule_state.TREE_TASK_TYPE, self.brand["id"]))
+        self.assertEqual(found["state"], "failed", "交棒失敗要讓這次 job 記成失敗（鈴鐺算得到）")
+        self.assertEqual(found["code"], "pack_failed")
+        self.assertEqual(found["text"], pack_error["text"])
+
+        body = self.client.get(f"/api/schedule/brands/{self.brand['id']}").json()
+        self.assertIsNotNone(body["tree"], "樹照常顯示，不被失敗的佔位列蓋掉")
+        self.assertEqual(body["tree"]["task_id"], tree_row["id"])
+        briefs = body["briefs"]
+        self.assertEqual({b["node_key"] for b in briefs}, {"1.1.1", "1.2.1"})
+        self.assertTrue(all(b["status"] == "missing" for b in briefs))
+        self.assertTrue(all(b["last_error"] == pack_error["text"] for b in briefs))
+
+
 class RejectApiContractTest(_ScheduleApiTestBase):
     """票 10-feedback-entries（ADR 0037）：POST .../reject——每條意見變一列 rule，
     再用凍結參數重新排程。"""

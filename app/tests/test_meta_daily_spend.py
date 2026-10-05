@@ -343,9 +343,12 @@ class FailedPullLeavesOldDataTest(_MetaDailySpendTestBase):
         # 2026-09-01：失敗不再靜默。以前這一支照樣算成功，於是「Meta 限流」跟「今天真的
         # 沒有花費」在系統裡長得一模一樣。現在跑完所有帳號才拋，所以下面「成功的帳號沒被
         # 拖累」那條斷言仍然成立。
-        with self.assertRaises(graph.GraphError) as caught:
+        # F50 Contract J：拋的是 `background.JobFailed("account_failed")`，句子指名帳號。
+        with self.assertRaises(background_module.JobFailed) as caught:
             daily_pull.run_daily_pull(org_id)
-        self.assertIn(BP_ACCOUNT_ID, str(caught.exception), "錯誤訊息要指名是哪個帳號失敗")
+        self.assertEqual(caught.exception.code, "account_failed")
+        self.assertIn(BP_ACCOUNT_ID, caught.exception.text or "", "錯誤訊息要指名是哪個帳號失敗")
+        self.assertNotIn(SD_ACCOUNT_ID, caught.exception.text or "", "成功的帳號不該被點名")
 
         bp_rows_after = self._spend_rows(bp_id)
         bp_last_pull_after = web.conn.execute(
@@ -781,6 +784,117 @@ class BackfillStatusTest(_MetaDailySpendTestBase):
         self.assertEqual(status["earliest_spend_date"], date(2026, 6, 1))
         self.assertEqual(status["latest_spend_date"], date(2026, 6, 5))
         self.assertEqual(status["ad_rows"], 2)
+
+
+# -- 5g. F50 Contract J：補拉與每日拉取一定留下結果，GET …/backfill 讀得到 -------------
+
+class PullOutcomeTest(_MetaDailySpendTestBase):
+    """F50-I10（R7 A12、controls a-66）：以前補拉跑完一列都沒有、或某個帳號失敗，畫面看到的
+    都是 `running: false, ad_rows: 0`——沒跑過、跑完沒資料、失敗長得一模一樣。現在每一次
+    跑完都存一個結果，`GET …/backfill` 的 `outcome` 照實給。"""
+
+    def setUp(self):
+        super().setUp()
+        self.org_id, token = self._make_org("pull_outcome")
+        self.auth = self._headers(token, self.org_id)
+        self.bp_id = self._connect_account(self.org_id, BP_ACCOUNT_ID, "BP AD")
+        self.brand_id = bi_repo.create_brand(
+            web.conn, org_id=self.org_id, name="結果測試品牌", client_name=None, actor="test",
+        )["id"]
+        self._bind(self.org_id, self.brand_id, self.bp_id)
+
+    def _run_backfill_job(self) -> str:
+        """真的透過佇列跑一次補拉（跟路由同一個 lock），回傳 procrastinate 的 job status。"""
+        lock = daily_pull.backfill_lock(self.org_id)
+        self.assertTrue(background_module.enqueue(
+            daily_pull._BACKFILL_TASK_NAME, org_id=self.org_id, lock=lock))
+        web.conn.commit()
+        background_module.app().run_worker(wait=False)
+        schema = coredb.current().execute("SELECT current_schema() AS s").fetchone()["s"]
+        return coredb.current().execute(
+            f'SELECT status::text AS status FROM "{schema}__queue".procrastinate_jobs'
+            " WHERE queueing_lock = %s ORDER BY id DESC LIMIT 1", (lock,),
+        ).fetchone()["status"]
+
+    def _backfill_status(self) -> dict:
+        resp = self.client.get(f"/api/meta/brands/{self.brand_id}/backfill", headers=self.auth)
+        self.assertEqual(resp.status_code, 200, resp.text)
+        return resp.json()
+
+    def test_never_ran_serves_a_null_outcome(self):
+        self.assertIsNone(self._backfill_status()["outcome"])
+
+    def test_backfill_with_zero_rows_is_empty_and_the_route_says_so(self):
+        graph.fetch_page = lambda url, *, params, headers: {"data": [], "paging": {}}
+
+        self.assertEqual(self._run_backfill_job(), "succeeded", "沒資料不是失敗")
+
+        body = self._backfill_status()
+        self.assertFalse(body["running"])
+        self.assertEqual(body["ad_rows"], 0)
+        self.assertEqual(body["outcome"]["state"], "empty")
+        self.assertEqual(body["outcome"]["code"], "no_rows")
+        self.assertTrue(body["outcome"]["text"])
+        self.assertIsNotNone(body["outcome"]["finished_at"])
+
+    def test_backfill_with_rows_is_done(self):
+        def fake(url, *, params, headers):
+            level = params["level"]
+            since = json.loads(params["time_range"])["since"]
+            item = {"campaign_id": "camp-1", f"{level}_id": f"{level}-1", "spend": "100",
+                    "impressions": "1000", "clicks": "10", "date_start": since}
+            return {"data": [item], "paging": {}}
+
+        graph.fetch_page = fake
+
+        self.assertEqual(self._run_backfill_job(), "succeeded")
+        body = self._backfill_status()
+        self.assertEqual(body["outcome"]["state"], "done")
+        self.assertGreater(body["ad_rows"], 0)
+
+    def test_backfill_with_a_failing_account_fails_with_the_classified_code(self):
+        """一個帳號 Meta 回 190（權杖失效）→ 這次補拉失敗，code 是 `graph.classify_error`
+        的分類 `auth`，句子指名帳號；另一個帳號照補，寫進去的列留著。"""
+        sd_id = self._connect_account(self.org_id, SD_ACCOUNT_ID, "上等生技廣告帳號")
+        self._bind(self.org_id, self.brand_id, sd_id)
+
+        def fake(url, *, params, headers):
+            if f"act_{BP_ACCOUNT_ID}/" in url:
+                return {"error": {"code": 190, "message": "Error validating access token"}}
+            level = params["level"]
+            since = json.loads(params["time_range"])["since"]
+            item = {"campaign_id": "camp-1", f"{level}_id": f"{level}-1", "spend": "100",
+                    "impressions": "1000", "clicks": "10", "date_start": since}
+            return {"data": [item], "paging": {}}
+
+        graph.fetch_page = fake
+
+        self.assertEqual(self._run_backfill_job(), "failed", "帳號失敗要讓這次 job 記成失敗")
+        body = self._backfill_status()
+        self.assertEqual(body["outcome"]["state"], "failed")
+        self.assertEqual(body["outcome"]["code"], graph.ERROR_AUTH)
+        self.assertIn(BP_ACCOUNT_ID, body["outcome"]["text"])
+        self.assertNotIn(SD_ACCOUNT_ID, body["outcome"]["text"])
+        self.assertGreater(body["ad_rows"], 0, "沒失敗的帳號照補，寫進去的列留著")
+
+    def test_daily_pull_with_one_failed_account_fails_its_job_with_account_failed(self):
+        sd_id = self._connect_account(self.org_id, SD_ACCOUNT_ID, "上等生技廣告帳號")
+        self._bind(self.org_id, self.brand_id, sd_id)
+        graph.fetch_page = _fail_for(
+            BP_ACCOUNT_ID, otherwise=_dispatch_insights({SD_ACCOUNT_ID: SD_INSIGHTS_PAGE}))
+        lock = f"meta_daily_pull_test:{self.org_id}"
+
+        a = background_module.app()
+        with a.open():
+            a.configure_task(daily_pull._TASK_NAME, queueing_lock=lock).defer(org_id=self.org_id)
+        a.run_worker(wait=False)
+
+        found = background_module.outcome(lock)
+        self.assertIsNotNone(found)
+        self.assertEqual(found["state"], "failed")
+        self.assertEqual(found["code"], "account_failed")
+        self.assertIn(BP_ACCOUNT_ID, found["text"])
+        self.assertNotIn(SD_ACCOUNT_ID, found["text"])
 
 
 # -- 6. API 契約：GET /api/meta/brands/{brand_id}/spend -----------------------------

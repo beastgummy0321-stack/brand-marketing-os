@@ -94,11 +94,20 @@ export interface MetaBackfillStartResult {
   running: boolean;
 }
 
+/** F50 Contract J（R7 A12）：最近一次補拉怎麼結束的；null＝從沒排過。 */
+export interface MetaBackfillOutcome {
+  state: "running" | "failed" | "empty" | "done";
+  code: string | null;
+  text: string | null;
+  finished_at: string | null;
+}
+
 export interface MetaBackfillStatus {
   running: boolean;
   earliest_spend_date: string | null;
   latest_spend_date: string | null;
   ad_rows: number;
+  outcome?: MetaBackfillOutcome | null;
 }
 
 export async function startMetaBackfill(brandId: string): Promise<MetaBackfillStartResult> {
