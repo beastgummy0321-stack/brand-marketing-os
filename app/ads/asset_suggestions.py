@@ -51,12 +51,10 @@ def get_batch(conn, org, brand, campaign, batch_id):
     result["retry_notice"] = "失敗批次不自動重送；可先手動修訂文案與安排。"
     # F50 Contract J (slots #7): a batch whose AI call did not succeed serves the call's own
     # error and its kind (timeout／refused／provider／truncated／...), never a generic sentence.
-    result["error_code"] = None
     task = gateway.get_task(conn, result["llm_task_id"]) if result.get("llm_task_id") else None
-    if task is not None and task.get("error_code"):
-        result["error_code"] = task["error_code"]
-        if task["status"] != "succeeded" and task.get("error"):
-            result["error"] = task["error"]
+    result["error_code"] = _call_error_code(task)
+    if task is not None and task["status"] != "succeeded" and task.get("error"):
+        result["error"] = task["error"]
     result["stale"] = False
     if result["status"] == "succeeded":
         try:
@@ -67,6 +65,12 @@ def get_batch(conn, org, brand, campaign, batch_id):
         except ValueError:
             result["stale"] = True
     return result
+
+
+def _call_error_code(task) -> str | None:
+    """The kind of failure an `llm_task` row recorded (`gateway.ERROR_CODES`), or None -- the
+    one read of the AI call's `error_code` in this module (not a sync task's)."""
+    return task.get("error_code") if task is not None else None
 
 
 def _judged_against(conn, org, brand, campaign, ad_id):
@@ -544,7 +548,7 @@ def run(org_id, brand_id, campaign_id, batch_id):
                     (reason, batch_id),
                 )
                 conn.commit()
-                return background.Failed(task.get("error_code") or "provider", reason)
+                return background.Failed(_call_error_code(task) or "provider", reason)
             if len(task.get("rendered_output") or "") > policy.OUTPUT_CHARS:
                 raise ValueError("回傳超過 16,384 字元接受上限，未採用；這不是生成用量硬上限。")
             parsed = gateway.parse_json_reply(task.get("rendered_output") or "")
