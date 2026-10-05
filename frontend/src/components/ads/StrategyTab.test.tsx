@@ -1,14 +1,14 @@
 /** frontend/src/components/ads/StrategyTab.test.tsx — F28-I09: the strategy tab is 一個上限 → 這一期的總預算 → 預算怎麼分
  * → two folds, with one bottom bar. These tests pin the bar's order of precedence (open over-cap sheet > unsaved pick >
  * adopt > the workspace's next step), that nothing is chosen or saved for the user, and the imported campaign's shape. */
-import type { ReactElement } from "react";
-import { render, screen, within } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { useState, type ReactElement } from "react";
+import { act, render, screen, within } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 
 import type { AdsBudgetBasisJson, BudgetScenarioRow, CampaignDetail, DeliveryGroupRow, StrategyBasis } from "@/lib/adsApi";
-import { adoptStrategy, patchCampaign, selectScenario } from "@/lib/adsApi";
+import { AdsApiError, adoptStrategy, generateStrategy, getCampaign, patchCampaign, selectScenario } from "@/lib/adsApi";
 import { getTriage, type CapView } from "@/lib/adsTriageApi";
 import type { CoordinateLearnings } from "@/lib/adsLearningsApi";
 import { getLaunchSettings, type LaunchSettingsValues, type LaunchSettingsView } from "@/lib/adsLaunchSettingsApi";
@@ -562,5 +562,94 @@ describe("StrategyTab (F28-I09)", () => {
     expect(await screen.findByText("這個活動還沒有策略建議")).toBeTruthy();
     expect(screen.getByText("一個上限")).toBeTruthy();
     expect(screen.queryByRole("button", { name: /照這個方式進行/ })).toBeNull();
+  });
+});
+
+describe("F50 Contract J (R7 B4／B3): a running planner call survives a reload; a refusal prints its reason", () => {
+  const SINCE = "2026-10-05T02:00:00Z";
+  /** The workspace keeps the campaign: `onCampaignChange` replaces it, as `CampaignWorkspace` does. */
+  function Host({ initial }: { initial: CampaignDetail }) {
+    const [c, setC] = useState(initial);
+    return <StrategyTab brandId="brd_1" campaign={c} onCampaignChange={setC} onChangeTab={vi.fn()} launchApproved={false} />;
+  }
+  const mount = (c: CampaignDetail) => render(<MemoryRouter><Host initial={c} /></MemoryRouter>);
+  const tick = () => act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.mocked(getTriage).mockResolvedValue({ window_days: 14, items: [], closed: { groups: [], total: 0, items: [], truncated: false } });
+  });
+  afterEach(() => { vi.useRealTimers(); });
+
+  it("mounted while 展開投放結構 still runs: 處理中… until a re-read serves busy null, then the adopted campaign", async () => {
+    const running = campaign({ budget_planned: 30000, budget_scenario: "cap", busy: { kind: "plan", since: SINCE } });
+    vi.mocked(getCampaign)
+      .mockResolvedValueOnce(running)
+      .mockResolvedValueOnce(campaign({ budget_planned: 30000, budget_scenario: "cap", groups: [group()], busy: null }));
+    mount(running);
+    const pressed = await screen.findByRole("button", { name: "處理中…" });
+    expect((pressed as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByRole("button", { name: /照這個方式進行/ })).toBeNull();
+    await tick(); // still running
+    expect(getCampaign).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: "處理中…" })).toBeTruthy();
+    await tick(); // done: the fresh campaign reloads the tab
+    expect(getCampaign).toHaveBeenCalledTimes(2);
+    expect(await screen.findByRole("button", { name: "下一步：素材 →" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "處理中…" })).toBeNull();
+    expect(adoptStrategy).not.toHaveBeenCalled();
+    await tick();
+    expect(getCampaign).toHaveBeenCalledTimes(2); // polling stopped
+  });
+
+  it("mounted while the strategy is generated: 產生中… (never an idle 產生策略), then the strategy once it lands", async () => {
+    const running = campaign({ budget_basis_json: {}, busy: { kind: "strategy", since: SINCE } });
+    vi.mocked(getCampaign).mockResolvedValueOnce(campaign({ busy: null }));
+    mount(running);
+    const generating = await screen.findByRole("button", { name: "產生中…" });
+    expect((generating as HTMLButtonElement).disabled).toBe(true);
+    await tick();
+    expect(await screen.findByRole("heading", { name: "預算怎麼分" })).toBeTruthy();
+    expect(screen.queryByText("這個活動還沒有策略建議")).toBeNull();
+    expect(generateStrategy).not.toHaveBeenCalled();
+  });
+
+  it("a 409 campaign_busy prints the served sentence and keeps re-reading until the call is done", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    vi.mocked(generateStrategy).mockRejectedValue(new AdsApiError("上一次還在處理，等它好了再看。", "campaign_busy"));
+    vi.mocked(getCampaign)
+      .mockResolvedValueOnce(campaign({ budget_basis_json: {}, busy: { kind: "strategy", since: SINCE } }))
+      .mockResolvedValueOnce(campaign({ busy: null }));
+    mount(campaign({ budget_basis_json: {} }));
+    await user.click(await screen.findByRole("button", { name: "產生策略" }));
+    expect(await screen.findByText("上一次還在處理，等它好了再看。")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "產生中…" })).toBeTruthy();
+    await tick();
+    await tick();
+    expect(getCampaign).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText("這個活動還沒有策略建議")).toBeNull();
+    expect(screen.queryByText("上一次還在處理，等它好了再看。")).toBeNull();
+  });
+
+  it("a 502 planner refusal prints the served message with its reason, not a fixed sentence", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const served = "產生策略失敗，請稍後再試。（模型的分配加起來不是 100%）";
+    vi.mocked(generateStrategy).mockRejectedValue(new AdsApiError(served, "strategy_failed"));
+    mount(campaign({ budget_basis_json: {} }));
+    await user.click(await screen.findByRole("button", { name: "產生策略" }));
+    expect(await screen.findByText(served)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "產生策略" })).toBeTruthy(); // not busy: pressing again is allowed
+    await tick();
+    expect(getCampaign).not.toHaveBeenCalled();
+  });
+
+  it("a 502 on 照這個方式進行 prints the served message with its reason in the bar", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const served = "展開投放結構失敗，請稍後再試。（有一組沒有綁定顧客群）";
+    vi.mocked(adoptStrategy).mockRejectedValue(new AdsApiError(served, "plan_failed"));
+    mount(campaign({ budget_planned: 30000, budget_scenario: "cap" }));
+    await user.click(await screen.findByRole("button", { name: "照這個方式進行 →" }));
+    expect(await screen.findByText(served)).toBeTruthy();
   });
 });

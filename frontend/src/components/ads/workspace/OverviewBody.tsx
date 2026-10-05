@@ -149,9 +149,11 @@ function DraftOverview({ brandId, campaign: c, workspace: ws, draft, canPublish,
 // data gap
 // ---------------------------------------------------------------------------------------------------------------
 
-/** Every day from the first to the last of `days` and of the totals window (ISO dates, no time zone arithmetic). */
+/** Every day from the first to the last of `days` and of the served totals window (ISO dates, no time zone
+ * arithmetic); a campaign not started yet has no window. */
 export function dayRange(days: string[], totals: WorkspaceTotals | null): string[] {
-  const all = [...days, ...(totals ? [totals.start, totals.end] : [])].sort();
+  const served = totals?.window ?? null;
+  const all = [...days, ...(served ? [served.start, served.end] : [])].sort();
   if (!all.length) return [];
   return dayList(all[0], all[all.length - 1], 62);
 }
@@ -420,10 +422,12 @@ function NextDecision({ item, ads, cap, breakEven, workspace: ws }: {
   );
 }
 
-/** Prototype `kvNumbers()`: the last 14 complete days (`totals`, one window) and what the budget carries. */
+/** Prototype `kvNumbers()`: the served totals window (`totals.window`, F50 Contract K — its `label` 「近 n 天」／「結束前 n
+ * 天」 and dates are printed as served; `null` = the campaign has not started yet) and what the budget carries. */
 function KvNumbers({ campaign: c, workspace: ws }: { campaign: CampaignDetail; workspace: CampaignWorkspace }) {
   const labels = c.labels ?? DEFAULT_LABELS;
   const t = ws.totals;
+  const w = t?.window ?? null;
   const cap = capOf(c);
   const rules = useAdsRules();
   const who = c.name.split("・")[0] || c.name;
@@ -445,12 +449,12 @@ function KvNumbers({ campaign: c, workspace: ws }: { campaign: CampaignDetail; w
   const label = "block text-xs text-muted-foreground";
   const big = "my-0.5 block text-[22px] font-semibold tracking-tight";
   return (
-    <section className={CARD} aria-label="近 14 天數字">
+    <section className={CARD} aria-label={w ? `${w.label}數字` : "活動數字"}>
       <div className="grid grid-cols-4">
         <div className={cell}>
-          <span className={label}>近 14 天花費</span>
+          <span className={label}>{w ? `${w.label}花費` : "花費"}</span>
           <b className={big}>{money(spend)}</b>
-          <span className={label}>{t ? `${md(t.start)} – ${md(t.end)}` : "還沒有可讀的區間"}</span>
+          <span className={label}>{w ? `${md(w.start)} – ${md(w.end)}` : t ? "還沒開始" : "還沒有可讀的區間"}</span>
         </div>
         <div className={cell}>
           <span className={label}>{labels.conversion}</span>

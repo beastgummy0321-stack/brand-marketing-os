@@ -4,6 +4,7 @@ import { MemoryRouter } from "react-router-dom";
 import { beforeEach, expect, it, vi } from "vitest";
 import * as api from "@/lib/adsRuntimeApi";
 import { ReviewTracking } from "./ReviewTracking";
+import { RULES_FIXTURE, seedAdsRules } from "./patterns/rulesFixture";
 // F50 Contract K: the org clock reads the workspace org zone; dates assert Asia/Taipei output, never the runner's.
 vi.mock("@/components/layout/WorkspaceContext", () => ({ useWorkspace: () => ({ scope: "user:org", identity: { user: { id: "u", email: "a@example.com" }, org: { id: "o", name: "測試", kind: "personal", role: "owner", timezone: "Asia/Taipei", today: "2026-10-01" }, orgs: [] } }) }));
 
@@ -57,4 +58,36 @@ it("品牌切換不保留上一品牌的資料與操作對象", async () => {
   await waitFor(() => expect(screen.queryByText("缺少完整日期，等待回補")).toBeNull());
   expect(api.getRuntime).toHaveBeenLastCalledWith("brand-other", "c", expect.any(AbortSignal));
   expect(api.saveMonitor).not.toHaveBeenCalled();
+});
+// F50 Contract I (decision 11): the day range is the served `limits.review_days`, never a copy here.
+async function typeWindow(value: string) {
+  const user = userEvent.setup(); render(page()); await screen.findByText("缺少完整日期，等待回補");
+  await user.click(screen.getByRole("button", { name: "查看同步、恢復與追蹤設定" }));
+  await user.click(screen.getByRole("button", { name: "調整觀察與檢討天數" }));
+  const input = screen.getByLabelText("觀察天數");
+  await user.clear(input); await user.type(input, value);
+  await user.click(screen.getByRole("button", { name: "保存追蹤條件" }));
+}
+it("an out-of-range day count prints the served range (a changed fixture changes the words)", async () => {
+  await typeWindow("40");
+  expect(await screen.findByText("觀察期與檢討間隔請填 1 至 31 天。")).toBeTruthy();
+  expect(api.saveMonitor).not.toHaveBeenCalled();
+});
+it("the range follows the served limits", async () => {
+  seedAdsRules({ ...RULES_FIXTURE, limits: { ...RULES_FIXTURE.limits, review_days: { min: 3, max: 14 } } });
+  try {
+    await typeWindow("20");
+    expect(await screen.findByText("觀察期與檢討間隔請填 3 至 14 天。")).toBeTruthy();
+    expect((screen.getByLabelText("觀察天數") as HTMLInputElement).max).toBe("14");
+    expect(api.saveMonitor).not.toHaveBeenCalled();
+  } finally { seedAdsRules(RULES_FIXTURE); }
+});
+it("before the rules load nothing is checked here: the typed value goes and the server's sentence comes back", async () => {
+  seedAdsRules(null);
+  vi.mocked(api.saveMonitor).mockRejectedValue(new Error("觀察窗與重看間隔請選一至三十一日。"));
+  try {
+    await typeWindow("40");
+    expect(await screen.findByText("觀察窗與重看間隔請選一至三十一日。")).toBeTruthy();
+    expect(api.saveMonitor).toHaveBeenCalledWith("brand", "c", "ad", expect.objectContaining({ window_days: 40 }), expect.any(AbortSignal));
+  } finally { seedAdsRules(RULES_FIXTURE); }
 });

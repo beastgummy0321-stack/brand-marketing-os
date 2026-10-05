@@ -49,6 +49,9 @@ const ALL_GROUPS = "all";
 const LANDING_SOURCE: Partial<Record<FieldSource, string>> = { sell_way: "來自賣法", user: "你填的", copied: "照上一期" };
 /** F46-I08: the field sources tagged instead of 「猜的，請確認」 (the create filled them by rule, not a guess). */
 const TAGGED_SOURCES: readonly FieldSource[] = ["copied", "break_even", "brand"];
+/** F50 Contract I (planning #4／#12): a value the system guessed (`system`) or the model read from the 一句話 sentence
+ * (`parsed`) is not the user's — both show 「猜的，請確認」 on a dashed border, with no new words. */
+const GUESSED_SOURCES: readonly FieldSource[] = ["system", "parsed"];
 
 /** New-campaign wizard v10 step 2 (F30-I05, prototype `newStep2()` 「系統這樣理解」): six fields the create call
  * understood — 商品、結果、期間、預算上限、平台、受眾方向 (主打 and 素材 N 則 are strategy outputs, not shown before
@@ -60,7 +63,7 @@ const TAGGED_SOURCES: readonly FieldSource[] = ["copied", "break_even", "brand"]
  * (Contract D): a structured create now stores the cap (沿用上一期, the sell-way's cap, else its break-even), so the
  * chip shows that stored value; an older campaign without one still reads empty with break-even as a hint. A value
  * the create filled by rule (`field_sources` `copied`／`break_even`／`brand`) shows its tag instead of 「猜的，請確認」;
- * `system` keeps 「猜的，請確認」. */
+ * `system` and `parsed` (the model read it from the sentence, F50) keep 「猜的，請確認」. */
 export function ConfirmBriefPage({ brandId, campaignId }: { brandId: string; campaignId: string }) {
   const navigate = useNavigate();
   const homeHref = `/brands/${brandId}/ads`;
@@ -105,7 +108,7 @@ export function ConfirmBriefPage({ brandId, campaignId }: { brandId: string; cam
   const context = campaign.context_json ?? {};
   const constraints = (campaign.constraints_json ?? {}) as CampaignConstraints;
   const sources = context.field_sources ?? {};
-  const guessed = (key: keyof CampaignFieldSources) => (sources[key] ?? "system") === "system";
+  const guessed = (key: keyof CampaignFieldSources) => GUESSED_SOURCES.includes(sources[key] ?? "system");
   const productId = context.product_ids?.[0] ?? null;
   const products = options.data?.products ?? [];
   const previousName = products.find((p) => p.id === productId)?.previous?.campaign_name;
@@ -219,7 +222,9 @@ export function ConfirmBriefPage({ brandId, campaignId }: { brandId: string; cam
   // F47-I06: the target writer sets `field_sources.cap` to `user` when it changes the cap, so the stored source is
   // the cap's tag as is (沿用上一期／打平 only while the create's value still stands).
   const capTagHolds = cap.own_value !== null;
-  const guesses = fields.filter((f) => f.source !== null && guessed(f.source)).length;
+  // F50: a cap the model read from the 一句話 sentence (`parsed`) is a guess like any other parsed field.
+  const capGuessed = capTagHolds && sources.cap === "parsed";
+  const guesses = fields.filter((f) => f.source !== null && guessed(f.source)).length + (capGuessed ? 1 : 0);
   const capUnfilled = cap.own_value === null && cap.break_even !== null;
   const barHint = [guesses ? `有 ${guesses} 項是猜的` : null, capUnfilled ? "上限沒填會先用打平" : null].filter(Boolean).join("・") || undefined;
 
@@ -240,7 +245,7 @@ export function ConfirmBriefPage({ brandId, campaignId }: { brandId: string; cam
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         {fields.map((f) => (f.source === null
           ? <UnderstoodField key={f.key} field={f.key} label={f.label} value={f.value || "還沒填（選填）"} empty={!f.value} hint={f.hint} wide
-              guessed={false} tag={capTagHolds ? ruleTag("cap") : undefined} editing={editing === f.key} onEdit={!generating ? edit(f.key) : undefined} editor={f.editor} />
+              guessed={capGuessed} tag={capTagHolds ? ruleTag("cap") : undefined} editing={editing === f.key} onEdit={!generating ? edit(f.key) : undefined} editor={f.editor} />
           : <UnderstoodField key={f.key} field={f.key} label={f.label} value={f.value || "未設定"} guessed={guessed(f.source)} tag={ruleTag(f.source)}
               editing={editing === f.key} onEdit={f.editable && !generating ? edit(f.key) : undefined} editor={f.editor} />
         ))}

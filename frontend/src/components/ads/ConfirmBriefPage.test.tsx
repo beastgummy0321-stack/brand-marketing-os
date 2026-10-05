@@ -132,6 +132,36 @@ describe("ConfirmBriefPage (F30-I05)", () => {
     expect(screen.getByText("有 2 項是猜的")).toBeTruthy();
   });
 
+  it("F50 (R6 B1): a field the model read from the sentence (`parsed`) renders exactly like `system` — dashed, 「猜的，請確認」", async () => {
+    vi.mocked(getCampaign).mockResolvedValue(campaign({
+      context_json: { product_ids: ["prd_1"], audience_hint: "a", field_sources: sources({ budget: "parsed", platform: "parsed", audience: "user" }) },
+    }));
+    renderPage();
+    await screen.findByText(LONG);
+    for (const key of ["budget", "platform"]) {
+      expect(within(field(key)).getByText("猜的，請確認")).toBeTruthy();
+      expect(field(key).className).toContain("border-dashed");
+      expect(field(key).querySelector("[data-slot=source-tag]")).toBeNull();
+    }
+    expect(field("product").className).not.toContain("border-dashed");
+    // The sentence path's platform default (filled by the backend) is printed like any other value.
+    expect(within(field("platform")).getByText("Meta")).toBeTruthy();
+    expect(screen.getByText("有 2 項是猜的")).toBeTruthy();
+  });
+
+  it("F50: a cap the model read from the sentence (`parsed`) is a guess too, counted in the bar", async () => {
+    vi.mocked(getCampaign).mockResolvedValue(campaign({
+      cap: capView({ value: 450, basis: "own", own_value: 450 }),
+      context_json: { product_ids: ["prd_1"], audience_hint: "a", field_sources: { ...sources({ audience: "user" }), cap: "parsed" } },
+    }));
+    renderPage();
+    await screen.findByText(LONG);
+    expect(within(field("cap")).getByText("NT$450")).toBeTruthy();
+    expect(within(field("cap")).getByText("猜的，請確認")).toBeTruthy();
+    expect(field("cap").className).toContain("border-dashed");
+    expect(screen.getByText("有 1 項是猜的")).toBeTruthy();
+  });
+
   it("F46-I08: a value the create filled by rule shows its tag instead of 「猜的，請確認」; system keeps the guess", async () => {
     vi.mocked(getCampaign).mockResolvedValue(campaign({
       context_json: { product_ids: ["prd_1"], audience_hint: null, field_sources: sources({ platform: "copied", budget: "copied", dates: "system" }) },

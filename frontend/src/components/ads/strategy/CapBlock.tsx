@@ -161,8 +161,10 @@ export function CapBlock({ brandId, campaign: c, onCampaignChange }: {
   } else {
     const v = cap.value as number;
     // The stored source wins (as on ConfirmBriefPage): the target writer resets it to `user` when the cap changes.
+    // F50: a cap the model read from the 一句話 sentence (`parsed`, like `system`) is a guess, never 「自己填」.
     const source = c.context_json?.field_sources?.cap;
-    const ownWord = source === "copied" ? "沿用上一期" : source === "break_even" ? "打平線"
+    const ownWord = source === "parsed" || source === "system" ? "猜的，請確認"
+      : source === "copied" ? "沿用上一期" : source === "break_even" ? "打平線"
       : breakEven !== null && cap.own_value === breakEven ? "打平值" : "自己填";
     left = (
       <div>

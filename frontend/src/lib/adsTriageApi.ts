@@ -520,8 +520,18 @@ export interface AdsRules {
    * it (`resync` read the platform again, `connections` fix the data connection, `cap` set the cap／result, `wait`
    * give it time, `null` nothing to do here). Screens look a code up here; they keep no table of codes. */
   reasons: Record<string, AdsReason>;
+  /** F50 Contract I (decision 11, `triage.limits()`): the limits the ads screens quote, read from the constants that
+   * enforce them. Screens print the words without the number while the rules are not loaded. */
+  limits: AdsLimits;
 }
 export interface AdsReason { title: string; text: string; fix: "resync" | "connections" | "cap" | "wait" | null }
+export interface AdsLimits {
+  review_days: { min: number; max: number };
+  review_cadence_default: number;
+  campaign_default_days: number;
+  copy_items_max: number;
+  upload_max_mb: number;
+}
 
 export interface CampaignTarget extends CapView {
   campaign_id: string; product_ids: string[]; result_kinds: ResultKindOption[];

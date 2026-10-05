@@ -87,8 +87,9 @@ def _totals(conn, org_id, brand_id, campaign) -> dict:
     K: the window is `coverage.window(campaign, cutoff, TOTALS_DAYS)` with the campaign's last
     complete platform day as `cutoff` (`coverage.last_complete_day`), so an ended campaign's
     window is the 14 days before its end date; served as `window {start, end, days, label}` --
-    「近 {n} 天」 while it ends at the cutoff, 「結束前 {n} 天」 when the end date cut it.
-    A day of this window the platform read never covered has no row, and
+    「近 {n} 天」 while it ends at the cutoff, 「結束前 {n} 天」 when the end date cut it; a
+    campaign that starts after the cutoff has no window (`window`, `start`, `end` and every
+    number None). A day of this window the platform read never covered has no row, and
     a missing row would otherwise read as zero spend: so the window's own unread days come from
     the one day-state rule the `data_status` missing days come from (`coverage.load`, F49
     Contract V -- clipped to the campaign's own dates), and any unread day -- or nothing read at
@@ -101,6 +102,13 @@ def _totals(conn, org_id, brand_id, campaign) -> dict:
     campaign_id = campaign["id"]
     cutoff = coverage.last_complete_day(conn, org_id, brand_id, campaign_id)
     start, end = coverage.window(campaign, cutoff, TOTALS_DAYS)
+    if start > end:
+        # Not started yet in platform days (its start is after the last complete day): no
+        # window and no numbers -- never a reversed range or 「近 0 天」. The screen says 還沒開始.
+        return {
+            "start": None, "end": None, "window": None, "currency": None,
+            "spend": None, "results": None, "cost_per_result": None,
+        }
     window = _totals_window(start, end, cutoff)
     read = coverage.load(conn, org_id, brand_id, campaign, start, end)
     unread = read.never_read or not read.covered(start, end)

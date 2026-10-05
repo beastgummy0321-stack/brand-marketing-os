@@ -154,7 +154,9 @@ export function GroupPanel({
   const [customDates, setCustomDates] = useState(restoredDraft.current?.customDates ?? Boolean(g.start_date || g.end_date));
   const [restored, setRestored] = useState(Boolean(restoredDraft.current));
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // F50 Contract I (c1-08): a group date outside the campaign is refused with the server's sentence naming the window
+  // (`group_dates_outside`); it is printed under the dates, every other refusal under the form.
+  const [error, setError] = useState<{ text: string; dates: boolean } | null>(null);
   const [baseline, setBaseline] = useState(g);
   const dirty =
     name !== baseline.name ||
@@ -206,7 +208,10 @@ export function GroupPanel({
       clearDeliveryDraft(draftKey);
       onSaved(next);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "更新投放組失敗，請稍後再試。");
+      setError({
+        text: err instanceof Error ? err.message : "更新投放組失敗，請稍後再試。",
+        dates: err instanceof AdsApiError && err.code === "group_dates_outside",
+      });
     } finally {
       setSaving(false);
     }
@@ -287,9 +292,10 @@ export function GroupPanel({
                 </Button>
               </div>
             )}
+            <FieldError text={error?.dates ? error.text : null} />
           </div>
         </div>
-        {error && <p className="text-sm text-danger">{error}</p>}
+        {error && !error.dates && <p className="text-sm text-danger">{error.text}</p>}
         {(dirty || saving) && (
           <div className="flex flex-wrap gap-2">
             <Button onClick={() => void handleSave()} disabled={saving}>

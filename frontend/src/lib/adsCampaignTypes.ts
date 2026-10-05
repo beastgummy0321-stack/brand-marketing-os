@@ -10,7 +10,8 @@
 從選的賣法（與它的商品）帶入的（受眾、上限、落地頁）。F46-I08：`"copied"` 回來了——結構化建立時平台、上限、
  * 預算從同一個賣法的上一期帶入（`app/ads/brief.py`）；`"brand"`＝品牌已接上的第一個帳戶（平台）；
  * `"break_even"`＝賣法的打平線，存成這個活動自己的上限。 */
-export type FieldSource = "user" | "system" | "copied" | "sell_way" | "brand" | "break_even";
+/** F50 Contract I: `parsed` = the model read it from the 一句話 sentence (shown like `system`: 猜的，請確認). */
+export type FieldSource = "user" | "system" | "parsed" | "copied" | "sell_way" | "brand" | "break_even";
 
 export interface CampaignFieldSources {
   product: FieldSource;

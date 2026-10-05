@@ -103,13 +103,6 @@ const NAMES_APP = /(?<![\w/])app\//;
  * feature serves (F48 Decisions: time／input rules are W11–W14, feature C); they are excused here, not fixed. */
 const NOT_A_RULER: { file: string; text: string; why: string }[] = [
   { file: "components/ads/home/MonthMoney.tsx", text: "(cpp ?? 0) * 1.3", why: "axis headroom of the home money meter, not NEAR_BEST" },
-  { file: "components/ads/ReviewPanel.tsx", text: "預設每 7 天自動檢查", why: "the review round's revisit cadence (a default the user edits in 追蹤設定), not the grading window; debt: W13 serves the cadence" },
-  { file: "components/ads/ReviewPanel.tsx", text: "一次最多 31 天", why: "debt (W13 input rules): the observation-range limit `app/ads/review_monitor.py` checks" },
-  { file: "components/ads/ReviewTracking.tsx", text: "請填 1 至 31 天", why: "debt (W13 input rules): the same limit, validated before the request" },
-  { file: "components/ads/NewCampaignPage.tsx", text: "從今天起算 30 天", why: "debt (W11 time rules): the brief's default period (`app/ads/brief.py`)" },
-  { file: "components/ads/review/CopyPage.tsx", text: "（最多 5 則）", why: "debt (W13 input rules): the copy editor's per-list cap, enforced beside it" },
-  { file: "components/ads/workspace/OverviewBody.tsx", text: "\"近 14 天數字\"", why: "debt (W11 time rules): the overview window's name; its dates print from `t.start`／`t.end`" },
-  { file: "components/ads/workspace/OverviewBody.tsx", text: ">近 14 天花費<", why: "debt (W11 time rules): the same window's name" },
   { file: "components/ads/patterns/SlotGrid.tsx", text: "\"缺 1 則\"", why: "a slot placeholder is one missing ad by construction, not a figure" },
   { file: "components/ads/ExperimentPlan.tsx", text: "0.1 代表 10%", why: "explains the input's number format (a fraction), not a fact" },
   { file: "components/ads/StrategyTab.tsx", text: "剛好 100%", why: "percent shares sum to 100 by definition, not a fact" },

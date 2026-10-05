@@ -11,8 +11,11 @@
  * - `daily_budget` and `can_support` come from one rule: on a launched campaign the daily budget
  *   owners of its active ads (the number the cleanup proposal uses); on a draft the plan's group
  *   total, with `can_support` null.
- * - `totals` is the last 14 complete days in the org timezone (`start`–`end`, yesterday back);
- *   `null` on a draft. Inside it, `spend`, `results` and `cost_per_result` are all null when any
+ * - `totals` is the last 14 complete platform days ending at `min(last complete day, end date)`
+ *   (F50 Contract K): `window {start, end, days, label}` is the served name and dates — 「近 n 天」
+ *   while it ends at the last complete day, 「結束前 n 天」 when the campaign's end cut it; `window`
+ *   (and `start`／`end` and every number) is null when the campaign starts after the last complete
+ *   day (not started yet). `totals` is `null` on a draft. Inside it, `spend`, `results` and `cost_per_result` are all null when any
  *   day of the window was never read from the platform (outside the campaign's recorded sync
  *   coverage, or no coverage at all) — an unread day is never counted as 0. Over a fully read
  *   window `spend` is still null when a day's spend is unknown, the rows mix currencies, or there
@@ -30,9 +33,19 @@ export type WorkspaceStageKey = "plan" | "assets" | "launch" | "read" | "decide"
 
 export interface WorkspaceStage { key: WorkspaceStageKey; done: WorkspaceStageKey[] }
 
-export interface WorkspaceTotals {
+/** F50 Contract K (R3 N2): the totals window as served — print `label` and the dates, never a local name. */
+export interface TotalsWindow {
   start: string;
   end: string;
+  days: number;
+  label: string;
+}
+
+export interface WorkspaceTotals {
+  start: string | null;
+  end: string | null;
+  /** `null` when the campaign has not started yet (its first day is after the last complete day). */
+  window: TotalsWindow | null;
   currency: string | null;
   spend: number | null;
   results: number | null;

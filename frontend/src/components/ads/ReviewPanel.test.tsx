@@ -8,6 +8,7 @@ import type { NativeEntity } from "@/lib/adsExternalApi";
 import { apiFetch } from "@/lib/http";
 import { ReviewPanel } from "./ReviewPanel";
 import { ChangeControl } from "./ChangeControl";
+import { RULES_FIXTURE, seedAdsRules } from "./patterns/rulesFixture";
 
 vi.mock("./ManualHandoffPanel", () => ({ ManualHandoffPanel: () => null }));
 // F36-I09 (ruling G): the component reads the org clock through `useWorkspace().identity.org`; the
@@ -307,5 +308,38 @@ describe("F36-I09 組織時鐘：觀察期間預設", () => {
     await user.click(screen.getByRole("button", { name: "調整觀察期間" }));
     expect((screen.getByLabelText("開始日期") as HTMLInputElement).value).toBe("2026-02-22");
     expect((screen.getByLabelText("結束日期") as HTMLInputElement).value).toBe("2026-02-28");
+  });
+});
+
+describe("F50 Contract I (decision 11): the served limits", () => {
+  const firstReview = () => vi.mocked(reviews.getReviews).mockResolvedValue({ ...data(), reviews: [] });
+  const openRange = () => userEvent.setup().click(screen.getByRole("button", { name: "調整觀察期間" }));
+
+  it("prints the served cadence default and day range (a changed fixture changes the words)", async () => {
+    firstReview();
+    const { unmount } = render(page());
+    expect(await screen.findByText(/開始後預設每 7 天自動檢查這則廣告/)).toBeTruthy();
+    await openRange();
+    expect(screen.getByText(/一次最多 31 天；/)).toBeTruthy();
+    unmount();
+    seedAdsRules({ ...RULES_FIXTURE, limits: { ...RULES_FIXTURE.limits, review_cadence_default: 5, review_days: { min: 2, max: 20 } } });
+    try {
+      render(page());
+      expect(await screen.findByText(/開始後預設每 5 天自動檢查這則廣告/)).toBeTruthy();
+      await openRange();
+      expect(screen.getByText(/一次最多 20 天；/)).toBeTruthy();
+    } finally { seedAdsRules(RULES_FIXTURE); }
+  });
+
+  it("while the rules load the sentences print without a number", async () => {
+    firstReview();
+    seedAdsRules(null);
+    try {
+      render(page());
+      expect(await screen.findByText(/開始後預設定期自動檢查這則廣告/)).toBeTruthy();
+      await openRange();
+      expect(screen.getByText(/後端依組織日期確認範圍/)).toBeTruthy();
+      expect(screen.queryByText(/一次最多/)).toBeNull();
+    } finally { seedAdsRules(RULES_FIXTURE); }
   });
 });

@@ -17,7 +17,7 @@ import { useApiRead } from "@/lib/useApiRead";
 import { cn } from "@/lib/utils";
 import { UserAssetsLibrary } from "./UserAssetsLibrary";
 import { clearDraft, readDraft, saveDraft } from "./campaignDraft";
-import { ActionBar, Chip, Disclosure, FlowHeader, MoneyInput, PickCard, PickGroup, ReadFailed, formatAmount } from "./patterns";
+import { ActionBar, Chip, Disclosure, FlowHeader, MoneyInput, PickCard, PickGroup, ReadFailed, formatAmount, useAdsRules } from "./patterns";
 import { SellWayPickCard, SourceTag, UnderstandingView, breakEvenDerivedMark, wizardSteps, type SourceTagKind } from "./wizard/WizardPieces";
 
 /** The one-sentence create's 「請 AI 依品牌資料建議」 request (the free-text create path, kept under 進階). */
@@ -116,6 +116,9 @@ function CampaignWizard({ brandId, draftKey }: { brandId: string; draftKey: stri
   useEffect(() => { life.current = new AbortController(); return () => life.current.abort(); }, []);
   const options = useApiRead(() => getWizardOptions(brandId), [brandId]);
   const channels = useApiRead(() => fetchChannels(brandId), [brandId]);
+  // F50 Contract I (decision 11): the brief's default period is served (`limits.campaign_default_days`); while the
+  // rules load the sentence prints without the number.
+  const defaultDays = useAdsRules()?.limits.campaign_default_days ?? null;
 
   const [initial] = useState(() => readDraft(draftKey));
   const [productId, setProductId] = useState(initial.productId);
@@ -360,7 +363,7 @@ function CampaignWizard({ brandId, draftKey }: { brandId: string; draftKey: stri
   const locked = busy || restoring;
   const nameLine = way && (startDate && endDate && !backwards
     ? <>活動名稱會叫「<b>{nameBase(way.name)}・{md(startDate)}～{md(endDate)}</b>」</>
-    : <>活動名稱會叫「<b>{nameBase(way.name)}</b>」加上期間（沒填日期就從今天起算 30 天）</>);
+    : <>活動名稱會叫「<b>{nameBase(way.name)}</b>」加上期間（沒填日期就{defaultDays === null ? "用預設期間" : `從今天起算 ${defaultDays} 天`}）</>);
   // The pick view stays mounted (hidden) while the create runs, so the upload library keeps its selection for
   // an attach retry.
   return (

@@ -11,7 +11,7 @@ import { createReview, decideReview, getReview, getReviews, type ReviewRound, ty
 import { formatInstant, useOrgClock, type OrgClock } from "@/lib/orgClock";
 import { ReviewEvidence } from "./ReviewEvidence";
 import { ReviewTracking } from "./ReviewTracking";
-import { Disclosure } from "./patterns";
+import { Disclosure, useAdsRules } from "./patterns";
 
 const labels: Record<ReviewStatus, string> = { waiting: "資料不足，等待補齊", queued: "已安排檢討", running: "正在整理建議", ready: "建議已備妥", completed: "本次檢討完成", deferred: "本次檢討暫緩", unjudgeable: "本次無法判定", failed: "本次未完成", unknown: "結果尚未確認" };
 const directions = { retain: "保留現有投放", observe: "先觀察，再決定", adjust: "調整後繼續觀察", new_test: "準備下一個測試" };
@@ -23,6 +23,9 @@ function defaults(clock: OrgClock) {
 function Panel({ brandId, campaignId, onGoal }: { brandId: string; campaignId: string; onGoal: () => void }) {
   const [params, setParams] = useSearchParams();
   const clock = useOrgClock();
+  // F50 Contract I (decision 11): the observation range and the cadence default are served; while the rules load the
+  // sentences print without the number.
+  const limits = useAdsRules()?.limits ?? null;
   const requestedReview = params.get("review");
   const [data, setData] = useState<ReviewsData | null>(null);
   const [selected, setSelected] = useState<string | null>(params.get("review"));
@@ -113,10 +116,10 @@ function Panel({ brandId, campaignId, onGoal }: { brandId: string; campaignId: s
       <div className="surface-header"><h3 className="font-semibold">這次先看哪則廣告</h3><p className="mt-1 text-sm text-muted-foreground">沿用已讀取的設定與報表；你只需要選擇觀察對象。</p></div>
       <div className="surface-body space-y-4"><label className="block text-sm">廣告<select aria-label="檢討廣告" className="mt-1 w-full" value={target} disabled={busy || Boolean(previousId)} onChange={event => setTarget(event.target.value)}>{data.targets.map(row => <option key={row.id} value={row.id}>{row.name ?? row.native_id} · {row.platform} · {row.source_account}</option>)}</select></label>
         <p className="text-sm">觀察期間：{period.start} — {period.end}{previousId ? " · 承接上一輪判讀與操作紀錄" : ""}</p>
-        <Disclosure label="調整觀察期間"><div className="grid grid-cols-2 gap-3"><label className="text-sm">開始日期<Input type="date" value={period.start} disabled={busy} onChange={event => setPeriod(value => ({ ...value, start: event.target.value }))} /></label><label className="text-sm">結束日期<Input type="date" value={period.end} disabled={busy} onChange={event => setPeriod(value => ({ ...value, end: event.target.value }))} /></label></div><p className="mt-2 text-xs text-muted-foreground">一次最多 31 天；後端依組織日期確認範圍，成效仍標示來源帳戶的時區。</p></Disclosure>
+        <Disclosure label="調整觀察期間"><div className="grid grid-cols-2 gap-3"><label className="text-sm">開始日期<Input type="date" value={period.start} disabled={busy} onChange={event => setPeriod(value => ({ ...value, start: event.target.value }))} /></label><label className="text-sm">結束日期<Input type="date" value={period.end} disabled={busy} onChange={event => setPeriod(value => ({ ...value, end: event.target.value }))} /></label></div><p className="mt-2 text-xs text-muted-foreground">{limits ? `一次最多 ${limits.review_days.max} 天；` : ""}後端依組織日期確認範圍，成效仍標示來源帳戶的時區。</p></Disclosure>
         {data.targets_truncated && <p className="text-sm text-warning">目前只載入部分廣告；未顯示的廣告尚未納入這次檢討。</p>}
         <div className="flex flex-wrap gap-2"><Button disabled={busy || !target || !period.start || !period.end} onClick={() => void mutate(signal => createReview(brandId, campaignId, { entity_id: target, ...period, ...(previousId ? { previous_id: previousId } : {}) }, signal))}>{busy ? "保存中…" : "開始本次檢討"}</Button>{review && <Button variant="outline" onClick={() => setForm(false)} disabled={busy}>返回本次檢討</Button>}</div>
-        <p className="text-xs text-muted-foreground">開始後預設每 7 天自動檢查這則廣告，可在追蹤設定暫停或調整。資料不足先等待補齊，相同證據不重複請 AI 分析；已存在的設定沿用。</p>
+        <p className="text-xs text-muted-foreground">開始後預設{limits ? `每 ${limits.review_cadence_default} 天` : "定期"}自動檢查這則廣告，可在追蹤設定暫停或調整。資料不足先等待補齊，相同證據不重複請 AI 分析；已存在的設定沿用。</p>
       </div>
     </section>}
     {review && !form && <>

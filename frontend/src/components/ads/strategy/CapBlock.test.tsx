@@ -82,6 +82,12 @@ describe("CapBlock", () => {
     expect(await screen.findByText("自己填")).toBeTruthy();
   });
 
+  it("a cap the model read from the 一句話 sentence (parsed) is a guess, never 自己填 (F50)", async () => {
+    renderBlock(campaign(OWN, { context_json: { field_sources: { cap: "parsed" } } } as unknown as Partial<CampaignDetail>));
+    expect(await screen.findByText("猜的，請確認")).toBeTruthy();
+    expect(screen.queryByText("自己填")).toBeNull();
+  });
+
   it("an own cap equal to break-even reads 打平值", async () => {
     renderBlock(campaign(cap({ value: 520, basis: "own", own_value: 520, break_even: 520, price: 1580 })));
     expect(await screen.findByText("打平值")).toBeTruthy();
