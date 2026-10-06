@@ -166,6 +166,7 @@ class PrefillScanTest(_Base):
         self.assertEqual(images[0]["source"]["media_type"], "image/jpeg")
         self.assertEqual(content[-1]["type"], "text")
         self.assertIn("【頁面 1】https://example.com/about", content[-1]["text"])
+        self.assertEqual(content[-1]["text"].count(_PAGE), 1)
         self.assertEqual(self._prefill(bid)["photos_read"], 5)
         refs = ir.get_active_draft(web.conn, bid)["llm_task_refs_json"]
         task = gateway.get_task(web.conn, refs[-1]["llm_task_id"])

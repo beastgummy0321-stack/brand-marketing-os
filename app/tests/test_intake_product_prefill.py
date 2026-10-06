@@ -172,6 +172,7 @@ class ProductPrefillTest(_Base):
         self.assertIsNone(calls[0]["tools"])  # no web search
         content = calls[0]["messages"][0]["content"]
         self.assertIn(f"【商品頁】{_URL}", content[-1]["text"])
+        self.assertEqual(content[-1]["text"].count(_PAGE), 1)
         task = gateway.get_task(web.conn, self._row(pid)["llm_task_id"])
         assert task is not None
         self.assertEqual(task["task_type"], "intake_product_prefill")

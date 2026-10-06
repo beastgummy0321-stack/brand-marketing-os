@@ -26,7 +26,6 @@ Row states: `running` (queued) → `done` (`prefill_json` = the checked proposal
 Tests swap `PROVIDER` and `read_url` (same pattern as `app/intake/ai.py`).
 """
 
-import json
 import logging
 
 from app import storage
@@ -96,8 +95,8 @@ def _prompt(product_name: str, page: tuple | None, photos: int) -> str:
     lines = [f"商品名稱：{product_name}"]
     if page is not None:
         lines.append(f"【商品頁】{page[0]}\n{page[1]}")
-    lines.append("【來源目錄】\n" + json.dumps(
-        ai.prefill_sources([page] if page else [], label="商品頁"), ensure_ascii=False))
+    lines.append("【來源目錄】\n" + ai.prefill_catalog_prompt(
+        ai.prefill_sources([page] if page else [], label="商品頁")))
     if photos:
         lines.append(f"附上的商品照片共 {photos} 張。")
     pains = "；".join(f"{k}＝{label}" for k, label in vocab.PAIN_KINDS)

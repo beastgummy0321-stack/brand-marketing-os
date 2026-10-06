@@ -116,7 +116,7 @@ def _prefill_prompt(brand_name: str, pages: list, photo_kinds: list) -> str:
     lines = [f"品牌名稱：{brand_name}"]
     for index, (url, text) in enumerate(pages, start=1):
         lines.append(f"【頁面 {index}】{url}\n{text}")
-    lines.append("【來源目錄】\n" + json.dumps(prefill_sources(pages), ensure_ascii=False))
+    lines.append("【來源目錄】\n" + prefill_catalog_prompt(prefill_sources(pages)))
     if photo_kinds:
         lines.append("附上的品牌照片依序是：" + "、".join(
             f"第 {i} 張＝{kind}" for i, kind in enumerate(photo_kinds, start=1)))
@@ -167,6 +167,12 @@ def prefill_sources(pages: list, *, label: str = "頁面") -> list[PrefillSource
     return [{"source_id": f"page:{index}", "url": url, "text": text,
              "note": f"頁面 {index}" if label == "頁面" else label}
             for index, (url, text) in enumerate(pages, start=1)]
+
+
+def prefill_catalog_prompt(sources: list[PrefillSource]) -> str:
+    """Reference metadata only; the prompt already contains each source's full text once."""
+    return json.dumps([{"source_id": source["source_id"], "url": source["url"], "note": source["note"]}
+                       for source in sources], ensure_ascii=False)
 
 
 def normalized_quote(text: str) -> str:
