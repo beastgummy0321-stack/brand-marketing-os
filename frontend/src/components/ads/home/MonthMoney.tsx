@@ -56,7 +56,7 @@ function capText(home: HomeOverview): ReactNode {
 
 type Props = {
   brandId: string;
-  state: { status: "loading" } | { status: "error" } | { status: "ready"; home: HomeOverview };
+  state: { status: "loading" } | { status: "error"; message: string } | { status: "ready"; home: HomeOverview };
   onRetry: () => void;
   /** Open `scale_budget` row's own link (prototype 「看加預算建議 →」); null hides it. */
   scaleHref: string | null;
@@ -101,7 +101,10 @@ export function MonthMoney({ brandId, state, onRetry, scaleHref, onBudgetClosed,
         )}
         {state.status === "error" && (
           <div className="col-span-full flex flex-wrap items-center gap-3">
-            <p role="alert" className="text-sm text-muted-foreground">這個月的花費與預算暫時讀取不到・已保存的資料都還在</p>
+            <div role="alert" className="min-w-0 flex-1 text-sm text-muted-foreground">
+              <p>這個月的花費與預算暫時讀取不到・已保存的資料都還在</p>
+              <p className="mt-1 break-words">{state.message}</p>
+            </div>
             <Button variant="outline" size="sm" onClick={onRetry}>重新讀取</Button>
           </div>
         )}
