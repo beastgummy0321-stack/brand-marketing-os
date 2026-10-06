@@ -73,8 +73,10 @@ function BrandCoordinatesTab({ brandId }: { brandId: string }) {
     if (state.status !== "ready") return;
     const categories = state.coordinates.filter((c) => c.dimension === dimension)
       .map((c) => c.category ?? "未分類");
-    if (!categories.includes(selectedCategory)) setSelectedCategory(categories[0] ?? "");
-  }, [state, dimension, selectedCategory]);
+    // A ready-screen input can arrive before this effect. Normalize the latest choice,
+    // never the empty selection captured by the earlier ready render.
+    setSelectedCategory((current) => categories.includes(current) ? current : categories[0] ?? "");
+  }, [state, dimension]);
 
   async function saved(coordinate: Coordinate) {
     // The response confirms this row even if the subsequent reread fails.

@@ -1,5 +1,18 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ReactNode } from "react";
+
+const mountedInteraction = vi.hoisted(() => ({ run: null as (() => void) | null }));
+
+vi.mock("../shared/Badge", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../shared/Badge")>();
+  const { useLayoutEffect } = await import("react");
+  return { Badge: ({ children }: { children: ReactNode }) => {
+    // Deliver an input as soon as ready rows mount, before passive default-selection effects.
+    useLayoutEffect(() => { queueMicrotask(() => mountedInteraction.run?.()); }, []);
+    return <actual.Badge>{children}</actual.Badge>;
+  } };
+});
 
 vi.mock("@/lib/coordinatesApi", async (importOriginal) => ({
   ...await importOriginal<typeof import("@/lib/coordinatesApi")>(),
@@ -33,15 +46,33 @@ function deferred<T>() {
 async function selectCategory(category = "第二類") {
   const select = await screen.findByRole("combobox", { name: "分類" });
   fireEvent.change(select, { target: { value: category } });
+  await screen.findByText(rows.find(row => row.category === category)!.label);
   return select as HTMLSelectElement;
 }
 
 beforeEach(() => {
   vi.resetAllMocks();
+  mountedInteraction.run = null;
   fetchMock.mockResolvedValue(rows);
 });
 
 describe("coordinate context survives saves (F52-I15)", () => {
+  it("does not let the initial category normalization overwrite an immediate user selection", async () => {
+    fetchMock.mockResolvedValue(rows.map(row => ({ ...row, attributes: { funnel_stage: "test stage" } })));
+    const observed: string[] = [];
+    mountedInteraction.run = () => {
+      mountedInteraction.run = null;
+      const select = screen.getByRole("combobox", { name: "分類" }) as HTMLSelectElement;
+      observed.push(select.value);
+      fireEvent.change(select, { target: { value: "第二類" } });
+      observed.push(select.value);
+    };
+    render(<CoordinatesTab brandId="brand-one" />);
+    await screen.findByText("second coordinate");
+    expect(observed).toEqual(["第一類", "第二類"]);
+    expect((screen.getByRole("combobox", { name: "分類" }) as HTMLSelectElement).value).toBe("第二類");
+  });
+
   it("keeps the selected category and toggle focus through a delayed refresh", async () => {
     const refresh = deferred<Coordinate[]>();
     fetchMock.mockResolvedValueOnce(rows).mockReturnValueOnce(refresh.promise);
