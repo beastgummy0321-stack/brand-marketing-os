@@ -407,16 +407,21 @@ def _structure_assignments(conn, org, brand, campaign, ads, receipt_by_ad, plan)
     customers = home_overview._guarded(
         conn, "structure.customers", lambda: customer_groups.groups_by_id(conn, brand, campaign),
     )
-    offers = home_overview._guarded(conn, "structure.offers", lambda: bi_repo.offer_sources(
-        conn, brand, sell_way.of_campaign(campaign),
-    ))
-    offer_labels = {} if offers is None else {
-        key: "、".join(row["sentence"] for row in offers if row["offer_key"] == key)
-        for key in {row["offer_key"] for row in offers}
-    }
+    offers_by_product = {}
     carried = {}
     out = {}
     for ad in ads:
+        product_id = sell_way.of_ad(ad, campaign)
+        if product_id not in offers_by_product:
+            offers_by_product[product_id] = home_overview._guarded(
+                conn, "structure.offers",
+                lambda product=product_id: bi_repo.offer_sources(conn, brand, product),
+            )
+        offers = offers_by_product[product_id]
+        offer_labels = {} if offers is None else {
+            key: "、".join(row["sentence"] for row in offers if row["offer_key"] == key)
+            for key in {row["offer_key"] for row in offers}
+        }
         receipt = receipt_by_ad.get(ad["id"]) or {}
         carry = (ad.get("coordinates_snapshot_json") or {}).get("carried_from") or {}
         carry_id = receipt.get("carry_from_ad_id") or carry.get("ad_id")

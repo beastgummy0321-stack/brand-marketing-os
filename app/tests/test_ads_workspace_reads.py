@@ -931,6 +931,67 @@ class AppBuiltStructureTest(_WithReader):
         self.assertEqual(assignment["accepted_revision"], "accepted")
         self.assertEqual(repository.get_campaign(conn, org, brand, campaign), stored)
 
+    def test_f52_ad_sell_way_override_uses_its_own_offer_sentence(self):
+        conn, org, brand, campaign = self.conn, self.org, self.brand, self.campaign
+        campaign_product, ad_product = [
+            bi_repo.create_product(conn, brand, name=name, actor="test")["id"]
+            for name in ("本期商品", "廣告指定商品")
+        ]
+        for product, price, list_price in ((campaign_product, 300, 400), (ad_product, 700, 900)):
+            bi_repo.save_product_economics(
+                conn, brand, product, actor="test", confirmed_by="test",
+                selling_price=price, list_price=list_price, currency="TWD",
+            )
+        repository.update_campaign(conn, org, brand, campaign,
+                                   {"product_ids": [campaign_product]})
+        # F44 Contract A explicitly supports stored per-ad sell-way overrides.
+        conn.execute("UPDATE ads_ad SET product_id=%s,offer_key='discount' WHERE id=%s",
+                     (ad_product, self.ready))
+        conn.execute("UPDATE ads_ad SET offer_key='discount' WHERE id=%s", (self.missing,))
+        conn.commit()
+        campaign_sentence = bi_repo.offer_sources(conn, brand, campaign_product)[0]["sentence"]
+        ad_sentence = bi_repo.offer_sources(conn, brand, ad_product)[0]["sentence"]
+        self.assertNotEqual(campaign_sentence, ad_sentence)
+        stored = repository.get_ad(conn, org, brand, self.ready)
+        ads = workspace_reads.structure(conn, org, brand, campaign)["groups"][0]["ads"]
+        assignments = {ad["ad_id"]: ad["assignment"] for ad in ads}
+        self.assertIn(ad_sentence, assignments[self.ready]["offer_label"])
+        self.assertNotIn(campaign_sentence, assignments[self.ready]["offer_label"])
+        self.assertIn(campaign_sentence, assignments[self.missing]["offer_label"])
+        self.assertEqual(repository.get_ad(conn, org, brand, self.ready), stored)
+
+    def test_f52_failed_offer_override_is_isolated_and_cached_by_sell_way(self):
+        conn, org, brand, campaign = self.conn, self.org, self.brand, self.campaign
+        campaign_product, ad_product = [
+            bi_repo.create_product(conn, brand, name=name, actor="test")["id"]
+            for name in ("本期商品", "廣告指定商品")
+        ]
+        repository.update_campaign(conn, org, brand, campaign,
+                                   {"product_ids": [campaign_product]})
+        another = repository.create_ad(conn, org, brand, campaign, self.group, name="同商品",
+                                       coordinates={"offer": "free_shipping"},
+                                       coordinates_snapshot={})["id"]
+        conn.execute("UPDATE ads_ad SET product_id=%s,offer_key='free_shipping' "
+                     "WHERE id IN (%s,%s)",
+                     (ad_product, self.ready, another))
+        conn.execute("UPDATE ads_ad SET offer_key='free_shipping' WHERE id=%s", (self.missing,))
+        conn.commit()
+
+        def offer_sources(conn_, brand_, product_id):
+            if product_id == ad_product:
+                raise RuntimeError("failed override read")
+            return [{"offer_key": "free_shipping", "sentence": "本期商品免運"}]
+
+        with mock.patch.object(bi_repo, "offer_sources", side_effect=offer_sources) as read, \
+                self.slots_read({}):
+            ads = workspace_reads.structure(conn, org, brand, campaign)["groups"][0]["ads"]
+        assignments = {ad["ad_id"]: ad["assignment"] for ad in ads}
+        for ad_id in (self.ready, another):
+            self.assertEqual(assignments[ad_id]["offer_label"], "優惠資料讀不到")
+        self.assertIn("本期商品免運", assignments[self.missing]["offer_label"])
+        self.assertCountEqual([call.args[2] for call in read.call_args_list],
+                              [ad_product, campaign_product])
+
     def test_f52_removed_customer_and_unknown_offer_are_not_snapshot_labels(self):
         conn, org, brand, campaign = self.conn, self.org, self.brand, self.campaign
         conn.execute(
