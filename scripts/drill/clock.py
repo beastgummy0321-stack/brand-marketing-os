@@ -65,7 +65,7 @@ def patch_modules(prefix: str = "app.") -> int:
     from app.core import db
 
     real = getattr(db, "_drill_real_now_utc", None) or db.now_utc
-    db._drill_real_now_utc = real
+    db.__dict__["_drill_real_now_utc"] = real
 
     from datetime import timedelta, timezone
 
@@ -89,7 +89,7 @@ def patch_modules(prefix: str = "app.") -> int:
         if not (name == "app" or name.startswith(prefix)) or mod is None:
             continue
         if getattr(mod, "now_utc", None) is real:
-            mod.now_utc = now_utc
+            mod.__dict__["now_utc"] = now_utc
             n += 1
     return n
 

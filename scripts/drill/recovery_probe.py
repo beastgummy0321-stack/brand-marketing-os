@@ -32,6 +32,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextvars
+import getpass
 import hashlib
 import json
 import os
@@ -53,7 +54,8 @@ FAULTS = {
     "worker-prefill": ("worker", "intake_prefill"),
     "worker-copy": ("worker", "workbench_copy"),
 }
-CALL = contextvars.ContextVar("recovery_call", default=None)
+CALL: contextvars.ContextVar[dict | None] = contextvars.ContextVar("recovery_call", default=None)
+DB_IDENTITY_FIELDS = ("host", "hostaddr", "port", "dbname", "user")
 
 
 def local_origin(value: str) -> str:
@@ -78,6 +80,17 @@ def bounded(value: float) -> float:
     return value
 
 
+def _windows_start_identity(kernel, handle) -> str:
+    """Read creation time from the caller's existing process handle."""
+    import ctypes
+    from ctypes import wintypes
+
+    times = [wintypes.FILETIME() for _ in range(4)]
+    if not kernel.GetProcessTimes(handle, *(ctypes.byref(t) for t in times)):
+        raise OSError(ctypes.get_last_error())
+    return str((times[0].dwHighDateTime << 32) | times[0].dwLowDateTime)
+
+
 def process_identity(pid: int) -> dict:
     if pid <= 0:
         raise ValueError("A positive process ID is required")
@@ -91,10 +104,7 @@ def process_identity(pid: int) -> dict:
         if not handle:
             raise ProcessLookupError(pid)
         try:
-            times = [wintypes.FILETIME() for _ in range(4)]
-            if not kernel.GetProcessTimes(handle, *(ctypes.byref(t) for t in times)):
-                raise OSError(ctypes.get_last_error())
-            start = str((times[0].dwHighDateTime << 32) | times[0].dwLowDateTime)
+            start = _windows_start_identity(kernel, handle)
         finally:
             kernel.CloseHandle(handle)
     elif sys.platform == "linux":
@@ -120,10 +130,7 @@ def interrupt_process(receipt: dict) -> None:
         if not handle:
             raise ProcessLookupError(pid)
         try:
-            times = [wintypes.FILETIME() for _ in range(4)]
-            if not kernel.GetProcessTimes(handle, *(ctypes.byref(t) for t in times)):
-                raise OSError(ctypes.get_last_error())
-            identity = str((times[0].dwHighDateTime << 32) | times[0].dwLowDateTime)
+            identity = _windows_start_identity(kernel, handle)
             if identity != receipt["start_identity"] or pid == os.getpid():
                 raise RuntimeError("Process identity mismatch; refusing interruption")
             if not kernel.TerminateProcess(handle, 91):
@@ -234,14 +241,35 @@ def events(context: Path) -> list:
 def scoped_dsn(context: dict) -> str:
     from psycopg.conninfo import conninfo_to_dict, make_conninfo
 
-    params = conninfo_to_dict(os.environ["DATABASE_URL"])
+    params = {
+        key: str(value) for key, value in conninfo_to_dict(os.environ["DATABASE_URL"]).items()
+    }
+    # libpq uses hostaddr for the destination, and unset params may come from
+    # PG* variables/service files. Reject service indirection; freeze the
+    # effective endpoint and identity into this DSN before any connection.
+    if params.get("service") or any(os.environ.get(k) for k in ("PGSERVICE", "PGSERVICEFILE")):
+        raise ValueError("PostgreSQL service indirection is unsupported for local recovery")
     if params.get("host") not in {"localhost", "127.0.0.1", "::1"}:
         raise ValueError("Only local PostgreSQL is permitted")
-    identity = {key: params.get(key) for key in ("host", "port", "dbname", "user")}
+    hostaddr = params.get("hostaddr") or os.environ.get("PGHOSTADDR")
+    if not hostaddr:
+        hostaddr = "::1" if params["host"] == "::1" else "127.0.0.1"
+    if hostaddr not in {"127.0.0.1", "::1"}:
+        raise ValueError("Only a single numeric local PostgreSQL address is permitted")
+    params["hostaddr"] = hostaddr  # Never rely on localhost DNS or later PGHOSTADDR changes.
+    port = params.get("port") or os.environ.get("PGPORT") or "5432"
+    if not port.isdecimal() or not 1 <= int(port) <= 65535:
+        raise ValueError("An explicit single local PostgreSQL port is required")
+    params["port"] = str(int(port))
+    params["user"] = params.get("user") or os.environ.get("PGUSER") or getpass.getuser()
+    params["dbname"] = params.get("dbname") or os.environ.get("PGDATABASE") or params["user"]
+    if "=" in params["dbname"] or params["dbname"].startswith(("postgres://", "postgresql://")):
+        raise ValueError("Nested local PostgreSQL connection strings are unsupported")
+    identity = {key: params[key] for key in DB_IDENTITY_FIELDS}
     if context.get("db_identity") and context["db_identity"] != identity:
         raise ValueError("Database identity differs from context")
     params["options"] = f"-c search_path={context['schema']}"
-    return make_conninfo(**params)
+    return make_conninfo(**dict(sorted(params.items())))
 
 
 def admit(environment=None) -> None:
@@ -275,20 +303,25 @@ def init(port: int) -> Path:
     }
     dsn = scoped_dsn(value)
     params = conninfo_to_dict(dsn)
-    value["db_identity"] = {key: params.get(key) for key in ("host", "port", "dbname", "user")}
+    value["db_identity"] = {key: params[key] for key in DB_IDENTITY_FIELDS}
     context = directory / "context.json"
     write(context, value)  # Persist ownership before a possible partial setup failure.
     import psycopg
+    from psycopg import sql
 
     with psycopg.connect(dsn, connect_timeout=5) as conn:
         conn.execute("SET statement_timeout='30s'")
-        conn.execute(f'CREATE SCHEMA "{schema}"; SET search_path TO "{schema}"')
         conn.execute(
-            "\n".join(
-                p.read_text("utf-8") for p in sorted((ROOT / "supabase/migrations").glob("*.sql"))
+            sql.SQL("CREATE SCHEMA {}; SET search_path TO {}").format(
+                sql.Identifier(schema), sql.Identifier(schema)
             )
         )
-        conn.execute(f'GRANT USAGE ON SCHEMA "{schema}" TO authenticated')
+        conn.execute(
+            b"\n".join(p.read_bytes() for p in sorted((ROOT / "supabase/migrations").glob("*.sql")))
+        )
+        conn.execute(
+            sql.SQL("GRANT USAGE ON SCHEMA {} TO authenticated").format(sql.Identifier(schema))
+        )
     event(context, "initialized", schema=schema, build=value["build"])
     return context
 
@@ -427,6 +460,8 @@ def install_provider(context: Path | None, role: str) -> None:
             return self.delegate.complete(**kwargs)
 
     def select(provider, task_type=None):
+        if not isinstance(task_type, str):
+            raise RuntimeError("A named local task type is required")
         reply = replies.get(task_type, providers.SCRIPTED_REPLIES.get(task_type))
         if reply is None:
             raise RuntimeError(f"Unsupported local reply fixture: {task_type}; supply --replies")
@@ -684,7 +719,13 @@ def snapshot(context: Path, token: str, path: str | None = None) -> dict:
     require_live_runner(value, "web")
     fault = json.loads((context.parent / "armed.json").read_text("utf-8"))
     path = path or fault["draft_path"]
-    if not path.startswith("/api/") or ".." in path or "?" in path or "#" in path:
+    if (
+        not isinstance(path, str)
+        or not path.startswith("/api/")
+        or ".." in path
+        or "?" in path
+        or "#" in path
+    ):
         raise ValueError("Snapshot accepts only an explicit product GET path")
     response = httpx.get(
         value["origin"] + path,
@@ -841,11 +882,13 @@ def cleanup(context: Path) -> None:
     value = load(context)
     if value["auth_origin"] != local_origin(os.environ["SUPABASE_URL"]):
         raise ValueError("Auth origin differs from context")
+    dsn = scoped_dsn(value)  # Refuse mismatched/indirect DB settings before any cleanup action.
     for receipt in list(value["processes"]):
         if not receipt.get("stopped"):
             stop(context, receipt, "cleanup")
     import httpx
     import psycopg
+    from psycopg import sql
 
     headers = {
         "apikey": os.environ["SUPABASE_SERVICE_ROLE_KEY"],
@@ -860,10 +903,12 @@ def cleanup(context: Path) -> None:
             if response.status_code not in {200, 204, 404}:
                 raise RuntimeError("Owned Auth user cleanup failed")
     schema = value["schema"]
-    with psycopg.connect(scoped_dsn(value), connect_timeout=5) as conn:
+    with psycopg.connect(dsn, connect_timeout=5) as conn:
         conn.execute("SET statement_timeout='10s'")
-        conn.execute(f'DROP SCHEMA IF EXISTS "{schema}__queue" CASCADE')
-        conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        conn.execute(
+            sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(sql.Identifier(schema + "__queue"))
+        )
+        conn.execute(sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(sql.Identifier(schema)))
     event(context, "cleanup-complete", schema=schema, auth_users=value["auth_users"])
     value = load(context)
     value["cleaned"] = True

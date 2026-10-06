@@ -10,6 +10,164 @@ import time
 import pytest
 
 
+@pytest.mark.parametrize(
+    "extra, inherited",
+    [
+        ("hostaddr=203.0.113.5", {}),
+        ("hostaddr=127.0.0.1,203.0.113.5", {}),
+        ("", {"PGHOSTADDR": "203.0.113.5"}),
+        ("service=external", {}),
+        ("", {"PGSERVICE": "external"}),
+        ("", {"PGSERVICEFILE": "external-service.conf"}),
+    ],
+)
+@pytest.mark.parametrize("operation", ["init", "cleanup"])
+def test_database_admission_refuses_indirect_destinations_before_connect(
+    tmp_path, monkeypatch, extra, inherited, operation
+):
+    import psycopg
+
+    from scripts.drill import recovery_probe as probe
+
+    for name in ("PGHOSTADDR", "PGSERVICE", "PGSERVICEFILE"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "host=127.0.0.1 port=54322 dbname=postgres user=postgres " + extra,
+    )
+    for name, value in inherited.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setenv("BRAND_OS_ENV", "local")
+    monkeypatch.setenv("SUPABASE_URL", "http://127.0.0.1:54321")
+    monkeypatch.setenv("IDENTITY_DEV_TOKEN", "")
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "local-test-key")
+    calls = []
+
+    def refuse_connection(*args, **kwargs):
+        calls.append(True)
+        pytest.fail("Invalid destination reached the database connection boundary")
+
+    monkeypatch.setattr(psycopg, "connect", refuse_connection)
+    # Own all paths even in the red run; no schema or external connection is created.
+    monkeypatch.setattr(probe.tempfile, "mkdtemp", lambda **kw: str(tmp_path))
+    context = tmp_path / "context.json"
+    context.write_text(
+        json.dumps(
+            {
+                "schema": "f52_recovery_0123abcdefab",
+                "directory": str(tmp_path),
+                "origin": "http://127.0.0.1:8754",
+                "auth_origin": "http://127.0.0.1:54321",
+                "processes": [],
+                "auth_users": [],
+            }
+        )
+    )
+    with pytest.raises(ValueError, match="local|service"):
+        if operation == "init":
+            with probe.socket.socket() as port_probe:
+                port_probe.bind(("127.0.0.1", 0))
+                port = port_probe.getsockname()[1]
+            probe.init(port)
+        else:
+            probe.cleanup(context)
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    "dsn, inherited, expected",
+    [
+        (
+            "host=localhost",
+            {"PGPORT": "54322", "PGDATABASE": "owned", "PGUSER": "fixture"},
+            {
+                "host": "localhost",
+                "hostaddr": "127.0.0.1",
+                "port": "54322",
+                "dbname": "owned",
+                "user": "fixture",
+            },
+        ),
+        (
+            "host=localhost port=54322 dbname=owned user=fixture",
+            {"PGHOSTADDR": "::1"},
+            {
+                "host": "localhost",
+                "hostaddr": "::1",
+                "port": "54322",
+                "dbname": "owned",
+                "user": "fixture",
+            },
+        ),
+        (
+            "postgresql://fixture@localhost:54322/owned?hostaddr=127.0.0.1",
+            {"PGHOSTADDR": "203.0.113.5"},
+            {
+                "host": "localhost",
+                "hostaddr": "127.0.0.1",
+                "port": "54322",
+                "dbname": "owned",
+                "user": "fixture",
+            },
+        ),
+    ],
+)
+def test_init_receipt_pins_effective_database_identity(
+    tmp_path, monkeypatch, dsn, inherited, expected
+):
+    import psycopg
+    from psycopg.conninfo import conninfo_to_dict, make_conninfo
+
+    from scripts.drill import recovery_probe as probe
+
+    for name in ("PGHOSTADDR", "PGSERVICE", "PGSERVICEFILE", "PGPORT", "PGDATABASE", "PGUSER"):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in inherited.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setenv("DATABASE_URL", dsn)
+    monkeypatch.setenv("BRAND_OS_ENV", "local")
+    monkeypatch.setenv("SUPABASE_URL", "http://127.0.0.1:54321")
+    monkeypatch.setenv("IDENTITY_DEV_TOKEN", "")
+    monkeypatch.setattr(probe.tempfile, "mkdtemp", lambda **kw: str(tmp_path))
+    connected = []
+
+    class LocalDatabaseStandIn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def execute(self, query):
+            pass
+
+    def connect(conninfo, **kwargs):
+        connected.append(conninfo_to_dict(conninfo))
+        return LocalDatabaseStandIn()
+
+    monkeypatch.setattr(psycopg, "connect", connect)
+    with probe.socket.socket() as port_probe:
+        port_probe.bind(("127.0.0.1", 0))
+        port = port_probe.getsockname()[1]
+    context = probe.init(port)
+    receipt = json.loads(context.read_text())
+    assert receipt["db_identity"] == expected
+    assert {key: connected[0][key] for key in expected} == expected
+    pinned = probe.scoped_dsn(receipt)
+    # Later inherited changes cannot move a child whose explicit DSN was frozen.
+    monkeypatch.setenv("DATABASE_URL", pinned)
+    for name in ("PGHOSTADDR", "PGHOST", "PGPORT", "PGDATABASE", "PGUSER"):
+        monkeypatch.setenv(name, "203.0.113.5")
+    assert probe.scoped_dsn(receipt) == pinned
+    different_address = "::1" if expected["hostaddr"] == "127.0.0.1" else "127.0.0.1"
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        make_conninfo(pinned, hostaddr=different_address),
+    )
+    with pytest.raises(ValueError, match="identity differs"):
+        probe.scoped_dsn(receipt)
+
+
 def test_clock_cli_uses_owned_override_without_touching_default(tmp_path):
     owned = tmp_path / "owned" / "today"
     env = {**os.environ, "DRILL_CLOCK_PATH": str(owned)}
@@ -148,7 +306,7 @@ def test_actual_owned_child_is_interrupted_and_unrelated_process_survives(tmp_pa
             if child.poll() is None:
                 if boot.exists():
                     probe.interrupt_process(json.loads(boot.read_text()))
-                if child.poll() is None:
+                else:
                     probe.interrupt_process(probe.process_identity(child.pid))
                 child.wait(timeout=5)
 
