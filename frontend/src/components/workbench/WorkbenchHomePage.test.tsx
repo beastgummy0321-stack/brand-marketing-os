@@ -213,6 +213,24 @@ describe("Shared pack card variants (F52-I17)", () => {
 });
 
 describe("Workbench home consumer acceptance (F52-I18)", () => {
+  const originalScrollIntoView = Object.getOwnPropertyDescriptor(Element.prototype, "scrollIntoView");
+
+  beforeEach(() => {
+    Object.defineProperty(Element.prototype, "scrollIntoView", {
+      configurable: true,
+      writable: true,
+      value: vi.fn(),
+    });
+  });
+
+  afterEach(() => {
+    if (originalScrollIntoView) {
+      Object.defineProperty(Element.prototype, "scrollIntoView", originalScrollIntoView);
+    } else {
+      Reflect.deleteProperty(Element.prototype, "scrollIntoView");
+    }
+  });
+
   it("empty and loading home states offer real entry points without manufacturing a preview card", async () => {
     const user = userEvent.setup();
     let resolvePacks!: (packs: PackCard[]) => void;
