@@ -211,3 +211,69 @@ describe("Shared pack card variants (F52-I17)", () => {
     expect(screen.getByTestId("where").textContent).toBe("/brands/brd_1/workbench/packs/wbp_ads");
   });
 });
+
+describe("Workbench home consumer acceptance (F52-I18)", () => {
+  it("empty and loading home states offer real entry points without manufacturing a preview card", async () => {
+    const user = userEvent.setup();
+    let resolvePacks!: (packs: PackCard[]) => void;
+    mockListPacks.mockReturnValue(new Promise((resolve) => { resolvePacks = resolve; }));
+    renderRouted();
+    expect(screen.getByRole("heading", { name: "任務包（0）" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "更多操作" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "繼續 →" })).toBeNull();
+    expect(screen.queryByText("預覽")).toBeNull();
+    resolvePacks([]);
+    expect(await screen.findByText("目前沒有任務包")).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: /建立後產生/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: "更多操作" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "繼續 →" })).toBeNull();
+    await user.click(screen.getByRole("link", { name: /文案/ }));
+    expect(screen.getByTestId("where").textContent).toBe("/brands/brd_1/workbench/new?type=copy");
+  });
+
+  it("loaded long-name cards still continue by keyboard and expose their real pack routes", async () => {
+    const user = userEvent.setup();
+    const pack = card({ name: "Beast Prime 秋季夜跑與通勤補給完整商品介紹及新手需求驗證素材任務包" });
+    mockListPacks.mockResolvedValue([pack]);
+    renderRouted();
+    const heading = await screen.findByRole("heading", { name: pack.name });
+    const tile = heading.closest(".surface") as HTMLElement;
+    expect(within(tile).queryByText("預覽")).toBeNull();
+    expect(within(tile).getByRole("button", { name: "更多操作" })).toBeTruthy();
+    const continueButton = within(tile).getByRole("button", { name: "繼續 →" });
+    continueButton.focus();
+    await user.keyboard("{Enter}");
+    expect(screen.getByTestId("where").textContent).toBe("/brands/brd_1/workbench/packs/wbp_ads");
+  });
+
+  it("expands the loaded list and closes only the confirmed real card with a refreshed state", async () => {
+    const user = userEvent.setup();
+    mockListPacks.mockResolvedValue([card(), FREE]);
+    mockClosePack.mockImplementation(async (brandId, packId) => {
+      expect(brandId).toBe("brd_1");
+      expect(packId).toBe("wbp_ads");
+      mockListPacks.mockResolvedValue([card({ closed: true }), FREE]);
+      return {} as never;
+    });
+    renderRouted();
+    await screen.findByRole("heading", { name: "10/17 秋季活動" });
+    await user.click(screen.getByRole("button", { name: "查看全部 →" }));
+    expect(await screen.findByRole("table")).toBeTruthy();
+    expect(within(screen.getByRole("table")).getAllByRole("row")).toHaveLength(3);
+    await user.click(screen.getByRole("button", { name: "格狀" }));
+    await openMenu("10/17 秋季活動");
+    await user.click(screen.getByRole("menuitem", { name: "關閉任務包" }));
+    await user.click(screen.getByRole("button", { name: "取消" }));
+    expect(mockClosePack).not.toHaveBeenCalled();
+    await openMenu("10/17 秋季活動");
+    await user.click(screen.getByRole("menuitem", { name: "關閉任務包" }));
+    await user.click(screen.getByRole("button", { name: "確定關閉" }));
+    await waitFor(() => expect(mockClosePack).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    const closedTile = screen.getByRole("heading", { name: "10/17 秋季活動" }).closest(".surface") as HTMLElement;
+    expect(await within(closedTile).findByText("已關閉", { selector: "[data-slot=badge]" })).toBeTruthy();
+    const freeTile = await openMenu("自由工作 #2");
+    expect(screen.getByRole("menuitem", { name: "關閉任務包" })).toBeTruthy();
+    expect(within(freeTile).queryByText("已關閉")).toBeNull();
+  });
+});
