@@ -84,8 +84,16 @@ Legacy close route completed an isolated no-spend campaign and explicitly said n
 ## Build transitions and final verification
 Original baselineec72ce1a -> I15d46b3c75 during persona stop -> I172f3570c0 after safe pause -> I186f3691b9 after safe pause
 -> I1654bae15c after drill execution. No database/fake-state reset at restarts. Clock advanced explicitly to11/3 for final
-cleanup/settlement; no rollback.143 frozen B/plan files were rehashed with0mismatches,111 control/fault JPEGs had true JPEG
+cleanup/settlement; no rollback.143 frozen B/plan files were rehashed with0mismatches,113 control/fault JPEGs had true JPEG
 headers at the integrity checkpoint. Original failures and reruns remain separate. No remote push.
 
-Final integration and live I16 recovery receipts will be appended after completion. All four features remain OPEN:
+Live I16 on54bae15c: stopped owned backend49424 after loading the SPA, saw central network/outcome reasons in money
+and decision panels, restarted without reset, then each visible retry recovered. Native F18-I16-live-offline/recovered.jpg
+retained. Offline clock fallback showed host10/6 until the organization-clock read recovered11/3; this is not clock proof.
+
+First fresh integration found3failures with3854passes+798subtests: I18 read task errors outside the sync owner, and two
+ABO/CBO fixture tests lacked their fake platform delivery vocabulary. I19 ab1a701f preserves the exact predicate in
+external_sync.clean_task_success and supplies the fixture-only vocabulary. No scanner allowances or production adapter
+changes. Targeted129tests+78subtests, independent exact-head review, finish and merge passed. A fresh full integration
+receipt follows when complete. All four features remain OPEN:
 the drill fails the acceptance threshold and combined UI/report human acceptance has not been granted.

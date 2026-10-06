@@ -192,3 +192,10 @@ periods. New: `brand-facts.md` "Onboarding supplement"; the AI prefill reads a f
 asset confirm checks claims with product `None` and silently parks offer copy as 「處理中」).
 What the drill cost the fixture this time: the daily sync cron runs on real time, so after moving the clock past a period end
 run `.harness/scratch/drill9/ops.py sync` before planning, or launch approval waits on 「餘額尚不確定」.
+
+## Drill 12 (2026-10-06) — F48–F51 acceptance
+
+[Report](drill-12/report.md), [control coverage](drill-12/controls.md), [fault recovery](drill-12/faults.md),
+[plan](drill-12/plan.md). Three B periods completed against frozen A. Overall FAIL; strategy/copy/learning5/5/5,
+original money/data-loss failures preserved alongside repairs. Local simulation only; explicit untested scope remains.
+F48–F51 stay open pending combined evidence and genuine human acceptance.
