@@ -32,8 +32,8 @@ the days its monthly reads did not cover, from its first monthly day on. Days be
 dates).
 
 Account state, first match: `auth_expired` / `failed` (the latest account-wide read -- the `list`
-task, the newest `monthly` task or a read that could not be requested, judged by
-`external_sync.outcome` (F49 Contract O) -- failed, or one of its open campaigns' own sync state is
+task, the newest `monthly` task, any unresolved older month or a read that could not be requested,
+judged by `external_sync.outcome` (F49 Contract O) -- failed, or an open campaign's sync state is
 failed / auth_expired; auth through the adapters' auth-error classifier) / `never` (no coverage
 at all) / `missing_days` / `ok`. `missing_days` are the complete days (up to the account's last
 complete day, `coverage.account_last_complete_day`) of this month or of the last `LOOKBACK_DAYS`
@@ -180,6 +180,10 @@ def _account(conn, org_id, brand_id, channel, account, span, accounts_cache):
     if read and read["state"] in {"failed", "partial"}:
         failures.append((read["code"], read["text"]))
     auth = bool(read) and adapters.is_auth_error(platform, read["code"])
+    month_failure = external_sync.monthly_failure(tasks)
+    if month_failure:
+        failures.append((month_failure["code"], month_failure["text"]))
+        auth = auth or adapters.is_auth_error(platform, month_failure["code"])
     for task in account_tasks.values():
         if task.get("status") == "succeeded":
             moments.append(task.get("completed_at"))

@@ -1,9 +1,12 @@
 """Account-month evidence uses fake source pages and isolated PostgreSQL only."""
 
 import unittest
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 from unittest.mock import patch
 
+from fastapi.testclient import TestClient
+
+from app import background, main
 from app.ads import adapters, month_budget
 from app.ads import external_repository as repo
 from app.ads import external_sync as sync
@@ -267,6 +270,275 @@ class MonthlySyncTest(unittest.TestCase):
                 for call in request.call_args_list
             )
         )
+        self.assertTrue(all(not call.kwargs.get("retry_failed_monthly")
+                            for call in request.call_args_list))
+
+
+class RetryMonthlyReader(MonthlyReader):
+    """Two real worker pages per requested month, with failures at the second-page boundary."""
+
+    def __init__(self, account_id):
+        super().__init__(account_id)
+        self.failures = {}
+
+    def read_monthly(self, conn, org, brand, account, *, start, end, cursor=None, **kwargs):
+        self.calls.append((account["account_id"], start, end, cursor))
+        index = cursor["index"] if cursor else 0
+        code = self.failures.get((account["account_id"], start))
+        if index == 1 and code:
+            raise SourceReadError("月份第二頁失敗", code)
+        proof = {"scope": "account_campaign_day", "start": start, "end": end, **account}
+        return SourcePage(
+            [row(day=(date.fromisoformat(start) + timedelta(days=index)).isoformat())],
+            {"index": 1} if index == 0 else None,
+            coverage=proof,
+        )
+
+
+class FailedMonthRetryTest(unittest.TestCase):
+    """The ordinary HTTP retry runs through the real local queue, never SQL task rescue."""
+
+    def setUp(self):
+        self.conn = db.current()
+        self.org, self.brand = setup_brand(self.conn)
+        self.reader = RetryMonthlyReader(self.brand)
+        self.client = TestClient(main.app)
+        self.url = f"/api/ads/brands/{self.brand}"
+        self.today = patch.object(sync.settings, "today_for_org")
+        self.clock = patch.object(db, "now_utc")
+        self.today = self.today.start()
+        self.clock = self.clock.start()
+        self.addCleanup(patch.stopall)
+        self.advance(date(2026, 10, 20))
+        patch.object(sync.channels, "external_reader", side_effect=lambda key:
+                     self.reader if key == "fixture" else None).start()
+        patch.object(sync.channels, "CHANNELS", [{"key": "fixture", "label": "測試來源"}]).start()
+        background.register(sync.TASK, sync.run_sync)
+
+    root = MonthlySyncTest.root
+
+    def advance(self, day):
+        self.today.return_value = day
+        self.clock.return_value = datetime(day.year, day.month, day.day, 2, tzinfo=UTC)
+
+    def refresh(self, **window):
+        response = self.client.post(self.url + "/existing-campaigns/refresh", json={
+            "platform": "fixture", "source_account": self.brand, **window,
+        })
+        self.assertEqual(response.status_code, 200, response.text)
+        return response.json()["job"]
+
+    def finish(self, job):
+        background.app().run_worker(wait=False)
+        result = repo.get_job(self.conn, self.org, self.brand, job["id"])
+        self.assertNotIn(result["status"], {"pending", "running"}, result["tasks"])
+        return result
+
+    def account_source(self):
+        response = self.client.get(self.url + "/connections")
+        self.assertEqual(response.status_code, 200, response.text)
+        return next(s for s in response.json()["sources"] if s["kind"] == "ad_account")
+
+    def test_f52_public_retry_recovers_original_october_scope_after_november(self):
+        campaign, _ = self.root()
+        good = self.finish(self.refresh())["tasks"]["monthly:2026-10"]
+        self.reader.failures[(self.brand, "2026-10-01")] = "source_error"
+        failed = self.finish(self.refresh())["tasks"]["monthly:2026-10"]
+        self.assertEqual((failed["status"], failed["cursor"]), ("failed", {"index": 1}))
+        self.assertFalse(failed["restart_required"])
+        self.assertEqual(failed["last_covered"]["end"], good["covered"]["end"])
+        self.advance(date(2026, 11, 5))
+        scheduled = self.finish(sync.request_sync(
+            self.conn, self.org, self.brand, "fixture", self.brand,
+        ))
+        self.assertEqual(scheduled["tasks"]["monthly:2026-10"], failed)
+        self.assertEqual(scheduled["tasks"]["monthly:2026-11"]["status"], "succeeded")
+        source_before = self.account_source()
+        retry = self.refresh()
+        october = retry["tasks"]["monthly:2026-10"]
+        self.assertEqual(october["status"], "pending")
+        self.assertEqual((october["start"], october["end"]), ("2026-10-01", "2026-10-20"))
+        self.assertEqual((october["generation"], october["cursor"]),
+                         (failed["generation"], failed["cursor"]))
+        self.assertEqual(october["last_covered"], failed["last_covered"])
+        self.assertEqual(source_before["state"], "failed")
+        self.assertEqual(self.account_source()["state"], "failed")
+        self.assertEqual(self.client.get(self.url + "/sync-jobs/" + retry["id"])
+                         .json()["outcome"]["state"], "running")
+        self.assertEqual(retry["tasks"]["monthly:2026-11"]["end"], "2026-11-05")
+        again = self.refresh()
+        for month in ("monthly:2026-10", "monthly:2026-11"):
+            self.assertEqual(again["tasks"][month], retry["tasks"][month])
+        queued = background.queue_snapshot(since=datetime(2026, 1, 1, tzinfo=UTC))["jobs"]
+        self.assertEqual(len([j for j in queued if j["args"].get("job_id") == retry["id"]]), 1)
+        retained = repo.external_view(self.conn, self.org, self.brand, campaign["id"],
+                                      start=date(2026, 10, 1), end=date(2026, 10, 20))
+        self.assertEqual(sum(r["spend"] for r in retained["observations"]), 20)
+        still_failed = self.finish(again)
+        self.assertEqual(still_failed["tasks"]["monthly:2026-10"]["status"], "failed")
+        self.assertEqual(still_failed["tasks"]["monthly:2026-11"]["status"], "succeeded")
+        self.assertEqual(self.account_source()["state"], "failed")
+        del self.reader.failures[(self.brand, "2026-10-01")]
+        final_retry = self.refresh()
+        sync.run_sync(self.org, self.brand, final_retry["id"])
+        self.assertEqual(self.account_source()["state"], "failed")
+        completed = self.finish(final_retry)
+        self.assertEqual(completed["tasks"]["monthly:2026-10"]["status"], "succeeded")
+        self.assertEqual(completed["tasks"]["monthly:2026-10"]["covered"]["end"], "2026-10-20")
+        self.assertNotEqual(self.account_source()["state"], "failed")
+        self.assertIn((self.brand, "2026-10-01", "2026-10-20", {"index": 1}),
+                      self.reader.calls)
+
+    def test_f52_two_failed_months_resume_and_restart_without_losing_last_coverage(self):
+        self.advance(date(2026, 9, 20))
+        self.reader.failures[(self.brand, "2026-09-01")] = "source_error"
+        september = self.finish(self.refresh())["tasks"]["monthly:2026-09"]
+        self.advance(date(2026, 10, 20))
+        good = self.finish(self.refresh())["tasks"]["monthly:2026-10"]
+        self.reader.failures[(self.brand, "2026-10-01")] = "invalid_source_page"
+        failed = self.finish(self.refresh())["tasks"]["monthly:2026-10"]
+        self.assertTrue(failed["restart_required"])
+        self.advance(date(2026, 11, 5))
+        del self.reader.failures[(self.brand, "2026-10-01")]
+        retry = self.refresh()
+        october = retry["tasks"]["monthly:2026-10"]
+        self.assertEqual(october["last_covered"]["end"], good["covered"]["end"])
+        self.assertIsNone(october["cursor"])
+        self.assertNotEqual(october["generation"], failed["generation"])
+        self.assertEqual(october["rows"], 0)
+        self.assertNotIn("seen_native_ids", october)
+        self.assertEqual(retry["tasks"]["monthly:2026-09"]["generation"], september["generation"])
+        # The list and September attempts finish before October's first successful page.
+        for _ in range(5):
+            sync.run_sync(self.org, self.brand, retry["id"])
+        partial = repo.get_job(self.conn, self.org, self.brand, retry["id"])
+        self.assertEqual(partial["tasks"]["monthly:2026-10"]["cursor"], {"index": 1})
+        self.assertEqual(partial["tasks"]["monthly:2026-10"]["error_code"], "invalid_source_page")
+        self.assertEqual(self.account_source()["state"], "failed")
+        finished = self.finish(retry)
+        self.assertEqual(finished["tasks"]["monthly:2026-10"]["status"], "succeeded")
+        self.assertIsNone(finished["tasks"]["monthly:2026-10"]["error_code"])
+        self.assertEqual(finished["tasks"]["monthly:2026-09"]["status"], "failed")
+        self.assertEqual(self.account_source()["state"], "failed")
+        del self.reader.failures[(self.brand, "2026-09-01")]
+        final = self.finish(self.refresh())
+        self.assertEqual(final["tasks"]["monthly:2026-09"]["covered"]["end"], "2026-09-20")
+        self.assertNotEqual(self.account_source()["state"], "failed")
+
+    def test_f52_campaign_retry_covers_both_accounts_but_account_retry_stays_scoped(self):
+        from app.ads import repository
+
+        second = "second-account"
+        accounts = [self.reader.account, {**self.reader.account, "account_id": second}]
+        self.reader.accounts = lambda conn, org, brand: accounts if brand == self.brand else []
+        self.reader.failures = {(a["account_id"], "2026-10-01"): "source_error" for a in accounts}
+        failed = {a["account_id"]: self.finish(self.refresh(source_account=a["account_id"]))
+                  for a in accounts}
+        self.advance(date(2026, 11, 5))
+        retry = self.refresh()
+        self.assertEqual(retry["tasks"]["monthly:2026-10"]["status"], "pending")
+        unchanged = sync.account_job(self.conn, self.org, self.brand, "fixture", second)
+        self.assertEqual(unchanged["tasks"], failed[second]["tasks"])
+        # A foreign account cannot use this brand's retry, even when it has retained failures.
+        response = self.client.post(self.url + "/existing-campaigns/refresh", json={
+            "platform": "fixture", "source_account": "foreign",
+        })
+        self.assertEqual(response.status_code, 409)
+        campaign = repository.create_campaign(self.conn, self.org, self.brand, {
+            "name": "First launch", "goal_text": "品牌介紹", "objective": "awareness",
+        })["id"]
+        self.conn.commit()
+        response = self.client.post(self.url + f"/campaigns/{campaign}/sync", json={})
+        self.assertEqual(response.status_code, 200, response.text)
+        jobs = response.json()["jobs"]
+        self.assertEqual({job["source_account"] for job in jobs}, {self.brand, second})
+        self.assertEqual(response.json()["job"], jobs[0])
+        for job in jobs:
+            self.assertEqual(job["tasks"]["monthly:2026-10"]["status"], "pending")
+            self.assertIn("monthly:2026-11", job["tasks"])
+        self.reader.failures.clear()
+        self.finish(jobs[0])  # The actual queue processes both account jobs.
+        for job in jobs:
+            done = repo.get_job(self.conn, self.org, self.brand, job["id"])
+            self.assertEqual(done["tasks"]["monthly:2026-10"]["status"], "succeeded")
+
+    def test_f52_unsupported_month_reader_does_not_replay_retained_failures(self):
+        self.reader.failures[(self.brand, "2026-10-01")] = "invalid_monthly_scope"
+        failed = self.finish(self.refresh())["tasks"]["monthly:2026-10"]
+        self.advance(date(2026, 11, 5))
+        self.reader.monthly_supported = lambda: False
+        calls = list(self.reader.calls)
+        retry = self.refresh()
+        self.assertEqual(retry["tasks"]["monthly:2026-10"], failed)
+        self.assertNotIn("monthly:2026-11", retry["tasks"])
+        self.finish(retry)
+        self.assertEqual(self.reader.calls, calls)
+        self.assertEqual(self.account_source()["state"], "failed")
+
+    def test_f52_explicit_november_window_keeps_active_cursor_and_october_original_range(self):
+        self.reader.failures[(self.brand, "2026-10-01")] = "source_error"
+        failed = self.finish(self.refresh())["tasks"]["monthly:2026-10"]
+        self.advance(date(2026, 11, 5))
+        scheduled = sync.request_sync(self.conn, self.org, self.brand, "fixture", self.brand,
+                                      start=date(2026, 11, 2), end=date(2026, 11, 4))
+        sync.run_sync(self.org, self.brand, scheduled["id"])  # List first.
+        sync.run_sync(self.org, self.brand, scheduled["id"])  # November's first page.
+        before = repo.get_job(self.conn, self.org, self.brand, scheduled["id"])
+        self.assertEqual(before["tasks"]["monthly:2026-11"]["cursor"], {"index": 1})
+        retry = self.refresh(start="2026-11-02", end="2026-11-04")
+        self.assertEqual(retry["tasks"]["monthly:2026-11"], before["tasks"]["monthly:2026-11"])
+        self.assertEqual(retry["tasks"]["monthly:2026-10"]["generation"], failed["generation"])
+        self.assertEqual(retry["tasks"]["monthly:2026-10"]["end"], "2026-10-20")
+        self.assertEqual(retry["tasks"]["monthly:2026-10"]["status"], "pending")
+        self.reader.failures.clear()
+        self.finish(retry)
+
+    def test_f52_same_month_superset_restarts_without_erasing_failed_evidence(self):
+        self.advance(date(2026, 10, 10))
+        good = self.finish(self.refresh())["tasks"]["monthly:2026-10"]
+        self.reader.failures[(self.brand, "2026-10-01")] = "source_error"
+        failed = self.finish(self.refresh())["tasks"]["monthly:2026-10"]
+        self.advance(date(2026, 10, 20))
+        retry = self.refresh(start="2026-10-05", end="2026-10-15")
+        october = retry["tasks"]["monthly:2026-10"]
+        self.assertEqual((october["start"], october["end"]), ("2026-10-01", "2026-10-20"))
+        self.assertGreaterEqual(october["end"], failed["end"])
+        self.assertNotEqual(october["generation"], failed["generation"])
+        self.assertIsNone(october["cursor"])
+        self.assertEqual(october["last_covered"]["end"], good["covered"]["end"])
+        self.assertEqual(october["error_code"], "source_error")
+        self.reader.failures.clear()
+        final = self.finish(retry)["tasks"]["monthly:2026-10"]
+        self.assertEqual(final["covered"]["end"], "2026-10-19")
+        self.assertIsNone(final["error_code"])
+
+    def test_f52_smaller_month_after_clock_reversal_cannot_clear_a_larger_failure(self):
+        self.reader.failures[(self.brand, "2026-10-01")] = "source_error"
+        failed = self.finish(self.refresh())["tasks"]["monthly:2026-10"]
+        self.advance(date(2026, 10, 10))
+        response = self.client.post(self.url + "/existing-campaigns/refresh", json={
+            "platform": "fixture", "source_account": self.brand,
+        })
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertEqual(response.json()["error"]["message"],
+                         "本次日期範圍尚未涵蓋先前失敗資料，請確認日期後重試。")
+        unchanged = sync.account_job(self.conn, self.org, self.brand, "fixture", self.brand)
+        self.assertEqual(unchanged["tasks"]["monthly:2026-10"], failed)
+        self.advance(date(2026, 11, 20))
+        self.reader.failures[(self.brand, "2026-11-01")] = "source_error"
+        self.finish(self.refresh())
+        self.advance(date(2026, 11, 10))
+        before = sync.account_job(self.conn, self.org, self.brand, "fixture", self.brand)
+        queued = background.queue_snapshot(since=datetime(2026, 1, 1, tzinfo=UTC))["jobs"]
+        response = self.client.post(self.url + "/existing-campaigns/refresh", json={
+            "platform": "fixture", "source_account": self.brand,
+            "start": "2026-10-25", "end": "2026-11-10",
+        })
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertEqual(sync.account_job(self.conn, self.org, self.brand, "fixture", self.brand),
+                         before)
+        self.assertEqual(background.queue_snapshot(since=datetime(2026, 1, 1, tzinfo=UTC))["jobs"],
+                         queued)
 
 
 class AboMonthDelegationTest(unittest.TestCase):

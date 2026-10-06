@@ -109,6 +109,23 @@ def clean_task_success(task):
     return task.get("status") == "succeeded" and not task.get("errors")
 
 
+def monthly_failure(tasks):
+    """An account's unresolved month failure, including a retry not yet read to completion.
+
+    The job still reports running while pages are pending; its source retains the previous
+    failure reason until that month succeeds, rather than healing on a different month's read.
+    """
+    failed = {
+        key: {**task, "status": "failed"}
+        for key, task in tasks.items()
+        if key.startswith("monthly:") and (
+            task.get("status") == "failed"
+            or task.get("status") == "pending" and task.get("error_code")
+        )
+    }
+    return outcome(failed) if failed else None
+
+
 def failed_outcome(exc):
     """The outcome of a read that could not even start (`account_reader` raised)."""
     return _result("failed", getattr(exc, "code", None) or "source_error")
@@ -212,7 +229,7 @@ def request_campaign_sync(conn, org_id, brand_id, campaign_id, *, start=None, en
     # F49 Contract N: the campaign the user asked to re-read is read, monitored or not.
     return [
         request_sync(conn, org_id, brand_id, platform, account, campaign_ids=(campaign_id,),
-                     **window)
+                     retry_failed_monthly=True, **window)
         for platform, account in accounts
     ]
 
@@ -309,12 +326,13 @@ def monthly_supported(reader):
 
 
 def request_sync(conn, org_id, brand_id, platform, source_account, *, start=None, end=None,
-                 campaign_ids=()):
+                 campaign_ids=(), retry_failed_monthly=False):
     """Request the account's read. Account tasks (`list`, `monthly:*`) always; per-campaign
     sections (`SECTIONS`) only for the roots of campaigns `lifecycle.monitored` today, plus the
     `campaign_ids` passed explicitly (a campaign the user asked to re-read or just imported,
     monitored or not) -- F49 Contract N: a closed campaign, or one ended past the grace days, is
-    not re-read in the background."""
+    not re-read in the background. Explicit user retry also requests this account's retained
+    failed months, at their original ranges; scheduled reads keep only their requested window."""
     reader, _ = account_reader(conn, org_id, brand_id, platform, source_account)
     today = settings.today_for_org(conn, org_id=org_id)
     month_request_start = start or end or today
@@ -346,8 +364,9 @@ def request_sync(conn, org_id, brand_id, platform, source_account, *, start=None
         roots = [root for root in roots if root["campaign_id"] in wanted]
     requested = {"list": {"section": "list"}}
     # Explicit backfills cover each touched month; daily/default reads cover this month.
+    supports_monthly = monthly_supported(reader)
     month = month_request_start.replace(day=1)
-    while monthly_supported(reader) and month <= end:
+    while supports_monthly and month <= end:
         month_end = month.replace(day=calendar.monthrange(month.year, month.month)[1])
         requested["monthly:" + month.strftime("%Y-%m")] = {
             "section": "monthly",
@@ -355,6 +374,18 @@ def request_sync(conn, org_id, brand_id, platform, source_account, *, start=None
             "end": min(today, month_end).isoformat(),
         }
         month = month_end + timedelta(days=1)
+    if retry_failed_monthly and supports_monthly:
+        for key, task in tasks.items():
+            if key.startswith("monthly:") and task["status"] == "failed" and key not in requested:
+                requested[key] = {field: task[field] for field in ("section", "start", "end")}
+    # A clock moving backwards cannot let a shorter clean read erase an unresolved scope.
+    # Validate the entire request before replacing any task or enqueueing any new month.
+    for key, task in requested.items():
+        old = tasks.get(key)
+        if old and monthly_failure({key: old}) and (
+            task["start"] > old["start"] or task["end"] < old["end"]
+        ):
+            raise ValueError("本次日期範圍尚未涵蓋先前失敗資料，請確認日期後重試。")
     for root in roots:
         for section in SECTIONS:
             key = root["campaign_id"] + ":" + section
@@ -380,7 +411,9 @@ def request_sync(conn, org_id, brand_id, platform, source_account, *, start=None
         same_range = (
             old and old.get("start") == task.get("start") and old.get("end") == task.get("end")
         )
-        if active and old and (task["section"] != "monthly" or same_range):
+        failed_month = old and task["section"] == "monthly" and old["status"] == "failed"
+        if active and old and (task["section"] != "monthly" or same_range) \
+                and not (retry_failed_monthly and failed_month):
             continue
         resume = (
             old
@@ -395,8 +428,8 @@ def request_sync(conn, org_id, brand_id, platform, source_account, *, start=None
             "started_at": resumed.get("started_at") if resume else now_utc(),
             "cursor": resumed.get("cursor") if resume else None,
             "status": "pending",
-            "errors": [],
-            "error_code": None,
+            "errors": old.get("errors", []) if old and failed_month else [],
+            "error_code": old.get("error_code") if old and failed_month else None,
             "attempts": 0,
             # Contract O: saved rows of this generation (a resumed read keeps counting).
             "rows": resumed.get("rows") if resume else 0,
@@ -757,11 +790,13 @@ def _run_page(org_id, brand_id, job_id) -> bool:
                     errors = (
                         task.get("errors", []) + _save_page(conn, job, task, page, reader)
                     )[-20:]
+                pending_month = task["section"] == "monthly" and bool(page.cursor)
                 updated = {
                     **task,
                     "cursor": page.cursor,
-                    "errors": errors,
-                    "error_code": "partial_source_page" if errors else None,
+                    "errors": task.get("errors", []) if pending_month else errors,
+                    "error_code": task.get("error_code") if pending_month
+                    else "partial_source_page" if errors else None,
                     "status": "pending" if page.cursor else "failed" if errors else "succeeded",
                 }
                 finished = not page.cursor and not errors

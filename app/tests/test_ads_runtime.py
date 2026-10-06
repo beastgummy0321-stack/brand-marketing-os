@@ -253,6 +253,8 @@ class RuntimeTest(unittest.TestCase):
         ):
             runtime._sync_sources(self.conn, self.org, self.brand, self.campaign, db.now_utc())
         ranges = {(c.kwargs["start"], c.kwargs["end"]) for c in request.call_args_list}
+        self.assertTrue(all(not c.kwargs.get("retry_failed_monthly")
+                            for c in request.call_args_list))
         self.assertTrue(all((b - a).days <= 30 for a, b in ranges))
         day = start
         while day <= end:
