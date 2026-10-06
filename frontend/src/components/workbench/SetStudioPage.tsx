@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { EmptyState } from "@/components/layout/EmptyState";
@@ -11,7 +11,6 @@ import { cn } from "@/lib/utils";
 import {
   deselectVersion,
   getSet,
-  runProduct,
   selectVersion,
   type ProductPart,
   type ProductVersion,
@@ -21,6 +20,7 @@ import {
 import { ImagePart } from "./ImagePart";
 import { PART_LABEL, regenerateLabel } from "./regenerateLabel";
 import { SetGenerationStatus } from "./SetGenerationStatus";
+import { useStudioGeneration } from "./useStudioGeneration";
 
 const SET_STATUS_TONE: Record<string, string> = {
   已完成: "bg-success/10 text-success",
@@ -80,13 +80,6 @@ function SetStudio({
   const [state, setState] = useState<LoadState>({ status: "loading" });
   const [pollError, setPollError] = useState<string | null>(null);
   const [activePart, setActivePart] = useState<ProductPart | null>(null);
-  /** F40-I11 (drill-7 #16): `set.generation.status` is one brief-level field shared by every
-   * part, so the payload cannot say which part is running. The page remembers the part this
-   * browser started so the other tabs' buttons can name it; cleared when the round ends. */
-  const [startedPart, setStartedPart] = useState<ProductPart | null>(null);
-  const [pendingPart, setPendingPart] = useState<ProductPart | null>(null);
-  const [runError, setRunError] = useState<string | null>(null);
-  const requestPending = useRef(false);
 
   function load(): Promise<void> {
     setState((prev) => (prev.status === "ready" ? prev : { status: "loading" }));
@@ -122,10 +115,9 @@ function SetStudio({
 
   const serverGenerating = state.status === "ready" &&
     ["queued", "running"].includes(state.set.generation?.status ?? "");
-  const generating = pendingPart !== null || serverGenerating;
-  useEffect(() => {
-    if (!generating) setStartedPart(null);
-  }, [generating]);
+  const { startedPart, pendingPart, runError, generating, handleRun } = useStudioGeneration({
+    brandId, setId, serverGenerating, onUpdated: applyUpdated,
+  });
   useEffect(() => {
     if (!serverGenerating) return;
     let cancelled = false;
@@ -144,24 +136,6 @@ function SetStudio({
     timer = setTimeout(poll, 3000);
     return () => { cancelled = true; clearTimeout(timer); };
   }, [brandId, setId, serverGenerating]);
-
-  async function handleRun(part: ProductPart, count?: number) {
-    if (requestPending.current) return;
-    requestPending.current = true;
-    setPendingPart(part);
-    setStartedPart(part);
-    setRunError(null);
-    try {
-      const next = await runProduct(brandId, setId, part, count);
-      setState({ status: "ready", set: next });
-    } catch (err) {
-      setStartedPart(null);
-      setRunError(`${PART_LABEL[part]}產出失敗：${err instanceof Error ? err.message : "請稍後再試。"}`);
-    } finally {
-      requestPending.current = false;
-      setPendingPart(null);
-    }
-  }
 
   function applyUpdated(next: SetDetail) {
     setState({ status: "ready", set: next });

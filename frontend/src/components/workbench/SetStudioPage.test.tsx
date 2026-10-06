@@ -23,6 +23,7 @@ vi.mock("@/components/layout/WorkspaceContext", () => ({
 import type { SetDetail } from "@/lib/workbenchApi";
 import { getSet, runProduct, selectVersion } from "@/lib/workbenchApi";
 import { fetchActiveJobs, type ActiveJobsSnapshot } from "@/lib/jobsApi";
+import { ApiNetworkError } from "@/lib/http";
 import { SetStudioPage } from "./SetStudioPage";
 
 const mockGetSet = vi.mocked(getSet);
@@ -823,6 +824,23 @@ describe("F40-I11 再生成按鈕說明是哪個部分在生成（drill-7 #16）
     expect(mockRunProduct).toHaveBeenCalledTimes(2);
     expect(screen.queryByText(/本次文案請求被拒絕/)).toBeNull();
     expect(await screen.findByText("素材已排隊，等待生成。")).toBeTruthy();
+  });
+
+  it("F52-I19 preserves an unknown write result across tabs without calling it a failure or retrying", async () => {
+    mockGetSet.mockResolvedValue(twoPartDetail());
+    let reject!: (reason: Error) => void;
+    mockRunProduct.mockImplementationOnce(() => new Promise<SetDetail>((_, no) => { reject = no; }));
+    renderStudio("/brands/brd_1/workbench/packs/pack_1/sets/set_1?part=copy");
+    await userEvent.click(await screen.findByRole("button", { name: "再生成一輪（5 組文案）" }));
+    await userEvent.click(screen.getByRole("tab", { name: "圖片" }));
+    expect((await screen.findByRole("button", { name: "正在生成文案，完成後才能再生成" }) as HTMLButtonElement).disabled).toBe(true);
+    const unknown = new ApiNetworkError(true);
+    await act(async () => reject(unknown));
+    expect((await screen.findByRole("alert")).textContent).toBe(`文案：${unknown.message}`);
+    expect(screen.queryByText(/文案產出失敗/)).toBeNull();
+    await userEvent.click(screen.getByRole("tab", { name: "文案" }));
+    expect(screen.getByRole("alert").textContent).toBe(`文案：${unknown.message}`);
+    expect(mockRunProduct).toHaveBeenCalledTimes(1);
   });
 
   it("F52-I19 does not let a delayed old set response replace the navigated set", async () => {
