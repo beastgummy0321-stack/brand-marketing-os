@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
 import { EmptyState } from "@/components/layout/EmptyState";
@@ -61,7 +61,7 @@ function groupRounds(versions: ProductVersion[]): RoundGroup[] {
  * 生成、看版本、選定、完成這個素材組的地方。所有畫面文字（`cells`/`image_generation.reason`/
  * `generation_settings`）都照 `SetDetail` 給的原樣渲染，這支檔案不重算、不重打一份規則。 */
 export function SetStudioPage(props: Parameters<typeof SetStudio>[0]) {
-  return <SetStudio key={`${props.brandId}:${props.setId}`} {...props} />;
+  return <SetStudio key={`${props.brandId}:${props.packId}:${props.setId}`} {...props} />;
 }
 
 function SetStudio({
@@ -84,6 +84,9 @@ function SetStudio({
    * part, so the payload cannot say which part is running. The page remembers the part this
    * browser started so the other tabs' buttons can name it; cleared when the round ends. */
   const [startedPart, setStartedPart] = useState<ProductPart | null>(null);
+  const [pendingPart, setPendingPart] = useState<ProductPart | null>(null);
+  const [runError, setRunError] = useState<string | null>(null);
+  const requestPending = useRef(false);
 
   function load(): Promise<void> {
     setState((prev) => (prev.status === "ready" ? prev : { status: "loading" }));
@@ -117,13 +120,14 @@ function SetStudio({
     }
   }, [searchParams, state]);
 
-  const generating = state.status === "ready" &&
+  const serverGenerating = state.status === "ready" &&
     ["queued", "running"].includes(state.set.generation?.status ?? "");
+  const generating = pendingPart !== null || serverGenerating;
   useEffect(() => {
     if (!generating) setStartedPart(null);
   }, [generating]);
   useEffect(() => {
-    if (!generating) return;
+    if (!serverGenerating) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout>;
     async function poll() {
@@ -139,7 +143,25 @@ function SetStudio({
     }
     timer = setTimeout(poll, 3000);
     return () => { cancelled = true; clearTimeout(timer); };
-  }, [brandId, setId, generating]);
+  }, [brandId, setId, serverGenerating]);
+
+  async function handleRun(part: ProductPart, count?: number) {
+    if (requestPending.current) return;
+    requestPending.current = true;
+    setPendingPart(part);
+    setStartedPart(part);
+    setRunError(null);
+    try {
+      const next = await runProduct(brandId, setId, part, count);
+      setState({ status: "ready", set: next });
+    } catch (err) {
+      setStartedPart(null);
+      setRunError(`${PART_LABEL[part]}產出失敗：${err instanceof Error ? err.message : "請稍後再試。"}`);
+    } finally {
+      requestPending.current = false;
+      setPendingPart(null);
+    }
+  }
 
   function applyUpdated(next: SetDetail) {
     setState({ status: "ready", set: next });
@@ -202,8 +224,9 @@ function SetStudio({
         <div className="flex flex-col gap-4 min-w-0">
           <SetHeader set={set} />
           <MissingPartLinks set={set} onOpen={openPart} />
-          <SetGenerationStatus brandId={brandId} set={set} generating={generating} pollError={pollError}
-            part={activePart} onReload={load} onRunStarted={setStartedPart} onUpdated={applyUpdated} />
+          <SetGenerationStatus set={set} generating={generating} pollError={pollError}
+            part={activePart} onReload={load} onRun={handleRun} />
+          {runError && <p role="alert" className="rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">{runError}</p>}
 
           {set.lock.reason && (
             <div className="rounded-md bg-muted px-3 py-2 text-xs text-muted-foreground">
@@ -227,7 +250,9 @@ function SetStudio({
                     set={set}
                     part={part}
                     runningPart={generating ? startedPart : null}
-                    onRunStarted={setStartedPart}
+                    generating={generating}
+                    pendingPart={pendingPart}
+                    onRun={handleRun}
                     onUpdated={applyUpdated}
                     onSwitchPart={openPart}
                     onFinish={finishSet}
@@ -362,7 +387,9 @@ function ProductPanel({
   set,
   part,
   runningPart,
-  onRunStarted,
+  generating,
+  pendingPart,
+  onRun,
   onUpdated,
   onSwitchPart,
   onFinish,
@@ -372,7 +399,9 @@ function ProductPanel({
   part: ProductPart;
   /** The part this browser started in the round now running, `null` when unknown. */
   runningPart: ProductPart | null;
-  onRunStarted: (part: ProductPart | null) => void;
+  generating: boolean;
+  pendingPart: ProductPart | null;
+  onRun: (part: ProductPart, count?: number) => Promise<void>;
   onUpdated: (next: SetDetail) => void;
   onSwitchPart: (part: ProductPart) => void;
   onFinish: () => void;
@@ -381,7 +410,6 @@ function ProductPanel({
   const [count, setCount] = useState<number>(
     (product?.generation_settings.count as number | undefined) ?? DEFAULT_COUNT,
   );
-  const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [advancedOpen, setAdvancedOpen] = useState(false);
 
@@ -390,20 +418,9 @@ function ProductPanel({
   }
 
   async function handleRun(runCount?: number) {
-    setRunning(true);
     setError(null);
-    onRunStarted(part);
-    try {
-      // 圖片：Decision 28，永遠不帶數量——一輪固定 10 張，由後端決定。
-      const arg = part === "image_prompt" ? undefined : (runCount ?? count);
-      const next = await runProduct(brandId, set.id, part, arg);
-      onUpdated(next);
-    } catch (err) {
-      onRunStarted(null);
-      setError(err instanceof Error ? err.message : "產出失敗，請稍後再試。");
-    } finally {
-      setRunning(false);
-    }
+    // Copy and image cardinality belong to the server; only scripts accept a count.
+    await onRun(part, part === "video_script" ? (runCount ?? count) : undefined);
   }
 
   async function handleSelect(versionId: string, selected: boolean) {
@@ -421,15 +438,14 @@ function ProductPanel({
   const allDone = set.required_parts.every(
     (p) => (set.products[p] as SetProduct | undefined)?.state === "已選定",
   );
-  const generating = running || ["queued", "running"].includes(set.generation?.status ?? "");
   // F40-I11 (drill-7 #16): the rule lives in `regenerateLabel.ts`; this file only renders it.
   const runLabel = regenerateLabel({
     part,
     generating,
-    ownRequestInFlight: running,
+    ownRequestInFlight: pendingPart === part,
     runningPart,
-    productState: product.state,
-    idleLabel: part === "image_prompt" ? "再生成一輪（10 張）" : `再生成 ${count} 張`,
+    idleLabel: part === "image_prompt" ? "再生成一輪（10 張）"
+      : part === "copy" ? "再生成一輪（5 組文案）" : `再生成 ${count} 張`,
   });
   // F47 Q7: the part's own lock (an override-approved set keeps its missing parts open).
   const locked = product.locked ?? set.lock.locked;
@@ -496,9 +512,9 @@ function ProductPanel({
           進階設定
         </summary>
         {advancedOpen && <div className="surface-body flex flex-col gap-4">
-          {part === "image_prompt" ? (
+          {part !== "video_script" ? (
             <p className="text-sm text-muted-foreground">
-              每輪提供 10 個圖片提案，數量不可調整。
+              {part === "copy" ? "每輪提供 5 組文案候選，數量不可調整。" : "每輪提供 10 個圖片提案，數量不可調整。"}
             </p>
           ) : (
             <label className="flex max-w-xs flex-col gap-1 text-sm text-foreground">

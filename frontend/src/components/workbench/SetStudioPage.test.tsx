@@ -6,7 +6,7 @@
  * the payload (not a re-spelt copy), and (F07-I12) that `version.badges`/`fingerprint_text` and
  * `copy_all_text` are rendered verbatim, never rebuilt — the same importActual+覆寫 fake as
  * `frontend/src/components/intake/IntakeWizard.test.tsx`. */
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -602,27 +602,51 @@ function copySetDetail(): SetDetail {
   });
 }
 
-describe("SetStudioPage 文案的生成按鈕不變（F07-I12 Decision 28：只動圖片）", () => {
-  it("進階設定保留數量輸入，收合時不進入可存取樹", async () => {
+describe("F52-I19 fixed copy candidates", () => {
+  it("states five candidate sets without a variable count, including legacy settings", async () => {
     mockGetSet.mockResolvedValue(copySetDetail());
     renderStudio();
 
     const advanced = await screen.findByText("進階設定");
     expect(screen.queryByRole("spinbutton", { name: "產出數量" })).toBeNull();
     await userEvent.click(advanced);
-    expect(screen.getByRole("spinbutton", { name: "產出數量" })).toBeTruthy();
-    expect(screen.getAllByRole("button", { name: /^再生成 \d+ 張$/ })).toHaveLength(1);
+    expect(screen.queryByRole("spinbutton", { name: "產出數量" })).toBeNull();
+    expect(screen.getByText("每輪提供 5 組文案候選，數量不可調整。")).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: "再生成一輪（5 組文案）" })).toHaveLength(1);
   });
 
-  it("呼叫 runProduct 仍帶數量", async () => {
+  it("requests copy without a variable count", async () => {
     mockRunProduct.mockResolvedValue(copySetDetail());
     mockGetSet.mockResolvedValue(copySetDetail());
     renderStudio();
 
-    const runButtons = await screen.findAllByRole("button", { name: "再生成 4 張" });
+    const runButtons = await screen.findAllByRole("button", { name: "再生成一輪（5 組文案）" });
     await userEvent.click(runButtons[0]);
 
-    expect(mockRunProduct).toHaveBeenCalledWith("brd_1", "set_1", "copy", 4);
+    expect(mockRunProduct).toHaveBeenCalledWith("brd_1", "set_1", "copy", undefined);
+  });
+
+  it.each([1, 2])("keeps script count %i editable and uses it on retry", async (count) => {
+    const detail = setDetail({
+      required_parts: ["video_script"],
+      products: { video_script: {
+        state: "未生成", selected: 0, required: 1, generation_settings: { count: 4 }, versions: [],
+      } },
+    });
+    mockGetSet.mockResolvedValue(detail);
+    mockRunProduct.mockResolvedValueOnce({ ...detail, generation: { status: "failed", error: "腳本生成失敗" },
+      products: { video_script: { ...detail.products.video_script!, generation_settings: { count } } },
+    }).mockResolvedValueOnce({ ...detail, generation: { status: "queued", error: null } });
+    renderStudio();
+    await userEvent.click(await screen.findByText("進階設定"));
+    const input = screen.getByRole("spinbutton", { name: "產出數量" });
+    fireEvent.change(input, { target: { value: String(count) } });
+    await userEvent.click(screen.getByRole("button", { name: `再生成 ${count} 張` }));
+    expect(mockRunProduct).toHaveBeenCalledWith("brd_1", "set_1", "video_script", count);
+    expect(screen.getByRole("spinbutton", { name: "產出數量" })).toHaveProperty("value", String(count));
+    await userEvent.click(await screen.findByRole("button", { name: "重新生成" }));
+    expect(mockRunProduct).toHaveBeenLastCalledWith("brd_1", "set_1", "video_script", count);
+    expect(mockRunProduct).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -709,7 +733,7 @@ describe("background generation", () => {
       await act(async () => {});
       expect(screen.getByText("素材生成中，完成後會自動更新。")).toBeTruthy();
       expect(screen.queryByText("還沒有生成過")).toBeNull();
-      expect((screen.getByRole("button", { name: "生成中…" }) as HTMLButtonElement).disabled).toBe(true);
+      expect((screen.getByRole("button", { name: "素材生成中，完成後才能再生成" }) as HTMLButtonElement).disabled).toBe(true);
       await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
       expect(screen.queryByText("素材生成中，完成後會自動更新。")).toBeNull();
       expect(screen.getByRole("button", { name: "顯示提示詞" })).toBeTruthy();
@@ -743,10 +767,10 @@ describe("F40-I11 再生成按鈕說明是哪個部分在生成（drill-7 #16）
     mockRunProduct.mockResolvedValue(twoPartDetail({ generation: { status: "queued", error: null } }));
     renderStudio("/brands/brd_1/workbench/packs/pack_1/sets/set_1?part=copy");
 
-    const run = await screen.findByRole("button", { name: "再生成 4 張" });
+    const run = await screen.findByRole("button", { name: "再生成一輪（5 組文案）" });
     expect((run as HTMLButtonElement).disabled).toBe(false);
     await userEvent.click(run);
-    expect(mockRunProduct).toHaveBeenCalledWith("brd_1", "set_1", "copy", 4);
+    expect(mockRunProduct).toHaveBeenCalledWith("brd_1", "set_1", "copy", undefined);
     const own = await screen.findByRole("button", { name: "生成中…" });
     expect((own as HTMLButtonElement).disabled).toBe(true);
     expect(own.getAttribute("title")).toBeNull();
@@ -759,7 +783,7 @@ describe("F40-I11 再生成按鈕說明是哪個部分在生成（drill-7 #16）
     expect(screen.queryByRole("button", { name: "生成中…" })).toBeNull();
   });
 
-  it("這一輪不是本頁按的：已有版本的部分寫「另一個部分」，還沒生成過的部分維持「生成中…」", async () => {
+  it("an externally started round stays unknown on both empty and previously generated parts", async () => {
     mockGetSet.mockResolvedValue(twoPartDetail({
       generation: { status: "running", error: null },
       products: {
@@ -769,13 +793,53 @@ describe("F40-I11 再生成按鈕說明是哪個部分在生成（drill-7 #16）
     }));
     renderStudio("/brands/brd_1/workbench/packs/pack_1/sets/set_1?part=image_prompt");
 
-    const own = await screen.findByRole("button", { name: "生成中…" });
+    const own = await screen.findByRole("button", { name: "素材生成中，完成後才能再生成" });
     expect((own as HTMLButtonElement).disabled).toBe(true);
 
     await userEvent.click(screen.getByRole("tab", { name: "文案" }));
-    const other = await screen.findByRole("button", { name: "正在生成另一個部分，完成後才能再生成" });
+    const other = await screen.findByRole("button", { name: "素材生成中，完成後才能再生成" });
     expect((other as HTMLButtonElement).disabled).toBe(true);
     expect(screen.queryByRole("button", { name: "生成中…" })).toBeNull();
+  });
+
+  it("F52-I19 holds the owned copy request across tabs before its POST returns and shows its failure", async () => {
+    mockGetSet.mockResolvedValue(twoPartDetail());
+    let reject!: (reason: Error) => void;
+    mockRunProduct.mockImplementationOnce(() => new Promise<SetDetail>((_, no) => { reject = no; }));
+    renderStudio("/brands/brd_1/workbench/packs/pack_1/sets/set_1?part=copy");
+    await userEvent.click(await screen.findByRole("button", { name: /再生成一輪（5 組文案）|再生成 4 張/ }));
+    expect((screen.getByRole("button", { name: "生成中…" }) as HTMLButtonElement).disabled).toBe(true);
+    await userEvent.click(screen.getByRole("tab", { name: "圖片" }));
+    expect((screen.getByRole("button", { name: /正在生成文案，完成後才能再生成|再生成一輪（10 張）/ }) as HTMLButtonElement).disabled).toBe(true);
+    const held = await screen.findByRole("button", { name: "正在生成文案，完成後才能再生成" });
+    expect((held as HTMLButtonElement).disabled).toBe(true);
+    expect(mockRunProduct).toHaveBeenCalledTimes(1);
+    await act(async () => reject(new Error("本次文案請求被拒絕")));
+    expect(await screen.findByRole("alert")).toHaveProperty("textContent", expect.stringContaining("本次文案請求被拒絕"));
+    expect((screen.getByRole("button", { name: "再生成一輪（10 張）" }) as HTMLButtonElement).disabled).toBe(false);
+    await userEvent.click(screen.getByRole("tab", { name: "文案" }));
+    mockRunProduct.mockResolvedValueOnce(twoPartDetail({ generation: { status: "queued", error: null } }));
+    await userEvent.click(screen.getByRole("button", { name: "再生成一輪（5 組文案）" }));
+    expect(mockRunProduct).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText(/本次文案請求被拒絕/)).toBeNull();
+    expect(await screen.findByText("素材已排隊，等待生成。")).toBeTruthy();
+  });
+
+  it("F52-I19 does not let a delayed old set response replace the navigated set", async () => {
+    const oldSet = twoPartDetail();
+    const newSet = twoPartDetail({ id: "set_2", name: "第二個素材組", pack_id: "pack_2", pack_name: "第二個任務包" });
+    mockGetSet.mockImplementation(async (_, id) => id === "set_2" ? newSet : oldSet);
+    let resolve!: (value: SetDetail) => void;
+    mockRunProduct.mockImplementationOnce(() => new Promise<SetDetail>((yes) => { resolve = yes; }));
+    const view = renderStudio("/brands/brd_1/workbench/packs/pack_1/sets/set_1?part=copy");
+    await userEvent.click(await screen.findByRole("button", { name: "再生成一輪（5 組文案）" }));
+    view.rerender(<MemoryRouter><SetStudioPage brandId="brd_1" packId="pack_2" setId="set_2" /></MemoryRouter>);
+    await screen.findByText("第二個任務包");
+    await act(async () => resolve({ ...oldSet, generation: { status: "queued", error: null } }));
+    expect(screen.getByText("第二個任務包")).toBeTruthy();
+    expect(screen.queryByText("素材已排隊，等待生成。")).toBeNull();
+    expect((screen.getByRole("button", { name: "再生成一輪（5 組文案）" }) as HTMLButtonElement).disabled).toBe(false);
+    expect(mockGetSet).toHaveBeenLastCalledWith("brd_1", "set_2");
   });
 });
 
@@ -811,7 +875,7 @@ describe("F47-I04 worker stopped, failed round, override approval", () => {
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("這輪生成失敗：找不到工單：wbb_01");
     await userEvent.click(screen.getByRole("button", { name: "重新生成" }));
-    expect(mockRunProduct).toHaveBeenCalledWith("brd_1", "set_1", "copy", 3);
+    expect(mockRunProduct).toHaveBeenCalledWith("brd_1", "set_1", "copy", undefined);
     expect(await screen.findByText("素材已排隊，等待生成。")).toBeTruthy();
     expect(screen.queryByText(/這輪生成失敗/)).toBeNull();
   });
@@ -837,7 +901,7 @@ describe("F47-I04 worker stopped, failed round, override approval", () => {
     expect((screen.getByRole("button", { name: "再生成一輪（10 張）" }) as HTMLButtonElement).disabled).toBe(false);
 
     await userEvent.click(screen.getByRole("tab", { name: "文案" }));
-    expect((await screen.findByRole("button", { name: /再生成 \d+ 張/ }) as HTMLButtonElement).disabled).toBe(true);
+    expect((await screen.findByRole("button", { name: "再生成一輪（5 組文案）" }) as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByRole("button", { name: "✓ 已選定" }) as HTMLButtonElement).disabled).toBe(true);
   });
 });
