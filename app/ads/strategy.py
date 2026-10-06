@@ -335,6 +335,9 @@ def executable_decision(ctx: dict, campaign: dict, payload: dict) -> dict:
         if slot.get("offer_key") not in offer_keys:
             refuse("offer_unavailable", "所選優惠這期不能使用，請重選。", ids)
         carry_id, intent = slot.get("carry_from_ad_id"), slot.get("test_intent")
+        rationale = slot.get("rationale")
+        if not isinstance(rationale, str) or not rationale.strip():
+            refuse("slot_rationale_missing", "每則廣告需要說明安排理由與依據限制，請重新產生策略。", ids)
         has_intent = isinstance(intent, str) and bool(intent.strip())
         if bool(carry_id) == has_intent:
             refuse("slot_intent_invalid", "請選擇沿用原廣告，或明確提出新測試。", ids)

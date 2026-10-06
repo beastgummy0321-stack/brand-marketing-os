@@ -36,6 +36,7 @@ def fixture_provider(rendered_output):
                         "offer_key": binding["offers"][0]["key"] if binding["offers"] and n == 0 else "none",
                         "carry_from_ad_id": None, "test_intent": "Test a buyer proposition",
                         "evidence_refs": binding["evidence_refs"][:1],
+                        "rationale": "Prepared evidence supports this buyer test; samples remain limited.",
                     } for n, row in enumerate(reply["allocation"]) if isinstance(row, dict)]
             elif isinstance(reply, dict) and "groups" in reply:
                 bound = providers.ScriptedProvider._json_section(prompt, "【已確認的新安排】")
@@ -72,7 +73,8 @@ def bind_fixture(conn, org, brand, campaign_id, reply=None):
             proposed.append({"id": f"carry-{item['ad']['id']}", "role": item["target"],
                 "customer_group_id": item["ad"].get("customer_group_id"),
                 "offer_key": item["ad"].get("offer_key"), "carry_from_ad_id": item["ad"]["id"],
-                "test_intent": None, "evidence_refs": refs})
+                "test_intent": None, "evidence_refs": refs,
+                "rationale": "Carry the observed original; relative results do not establish an optimum."})
     for role_row in payload["allocation"]:
         role = role_row["role"]
         planned = groups.get(role, {}).get("ads")
@@ -93,7 +95,8 @@ def bind_fixture(conn, org, brand, campaign_id, reply=None):
                 offer = "none"
             proposed.append({"id": f"slot-{role}-{n}", "role": role, "customer_group_id": gid,
                 "offer_key": offer, "carry_from_ad_id": None, "test_intent": "Test a buyer proposition",
-                "evidence_refs": refs})
+                "evidence_refs": refs,
+                "rationale": "Test this buyer proposition against the prepared evidence; samples are limited."})
     payload["slots"] = proposed
     payload["decision"] = strategy.executable_decision(ctx, campaign, payload)
     payload.pop("slots")
@@ -105,7 +108,8 @@ class DecisionRegressionTest(unittest.TestCase):
     def test_strategy_keeps_explicit_slots(self):
         slot = {"id": "slot-explore", "role": "explore", "customer_group_id": None,
                 "offer_key": "none", "carry_from_ad_id": None,
-                "test_intent": "Test a buyer proposition", "evidence_refs": []}
+                "test_intent": "Test a buyer proposition", "evidence_refs": [],
+                "rationale": "Test a buyer proposition; no observed results are available."}
         payload = strategy._validate_reply({
             "allocation": [{"role": "explore", "pct": 100}], "slots": [slot],
             "why": [], "unknowns": [], "alternatives": [],
@@ -153,7 +157,8 @@ class ExecutableDecisionAcceptanceTest(unittest.TestCase):
         return {"id": sid or f"slot-{role}", "role": role, "customer_group_id": group,
                 "offer_key": offer, "carry_from_ad_id": carry,
                 "test_intent": None if carry else "Test why this audience would buy",
-                "evidence_refs": []}
+                "evidence_refs": [],
+                "rationale": "Use the cited prepared evidence to test this audience; samples are limited."}
 
     def propose(self, campaign, slots, pcts=None):
         current = ads_repo.get_campaign(web.conn, self.org, self.brand, campaign["id"])
@@ -323,6 +328,21 @@ class ExecutableDecisionAcceptanceTest(unittest.TestCase):
         with self.assertRaises(plan.StrategyConflict):
             self.adopt(campaign, decision)
         self.assert_empty(campaign)
+
+    def test_each_slot_requires_its_own_rationale_and_rationale_changes_revision(self):
+        campaign = self.campaign()
+        slot = self.slot("new", self.people[0]["id"])
+        original = self.propose(campaign, [slot])
+        changed = self.propose(campaign, [dict(slot, rationale="A different evidence-based hypothesis; samples remain limited.")])
+        self.assertNotEqual(changed["revision"], original["revision"])
+        for rationale in (None, "", "   ", 100):
+            with self.subTest(rationale=rationale):
+                blocked = self.propose(campaign, [dict(slot, rationale=rationale)])
+                self.assertEqual(blocked["feasibility"]["state"], "blocked")
+                self.assertIn("slot_rationale_missing", {r["code"] for r in blocked["feasibility"]["reasons"]})
+                with self.assertRaises(plan.StrategyConflict):
+                    self.adopt(campaign, blocked)
+                self.assert_empty(campaign)
 
     def test_changed_inputs_and_budget_revision_cannot_be_adopted(self):
         campaign = self.campaign()

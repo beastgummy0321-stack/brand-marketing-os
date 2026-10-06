@@ -57,7 +57,7 @@ markdown fence 包起來、物件前後不留一個字。**
 
 Contract S: also return `slots`, an explicit array of assignments using only IDs from
 `【可綁定安排】`. Each has `id`, `role`, `customer_group_id` (null only when no groups are
-available), `offer_key`, `carry_from_ad_id` or a nonempty `test_intent` (exactly one),
+available), `offer_key`, `carry_from_ad_id` or a nonempty `test_intent` (exactly one), `rationale`,
 and `evidence_refs:[{kind,id}]`. Evidence kinds are learning, result, calendar, brand_fact.
 Retain a carried ad in its previous role by default; any role movement must be an explicit
 slot assignment. Keep its audience and offer with its original image/copy. Do not promote
@@ -66,7 +66,11 @@ as recommendations with sample limits; do not claim a calculated optimum. Every 
 role needs a slot, one role targets one customer group, and the whole proposal must fit the
 served ceiling. Never promise more distinct audiences than slots. Use `none` for no offer.
 Use stable descriptive slot IDs. Empty evidence is allowed only when the prepared context
-contains no relevant evidence; never invent citations.
+contains no relevant evidence; never invent citations. Every slot must include a nonempty
+`rationale` explaining this particular audience/role/offer/carry choice, connecting its
+`evidence_refs` to the recommendation and stating sample limits or unknowns. Allocation-level
+rationales do not replace each slot's rationale. Do not turn a small relative result into an
+optimality claim.
 
 - `allocation`：一個陣列，每一項是 `{"role", "pct", "rationale"}`：
   - `role`：只能用【可用角色】列出的角色，不能自己加（英文 key 照抄，程式要拿去對照；
@@ -88,6 +92,13 @@ contains no relevant evidence; never invent citations.
   "allocation": [
     {"role": "<可用角色之一>", "pct": <0～100 的數字>, "rationale": "……"},
     {"role": "<另一個可用角色>", "pct": <0～100 的數字>, "rationale": "……"}
+  ],
+  "slots": [
+    {"id": "slot-new", "role": "<allocated role>", "customer_group_id": "<prepared group ID>",
+     "offer_key": "<available offer key or none>", "carry_from_ad_id": null,
+     "test_intent": "<the buyer proposition to test>",
+     "rationale": "<why this assignment follows its cited evidence, with sample limits>",
+     "evidence_refs": [{"kind": "<prepared evidence kind>", "id": "<prepared evidence ID>"}]}
   ],
   "why": ["……"],
   "unknowns": ["……"],

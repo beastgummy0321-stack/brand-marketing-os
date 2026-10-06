@@ -926,6 +926,8 @@ class ScriptedProvider:
                             offers[0]["key"] if offers and index == 0 else "none"),
                         "carry_from_ad_id": prior["id"] if prior else None,
                         "test_intent": None if prior else "測試這群顧客的購買理由",
+                        "rationale": ("依據提供的觀察沿用原圖文；樣本有限，仍需後續驗證。" if prior
+                                      else "依據可用資料測試這群顧客的購買理由；尚未有足夠投放樣本。"),
                         "evidence_refs": binding["evidence_refs"][:1],
                     })
                 answer["slots"] = slots

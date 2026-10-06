@@ -51,6 +51,7 @@ export interface StrategyDecision {
   slots: {
     id: string; role: StrategyRole; customer_group_id: string | null; offer_key: string;
     carry_from_ad_id: string | null; test_intent: string | null;
+    rationale: string;
     evidence_refs: {kind: "learning" | "result" | "calendar" | "brand_fact"; id: string}[];
   }[];
   feasibility: {state: "ready" | "blocked"; reasons: {
