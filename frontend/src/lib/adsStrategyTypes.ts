@@ -53,6 +53,11 @@ export interface StrategyDecision {
     carry_from_ad_id: string | null; test_intent: string | null;
     rationale: string;
     evidence_refs: {kind: "learning" | "result" | "calendar" | "brand_fact"; id: string}[];
+    /** Served-only labels from the context validating this revision; never persisted as bindings. */
+    display?: {
+      customer_group_label: string; offer_label: string; carried_ad_label: string | null;
+      evidence: {kind: string; id: string; label: string}[]; evidence_omitted: number;
+    };
   }[];
   feasibility: {state: "ready" | "blocked"; reasons: {
     code: string; message: string; slot_ids: string[];

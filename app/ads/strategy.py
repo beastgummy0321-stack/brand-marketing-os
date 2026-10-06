@@ -23,6 +23,7 @@ import hashlib
 import json
 import math
 import re
+from copy import deepcopy
 
 from app.ads import (
     budget,
@@ -483,11 +484,55 @@ def refresh_decision(conn, org, brand, campaign, payload):
         payload["rationale_state"] = "stale"
 
 
+def _slot_display(ctx, slot):
+    """Read-only labels from the same context that checked this served revision."""
+    customers = {g["id"]: g["who"] for g in ctx["customer_groups"]}
+    offers = {o["key"]: f"{o['label']}：{o['sentence']}" for o in ctx["offers"]}
+    carried = {i["ad"]["id"]: i["ad"]["name"] for i in ctx["carried_candidates"]}
+    evidence = {("learning", r["id"]): r["text"] for r in ctx["learnings"]["ads"]}
+    for identifier in ctx["ranked_ids"]:
+        evidence.setdefault(("learning", identifier), "本期可用的投放學習排名")
+    for campaign in ctx["learnings"]["ranked"]["campaigns"]:
+        for row in campaign["rows"]:
+            labels = [row.get("verdict_label"), *(row.get("flags") or [])]
+            limits = "・".join(label for label in labels if label)
+            label = f"{campaign['campaign_name']}／{row['ad_name']}"
+            if limits:
+                label += f"（{limits}）"
+            evidence[("result", row["ad_id"])] = label
+            if row.get("learning_id"):
+                evidence[("learning", row["learning_id"])] = label
+    evidence.update({("brand_fact", r["id"]): f"{r['label']}：{r['value']}"
+                     for r in ctx.get("brand_facts") or []})
+    evidence.update({("calendar", r["id"]): r["name"] for r in ctx.get("calendar_evidence") or []})
+    customer_id = slot.get("customer_group_id")
+    offer_key = slot.get("offer_key")
+    carry_id = slot.get("carry_from_ad_id")
+    raw_refs = slot.get("evidence_refs")
+    refs = raw_refs if isinstance(raw_refs, list) else []
+    displayed_refs = [r for r in refs[:3] if isinstance(r, dict)]
+    return {
+        "customer_group_label": customers.get(
+            customer_id if isinstance(customer_id, str) else "", "已刪除或不在本期的顧客群"
+        ) if customer_id is not None else "尚未指定顧客群",
+        "offer_label": "不使用優惠" if slot.get("offer_key") == "none" else offers.get(
+            offer_key if isinstance(offer_key, str) else "", "已失效或不在本期的優惠"
+        ),
+        "carried_ad_label": carried.get(
+            carry_id if isinstance(carry_id, str) else "", "原廣告已不在可保留資料中"
+        ) if carry_id is not None else None,
+        "evidence": [dict(r, label=evidence.get(
+            (str(r.get("kind")), str(r.get("id"))), "依據已不在本期資料中"
+        )) for r in displayed_refs],
+        "evidence_omitted": len(refs) - len(displayed_refs),
+    }
+
+
 def served_decision(conn, org, brand, campaign, groups):
     """Separate candidate facts, proposed commitments and actual saved targeting."""
     payload = (campaign.get("budget_basis_json") or {}).get("strategy") or {}
     saved = payload.get("decision")
-    decision = dict(saved) if saved else None
+    decision = deepcopy(saved) if saved else None
     ctx = _prepared_decision_context(conn, org, brand, campaign)
     if saved and saved.get("state") == "proposed":
         assert decision is not None
@@ -515,6 +560,8 @@ def served_decision(conn, org, brand, campaign, groups):
     }
     names = {g["id"]: g["who"] for g in ctx["customer_groups"]}
     proposed = [s for s in decision["slots"] if isinstance(s, dict)]
+    for slot in proposed:
+        slot["display"] = _slot_display(ctx, slot)
     proposed_ids = {s["customer_group_id"] for s in proposed
                     if isinstance(s.get("customer_group_id"), str)}
     ads = [a for g in groups for a in g.get("ads") or []]

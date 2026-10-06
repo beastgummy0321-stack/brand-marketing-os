@@ -33,6 +33,7 @@ import { perSaleAmount } from "./patterns/csv";
 import { nextStep, type StepTarget } from "./nextStep";
 import { CapBlock } from "./strategy/CapBlock";
 import { BudgetScenarios, type OverCapPending } from "./strategy/BudgetScenarios";
+import { StrategyAssignmentSummary, StrategyCommitments } from "./strategy/StrategyCommitments";
 import { LaunchSettingsCard } from "./publish/LaunchSettingsCard";
 import { GroupSummary } from "./learnings/GroupSummary";
 import { LearningsTable } from "./learnings/LearningsTable";
@@ -127,7 +128,7 @@ function MaterialsRow({ materials }: { materials: NonNullable<CampaignDetail["ma
   const empty = materials.offers.length === 0 && materials.proof.length === 0;
   return (
     <div data-slot="materials-used" className="mb-3 flex flex-wrap items-center gap-1.5">
-      <span className="text-[12.5px] text-muted-foreground">這期會用：</span>
+      <span className="text-[12.5px] text-muted-foreground">可用素材：</span>
       {materials.offers.map((o) => <Chip key={`offer-${o.key}`} data-kind="offer">{o.label}：{o.sentence}</Chip>)}
       {materials.proof.map((p) => (
         <Chip key={`proof-${p.key}`} data-kind="proof" title={p.text} aria-label={`${p.label}：${p.text}`}>{p.label}</Chip>
@@ -178,6 +179,7 @@ export function StrategyTab({
   const [allocationError, setAllocationError] = useState<string | null>(null);
   const [primaryBusy, setPrimaryBusy] = useState(false);
   const [primaryError, setPrimaryError] = useState<string | null>(null);
+  const [rejectedRevision, setRejectedRevision] = useState<string | null>(null);
   const adoption = useRef<{ revision: string; operationId: string } | null>(null);
   // F48 decision 8: the ad sets the last saved total re-split (an adopted, still unbound plan); null otherwise.
   const [resplit, setResplit] = useState<ResplitRow[] | null>(null);
@@ -212,12 +214,21 @@ export function StrategyTab({
   const basis = c.budget_basis_json.basis;
   const step = nextStep(c);
   const pickedRow = picked ? c.budget_basis_json.scenarios?.scenarios.find((r) => r.key === picked) ?? null : null;
+  const decision = strategy?.decision;
+  const stale = strategy?.rationale_state === "stale" || decision?.state === "modified" ||
+    Boolean(decision?.revision && rejectedRevision === decision.revision) ||
+    Boolean(decision?.feasibility.reasons.some((reason) => reason.code === "strategy_changed"));
+  const decisionBlocker = stale ? "安排或預算已修改，原建議理由已失效。請重新產生策略。" :
+    !decision?.revision || decision.state === "legacy_unbound" || decision.slots.length === 0 ? "請重新產生策略並確認每則廣告的安排。" :
+    decision.feasibility.state === "blocked" ? "這份安排目前無法採用，請調整預算或重新產生策略。" : "";
 
   async function handleGenerate() {
     setGenerating(true);
     setGenerateError(null);
     try {
       onCampaignChange(await generateStrategy(brandId, c.id));
+      setRejectedRevision(null);
+      adoption.current = null;
     } catch (err) {
       // A 502 carries the served sentence with the refusal reason; a 409 `campaign_busy` its served sentence.
       setGenerateError(errorText(err, "產生策略失敗，請稍後再試。"));
@@ -235,6 +246,7 @@ export function StrategyTab({
     } catch (err) {
       setPrimaryError(errorText(err, fallback));
       if (isRejected(err, "campaign_busy")) setBusyRefused(true);
+      if (isRejected(err, "strategy_changed")) setRejectedRevision(decision?.revision ?? null);
     } finally {
       setPrimaryBusy(false);
     }
@@ -254,7 +266,7 @@ export function StrategyTab({
 
   const adopt = () => run(async () => {
     const revision = strategy?.decision?.revision;
-    if (!revision) throw new Error("請重新產生策略並確認每則廣告的安排。");
+    if (!revision || decisionBlocker || allocationPct !== null) throw new Error(decisionBlocker || "先套用或取消比例調整。");
     if (adoption.current?.revision !== revision) {
       adoption.current = { revision, operationId: crypto.randomUUID() };
     }
@@ -300,9 +312,11 @@ export function StrategyTab({
   } else if (pickedRow && pickedRow.total !== null) {
     primary = { label: `儲存預算 ${formatAmount(pickedRow.total)}`, onClick: () => void saveBudget() };
   } else if (step.id === "strategy_adopt") {
-    const blocker = c.cap.value === null ? "先設上限" : c.budget_planned === null ? "先選一個預算" : "";
+    const blocker = c.cap.value === null || c.cap.value <= 0 ? "先設上限" :
+      c.budget_planned === null || c.budget_planned <= 0 ? "先選一個預算" :
+      decisionBlocker || (allocationPct !== null ? "先套用或取消比例調整" : "");
     primary = { label: "照這個方式進行 →", onClick: () => void adopt(), disabled: blocker !== "" };
-    hint = blocker;
+    hint = blocker || "確認後建立投放結構";
   } else if (draft && step.id !== "strategy_generate") {
     // Prototype `tabStrategy()`: a draft goes on to its material; a campaign already on a platform has no next step here.
     primary = { label: "下一步：素材 →", onClick: () => onChangeTab("assets"), disabled: c.cap.value === null };
@@ -361,6 +375,18 @@ export function StrategyTab({
                 </div>
               </div>
               {c.materials && <MaterialsRow materials={c.materials} />}
+              <StrategyAssignmentSummary decision={decision} />
+              <p className="mb-3 text-xs text-muted-foreground">{stale ? "目前比例已修改，原建議理由已失效。" : "比例是本輪建議；有限樣本與相對成績不能證明最佳分配，仍有不確定性。"}</p>
+              {decisionBlocker && <div className="mb-3 rounded-md border border-border p-3 text-sm">
+                <p>{decisionBlocker}</p>
+                <ul className="mt-1 space-y-1 text-[13px] text-muted-foreground">
+                  {decision?.feasibility.reasons.filter((reason) => reason.code !== "strategy_changed").map((reason, i) => <li key={`${reason.code}-${i}`}>{reason.message}</li>)}
+                </ul>
+                {draft && <Button variant="outline" size="sm" className="mt-2" busy={generating}
+                  disabledReason={waiting || primaryBusy || allocationSaving ? "背景工作還在處理，請稍候" : undefined}
+                  onClick={() => void handleGenerate()}>重新產生策略</Button>}
+                {generateError && <p role="alert" className="mt-2 text-danger">{generateError}</p>}
+              </div>}
               {allocationPct === null ? (
                 <>
                   <AllocationBar parts={strategy.allocation.map((item) => ({ key: item.role, label: item.label, pct: item.pct }))} legend={false} />
@@ -376,7 +402,8 @@ export function StrategyTab({
                               <b className="text-sm font-semibold">{item.label}</b>
                               <span className="numeric text-sm">{item.pct}%{amount !== null && `・${amount} 元`}</span>
                             </div>
-                            {item.rationale?.trim() && <p className="mt-0.5 text-[13px] [overflow-wrap:anywhere]">{item.rationale}</p>}
+                            {!stale && item.rationale?.trim() && <p className="mt-0.5 text-[13px] [overflow-wrap:anywhere]">{item.rationale}</p>}
+                            <StrategyCommitments decision={decision} role={item.role} stale={stale} />
                           </div>
                         </li>
                       );
@@ -428,14 +455,19 @@ export function StrategyTab({
             <div className="flex flex-col gap-3 text-sm">
               {/* F48 Contract S: the program's facts first; the model's prose below them has no numbers of its own. */}
               {(strategy.facts ?? []).length > 0 && <StrategyFacts facts={strategy.facts ?? []} />}
-              {strategy.why.length > 0 && <ul className="list-disc space-y-1 pl-5">{strategy.why.map((line, i) => <li key={i}>{line}</li>)}</ul>}
-              {(strategy.learning_goals ?? []).length > 0 && (
+              {strategy.allocation.filter((item) => decision?.slots.some((slot) => slot.role === item.role)).map((item) => <section key={item.role} aria-label={`${item.label}安排依據`}>
+                <h3 className="text-[13px] font-semibold">{item.label}安排依據</h3>
+                <StrategyCommitments decision={decision} role={item.role} stale={stale} details />
+              </section>)}
+              {stale && <p className="text-muted-foreground">原建議理由已失效；重新產生後再確認新安排。</p>}
+              {!stale && strategy.why.length > 0 && <ul className="list-disc space-y-1 pl-5">{strategy.why.map((line, i) => <li key={i}>{line}</li>)}</ul>}
+              {!stale && (strategy.learning_goals ?? []).length > 0 && (
                 <div>
                   <div className="mb-1 font-medium">這輪想學到什麼</div>
                   <ul className="list-disc space-y-1 pl-5">{(strategy.learning_goals ?? []).map((line, i) => <li key={i}>{line}</li>)}</ul>
                 </div>
               )}
-              {strategy.unknowns.length > 0 && (
+              {!stale && strategy.unknowns.length > 0 && (
                 <div>
                   <div className="mb-1 font-medium">目前最大的未知</div>
                   <ul className="list-disc space-y-1 pl-5">{strategy.unknowns.map((line, i) => <li key={i}>{line}</li>)}</ul>
@@ -490,7 +522,7 @@ export function StrategyTab({
         hint={primaryError ?? (primary?.disabled ? undefined : hint)}
       >
         {primary && (
-          <Button busy={primaryBusy} disabledReason={waiting ? "背景工作還在處理，請稍候" : primary.disabled ? hint : undefined} onClick={primary.onClick}>
+          <Button busy={primaryBusy} disabledReason={waiting || generating ? "背景工作還在處理，請稍候" : primary.disabled ? hint : undefined} onClick={primary.onClick}>
             {primaryBusy || waiting ? "處理中…" : primary.label}
           </Button>
         )}
