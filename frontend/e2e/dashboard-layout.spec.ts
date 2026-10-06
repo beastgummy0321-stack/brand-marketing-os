@@ -1,4 +1,6 @@
 import { expect, test } from "@playwright/test";
+import { mkdir } from "node:fs/promises";
+import path from "node:path";
 
 test("自訂看板可儲存、鍵盤排序，並與其他品牌隔離", async ({ page }) => {
   const stamp = Date.now();
@@ -71,4 +73,87 @@ test("自訂看板可儲存、鍵盤排序，並與其他品牌隔離", async ({
   await page.getByRole("button", { name: "自訂版面", exact: true }).click();
   await panel.getByRole("button", { name: "刪除此檢視", exact: true }).click();
   await expect(page.locator(".dashboard-metrics article")).toHaveCount(5);
+});
+
+test("last home block exposes its reason by keyboard and survives reload/reset", async ({ page }) => {
+  // This UI-only fixture never writes an account, brand or platform object.
+  const user = { id: "layout-ui-user", email: "layout-ui@example.com", aud: "authenticated", role: "authenticated" };
+  const org = { id: "layout-ui-org", name: "版面驗證組織", kind: "personal", role: "owner", timezone: "Asia/Taipei", today: "2026-10-06" };
+  const brandId = "layout-ui-brand";
+  const key = `brand-os:dashboard:${JSON.stringify([user.id, org.id, brandId])}`;
+  await page.route("**/auth/v1/**", async (route) => {
+    await route.fulfill({ json: {
+      access_token: "local-ui-fixture-token", refresh_token: "local-ui-fixture-refresh",
+      token_type: "bearer", expires_in: 3600, expires_at: Math.floor(Date.now() / 1000) + 3600, user,
+    } });
+  });
+  await page.route("**/api/**", async (route) => {
+    const url = new URL(route.request().url());
+    const bodies: Record<string, unknown> = {
+      "/api/identity/me": { user, org, orgs: [org] },
+      "/api/dashboard/overview": { data: [{ brand_id: brandId, brand_name: "Beast Prime 控制項驗證品牌與長名稱", health: "green", revenue_this_month: null, revenue_mom_pct: null, next_step: null }] },
+      [`/api/meta/brands/${brandId}/spend`]: { campaigns: [], totals: [], last_pull_at: null, data_pulled_at: null, attribution_label: null },
+      [`/api/intake/brands/${brandId}/products`]: { data: { products: [], bundles: [], suggestions: [] } },
+      [`/api/dashboard/brands/${brandId}/month`]: { data: { spend_by_currency: [], currency: "TWD", revenue: 4820, margin: 3120, margin_unknown_sku_count: 0, roas_all_channels: null, roas_unknown: null, has_orders: true, marketplace_uncalibrated: false } },
+      "/api/jobs/active": { data: [], total: 0, other_count: 0, done_today: 0, failed_today: 0, generated_at: "2026-10-06T00:00:00Z", worker_alive: true, stalled: false },
+      "/api/dashboard/archived-brands": { data: [] },
+      "/api/inbox": { data: { open: [], resolved: [] } },
+      "/api/figures": { bases: {} },
+    };
+    await route.fulfill(url.pathname in bodies
+      ? { json: bodies[url.pathname] }
+      : { status: 503, json: { detail: "Isolated layout fixture: optional data unavailable" } });
+  });
+  await page.goto("/app/login");
+  await page.getByLabel("Email").fill(user.email);
+  await page.getByLabel("密碼").fill("local-ui-fixture-password");
+  await page.getByRole("button", { name: "登入", exact: true }).click();
+  await page.waitForURL(/\/app\/?$/);
+  await page.evaluate(({ key }) => localStorage.setItem(key, JSON.stringify({
+    version: 1, activeId: "ads",
+    views: [{ id: "ads", name: "最後一個區塊", metrics: [], widgets: [{ id: "commerce", width: "full" }] }],
+  })), { key });
+  await page.goto(`/app/brands/${brandId}`);
+  await page.getByRole("button", { name: "自訂版面", exact: true }).click();
+  const panel = page.getByRole("dialog", { name: "自訂看板版面" });
+  const last = panel.getByRole("checkbox", { name: "本月營收與毛利", exact: true });
+  const group = panel.getByRole("group", { name: "本月營收與毛利", exact: true });
+  const reason = panel.getByText("至少保留一個區塊；先勾選其他指標或區塊，才能取消這項。", { exact: true });
+  await expect(last).toBeDisabled();
+  await expect(last).toBeChecked();
+  await expect(reason).toBeVisible();
+  await expect(last).toHaveAttribute("aria-describedby", await reason.getAttribute("id") as string);
+  await expect(group).toHaveAttribute("aria-describedby", await reason.getAttribute("id") as string);
+  await panel.getByRole("textbox", { name: "檢視名稱" }).focus();
+  for (let i = 0; i < 10 && !(await group.evaluate((el) => document.activeElement === el)); i++) await page.keyboard.press("Tab");
+  await expect(group).toBeFocused();
+  await page.keyboard.press("Space");
+  await expect(last).toBeChecked();
+  if (process.env.F52_UI_EVIDENCE_DIR) {
+    await mkdir(process.env.F52_UI_EVIDENCE_DIR, { recursive: true });
+    for (const width of [1024, 1920]) {
+      await page.setViewportSize({ width, height: 1080 });
+      await group.focus();
+      await expect(reason).toBeVisible();
+      await page.screenshot({ path: path.join(process.env.F52_UI_EVIDENCE_DIR, `built-${width}.png`) });
+    }
+  }
+  await panel.getByRole("button", { name: "完成", exact: true }).click();
+  await page.reload();
+  await page.getByRole("button", { name: "自訂版面", exact: true }).click();
+  await expect(last).toBeDisabled();
+  await expect(reason).toBeVisible();
+  await panel.getByRole("checkbox", { name: "廣告花費", exact: true }).check();
+  await expect(last).toBeEnabled();
+  await expect(reason).toHaveCount(0);
+  await last.uncheck();
+  await expect(panel.getByRole("checkbox", { name: "廣告花費", exact: true })).toBeDisabled();
+  await panel.getByRole("button", { name: "重設此檢視", exact: true }).click();
+  await expect(panel.locator('input[type="checkbox"]:checked')).toHaveCount(9);
+  await expect(panel.locator('input[type="checkbox"]:disabled')).toHaveCount(0);
+  await panel.getByRole("button", { name: "完成", exact: true }).click();
+  await page.reload();
+  await page.getByRole("button", { name: "自訂版面", exact: true }).click();
+  await expect(panel.locator('input[type="checkbox"]:checked')).toHaveCount(9);
+  await expect(panel.locator('input[type="checkbox"]:disabled')).toHaveCount(0);
 });

@@ -1,3 +1,4 @@
+import { useId } from "react";
 import { ArrowDown, ArrowUp, RotateCcw } from "lucide-react";
 import { SidePanel } from "@/components/layout/SidePanel";
 import { Button } from "@/components/layout/ui/button";
@@ -38,6 +39,8 @@ export function LayoutEditor({
   canDelete: boolean;
 }) {
   const empty = view.metrics.length + view.widgets.length <= 1;
+  const reasonId = useId();
+  const lastBlockReason = "至少保留一個區塊；先勾選其他指標或區塊，才能取消這項。";
   return (
     <SidePanel ariaLabel="自訂看板版面" onClose={onClose}>
       <div>
@@ -60,11 +63,21 @@ export function LayoutEditor({
       <fieldset className="grid gap-3">
         <legend className="mb-3 font-semibold">關鍵指標</legend>
         {METRICS.map((id) => (
-          <label key={id} className="flex items-center gap-3">
+          <div
+            key={id}
+            role={empty && view.metrics.includes(id) ? "group" : undefined}
+            tabIndex={empty && view.metrics.includes(id) ? 0 : undefined}
+            aria-label={empty && view.metrics.includes(id) ? metricLabels[id] : undefined}
+            aria-disabled={empty && view.metrics.includes(id) ? true : undefined}
+            aria-describedby={empty && view.metrics.includes(id) ? reasonId : undefined}
+            className="rounded-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+          >
+          <label className="flex items-center gap-3">
             <input
               type="checkbox"
               checked={view.metrics.includes(id)}
               disabled={empty && view.metrics.includes(id)}
+              aria-describedby={empty && view.metrics.includes(id) ? reasonId : undefined}
               onChange={(e) =>
                 onChange({
                   ...view,
@@ -78,16 +91,30 @@ export function LayoutEditor({
             />
             {metricLabels[id]}
           </label>
+          {empty && view.metrics.includes(id) && (
+            <p id={reasonId} className="ml-7 mt-1 text-xs text-muted-foreground">{lastBlockReason}</p>
+          )}
+          </div>
         ))}
       </fieldset>
       <fieldset className="grid gap-3 border-t border-border pt-5">
         <legend className="pr-2 font-semibold">看板區塊</legend>
         {WIDGETS.map((id) => (
-          <label key={id} className="flex items-center gap-3">
+          <div
+            key={id}
+            role={empty && view.widgets.some((w) => w.id === id) ? "group" : undefined}
+            tabIndex={empty && view.widgets.some((w) => w.id === id) ? 0 : undefined}
+            aria-label={empty && view.widgets.some((w) => w.id === id) ? widgetLabels[id] : undefined}
+            aria-disabled={empty && view.widgets.some((w) => w.id === id) ? true : undefined}
+            aria-describedby={empty && view.widgets.some((w) => w.id === id) ? reasonId : undefined}
+            className="rounded-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+          >
+          <label className="flex items-center gap-3">
             <input
               type="checkbox"
               checked={view.widgets.some((w) => w.id === id)}
               disabled={empty && view.widgets.some((w) => w.id === id)}
+              aria-describedby={empty && view.widgets.some((w) => w.id === id) ? reasonId : undefined}
               onChange={(e) =>
                 onChange({
                   ...view,
@@ -99,6 +126,10 @@ export function LayoutEditor({
             />
             {widgetLabels[id]}
           </label>
+          {empty && view.widgets.some((w) => w.id === id) && (
+            <p id={reasonId} className="ml-7 mt-1 text-xs text-muted-foreground">{lastBlockReason}</p>
+          )}
+          </div>
         ))}
       </fieldset>
       <div className="grid gap-3">
