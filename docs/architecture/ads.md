@@ -2152,3 +2152,106 @@ Audit W15, W16, W18, W19; W18's wizard contract is in `intake.md` under F51. Rul
 - **Checks.** Frontend `feedbackGuards.test.ts`, `figureGuards.test.ts`, ads `oneRuler.test.ts`; backend
   `test_figure_basis.py`, `test_action_url_targets.py`, `test_ads_no_platform_literal.py`. Machine checks and component screenshot
   pairs are implementation evidence, not independent drill scores or human visual acceptance.
+
+### 6.54 Drill 12 remediation contracts (F52, planned 2026-10-06)
+
+Status: execution plan approved by the user on 2026-10-06; implementation and verification pending.
+[F52](../../.work/features/F52.md) owns the queue;
+[finding disposition](../drills/drill-12/remediation-findings.md) owns evidence reconciliation;
+[acceptance A01–A14](../drills/drill-12/acceptance.md) owns executable examples and final gates.
+These clauses extend the existing module contracts; they do not rewrite historical approvals.
+
+**Contract S — one accepted decision, one built assignment.** Keep strategy in the existing
+`budget_basis_json.strategy`, with a schema version and input/decision revision. Each proposed
+slot has a stable slot ID, role, customer-group ID (or explicit unknown when permitted), selected
+offer key, carried-ad ID or new-test intent, evidence references and rationale. Available IDs
+come from planner_context, never from display names or invented model identifiers. Evidence
+references identify source learning/result rows or known calendar facts, not model citations
+to nonexistent documents. The allocation retains role percentages; budget helpers alone produce
+whole amounts and capacity. The model explains its proposed allocation qualitatively and does
+not claim an algorithm proved an optimal percentage.
+
+Resolve eligible carryover and remaining capacity before a proposal is presented as executable.
+The default preserves a carried ad's former role; a different role is permitted only as an explicit
+proposed assignment accepted with that revision. No rule automatically promotes every relative
+winner. A two-slot plan cannot promise three distinct audiences unless its actual representation
+can support them. A missing/deleted/forbidden binding or infeasible capacity returns a structured
+reason and revision exit before adoption. No silent fallback may overwrite accepted audience,
+offer or role intent. LLM delivery generation may fill creative detail, not change bound slots.
+
+Adoption validates the same version, serializes competing writes and persists groups/ads/retained
+creative references in one transaction with idempotent operation identity. A retry returns the
+same accepted result; invalid output leaves no partial plan. The delivery result is compared to
+the accepted slots before commit. Store slot-to-built IDs in the receipt. Preserve image/copy
+versions for carried ads. Subsequent explicit structure edits revise the decision projection and
+invalidate stale rationale/approval according to existing rules, not a silent narrative rewrite.
+Old strategies remain readable; a new adoption that lacks bindings requires regeneration and
+confirmation. Existing approved historical plans remain intact. No migration is assumed necessary.
+
+Serve available, proposed and actual facts as separate states. Candidate customer-group count
+is not actual targeting. Actual unique customer groups and number of delivery groups are distinct.
+Strategy, structure, brief and handoff consume the same revision and receipt; frontend prints
+served counts, names, reasons and amounts. It does not reconstruct semantic bindings.
+
+Wire contract for I01 (additive reads; required for new adoption): `strategy.decision` contains
+`schema_version:1`, `revision:string`, `state:proposed|adopted|modified|legacy_unbound`,
+`slots:[{id,role,customer_group_id:string|null,offer_key,carry_from_ad_id:string|null,
+test_intent:string|null,evidence_refs:[{kind,id}]}]` and
+`feasibility:{state:ready|blocked,reasons:[{code,message,slot_ids:string[]}]}`.
+Exactly one of carry_from_ad_id and nonempty test_intent is supplied for a slot; legacy_unbound
+may have no slots. Existing allocation/rationale fields remain, now referring to these slots.
+Evidence kind is learning, result, calendar or brand_fact; identifiers resolve within the prepared
+context. A null group is permitted only when that context has no selectable customer groups,
+and renders unknown rather than an invented audience. The revision hashes decision-relevant
+inputs/assignments/allocation, excluding read timestamps and rendered labels.
+The existing POST campaign/plan receives `expected_revision` and `operation_id`; missing revision
+on a new adoption returns 409 `strategy_confirmation_required`. A changed revision returns 409
+`strategy_changed`; infeasible returns 409 `strategy_infeasible` with the feasibility reasons.
+Successful adoption retains the existing campaign envelope and adds
+`strategy.decision.receipt:{revision,slots:[{slot_id,group_id,ad_id,carry_from_ad_id}]}`.
+Strategy/structure clients and scripted factories change before their UI consumers are dispatched.
+
+**Contract P — every numeric projection names its window.** Keep raw performance history as
+history. Campaign period projection selects the campaign window through the last completed
+account day, with start/end inclusive; intraday provisional observations are separately labelled.
+Totals, daily series, group/ad tables, shares and period grade use the same selected rows and
+declared scope. Campaign-detail/list period totals and closeout/learning period inputs use this
+projection too. Unknown/null remains unknown. Date-less imported campaigns use an explicit
+requested/observed range rather than an invented date. Platform/account currency and attribution
+remain part of scope. Monthly account spend, recent windows and comparison periods keep their
+own explicit windows. Do not globally clip repository history or erase pre-period rows.
+
+**Contract A — approve the displayed revision.** Retain the existing launch snapshot hash and
+idempotent operation semantics. Initialization of effective settings/pixel-derived recommendation
+must finish before serving an approvable revision. The displayed settings and hash refer to one
+coherent snapshot; reads from different generations cannot create a false first-click conflict.
+Detect real edits and require a fresh explicit approval. A cache refresh does not count as human
+acceptance. Preserve the central unknown-network-result rule and money/permission checks.
+The precise false-conflict cause remains a hypothesis until I07 captures the hash difference.
+
+**Contract V — a new-ad action is checked by its handoff owner.** `new_ad.target_id` identifies
+a placement; it is not an external entity. Single and aggregate change-item checks dispatch
+new_ad to its approved handoff item(s), reusing handoff_check, its bindings, revision validation,
+locks and attempt guards. Other action kinds retain their existing readback paths. The aggregate
+serves successful observed time, attempted time and scoped settings/material proof explicitly.
+Missing timestamp stays missing; a successful read is not stamped by the browser. Material
+unknown/self-confirmed and independently read matching fields remain distinct. No settings
+receipt asserts actual delivery or sales causality. Tenant/campaign checks remain mandatory.
+
+**Contract R — user retry includes the failed scope.** Scheduled default sync keeps its current
+window. An explicit user refresh/retry at the existing UI entry includes the same account's retained
+failed monthly tasks as well as its requested current scope. Each monthly task keeps its original
+range and generation/cursor resume rules; restart_required creates a safe fresh generation.
+Queue processing remains bounded/page-based, and concurrent clicks deduplicate pending tasks.
+Retain last good rows and coverage while retrying. Only actual scoped success clears a failure;
+do not drop October merely because November succeeded. This does not expand routine monitoring
+to ended/closed campaigns or trigger platform writes. Existing central error/outcome projection
+reports remaining failure honestly. I11 updates user entry wiring, not background default meaning.
+
+**Contract L — lifecycle is not delivery.** Keep lifecycle storage/transitions unchanged, but
+serve current-period lifecycle wording separately from delivery counts/state/freshness and a
+capability-aware next action. Known paused is different from unread/unknown; live alone cannot
+claim an active ad. Reuse adapter vocabulary and canonical route builders. No automatic activation
+or requirement to spend money. On sync completion, workspace/performance/row detail consume the
+latest generation; a late response may not overwrite newer state or another campaign. Keep folds
+and independent errors intact. Existing reload callbacks must be investigated before adding more.

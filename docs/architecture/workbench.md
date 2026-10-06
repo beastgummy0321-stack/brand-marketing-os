@@ -382,3 +382,39 @@ was written for is `live_creative.offer_for` (the dispatch snapshot, else the cu
 Workbench jobs register through `background.register`; a round stuck in queued／running with no live job is reconciled to failed
 after `repository.GENERATION_TIMEOUT_S` (the one generation timeout), `material_handoff.start` restarts a failed set on the same
 pack, and `free_parse` returns its fallback `reason` and `error_code` (「AI 這次沒有給出可用的結果（…），先照預設往下。」).
+
+### 5.18 Drill 12 creative and control contracts (F52, planned 2026-10-06)
+
+Status: execution plan approved by the user on 2026-10-06; implementation and independent quality proof are outstanding.
+[F52](../../.work/features/F52.md), [findings](../drills/drill-12/remediation-findings.md) and
+[acceptance A02/A03/A10](../drills/drill-12/acceptance.md) define ownership and verification.
+
+The copy brief consumes the accepted ads slot revision from ads §6.54: audience, situation,
+selected registered offer, available verified/user-confirmed facts, retained creative, prior
+results with sample limitations, and eligible calendar events. Program prepares this context;
+the model chooses/writes a proposition. Distinguish a retained control from a new test. A new-test
+intent names its substantive audience/situation/proposition change and evidence; replacing words
+in the same proposition does not establish novelty. Known relevant calendar opportunities are
+used or consciously declined with a reason. No hardcoded brand/audience/holiday, invented urgency
+or model arithmetic. A selected offer must survive into the consumer-visible fields; a deliberate
+none-offer plan remains possible but cannot replace a promised offer without revision.
+
+Contract tests prove the brief/output connection; independent fresh judging proves usefulness.
+No keyword scanner, automatic self-score or repeated-generation-until-pass loop certifies quality.
+Preserve exact carried copy/material. Relative best above the cap is not target attainment.
+
+Copy generation continues to produce **five candidate sets per round**. Copy UI has no variable
+count suggesting one result; script count stays variable. Existing image-prompt/raster capability
+is unchanged. Generating labels bind the current pack/set/part/job identity; the drill12 image-label
+observation is a hypothesis and requires a trace before a repair claim.
+
+Shared pack cards gain an explicit noninteractive preview presentation, reused on free-job and
+workbench-home screens. Real cards retain actions. Preview omits dead buttons/tab stops instead
+of disabling all pointer events while leaving action styling. No new workbench workflow is added.
+
+The existing claims guard remains the only owner. Registered active product/sell-way name spans
+are identity, scoped to the brand; surrounding promotional claims still undergo offer/forbidden
+checks. Existing name stripping already implements this intent, so the drill12 特惠 failure requires
+an exact contextual reproduction. No global token allowance, arbitrary alias generation or entire
+sentence exemption is permitted. Workbench warning and ads-slot refusal reuse the same verdict.
+Statutory reminders remain distinct from forbidden facts; this work supplies no legal clearance.

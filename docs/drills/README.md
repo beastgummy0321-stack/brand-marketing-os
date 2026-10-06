@@ -199,3 +199,7 @@ run `.harness/scratch/drill9/ops.py sync` before planning, or launch approval wa
 [plan](drill-12/plan.md). Three B periods completed against frozen A. Overall FAIL; strategy/copy/learning5/5/5,
 original money/data-loss failures preserved alongside repairs. Local simulation only; explicit untested scope remains.
 F48–F51 stay open pending combined evidence and genuine human acceptance.
+
+Follow-up execution approved 2026-10-06, acceptance pending: [F52 handoff](drill-12/Handoff.md),
+[corrected finding dispositions](drill-12/remediation-findings.md),
+[repair acceptance criteria](drill-12/acceptance.md). This does not amend the failed drill verdict.

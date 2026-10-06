@@ -262,3 +262,42 @@ F51-I15 preserves the served signed `break_even` in sell-way summaries, shared p
 value states loss before advertising; zero states no advertising room. Explicit `cap_per_sale` stays unchanged, including the
 above-break-even warning. Default cap display reads the served cap; the browser never clamps break-even to zero. Component
 regressions and the frontend figure guard cover this drill-12 money-stop repair; persona rerun is recorded separately.
+
+### F52 Drill 12 policy and source attribution contracts (planned 2026-10-06)
+
+Status: execution plan approved by the user on 2026-10-06; implementation and verification pending.
+[F52](../../.work/features/F52.md) and [acceptance A11/A12](../drills/drill-12/acceptance.md)
+are the queue and evidence criteria. Existing user confirmation and claim decisions remain.
+
+An applicable merchant return policy may have user-entered conditions and a source note in its
+own policy record. Extend cooling_off with optional `conditions` and `source_note`; preserve
+`applies` and separate exemption `disclosure`. Applicable=true no longer loses conditions.
+Non-applicable still needs its existing disclosure. Persist through existing policy storage;
+preserve old records/custom policies and read old payloads. No database migration is presumed.
+UI displays merchant-provided terms without asserting a universal legal guarantee or deciding
+legal validity. Unknown provenance stays unknown. Toggling does not destroy unsent user fields.
+
+Storage mapping: add a dedicated non-promotional merchant-return-conditions policy key to the
+existing registry; its `params_json` carries conditions/source_note, and its value is the merchant
+statement. The exemption key retains its current meaning. The record is not an offer source and
+must not create refund/discount advertising eligibility by itself. An omitted new field in an old
+payload preserves the saved field; explicit empty text clears it. Apply existing text limits via
+the policy/input-rule owner rather than a browser-only constant. Read/write SQL stays in the
+existing brand policy repository facade; intake does not acquire another module's table ownership.
+
+AI source attribution is distinct from confirmation and from truth. Internally, a sourced proposal
+carries `source_refs: [{source_id, quote}]` referencing only fetched input sources; code validates
+normalized quoted spans against those sources and renders the existing public `source_note`.
+The proposal schema may gain these internal fields without requiring a new persisted/public API.
+Customer-group interpretations may paraphrase while carrying grounded source references and remain
+proposals, not extracted literal facts. A quote match establishes source presence only, not the truth
+of the surrounding proposition, efficacy, or advertising eligibility. Invalid/missing references
+cannot be presented as source-backed; use the existing bounded failure/manual-input path without
+storing a falsely attributed proposal. Manual user entry stays allowed; claims still require an
+explicit approve/reject decision. Do not auto-approve scraped text or rewrite prior confirmed rows.
+
+The specifically questioned drill12 water/size/espresso/scenario statements exist in the frozen
+website. Preserve that correction; the operator's evidence does not prove source-free invention.
+No hardcoded blacklist of those phrases or substitution of the persona fact sheet for the actual
+fetched source is part of this contract. The regression includes forged/missing attribution and
+rejected-claim propagation, while independent content truth remains a separate evidence boundary.
