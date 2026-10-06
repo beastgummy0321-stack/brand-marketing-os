@@ -512,6 +512,71 @@ class FailedMonthRetryTest(unittest.TestCase):
         self.assertEqual(final["covered"]["end"], "2026-10-19")
         self.assertIsNone(final["error_code"])
 
+    def _run_until_monthly_first_page(self, job):
+        for _ in range(8):
+            sync.run_sync(self.org, self.brand, job["id"])
+            read = self.client.get(self.url + "/sync-jobs/" + job["id"]).json()
+            if read["job"]["tasks"]["monthly:2026-10"]["cursor"] == {"index": 1}:
+                return read
+        self.fail("the bounded worker never reached the first monthly page")
+
+    def _assert_pending_month_failure_survives_superset(self, *, scheduled):
+        if scheduled:
+            self.root()  # The real daily dispatcher discovers this account's imported root.
+        self.advance(date(2026, 10, 10))
+        good = self.finish(self.refresh())["tasks"]["monthly:2026-10"]
+        self.reader.failures[(self.brand, "2026-10-01")] = "source_error"
+        failed = self.finish(self.refresh())["tasks"]["monthly:2026-10"]
+        self.assertEqual(failed["cursor"], {"index": 1})
+        self.advance(date(2026, 10, 20))
+        retry = self.refresh()
+        self.reader.failures.clear()
+        pending = self._run_until_monthly_first_page(retry)["job"]
+        previous = pending["tasks"]["monthly:2026-10"]
+        self.assertEqual((previous["status"], previous["cursor"]), ("pending", {"index": 1}))
+        self.assertEqual(previous["error_code"], "source_error")
+        self.assertEqual(previous["last_covered"], failed["last_covered"])
+
+        self.advance(date(2026, 10, 21))
+        if scheduled:
+            sync.dispatch_daily(db.now_utc())
+            replaced = self.client.get(self.url + "/sync-jobs/" + retry["id"]).json()["job"]
+        else:
+            replaced = self.refresh()
+        october = replaced["tasks"]["monthly:2026-10"]
+        self.assertEqual((october["start"], october["end"]), ("2026-10-01", "2026-10-21"))
+        self.assertNotEqual(october["generation"], previous["generation"])
+        self.assertIsNone(october["cursor"])
+        self.assertEqual(october["rows"], 0)
+        self.assertEqual(october["last_covered"], previous["last_covered"])
+        self.assertEqual(october["error_code"], "source_error")
+        self.assertEqual(october["errors"], failed["errors"])
+        self.assertEqual(self.account_source()["state"], "failed")
+        queued_before = background.queue_snapshot(since=datetime(2026, 1, 1, tzinfo=UTC))["jobs"]
+        self.assertEqual(self.refresh()["tasks"]["monthly:2026-10"], october)
+        queued = background.queue_snapshot(since=datetime(2026, 1, 1, tzinfo=UTC))["jobs"]
+        # Manual bounded page ticks have queued several revisions; repeated refresh adds none.
+        self.assertEqual([j["id"] for j in queued], [j["id"] for j in queued_before])
+        page = self._run_until_monthly_first_page(replaced)
+        self.assertEqual(page["outcome"]["state"], "running")
+        self.assertEqual(page["job"]["tasks"]["monthly:2026-10"]["error_code"], "source_error")
+        self.assertEqual(self.account_source()["state"], "failed")
+        final = self.finish(replaced)["tasks"]["monthly:2026-10"]
+        self.assertEqual(final["status"], "succeeded")
+        self.assertEqual(final["covered"], {"start": "2026-10-01", "end": "2026-10-20"})
+        self.assertGreater(final["covered"]["end"], good["covered"]["end"])
+        self.assertIsNone(final["error_code"])
+        self.assertEqual(final["errors"], [])
+        self.assertNotEqual(self.account_source()["state"], "failed")
+        self.assertIn((self.brand, "2026-10-01", "2026-10-21", None), self.reader.calls)
+        self.assertIn((self.brand, "2026-10-01", "2026-10-21", {"index": 1}), self.reader.calls)
+
+    def test_f52_explicit_pending_month_superset_retains_failure_until_terminal_success(self):
+        self._assert_pending_month_failure_survives_superset(scheduled=False)
+
+    def test_f52_scheduled_pending_month_superset_retains_failure_until_terminal_success(self):
+        self._assert_pending_month_failure_survives_superset(scheduled=True)
+
     def test_f52_smaller_month_after_clock_reversal_cannot_clear_a_larger_failure(self):
         self.reader.failures[(self.brand, "2026-10-01")] = "source_error"
         failed = self.finish(self.refresh())["tasks"]["monthly:2026-10"]

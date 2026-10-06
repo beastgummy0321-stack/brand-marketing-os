@@ -412,6 +412,9 @@ def request_sync(conn, org_id, brand_id, platform, source_account, *, start=None
             old and old.get("start") == task.get("start") and old.get("end") == task.get("end")
         )
         failed_month = old and task["section"] == "monthly" and old["status"] == "failed"
+        # A larger range restarts a pending retry too. Its last failure remains unresolved
+        # until a clean terminal page, regardless of the replacement generation.
+        unresolved_month = bool(old and monthly_failure({key: old}))
         if active and old and (task["section"] != "monthly" or same_range) \
                 and not (retry_failed_monthly and failed_month):
             continue
@@ -428,8 +431,8 @@ def request_sync(conn, org_id, brand_id, platform, source_account, *, start=None
             "started_at": resumed.get("started_at") if resume else now_utc(),
             "cursor": resumed.get("cursor") if resume else None,
             "status": "pending",
-            "errors": old.get("errors", []) if old and failed_month else [],
-            "error_code": old.get("error_code") if old and failed_month else None,
+            "errors": old.get("errors", []) if old and unresolved_month else [],
+            "error_code": old.get("error_code") if old and unresolved_month else None,
             "attempts": 0,
             # Contract O: saved rows of this generation (a resumed read keeps counting).
             "rows": resumed.get("rows") if resume else 0,
