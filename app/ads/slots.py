@@ -827,7 +827,8 @@ def _place(conn, org, brand, campaign_id, ad_id, placement, actor) -> None:
     settle(conn, org, brand, campaign_id, placement["id"])
 
 
-def carry(conn, org, brand, campaign_id, ad_id, asset_id, copy_fields, actor) -> None:
+def carry(conn, org, brand, campaign_id, ad_id, asset_id, copy_fields, actor, *,
+          atomic=False) -> None:
     """F48 Contract K: a 留下 ad carried into the next plan takes the original and copy it went
     out with -- `user_assets.attach(…, ad_id=…)` on the same original with that copy (purpose =
     the ad's name), then the same pointer／confirmation／assignment an upload runs, so the slot
@@ -837,7 +838,17 @@ def carry(conn, org, brand, campaign_id, ad_id, asset_id, copy_fields, actor) ->
         conn, org, brand, campaign_id, asset_id, copy_fields, actor, purpose=ad["name"],
         ad_id=ad_id,
     )
-    _place(conn, org, brand, campaign_id, ad_id, placement, actor)
+    if not atomic:
+        _place(conn, org, brand, campaign_id, ad_id, placement, actor)
+        return
+    # Contract S: the adoption transaction owns every write and any refusal rolls it back.
+    from app.ads import asset_suggestions
+    confirmed = asset_suggestions.confirm_manual(
+        conn, org, brand, campaign_id, placement["id"], placement["revision"], actor,
+        strict=True,
+    )
+    handoff_assignment.assign(conn, org, brand, campaign_id, ad_id, confirmed["id"],
+                              confirmed["revision"], commit=False)
 
 
 def copy_options(conn, org, brand, campaign_id) -> dict:

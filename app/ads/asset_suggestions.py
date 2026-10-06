@@ -722,7 +722,8 @@ def _apply_confirmation(
     return assets.placement(conn, org, brand, campaign, placement_id)
 
 
-def confirm_manual(conn, org, brand, campaign, placement_id, expected_revision, actor):
+def confirm_manual(conn, org, brand, campaign, placement_id, expected_revision, actor, *,
+                   strict=False):
     conn.execute(
         "SELECT id FROM ads_asset_placement WHERE org_id=%s AND brand_id=%s AND "
         "campaign_id=%s AND id=%s AND is_current FOR UPDATE",
@@ -740,6 +741,8 @@ def confirm_manual(conn, org, brand, campaign, placement_id, expected_revision, 
         conn, org, brand, data, data["placements"][0], {"copy_fields": {}, "purpose": ""}
     )
     if result["pending_reasons"]:
+        if strict:
+            raise ValueError("；".join(result["pending_reasons"]))
         return _refused(conn, org, brand, campaign, old, result)
     return _apply_confirmation(
         conn,

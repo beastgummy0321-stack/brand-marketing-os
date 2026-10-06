@@ -61,6 +61,8 @@ function campaign(overrides: Partial<CampaignDetail> = {}): CampaignDetail {
     start_date: "2026-09-08", end_date: "2026-10-08", status: "draft", budget_planned: null, budget_scenario: null,
     budget_basis_json: {
       strategy: {
+        decision: {schema_version: 1, revision: "displayed-revision", state: "proposed", slots: [],
+          feasibility: {state: "ready", reasons: []}},
         allocation: [
           { role: "new", label: "新客", pct: 60, rationale: null, amount: null },
           { role: "retarget", label: "再行銷", pct: 30, rationale: null, amount: null },
@@ -184,9 +186,53 @@ describe("StrategyTab (F28-I09)", () => {
     vi.mocked(adoptStrategy).mockResolvedValue(adopted);
     const { onChangeTab } = renderTab(campaign({ budget_planned: 30000, budget_scenario: "cap" }));
     await user.click(await screen.findByRole("button", { name: "照這個方式進行 →" }));
-    expect(adoptStrategy).toHaveBeenCalledWith("brd_1", "cmp_1");
+    expect(adoptStrategy).toHaveBeenCalledWith("brd_1", "cmp_1", {
+      expected_revision: "displayed-revision", operation_id: expect.any(String),
+    });
     expect(selectScenario).not.toHaveBeenCalled();
     expect(onChangeTab).toHaveBeenCalledWith("structure");
+  });
+
+  it("an unknown network result retries the same displayed revision with the same operation", async () => {
+    const user = userEvent.setup();
+    vi.mocked(adoptStrategy).mockRejectedValue(new Error("Connection lost"));
+    renderTab(campaign({ budget_planned: 30000, budget_scenario: "cap" }));
+    await user.click(await screen.findByRole("button", { name: "照這個方式進行 →" }));
+    await screen.findByText("Connection lost");
+    await user.click(screen.getByRole("button", { name: "照這個方式進行 →" }));
+    expect(adoptStrategy).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(adoptStrategy).mock.calls[0][2]).toEqual(vi.mocked(adoptStrategy).mock.calls[1][2]);
+    expect(getCampaign).not.toHaveBeenCalled();
+  });
+
+  it("a displayed changed revision creates a new operation, without an implicit reread", async () => {
+    const user = userEvent.setup();
+    vi.mocked(adoptStrategy).mockRejectedValue(new Error("Connection lost"));
+    const initial = campaign({ budget_planned: 30000, budget_scenario: "cap" });
+    const callbacks = { onCampaignChange: vi.fn(), onChangeTab: vi.fn() };
+    const view = render(<MemoryRouter><StrategyTab brandId="brd_1" campaign={initial} {...callbacks} launchApproved={false} /></MemoryRouter>);
+    await user.click(await screen.findByRole("button", { name: "照這個方式進行 →" }));
+    await screen.findByText("Connection lost");
+    const changed = { ...initial, budget_basis_json: { ...initial.budget_basis_json, strategy: {
+      ...initial.budget_basis_json.strategy!, decision: { ...initial.budget_basis_json.strategy!.decision!, revision: "changed-revision" },
+    } } };
+    view.rerender(<MemoryRouter><StrategyTab brandId="brd_1" campaign={changed} {...callbacks} launchApproved={false} /></MemoryRouter>);
+    await user.click(screen.getByRole("button", { name: "照這個方式進行 →" }));
+    const first = vi.mocked(adoptStrategy).mock.calls[0][2];
+    const second = vi.mocked(adoptStrategy).mock.calls[1][2];
+    expect(second.expected_revision).toBe("changed-revision");
+    expect(second.operation_id).not.toBe(first.operation_id);
+    expect(getCampaign).not.toHaveBeenCalled();
+  });
+
+  it("a legacy unbound strategy cannot submit an empty approval", async () => {
+    const user = userEvent.setup();
+    const initial = campaign({ budget_planned: 30000, budget_scenario: "cap" });
+    initial.budget_basis_json.strategy!.decision = undefined;
+    renderTab(initial);
+    await user.click(await screen.findByRole("button", { name: "照這個方式進行 →" }));
+    await screen.findByText("請重新產生策略並確認每則廣告的安排。");
+    expect(adoptStrategy).not.toHaveBeenCalled();
   });
 
   it("on a platform (live) the bar has no next step here and the allocation is no longer editable", async () => {

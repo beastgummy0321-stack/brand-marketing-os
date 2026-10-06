@@ -11,9 +11,12 @@ wording (`customer_groups.HEADER`, `coordinate_learning.HEADER`, 【這期可用
 「- offer=〈key〉｜〈sentence〉」 lines), so `providers.ScriptedProvider`'s parsers keep working.
 """
 
+import math
+
 from app import workbench
 from app.ads import (
     budget,
+    calendar_tw,
     coordinate_learning,
     customer_groups,
     learning_rank,
@@ -352,6 +355,9 @@ def _previous_text(previous: dict | None) -> str:
 def capacity_of(daily, cap, roles: int = 0) -> dict | None:
     """Contract C: `{daily, cap, can_support, ceiling}` -- `ceiling = max(can_support + 1, roles)`
     (one explore slot; every adopted role needs an ad). `None` when either number is unknown."""
+    if any(value is None or isinstance(value, bool) or not math.isfinite(value) or value <= 0
+           for value in (daily, cap)):
+        return None
     can_support = triage_capacity.can_support(daily, cap)
     if can_support is None:
         return None
@@ -400,14 +406,30 @@ def planner_context(conn, org_id: str, brand_id: str, product_id: str | None, *,
     cap = capacity = None
     if campaign is not None:
         cap = targets.resolve(conn, org_id, brand_id, campaign)["value"]
-        allocation = ((campaign.get("budget_basis_json") or {}).get("strategy") or {}).get(
-            "allocation") or []
         daily = budget.daily_of(campaign.get("budget_planned"), _days(campaign))
-        capacity = capacity_of(daily, cap, len(allocation))
+        capacity = capacity_of(daily, cap)
     basis = prices_basis(blocks)
     # The delivery plan's menu (and the offers it keeps) for the caller's sell-way.
     the_menu = menu(conn, org_id, brand_id, product_id,
                     campaign is None or campaign.get("end_date") is not None)
+    carried = coordinate_learning.keep_ads(conn, org_id, brand_id, product_id) if campaign else []
+    for item in carried:
+        creative = item["creative"]
+        reasons = []
+        if creative is not None:
+            checked = workbench.validate_claims(conn, org_id, brand_id, product_id,
+                creative["copy_fields"], offer_key=item["ad"].get("offer_key") or "none")
+            reasons = [*checked["unsupported_promises"], *checked["forbidden_terms"],
+                       *checked["missing_offer"]]
+            if any(not str(creative["copy_fields"].get(k) or "").strip()
+                   for k in ("headline", "body", "description")):
+                reasons.append("原文案欄位不完整")
+        else:
+            reasons.append("原圖或原文案無法沿用")
+        item["eligibility"] = {"state": "blocked" if reasons else "ready", "reasons": reasons}
+    calendar = []
+    if campaign and campaign.get("start_date") and campaign.get("end_date"):
+        calendar = calendar_tw.events_between(campaign["start_date"], campaign["end_date"])
     return {
         "product": product,
         "product_ids": product_ids,
@@ -424,6 +446,9 @@ def planner_context(conn, org_id: str, brand_id: str, product_id: str | None, *,
         "previous": _previous(conn, org_id, brand_id, known),
         "cap": cap,
         "capacity": capacity,
+        "carried_candidates": carried,
+        "calendar_evidence": [{**row, "id": f"{row['start']}:{row['end']}:{row['name']}"}
+                              for row in calendar],
         "knowledge_item_ids": (
             [row["product_id"] for row in basis] + [group["id"] for group in listed]
             + [row["id"] for row in rows] + ranked_ids

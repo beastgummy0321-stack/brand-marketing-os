@@ -894,18 +894,63 @@ class ScriptedProvider:
         prompt = self._last_user_text(messages)
         if "allocation" in self._reply:
             roles = self._offered_roles(prompt)
+            binding = self._json_section(prompt, "【可綁定安排】")
+            if binding and binding.get("capacity"):
+                kept_roles = list(dict.fromkeys(c["role"] for c in binding["carried"]
+                                               if c.get("creative") and c["role"] in roles))
+                roles = (kept_roles + [r for r in roles if r not in kept_roles])[:binding["capacity"]["ceiling"]]
             pcts = self._STRATEGY_PCTS.get(len(roles))
             if pcts is None:
                 return self._reply
             rationale = self._reply["allocation"][0]["rationale"]
-            return {
+            answer = {
                 **self._reply,
                 "allocation": [
                     {"role": role, "pct": pct, "rationale": rationale}
                     for role, pct in zip(roles, pcts, strict=True)
                 ],
             }
+            if binding is not None:
+                customers = binding["customers"]
+                offers = binding["offers"]
+                carried = [c for c in binding["carried"] if c.get("creative")
+                           and (c.get("eligibility") or {}).get("state") != "blocked"]
+                slots = []
+                for index, role in enumerate(roles):
+                    prior = next((c for c in carried if c["role"] == role), None)
+                    gid = prior["customer_group_id"] if prior else (
+                        customers[min(index, len(customers) - 1)]["id"] if customers else None)
+                    slots.append({
+                        "id": f"slot-{role}", "role": role, "customer_group_id": gid,
+                        "offer_key": prior["coordinates"]["offer"] if prior else (
+                            offers[0]["key"] if offers and index == 0 else "none"),
+                        "carry_from_ad_id": prior["id"] if prior else None,
+                        "test_intent": None if prior else "測試這群顧客的購買理由",
+                        "rationale": ("依據提供的觀察沿用原圖文；樣本有限，仍需後續驗證。" if prior
+                                      else "依據可用資料測試這群顧客的購買理由；尚未有足夠投放樣本。"),
+                        "evidence_refs": binding["evidence_refs"][:1],
+                    })
+                answer["slots"] = slots
+            return answer
         if "groups" in self._reply:
+            bound = self._json_section(prompt, "【已確認的新安排】")
+            binding = self._json_section(prompt, "【安排可用的顧客】")
+            if bound is not None and binding is not None:
+                template = self._reply["groups"][0]["ads"][0]
+                groups = {}
+                for slot in bound:
+                    role = slot["role"]
+                    customer = next((g for g in binding if g["id"] == slot["customer_group_id"]), None)
+                    coords = dict(template["coordinates"])
+                    coords["offer"] = slot["offer_key"]
+                    if customer and customer.get("pain_keys"):
+                        coords["pain"] = customer["pain_keys"][0]
+                    ad = {"slot_id": slot["id"], "name": f"e2e {slot['id']} ad",
+                          "scene": f"{role} 的顧客晚上在家看到廣告", "coordinates": coords,
+                          "customer_group": binding.index(customer) + 1 if customer else None}
+                    group = groups.setdefault(role, {"role": role, "name": f"e2e {role} group", "ads": []})
+                    group["ads"].append(ad)
+                return {**self._reply, "groups": list(groups.values())}
             roles = self._adopted_roles(prompt)
             if not roles:
                 return self._reply
@@ -964,6 +1009,13 @@ class ScriptedProvider:
                         ad["coordinates"]["pain"] = pains[0]
             return {**self._reply, "groups": groups}
         return self._reply
+
+    @staticmethod
+    def _json_section(prompt, header):
+        marker = "\n" + header + "\n"
+        if marker not in prompt:
+            return None
+        return json.loads(prompt.split(marker, 1)[1].split("\n\n", 1)[0])
 
     @classmethod
     def _carried(cls, prompt: str) -> tuple[dict, int | None]:

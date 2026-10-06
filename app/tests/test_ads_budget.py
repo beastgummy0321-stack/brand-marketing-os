@@ -24,6 +24,7 @@ from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi_repo
 from app.core import db as coredb
 from app.llm import providers
+from app.tests.test_ads_strategy_decision import bind_fixture, fixture_provider
 
 from .identity_test_helpers import mint_hs256
 
@@ -344,16 +345,13 @@ def _random_pcts(rng) -> tuple:
 
 
 def _fake(rendered_output: str) -> providers.FakeProvider:
-    return providers.FakeProvider(response=providers.ProviderResponse(
-        output_text=rendered_output, structured=None,
-        usage=providers.Usage(input_tokens=100, output_tokens=50), stop_reason="end_turn",
-    ))
+    return fixture_provider(rendered_output)
 
 
 def _coordinates(tag: str) -> dict:
     return {
         "audience": f"aud_{tag}", "pain": f"pain_{tag}", "angle": f"angle_{tag}",
-        "hook": f"hook_{tag}", "proof": f"proof_{tag}", "offer": f"offer_{tag}",
+        "hook": f"hook_{tag}", "proof": f"proof_{tag}", "offer": "none",
         "format": f"format_{tag}",
     }
 
@@ -461,15 +459,19 @@ class AdoptRoundsTheTotalPropertyTest(unittest.TestCase):
             with self.subTest(total=total, days=days, pcts=pcts):
                 campaign = ads_repo.create_campaign(web.conn, self.org_id, self.brand_id, {
                     "name": f"一套算錢 第 {n} 期", "goal_text": "衝購買",
-                    "objective": "購買", "target_cost": 300,
+                    "objective": "購買", "target_cost": max(1, budget.daily_of(total, days) / 6),
                     "start_date": start, "end_date": start + timedelta(days=days - 1),
                     "status": "draft", "budget_planned": total,
                     "budget_scenario": "custom",
                     "budget_basis_json": {"strategy": {"allocation": _allocation(pcts)}},
                 }, created_by="測試員")
                 plan.PROVIDER = _fake(_PLAN_REPLY)
+                revision = bind_fixture(
+                    web.conn, self.org_id, self.brand_id, campaign["id"], json.loads(_PLAN_REPLY)
+                )
                 detail = plan.adopt_strategy(
                     web.conn, self.org_id, self.brand_id, campaign["id"], actor="測試員",
+                    expected_revision=revision, operation_id=f"money-{campaign['id']}",
                 )
                 dailies = [float(g["daily_budget"]) for g in detail["groups"]]
                 self.assertTrue(all(d.is_integer() for d in dailies))

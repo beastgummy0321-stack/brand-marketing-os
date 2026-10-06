@@ -294,13 +294,14 @@ def _creative(conn: _AnyConn, org_id: str, brand_id: str, ad: dict) -> dict | No
     try:
         placement = user_assets.placement(conn, org_id, brand_id, ad["campaign_id"],
                                           placement_id, revision)
-        user_assets.get_asset(conn, org_id, brand_id, placement["asset_id"])
+        asset = user_assets.get_asset(conn, org_id, brand_id, placement["asset_id"])
     except ValueError:
         return None
     copy = _copy_of(bindings.effective_copy(placement)) or _live_copy(ad)
-    if copy is None:
+    if copy is None or asset["status"] != "ready":
         return None
-    return {"asset_id": placement["asset_id"], "copy_fields": copy}
+    return {"asset_id": placement["asset_id"], "copy_fields": copy,
+            "placement_id": placement["id"], "placement_revision": placement["revision"]}
 
 
 def keep_ads(conn: _AnyConn, org_id: str, brand_id: str, sell_way_id: str | None) -> list[dict]:

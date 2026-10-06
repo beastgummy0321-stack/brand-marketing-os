@@ -25,21 +25,19 @@ from app.ads import user_assets_repository as user_assets
 from app.brand_intelligence import repository as bi_repo
 from app.core import db as coredb
 from app.llm import providers
+from app.tests.test_ads_strategy_decision import bind_fixture, fixture_provider
 
 ACTOR = "測試員"
 
 
 def _fake(rendered_output: str) -> providers.FakeProvider:
-    return providers.FakeProvider(response=providers.ProviderResponse(
-        output_text=rendered_output, structured=None,
-        usage=providers.Usage(input_tokens=100, output_tokens=50), stop_reason="end_turn",
-    ))
+    return fixture_provider(rendered_output)
 
 
 def _coordinates(tag: str) -> dict:
     return {
         "audience": f"aud_{tag}", "pain": f"pain_{tag}", "angle": f"angle_{tag}",
-        "hook": f"hook_{tag}", "proof": f"proof_{tag}", "offer": f"offer_{tag}",
+        "hook": f"hook_{tag}", "proof": f"proof_{tag}", "offer": "none",
         "format": f"format_{tag}",
     }
 
@@ -86,7 +84,11 @@ class AssetsTestBase(unittest.TestCase):
         row = ads_repo.create_campaign(web.conn, self.org_id, self.brand_id, campaign,
                                         created_by=ACTOR)
         plan.PROVIDER = _fake(_VALID_PLAN_REPLY)
-        return plan.adopt_strategy(web.conn, self.org_id, self.brand_id, row["id"], actor=ACTOR)
+        revision = bind_fixture(
+            web.conn, self.org_id, self.brand_id, row["id"], json.loads(_VALID_PLAN_REPLY)
+        )
+        return plan.adopt_strategy(web.conn, self.org_id, self.brand_id, row["id"], actor=ACTOR,
+                                  expected_revision=revision, operation_id=f"assets-{row['id']}")
 
     def _direct_campaign(self, *, campaign_start, campaign_end, group_role: str = "new",
                           group_start=None, group_end=None,

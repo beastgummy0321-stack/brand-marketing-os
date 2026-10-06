@@ -7,6 +7,7 @@ the unread days and says never-synced; the sample bucket boundaries (9/10, 49/50
 are exact; the retired manual ingest endpoint is gone; real purchases reach closeout.
 """
 
+import json
 import unittest
 import uuid
 from datetime import date, timedelta
@@ -23,21 +24,19 @@ from app.core import db as coredb
 from app.core import settings as coresettings
 from app.llm import providers
 from app.tests.fixtures.ads_external import outcome_seed
+from app.tests.test_ads_strategy_decision import bind_fixture, fixture_provider
 
 ACTOR = "測試員"
 
 
 def _fake(rendered_output: str) -> providers.FakeProvider:
-    return providers.FakeProvider(response=providers.ProviderResponse(
-        output_text=rendered_output, structured=None,
-        usage=providers.Usage(input_tokens=100, output_tokens=50), stop_reason="end_turn",
-    ))
+    return fixture_provider(rendered_output)
 
 
 _VALID_PLAN_REPLY = (
     '{"groups": [{"role": "new", "name": "新客組", "ads": '
     '[{"name": "新客-廣告一", "coordinates": '
-    '{"audience": "a", "pain": "p", "angle": "an", "hook": "h", "proof": "pr", "offer": "o",'
+    '{"audience": "a", "pain": "p", "angle": "an", "hook": "h", "proof": "pr", "offer": "none",'
     ' "format": "f"}, "scene": "上班族午休在辦公室滑手機找點心"}]}]}'
 )
 
@@ -90,14 +89,24 @@ class OutcomeTestBase(unittest.TestCase):
         allocation = [{"role": "new", "label": "新客", "pct": 100, "rationale": None}]
         campaign = ads_repo.create_campaign(web.conn, self.org_id, self.brand_id, {
             "name": f"測試 Campaign {uuid.uuid4().hex[:6]}", "goal_text": "幫產品衝購買",
-            "objective": "購買", "target_cost": cap,
+            "objective": "購買", "target_cost": cap or 300,
             "start_date": start_date, "end_date": end_date, "status": "draft",
             "budget_planned": 500, "budget_scenario": "recommended",
             "budget_basis_json": {"strategy": {"allocation": allocation}},
         }, created_by=ACTOR)
         plan.PROVIDER = _fake(_VALID_PLAN_REPLY)
+        revision = bind_fixture(
+            web.conn, self.org_id, self.brand_id, campaign["id"], json.loads(_VALID_PLAN_REPLY)
+        )
         detail = plan.adopt_strategy(web.conn, self.org_id, self.brand_id, campaign["id"],
-                                      actor=ACTOR)
+                                      actor=ACTOR, expected_revision=revision,
+                                      operation_id=f"outcome-{campaign['id']}")
+        if cap is None:
+            # Imported outcome behavior with an unknown cap is independent of initial adoption.
+            web.conn.execute(
+                "UPDATE ads_campaign SET target_cost=NULL,target_basis=NULL WHERE id=%s",
+                (campaign["id"],),
+            )
 
         tag = uuid.uuid4().hex[:8]
         campaign_ext, group_ext, ad_ext = f"camp-{tag}", f"as-{tag}", f"ad-{tag}"

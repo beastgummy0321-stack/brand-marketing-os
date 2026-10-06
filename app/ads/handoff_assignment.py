@@ -72,7 +72,7 @@ def workspace(conn, org, brand, campaign):
     }
 
 
-def assign(conn, org, brand, campaign, ad_id, placement_id, revision):
+def assign(conn, org, brand, campaign, ad_id, placement_id, revision, *, commit=True):
     changes.lock(conn, org, brand)
     context = changes.campaign(conn, org, brand, campaign)
     if context["origin"] != "internal" or context["status"] == "closed":
@@ -104,5 +104,6 @@ def assign(conn, org, brand, campaign, ad_id, placement_id, revision):
         "WHERE org_id=%s AND brand_id=%s AND campaign_id=%s AND id=%s",
         (placement_id, revision, org, brand, campaign, ad_id),
     )
-    conn.commit()
+    if commit:
+        conn.commit()
     return workspace(conn, org, brand, campaign)

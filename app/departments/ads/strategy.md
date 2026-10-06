@@ -55,6 +55,28 @@ markdown fence 包起來、物件前後不留一個字。**
 
 ## 交付內容
 
+Contract S: also return `slots`, an explicit array of assignments using only IDs from
+`【可綁定安排】`. Each has `id`, `role`, `customer_group_id` (null only when no groups are
+available), `offer_key`, `carry_from_ad_id` or a nonempty `test_intent` (exactly one), `rationale`,
+and `evidence_refs:[{kind,id}]`. Evidence kinds are learning, result, calendar, brand_fact.
+Retain a carried ad in its previous role by default; any role movement must be an explicit
+slot assignment. Keep its audience and offer with its original image/copy. Do not promote
+every relative winner. New tests must test a stated buying proposition. Explain percentages
+as recommendations with sample limits; do not claim a calculated optimum. Every allocated
+role needs a slot, one role targets one customer group, and the whole proposal must fit the
+served ceiling. Never promise more distinct audiences than slots. Use `none` for no offer,
+even when offers are available; disclose that choice in its test intent and rationale.
+Every nullable field must be present, using explicit null where appropriate.
+The binding section caps each choice list and its `omitted` map discloses excluded counts;
+do not assume the visible candidates are exhaustive or reference an omitted candidate.
+Use stable descriptive slot IDs. Empty evidence is allowed only when the prepared context
+contains no relevant evidence; never invent citations. Every slot must include a nonempty
+`rationale` explaining this particular audience/role/offer/carry choice, connecting its
+`evidence_refs` to the recommendation and stating sample limits or unknowns. Allocation-level
+rationales do not replace each slot's rationale. Do not turn a small relative result into an
+optimality claim. Slot rationale and test intent follow the same no-number prose rule:
+only supplied names may retain digits; do not write CPA, currency, or percentages there.
+
 - `allocation`：一個陣列，每一項是 `{"role", "pct", "rationale"}`：
   - `role`：只能用【可用角色】列出的角色，不能自己加（英文 key 照抄，程式要拿去對照；
     中文名稱由程式自己填，不用你回）。每個角色最多出現一次；不打算投的角色就不要列
@@ -75,6 +97,13 @@ markdown fence 包起來、物件前後不留一個字。**
   "allocation": [
     {"role": "<可用角色之一>", "pct": <0～100 的數字>, "rationale": "……"},
     {"role": "<另一個可用角色>", "pct": <0～100 的數字>, "rationale": "……"}
+  ],
+  "slots": [
+    {"id": "slot-new", "role": "<allocated role>", "customer_group_id": "<prepared group ID>",
+     "offer_key": "<available offer key or none>", "carry_from_ad_id": null,
+     "test_intent": "<the buyer proposition to test>",
+     "rationale": "<why this assignment follows its cited evidence, with sample limits>",
+     "evidence_refs": [{"kind": "<prepared evidence kind>", "id": "<prepared evidence ID>"}]}
   ],
   "why": ["……"],
   "unknowns": ["……"],

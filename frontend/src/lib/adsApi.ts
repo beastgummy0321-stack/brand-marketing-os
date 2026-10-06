@@ -326,7 +326,7 @@ export interface BudgetScenarios {
 }
 
 // F41-I04: the strategy shapes live in `adsStrategyTypes.ts` (this file's 800-line cap); re-exported here.
-export type { StrategyRole, StrategyAllocationItem, StrategyPayload, StrategyFact, BudgetPreview, ResplitRow, PlanMenuRow, PlanCapacity, StrategyBasisFact, StrategyBasisPrice, StrategyBasisLearning, StrategyCoordinateLearning, StrategyBasis } from "./adsStrategyTypes";
+export type { StrategyRole, StrategyAllocationItem, StrategyPayload, StrategyDecision, StrategyAssignmentFacts, StrategyFact, BudgetPreview, ResplitRow, PlanMenuRow, PlanCapacity, StrategyBasisFact, StrategyBasisPrice, StrategyBasisLearning, StrategyCoordinateLearning, StrategyBasis } from "./adsStrategyTypes";
 
 /** `ads_campaign.budget_basis_json` 的形狀（F03-I05 起）：策略＋預算情境＋依據，整包存在
  * Campaign 這一列，沒有另開表。 */
@@ -439,11 +439,12 @@ export async function setAllocation(
 // -- F03-I06：採用策略 -> 投放組／廣告，以及後續編輯 ------------------------------------------
 
 /** `POST .../campaigns/{id}/plan` — 把已採用的策略角色分配展開成投放組／廣告，草稿 -> `ready`。
- * 沒有請求體：策略跟預算都已經存在 Campaign 自己身上，這支不再重新問使用者。 */
-export async function adoptStrategy(brandId: string, campaignId: string): Promise<CampaignDetail> {
+ * Approves the revision currently displayed; retries retain the operation identity. */
+export async function adoptStrategy(brandId: string, campaignId: string,
+  approval: { expected_revision: string; operation_id: string }): Promise<CampaignDetail> {
   const res = await apiFetch(
     `${BASE}/brands/${encodeURIComponent(brandId)}/campaigns/${encodeURIComponent(campaignId)}/plan`,
-    { method: "POST" },
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(approval) },
   );
   const data = await readJson<{ campaign: CampaignDetail }>(res, "展開投放結構失敗。");
   return data.campaign;

@@ -31,21 +31,19 @@ from app.brand_intelligence import repository as bi_repo
 from app.core import approval as approval_mod
 from app.core import db as coredb
 from app.llm import providers
+from app.tests.test_ads_strategy_decision import bind_fixture, fixture_provider
 
 ACTOR = "測試員"
 
 
 def _fake(rendered_output: str) -> providers.FakeProvider:
-    return providers.FakeProvider(response=providers.ProviderResponse(
-        output_text=rendered_output, structured=None,
-        usage=providers.Usage(input_tokens=100, output_tokens=50), stop_reason="end_turn",
-    ))
+    return fixture_provider(rendered_output)
 
 
 def _coordinates(tag: str) -> dict:
     return {
         "audience": f"aud_{tag}", "pain": f"pain_{tag}", "angle": f"angle_{tag}",
-        "hook": f"hook_{tag}", "proof": f"proof_{tag}", "offer": f"offer_{tag}",
+        "hook": f"hook_{tag}", "proof": f"proof_{tag}", "offer": "none",
         "format": f"format_{tag}",
     }
 
@@ -124,7 +122,7 @@ class PublishTestBase(unittest.TestCase):
         ]
         campaign = {
             "name": "測試 Campaign", "goal_text": "幫產品衝購買",
-            "objective": "購買", "target_cost": 300,
+            "objective": "購買", "target_cost": 40,
             "start_date": start_date, "end_date": end_date, "status": "draft",
             "budget_planned": budget_planned, "budget_scenario": "recommended",
             "budget_basis_json": {"strategy": {"allocation": allocation}},
@@ -136,8 +134,12 @@ class PublishTestBase(unittest.TestCase):
         """`draft` -> `ready`，3 個投放組各一支廣告（跟 `test_ads_plan.py` 同一份假回覆）。"""
         campaign = self._create_campaign(**kwargs)
         plan.PROVIDER = _fake(_VALID_PLAN_REPLY)
+        revision = bind_fixture(
+            web.conn, self.org_id, self.brand_id, campaign["id"], json.loads(_VALID_PLAN_REPLY)
+        )
         return plan.adopt_strategy(
             web.conn, self.org_id, self.brand_id, campaign["id"], actor=ACTOR,
+            expected_revision=revision, operation_id=f"publish-{campaign['id']}",
         )
 
     def _actions(self, campaign_id: str) -> list:
