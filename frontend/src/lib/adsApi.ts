@@ -444,7 +444,7 @@ export async function adoptStrategy(brandId: string, campaignId: string,
   approval: { expected_revision: string; operation_id: string }): Promise<CampaignDetail> {
   const res = await apiFetch(
     `${BASE}/brands/${encodeURIComponent(brandId)}/campaigns/${encodeURIComponent(campaignId)}/plan`,
-    { method: "POST", body: JSON.stringify(approval) },
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(approval) },
   );
   const data = await readJson<{ campaign: CampaignDetail }>(res, "展開投放結構失敗。");
   return data.campaign;

@@ -132,8 +132,11 @@ test("冷啟動：建立精靈帶自己的圖 → 策略 → 自己填總額 →
   const planned = (await planResponse.json()).campaign;
   expect(planned.status).toBe("ready");
   const approval = planResponse.request().postDataJSON();
+  expect(planResponse.request().headers()["content-type"]).toBe("application/json");
+  expect(approval.operation_id).toBeTruthy();
   expect(approval.expected_revision).toBe(planned.budget_basis_json.strategy.decision.revision);
   expect(planned.budget_basis_json.strategy.decision.receipt.revision).toBe(approval.expected_revision);
+  expect(planned.budget_basis_json.strategy.decision.receipt.operation_id).toBe(approval.operation_id);
   const plannedIds: string[] = planned.groups.flatMap((group: { ads: { id: string }[] }) => group.ads.map(ad => ad.id));
   // One ad per group; the group count follows the roles the strategy prompt offered (F33 Contract P).
   expect(planned.groups.length).toBeGreaterThan(0);
