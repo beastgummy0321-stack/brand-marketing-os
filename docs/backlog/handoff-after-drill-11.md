@@ -3,7 +3,7 @@
 Start here in the next session. A board, not an implementation authorization. Replaces `handoff-after-drill-10.md`'s pointer.
 
 ## Resume here
-- **2026-10-05: resume from `.work/features/F51.md` 「# Handoff」** (audit chain F48–F51: A/B/C built and integrated, D in progress).
+- **2026-10-06: resume from `.work/features/F51.md` 「# Handoff」** (F48–F51 queues complete; combined acceptance and drill 12 remain open).
 - **2026-10-04 whole-program audit** (user order: this round is the final fix, end the simulate→find→fix loop):
   `audit-2026-10-04/README.md` groups R1–R7 plus ~110 new verified findings into 19 generator workstreams W1–W19 with the
   machine check each must install; decisions 10–14 there extend §2 below. Carve from that README, not from §1 here.
@@ -94,6 +94,7 @@ for which queue kinds are user decisions (home count = 下一件 = decision kind
 campaigns read `destinations`, not `external_view`; inline monthly budget editor (or a return target) on the publish list.
 
 ### R5 A number's basis is not written next to the number
+Built in F51 where scoped: `../architecture/ads.md` §6.53, `../architecture/intake.md` F51 and `../design-system.md` §§6–7. Earlier F48–F50 ownership remains as recorded above; drill 12 is the independent outcome check.
 - N1 「這期要花 6,000」 = October's share only (1,500 × 4 days): `app/ads/month_budget.py:217-227`; `change_control_launch.py:159-186`; `confirmParts.tsx:280,320`.
 - G6 「少賺約 NT$5,000」 deducts product cost, label says only 扣掉廣告費: `app/ads/home_overview.py:236-242`; `MonthMoney.tsx:126-146`.
 - B2 「改這期總預算」 after expansion saves budget_planned only; ad-set daily budgets (what month fit and approval read) never change:
@@ -104,6 +105,7 @@ Fix direction: every figure says what it covers (month portion, days, cost basis
 re-splits ad sets with `budget.split`, or the link goes to the structure tab).
 
 ### R6 Readiness and field rules are re-implemented per page instead of one rule (drill-10 root cause 6, remaining)
+Built in F51 where scoped: `../architecture/ads.md` §6.53, `../architecture/intake.md` F51 and `../design-system.md` §§6–7. Earlier F48–F50 ownership remains as recorded above; drill 12 is the independent outcome check.
 - A1 「可以投放」 = step counter, not content: zero customer groups still ready (`app/intake/product_onboarding.py:126,413,574-579,798-800`;
   `ProductDoneStep.tsx:139`; `WhoStep.tsx:40-45`). Fix: one content check used by complete() and the ready calculation; refuse empty groups.
 - A2 archived product's bundle still ready: `product_onboarding.py:427` ignores status; correct rule in `app/ads/wizard_options.py:118-121`. Fix: derive from `sellable_products`.
@@ -123,6 +125,7 @@ re-splits ad sets with `budget.split`, or the link goes to the structure tab).
 - F11 empty/oversize file share one sentence 「檔案超過 50 MiB 或沒有內容，請另建批次」 (`app/ads/user_assets.py:39`). Nit: simplified 「补」 at `app/ads/asset_suggestions.py:364`.
 
 ### R7 Long work and session state live only in the browser tab
+Built in F51 where scoped: `../architecture/ads.md` §6.53, `../architecture/intake.md` F51 and `../design-system.md` §§6–7. Earlier F48–F50 ownership remains as recorded above; drill 12 is the independent outcome check.
 - B3 plan refusals: five rules raise one `delivery_plan_failed`, no reason code, no log, `max_retries=0`, refusal never fed back (`plan.py:243,289-291,420-441`; `routes.py:479`). Same pattern in brief and strategy.
 - B4 reload during 展開投放結構／策略: busy state only in React; the running `llm_task` row exists but no read returns it; `adopt_strategy` has no row lock (`app/llm/gateway.py:180,192`; `StrategyTab.tsx:151,159,198-201`; `plan.py:344-348`).
 - A10 brand onboarding step lives in sessionStorage, not `?step=`; Back from step 3 → blank 建立品牌; steps 4–6 lose drafts on reload (`IntakeWizard.tsx:77,100,105-106`; only `IdentityStep` uses `useStepDraft`). Product onboarding is the model.

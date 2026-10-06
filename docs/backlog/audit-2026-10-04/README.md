@@ -14,7 +14,9 @@ the file:line rows for their ticket only.
 - W1–W6 built in F48 (2026-10-04): `docs/architecture/ads.md` §6.50, `workbench.md` §5.16, `intake.md` 「F48」.
 - W7–W10, W17 built in F49 (2026-10-04): `docs/architecture/ads.md` §6.51.
 - W11–W14 built in F50 (2026-10-05): §6.52.
-- W11–W14 = C; W15, W16, W18, W19 = D.
+- W15, W16, W18, W19 built in F51 (2026-10-06): `docs/architecture/ads.md` §6.53 and `intake.md` F51. W19 is the ratchet only; full adapter migration remains deferred.
+- User retained the active-AI-queue W14 exception on 2026-10-06 (ads §6.53); it is not a served background outcome.
+- F48–F51 remain open for combined human acceptance and drill 12; built does not mean accepted.
 
 ## Workstreams (each removes one generator; rows cite cluster file → finding ids)
 

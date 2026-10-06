@@ -246,3 +246,14 @@ one owner (`brand_intelligence.product_readiness`／`sellable_products`／`knowl
 onboarding; the done page's title follows `ready` and 「繼續建檔 →」 opens the first missing step. Archived products and brands are
 listed and restored on the products page and the brand overview. The library read lists queued customer-voice jobs. Details:
 `ads.md` §6.52.
+
+
+### F51 (built 2026-10-06): wizard location and drafts (Contract W)
+The brand wizard uses `/brands/{brand}/intake?step=N`. Creating a brand replaces `/intake/new`; subsequent step changes push
+history so browser Back walks the steps. Without a query, drafts open their stored reachable step and completed brands open
+step 7; unreachable query steps are clamped. The former `intake-view:` and `intake-start:` stores are removed.
+`shared/stepDraft.ts` owns `brandDraftKey` and `productDraftKey`: session drafts are scoped by user, brand/product and step,
+restored on reload, Back and step-bar navigation, and dropped after a successful save. Files and upload tokens are not drafts.
+Enter in an inline evidence editor saves only that edit, without submitting the whole step. Errors, buttons and derived
+figures follow `ads.md` section 6.53 and `design-system.md` sections 6-7. Draft/history behavior has targeted component tests;
+full drill and human acceptance are separate checks.

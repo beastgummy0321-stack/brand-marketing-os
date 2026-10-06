@@ -2039,9 +2039,10 @@ literals in strings, `Math.round` over money, mirror comments; per-line `NOT_A_R
 - **Strategy facts (Contract S, decision 3).** `strategy.facts [{kind, text}]` (groups, offers, numbers, capacity, learnings) are
   built by the program and recomputed on every campaign read; the model's prose is refused when a digit, `%` or `NT$` is left after
   stripping the names it was given (`planner_context.quoted_names`).
-- **Known debt left to features C／D**: `NOT_A_RULER` excuses in `oneRuler.test.ts` for browser arithmetic (`PaceChart.tsx`,
-  `PerformanceTab.tsx`, `reviewFlow.ts`) and copied backend numbers (`ReviewPanel`, `ReviewTracking`, `NewCampaignPage`, `CopyPage`,
-  `OverviewBody` 「近 14 天」); the statutory reminder row has no regulation link field (intake).
+- **C／D follow-through built in F50／F51**: the browser arithmetic and copied backend-number exceptions in `PaceChart`,
+  `PerformanceTab`, `reviewFlow`, `ReviewPanel`, `ReviewTracking`, `NewCampaignPage`, `CopyPage` and `OverviewBody` are removed.
+  The statutory reminder still has no regulation-link field (intake). The active-job queue exception retained by the user is
+  documented in §6.53; it does not supply a financial figure.
 
 ### 6.51 One lifecycle, one decision queue, one sync outcome, one coverage, readback compared, slot states served（ruled 2026-10-04；built in F49）
 Audit 2026-10-04 W7–W10, W17 (decisions 5, 6, 11, 12; user rulings 2026-10-04: `ENDED_GRACE_DAYS = 7`, 加預算 is not a decision).
@@ -2123,3 +2124,31 @@ strategy／plan, archived lists with restore, SKU cost 0 kept, list price below 
   `repository.GENERATION_TIMEOUT_S`.
 - **Known limits.** The Meta backfill outcome is per org while rows are per brand; a retried customer-voice failure stays listed
   for 24 h.
+
+
+### 6.53 One HTTP translator, explained controls, canonical routes, named figures and platform ratchet (built in F51, 2026-10-06)
+Audit W15, W16, W18, W19; W18's wizard contract is in `intake.md` under F51. Rule authorities remain the docstrings of
+`frontend/src/lib/http.ts`, `app/core/figures.py` and `app/shared/web.py::app_path`, not copies in screen components.
+- **Failure codes (Contract C).** API errors preserve `code`, `details`, keyed field errors and rejected values. Components
+  branch on those fields instead of matching error sentences. Network failures, expiry and pending-path restoration all use
+  `lib/http.ts` (Contract H). Failed writes are never replayed automatically.
+- **Routes (Contract R).** Served links are router paths without `/app`; `app_path` builds them. `app_url` adds the prefix only
+  for links leaving the SPA. Migration `20261006000101_core_interrupt_href_app_relative.sql` converts old inbox links.
+  `lib/adsRoutes.ts` builds campaign and flow paths, with `perf` as the performance tab; old `performance` bookmarks redirect.
+- **Figures (Contract F).** The seven bases at `GET /api/figures` own captions, formulas and units. `layout/Figure` prints them,
+  preserves currency and shows null as unknown. ROAS payload keys identify the basis. All-channel ROAS is unknown for mixed
+  currencies; platform spend totals are per currency. Earnings deduct both product cost and advertising spend. Review periods
+  serve `ad_spend` and `ad_result_view`; the browser does not reconstruct missing values from raw rows. Historical review
+  snapshots without the new keys remain unknown. `lib/figures` owns the two narrow preview/native-row ratio helpers.
+- **Controls and feedback (Contract D).** Shared buttons accept `busy` or `disabledReason`, never bare `disabled`; idle disabled
+  controls show an accessible reason. Save-in-place and clipboard actions acknowledge success or explain failure (design-system
+  sections 6-7). All F51 per-issue guard allowances and F51 one-ruler pending files are removed.
+- **Platform ratchet (Contract P).** `test_ads_no_platform_literal.py` scans native status words, platform imports and tokens
+  outside adapters, with counted `(file, token)` allowances. Counts may only shrink; stale counts fail too. Full adapter
+  migration remains deferred; `oneRulerPending/W19.ts` still records the two existing pause payloads.
+- **Retained active-job exception (user confirmed 2026-10-06).** `SettleAngles` reads `found?.job.status` to show its position
+  in the active AI queue. That API does not serve an outcome field. `oneRulerPending/W14.ts` is intentionally retained;
+  converting this read to a background-result contract would require separate backend scope.
+- **Checks.** Frontend `feedbackGuards.test.ts`, `figureGuards.test.ts`, ads `oneRuler.test.ts`; backend
+  `test_figure_basis.py`, `test_action_url_targets.py`, `test_ads_no_platform_literal.py`. Machine checks and component screenshot
+  pairs are implementation evidence, not independent drill scores or human visual acceptance.

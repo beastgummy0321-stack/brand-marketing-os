@@ -365,12 +365,14 @@ change (ADR 0060: `layout/` is the shared kit) and needs the shadcn generator, n
 | Inputs | `ui/input`, `ui/textarea`, native `select` | native `<input type=date>` for dates |
 | Loading | `Skeleton` | shaped like the content it replaces |
 | Empty / error | `EmptyState` | title · why · one next-step button (`actionHref` or `onAction` 重新載入) |
-| Failed request → sentence | `lib/http.ts` (`throwIfFailed`, `errorMessageFromResponse`) | the only place a non-OK response becomes an `Error`; it shows the server's sentence, and a 「…（狀態碼 N）」 text exists only as the fallback passed to it (guard: `lib/feedbackGuards.test.ts`). A 401 redirect says 「登入已過期，請重新登入」 on the login page; sign-in errors are Chinese |
-| Disabled control | `Button disabledReason` | while disabled, one muted sentence says why; never a silent grey button |
+| Failed request → sentence | `lib/http.ts` (`apiFetch`, `readJson`, `throwIfFailed`) | Contract H in its docstring owns network failures, response envelopes and login redirects. Failed reads say the server is unreachable; failed writes say their result is uncertain. Expiry remembers the page for 10 minutes, flags a lost write, and never replays it. Components branch on codes, not sentences (`lib/feedbackGuards.test.ts`). |
+| Disabled control | `Button busy` / `disabledReason` | Contract D: busy actions use `aria-busy` and a progress label; a nonempty reason disables the action and prints an accessible explanation. No legacy `disabled` prop. Shared action patterns follow this contract; native inputs retain their native behavior. |
 | Form error | `useFormSubmit` | the error clears as soon as a field value changes; field errors show the server's sentence |
 | Worker stopped | `WorkerStoppedNotice` + `lib/useWorkerHealth` | shown by the jobs bell and every page waiting on a job while `GET /api/jobs/active` says `stalled`: 「背景程式停了…」 + 「再檢查一次」 |
 | Paging | `Pager` | client-side slices, default page size in `usePagination.ts` |
 | Copy value | `CopyIconButton`, `ads/patterns/CopyField` | any id / key / text the user might paste elsewhere; shows 「已複製」 for 2 s, 「請手動選取複製」 when the browser refuses. The only places that call `navigator.clipboard` (guard: `lib/feedbackGuards.test.ts`) |
+| Save feedback | existing form feedback | a successful save that leaves the form open shows 「已儲存」; closing panels already signal completion. Do not show success before the write completes. |
+| Number basis | `layout/Figure` + `lib/figures.useFigureBases` | print the served label and formula from `GET /api/figures`; preserve currency and show unknown values as unknown. Definitions live only in `app/core/figures.py`. |
 | Header / tabs | `PageHeader`, `PageTabs` | §4 |
 
 Retired (deleted 2026-09-07, old look, zero importers): `FluidCard`, `StatBig`, `ProgressRing`,
@@ -386,7 +388,7 @@ Retired (deleted 2026-09-07, old look, zero importers): `FluidCard`, `StatBig`, 
   2026-09-08) — because one brand may bind accounts in two currencies (ADR 0057 §4) and `NT$` on a USD
   row is a wrong label; counts `1,332,500`; rate `1.91%`; ROAS `3.21x`; every number tabular. Format in
   one place (`number()` in `DashboardWidgets.tsx`, `format.ts`); do not re-implement per screen.
-- **Caption every number**: what window (本月累計), what source (平台回報), what basis (保守／樂觀).
+- **Caption every number**: what window (本月累計), what source (平台回報), what basis (保守／樂觀). Derived figures use the basis code, label and formula owned by `app/core/figures.py` (Contract F); the browser does not calculate a replacement or combine currencies. `null` never becomes zero.
 - **Two-basis ROAS** is drawn as a dumbbell: filled dot conservative (chart 1), hollow dot optimistic
   (chart 4), joined by a line; a dashed vertical breakeven line in `--color-warning` labelled
   「打平線 1.43x」; legend below; footnote 「兩種計算口徑，非統計信賴區間」. Never collapse it to one number.
