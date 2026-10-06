@@ -14,7 +14,10 @@ F42-I14 拆掉。
 不發任何真實網路請求。
 """
 
+import json
 import logging
+import unicodedata
+from typing import TypedDict
 
 from app import storage
 from app.brand_intelligence import repository as bi_repo
@@ -113,6 +116,7 @@ def _prefill_prompt(brand_name: str, pages: list, photo_kinds: list) -> str:
     lines = [f"品牌名稱：{brand_name}"]
     for index, (url, text) in enumerate(pages, start=1):
         lines.append(f"【頁面 {index}】{url}\n{text}")
+    lines.append("【來源目錄】\n" + prefill_catalog_prompt(prefill_sources(pages)))
     if photo_kinds:
         lines.append("附上的品牌照片依序是：" + "、".join(
             f"第 {i} 張＝{kind}" for i, kind in enumerate(photo_kinds, start=1)))
@@ -122,8 +126,10 @@ def _prefill_prompt(brand_name: str, pages: list, photo_kinds: list) -> str:
     lines.append("「沒找到」只能從這些面向挑：" + "、".join(PREFILL_AREAS))
     lines.append(
         "規則：\n"
-        "1. 每一項都要在 note 寫出處：來自網站就寫「頁面 N」或那一頁的名稱，來自照片就寫「品牌照片」。"
-        "不得編造出處；找不到出處的東西就不要寫。\n"
+        "1. 每一項（包含商品與顧客群詮釋）必須帶 source_refs，格式為"
+        '[{"source_id":"page:1","quote":"來源原文片段"}]。source_id 只能用來源目錄的 ID，'
+        "quote 必須逐字引用該來源。找不到引文就不要列；來源標籤由程式產生，不填 note。"
+        "照片沒有獨立文字或 OCR，不可自行造照片引文。引用只表示來源出現，並非查證內容為真。\n"
         f"2. positioning：一句話說這個品牌是給誰、解決什麼（最多 {MAX_POSITIONING_CHARS} 字）。\n"
         "3. tone：從可選的說話口氣挑 1～2 個。visual：畫面風格（色調、光線、場景）。\n"
         "4. proof：網站或照片上寫明的證據，fact_key 只能用上面的證據種類。\n"
@@ -132,11 +138,11 @@ def _prefill_prompt(brand_name: str, pages: list, photo_kinds: list) -> str:
         f"6. products：實際看到的商品名稱（最多 {MAX_PREFILL_PRODUCTS} 個），url 是該商品頁網址，"
         "不知道就 null；不要列價格。\n"
         "7. 沒找到的面向列進 not_found；沒有就不要填，不要用推測補。\n"
-        '只回傳 JSON：{"positioning": {"value": "…", "note": "出處"}, '
-        '"tone": {"values": ["…"], "note": "出處"}, "visual": {"value": "…", "note": "出處"}, '
-        '"proof": [{"fact_key": "…", "text": "…", "note": "出處"}], '
-        '"policies": [{"key": "…", "params": {"參數": "值"}, "note": "出處"}], '
-        '"products": [{"name": "…", "url": null}], "not_found": ["面向"]}'
+        '每個非空項目均加上 source_refs。只回傳 JSON：{"positioning": {"value": "…", "source_refs": []}, '
+        '"tone": {"values": ["…"], "source_refs": []}, "visual": {"value": "…", "source_refs": []}, '
+        '"proof": [{"fact_key": "…", "text": "…", "source_refs": []}], '
+        '"policies": [{"key": "…", "params": {"參數": "值"}, "source_refs": []}], '
+        '"products": [{"name": "…", "url": null, "source_refs": []}], "not_found": ["面向"]}'
     )
     return "\n\n".join(lines)
 
@@ -149,17 +155,51 @@ def _clean_text(value, limit: int) -> str | None:
     return text if text and len(text) <= limit else None
 
 
-def _clean_note(value, *, pages_read: int, photos_read: int) -> str | None:
-    """The entry's source note ("" = none given), or None when it names a source this scan did
-    not read (a photo note without photos, a page note without pages): an invented source."""
-    if value is None or (isinstance(value, str) and not value.strip()):
-        return ""
-    note = _clean_text(value, MAX_NOTE_CHARS)
-    if note is None:
+class PrefillSource(TypedDict):
+    source_id: str
+    url: str
+    text: str
+    note: str
+
+
+def prefill_sources(pages: list, *, label: str = "頁面") -> list[PrefillSource]:
+    """The fetched text catalog; image blocks have no independently quoted text/OCR."""
+    return [{"source_id": f"page:{index}", "url": url, "text": text,
+             "note": f"頁面 {index}" if label == "頁面" else label}
+            for index, (url, text) in enumerate(pages, start=1)]
+
+
+def prefill_catalog_prompt(sources: list[PrefillSource]) -> str:
+    """Reference metadata only; the prompt already contains each source's full text once."""
+    return json.dumps([{"source_id": source["source_id"], "url": source["url"], "note": source["note"]}
+                       for source in sources], ensure_ascii=False)
+
+
+def normalized_quote(text: str) -> str:
+    """Normalize width and whitespace, without inventing text or checking its truth."""
+    return "".join(unicodedata.normalize("NFKC", text).split()).strip("「」『』“”\"'")
+
+
+def source_note(item: dict, sources: list[PrefillSource]) -> str | None:
+    """All quoted references must match this call's catalog; model-written notes are ignored.
+    Matching proves source presence, not a proposition's truth or advertising eligibility."""
+    refs = item.get("source_refs")
+    if not isinstance(refs, list) or not refs:
         return None
-    if "照片" in note:
-        return note if photos_read else None
-    return note if pages_read else None
+    catalog = {source["source_id"]: source for source in sources}
+    notes = []
+    for ref in refs:
+        if not isinstance(ref, dict) or not isinstance(ref.get("source_id"), str):
+            return None
+        source = catalog.get(ref["source_id"])
+        quote = ref.get("quote")
+        if source is None or not isinstance(quote, str):
+            return None
+        span = normalized_quote(quote)
+        if not span or span not in normalized_quote(source["text"]):
+            return None
+        notes.append(source["note"])
+    return "、".join(dict.fromkeys(notes))
 
 
 def _clean_policy_params(key: str, raw) -> dict | None:
@@ -242,11 +282,12 @@ def _check_policies(items, note_of) -> tuple[list, int]:
     return policies, dropped
 
 
-def _check_products(items) -> tuple[list, int]:
+def _check_products(items, note_of) -> tuple[list, int]:
     products, seen, dropped = [], set(), 0
     for item in items if isinstance(items, list) else []:
         name = _clean_text(item.get("name"), MAX_PRODUCT_NAME_CHARS) if isinstance(item, dict) else None
-        if name is None or name in seen or len(products) >= MAX_PREFILL_PRODUCTS:
+        note = note_of(item) if isinstance(item, dict) else None
+        if name is None or note is None or name in seen or len(products) >= MAX_PREFILL_PRODUCTS:
             dropped += 1
             continue
         seen.add(name)
@@ -254,7 +295,7 @@ def _check_products(items) -> tuple[list, int]:
             url = input_rules.url(item.get("url"), "商品頁網址", optional=True)
         except input_rules.InputRuleError:
             url = None
-        products.append({"name": name, "url": url})
+        products.append({"name": name, "url": url, "note": note})
     return products, dropped
 
 
@@ -269,7 +310,8 @@ def found_areas(prefill: dict) -> set:
     return found
 
 
-def validate_prefill_reply(data, *, pages_read: int, photos_read: int) -> tuple[dict | None, int]:
+def validate_prefill_reply(data, *, pages_read: int, photos_read: int,
+                           sources: list[PrefillSource] | None = None) -> tuple[dict | None, int]:
     """Program check of the prefill reply contract -> (prefill, dropped entry count).
     `None` = unreadable (not an object, or none of the contract's keys). Every entry is checked on
     its own: an invalid one (a tone outside `TONES`, an unknown proof/policy key, over-long text, a
@@ -278,7 +320,7 @@ def validate_prefill_reply(data, *, pages_read: int, photos_read: int) -> tuple[
         return None, 0
 
     def note_of(item: dict) -> str | None:
-        return _clean_note(item.get("note"), pages_read=pages_read, photos_read=photos_read)
+        return source_note(item, sources or [])
 
     out, dropped = _check_value_blocks(data, note_of)
     tone, n = _check_tone(data.get("tone"), note_of)
@@ -289,7 +331,7 @@ def validate_prefill_reply(data, *, pages_read: int, photos_read: int) -> tuple[
     dropped += n
     out["policies"], n = _check_policies(data.get("policies"), note_of)
     dropped += n
-    out["products"], n = _check_products(data.get("products"))
+    out["products"], n = _check_products(data.get("products"), note_of)
     dropped += n
     found = found_areas(out)
     raw_missing = data.get("not_found") if isinstance(data.get("not_found"), list) else []
@@ -359,7 +401,8 @@ def run_prefill(conn, draft: dict) -> tuple:
     if task["status"] != "succeeded":
         return False, task["error"]
     prefill, dropped = validate_prefill_reply(
-        _parse_json_reply(task["rendered_output"]), pages_read=len(pages), photos_read=len(blocks))
+        _parse_json_reply(task["rendered_output"]), pages_read=len(pages), photos_read=len(blocks),
+        sources=prefill_sources(pages))
     if prefill is None:
         return False, PARSE_FAIL_MESSAGE
     if dropped:

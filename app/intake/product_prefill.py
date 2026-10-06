@@ -27,7 +27,6 @@ Tests swap `PROVIDER` and `read_url` (same pattern as `app/intake/ai.py`).
 """
 
 import logging
-import re
 
 from app import storage
 from app.brand_intelligence import background_job
@@ -96,6 +95,8 @@ def _prompt(product_name: str, page: tuple | None, photos: int) -> str:
     lines = [f"商品名稱：{product_name}"]
     if page is not None:
         lines.append(f"【商品頁】{page[0]}\n{page[1]}")
+    lines.append("【來源目錄】\n" + ai.prefill_catalog_prompt(
+        ai.prefill_sources([page] if page else [], label="商品頁")))
     if photos:
         lines.append(f"附上的商品照片共 {photos} 張。")
     pains = "；".join(f"{k}＝{label}" for k, label in vocab.PAIN_KINDS)
@@ -104,8 +105,11 @@ def _prompt(product_name: str, page: tuple | None, photos: int) -> str:
     lines.append(f"證據種類（fact_key＝名稱）：{kinds}")
     lines.append(
         "規則：\n"
-        "1. 每一項都要在 note 寫出處：來自商品頁就寫「商品頁」（評論區就寫「商品頁評論」），"
-        "來自照片就寫「商品照片」。不得編造出處；找不到出處的東西就不要寫。\n"
+        "1. 每一項必須帶 source_refs，格式為"
+        '[{"source_id":"page:1","quote":"來源原文片段"}]。source_id 只能用來源目錄的 ID，'
+        "quote 必須逐字引用該來源。找不到引文就不要列；來源標籤由程式產生，不填 note。"
+        "顧客群詮釋可以改寫，但仍要有引用，仍只是提議。照片沒有獨立文字或 OCR，"
+        "不可自行造照片引文；來源存在不等於內容、功效或廣告資格已查證。\n"
         f"2. intro：一句話介紹這個商品（最多 {_TEXT_LIMITS['intro']} 字）；"
         f"mechanism：裡面有什麼、怎麼作用（最多 {_TEXT_LIMITS['mechanism']} 字）；"
         f"difference：跟別家不一樣的地方（最多 {_TEXT_LIMITS['difference']} 字）。"
@@ -122,15 +126,15 @@ def _prompt(product_name: str, page: tuple | None, photos: int) -> str:
         "price＝售價，list_price＝頁面寫的原價，沒寫就 null。"
         "數字只能用頁面上寫的，不要換算、不要推測。\n"
         "7. 沒寫的就不要填，不要用推測補。\n"
-        '只回傳 JSON：{"intro": {"value": "…", "note": "出處"}, '
-        '"mechanism": {"value": "…", "note": "出處"}, '
-        '"difference": {"value": "…", "note": "出處"}, '
+        '每個非空項目均加上 source_refs。只回傳 JSON：{"intro": {"value": "…", "source_refs": []}, '
+        '"mechanism": {"value": "…", "source_refs": []}, '
+        '"difference": {"value": "…", "source_refs": []}, '
         '"groups": [{"who": "…", "pain_keys": ["…"], "quote": "", "when_used": "", '
-        '"note": "出處"}], '
-        '"proof": [{"fact_key": "…", "text": "…", "note": "出處"}], '
-        '"claims": [{"text": "…", "note": "出處"}], '
+        '"source_refs": []}], '
+        '"proof": [{"fact_key": "…", "text": "…", "source_refs": []}], '
+        '"claims": [{"text": "…", "source_refs": []}], '
         '"sell_ways": [{"name": "…", "qty": 1, "price": 0, "list_price": null, '
-        '"note": "出處"}]}'
+        '"source_refs": []}]}'
     )
     return "\n\n".join(lines)
 
@@ -138,13 +142,6 @@ def _prompt(product_name: str, page: tuple | None, photos: int) -> str:
 # ---------------------------------------------------------------------------
 # Contract check
 # ---------------------------------------------------------------------------
-
-_QUOTE_MARKS = "「」『』“”\"'"
-
-
-def _squash(text: str) -> str:
-    return re.sub(r"\s+", "", text).strip(_QUOTE_MARKS)
-
 
 def _check_texts(data: dict, note_of) -> tuple[dict, int]:
     out, dropped = {}, 0
@@ -174,12 +171,12 @@ def _optional_text(value, limit: int) -> str | None:
     return text if len(text) <= limit else None
 
 
-def _check_groups(items, note_of, page_text: str, photos_read: int) -> tuple[list, int]:
+def _check_groups(items, note_of, page_text: str) -> tuple[list, int]:
     """≤3 groups; pain keys outside the six are dropped (and repeats), more than two cut to two; a
     group left without a pain key, without 是誰 or with an invented note is dropped. A quote not
-    found verbatim on the page (unless the note names a read photo) is blanked."""
+    found verbatim on the page is blanked; images are not independently quoted text."""
     groups, seen, dropped = [], set(), 0
-    page = _squash(page_text)
+    page = ai.normalized_quote(page_text)
     for item in items if isinstance(items, list) else []:
         if not isinstance(item, dict) or len(groups) >= po.MAX_GROUPS:
             dropped += 1
@@ -197,8 +194,7 @@ def _check_groups(items, note_of, page_text: str, photos_read: int) -> tuple[lis
                 or quote is None or when_used is None):
             dropped += 1
             continue
-        from_photo = "照片" in note and photos_read
-        if quote and not from_photo and not (_squash(quote) and _squash(quote) in page):
+        if quote and not (ai.normalized_quote(quote) and ai.normalized_quote(quote) in page):
             quote, dropped = "", dropped + 1  # not the page's own words: never an invented quote
         seen.add(who)
         groups.append({"who": who, "pain_keys": pains, "quote": quote,
@@ -253,19 +249,19 @@ def _check_sell_ways(items, note_of) -> tuple[list, int]:
 
 
 def validate_reply(data, *, page_text: str, pages_read: int,
-                   photos_read: int) -> tuple[dict | None, int]:
+                   photos_read: int,
+                   sources: list[ai.PrefillSource] | None = None) -> tuple[dict | None, int]:
     """Program check of the product prefill reply -> (prefill, dropped entry count). `None` =
     unreadable (not an object, or none of the contract's keys). Every entry is checked on its own;
-    notes go through the brand read's rule (`ai._clean_note`: a photo note needs a read photo, a
-    page note a read page)."""
+    notes are generated from quoted references to this call's fetched text catalog."""
     if not isinstance(data, dict) or not any(key in data for key in _KEYS):
         return None, 0
 
     def note_of(item: dict) -> str | None:
-        return ai._clean_note(item.get("note"), pages_read=pages_read, photos_read=photos_read)
+        return ai.source_note(item, sources or [])
 
     out, dropped = _check_texts(data, note_of)
-    out["groups"], n = _check_groups(data.get("groups"), note_of, page_text, photos_read)
+    out["groups"], n = _check_groups(data.get("groups"), note_of, page_text)
     dropped += n
     out["proof"], n = ai._check_proof(data.get("proof"), note_of)
     dropped += n
@@ -336,7 +332,8 @@ def run_prefill(conn: Conn, brand_id: str, product_id: str) -> tuple:
         return _fail(conn, brand_id, product_id, task["error"] or ai.PARSE_FAIL_MESSAGE, task["id"])
     prefill, dropped = validate_reply(
         gateway.parse_json_reply(task["rendered_output"]), page_text=page[1] if page else "",
-        pages_read=1 if page else 0, photos_read=len(blocks))
+        pages_read=1 if page else 0, photos_read=len(blocks),
+        sources=ai.prefill_sources([page] if page else [], label="商品頁"))
     if prefill is None:
         return _fail(conn, brand_id, product_id, ai.PARSE_FAIL_MESSAGE, task["id"])
     if dropped:

@@ -76,17 +76,9 @@ SCRIPTED_REPLIES: dict[str, dict] = {
         "topic": None, "outputs": [{"part": "image_prompt", "count": 1}], "style_hint": None,
         "platform": None, "size": None, "audience": None, "key_message": None,
     },
-    # F42-I05: brand onboarding prefill; passes `app.intake.ai.validate_prefill_reply` whenever at
-    # least one page was read (every note names 「頁面 1」). No digits outside the policy param.
+    # Local intake fixtures take the bounded manual-input path. No page-independent facts.
     "intake_prefill": {
-        "positioning": {"value": "（腳本回覆）給忙到沒空吃飯的人的維他命軟糖", "note": "頁面 1"},
-        "tone": {"values": ["親切", "直接"], "note": "頁面 1"},
-        "visual": {"value": "（腳本回覆）明亮、自然光、暖色系", "note": "頁面 1"},
-        "proof": [{"fact_key": "founder_voice", "text": "（腳本回覆）創辦人自己吞不下藥丸才做了軟糖",
-                   "note": "頁面 1"}],
-        "policies": [{"key": "ship_threshold", "params": {"threshold": 999}, "note": "頁面 1"}],
-        "products": [{"name": "（腳本回覆）綜合維他命軟糖", "url": None}],
-        "not_found": ["媒體報導", "銷售數據"],
+        "proof": [], "policies": [], "products": [], "not_found": [],
     },
     # F42-I05: 「自訂」. One shape for every block: each block reads only its own keys
     # (app/intake/custom.py `check_reply`); no digits, so any sentence passes the number check.
@@ -97,20 +89,9 @@ SCRIPTED_REPLIES: dict[str, dict] = {
         "who": "（腳本回覆）整理好的一群顧客", "pain_keys": ["effort"], "quote": "（腳本回覆）顧客原話",
         "when_used": "（腳本回覆）早上出門前", "pain_key": "effort", "verdict": "ok",
     },
-    # F43-I06: product onboarding prefill; passes `app.intake.product_prefill.validate_reply`
-    # whenever the product page was read (every note names 「商品頁」). The quote is empty: a
-    # quote must be on the page verbatim, and the e2e page is not this text. The `groups` key
-    # does not trigger ScriptedProvider's delivery-plan template: this prompt has no adopted-role
-    # lines, so `_reply_for` returns the reply unchanged.
+    # Local product intake fixtures also leave proposals empty; manual entry remains available.
     "intake_product_prefill": {
-        "intro": {"value": "（腳本回覆）一天一顆的綜合維他命軟糖", "note": "商品頁"},
-        "mechanism": {"value": "（腳本回覆）維生素與礦物質做成軟糖", "note": "商品頁"},
-        "difference": {"value": "（腳本回覆）不用吞藥丸", "note": "商品頁"},
-        "groups": [{"who": "（腳本回覆）常加班的上班族", "pain_keys": ["effort"], "quote": "",
-                    "when_used": "（腳本回覆）早上出門前", "note": "商品頁"}],
-        "proof": [{"fact_key": "customer_review", "text": "（腳本回覆）回購很多次", "note": "商品頁"}],
-        "claims": [{"text": "（腳本回覆）每天補足營養", "note": "商品頁"}],
-        "sell_ways": [{"name": "單盒", "qty": 1, "price": 399, "list_price": None, "note": "商品頁"}],
+        "groups": [], "proof": [], "claims": [], "sell_ways": [],
     },
 }
 

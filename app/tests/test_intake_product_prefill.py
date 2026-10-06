@@ -10,6 +10,7 @@ brand and product names are fictional.
 import json
 import os
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from fastapi.testclient import TestClient
@@ -24,7 +25,7 @@ from app.core import settings as coresettings
 from app.intake import ai as intake_ai
 from app.intake import product_prefill
 from app.intake import repository as ir
-from app.llm import gateway, providers
+from app.llm import context_compiler, gateway, providers
 from app.llm.providers import FakeProvider, ProviderResponse, Usage
 
 _SEQ = [0]
@@ -37,31 +38,41 @@ _PAGE = (
 
 _GROUP = {"who": "常加班的上班族", "pain_keys": ["effort"],
           "quote": "每天吞藥丸好麻煩，這個好吃多了", "when_used": "早上出門前",
-          "note": "商品頁評論"}
+          "note": "商品頁", "source_refs": [{"source_id": "page:1",
+                                              "quote": "每天吞藥丸好麻煩，這個好吃多了"}]}
 _REPLY = {
-    "intro": {"value": "一天一顆，12 種維生素", "note": "商品頁"},
-    "mechanism": {"value": "維生素做成軟糖", "note": "商品頁"},
+    "intro": {"value": "一天一顆，12 種維生素", "note": "商品頁",
+              "source_refs": [{"source_id": "page:1", "quote": "一天一顆，12 種維生素"}]},
+    "mechanism": {"value": "維生素做成軟糖", "note": "商品頁",
+                  "source_refs": [{"source_id": "page:1", "quote": "綜合維他命軟糖"}]},
     "difference": {"value": "不用吞藥丸", "note": "商品照片"},  # no photo was read: invented
     "groups": [
         # made_up is outside the six pain keys: dropped, the group stays
         {**_GROUP, "pain_keys": ["effort", "made_up"]},
         # a quote that is not on the page: blanked, the group stays
         {"who": "怕買錯的新手爸媽", "pain_keys": ["uncertainty"], "quote": "我自己編的一句話",
-         "when_used": "", "note": "商品頁"},
+         "when_used": "", "note": "商品頁", "source_refs": _GROUP["source_refs"]},
         {"who": "只有煩惱不存在的人", "pain_keys": ["made_up"], "quote": "", "when_used": "",
          "note": "商品頁"},  # no pain key left: dropped
-        {"who": "第三群", "pain_keys": ["cost"], "quote": "", "when_used": "", "note": "商品頁"},
-        {"who": "第四群", "pain_keys": ["cost"], "quote": "", "when_used": "", "note": "商品頁"},
-        {"who": "第五群", "pain_keys": ["cost"], "quote": "", "when_used": "", "note": "商品頁"},
+        {"who": "第三群", "pain_keys": ["cost"], "quote": "", "when_used": "",
+         "note": "商品頁", "source_refs": _GROUP["source_refs"]},
+        {"who": "第四群", "pain_keys": ["cost"], "quote": "", "when_used": "",
+         "note": "商品頁", "source_refs": _GROUP["source_refs"]},
+        {"who": "第五群", "pain_keys": ["cost"], "quote": "", "when_used": "",
+         "note": "商品頁", "source_refs": _GROUP["source_refs"]},
     ],
     "proof": [
-        {"fact_key": "lab_report", "text": "SGS 重金屬檢驗合格", "note": "商品頁"},
+        {"fact_key": "lab_report", "text": "SGS 重金屬檢驗合格", "note": "商品頁",
+         "source_refs": [{"source_id": "page:1", "quote": "SGS 重金屬檢驗合格"}]},
         {"fact_key": "celebrity", "text": "明星推薦", "note": "商品頁"},  # unknown kind
     ],
-    "claims": [{"text": f"說法 {i}", "note": "商品頁"} for i in range(10)],
+    "claims": [{"text": "12 種維生素", "note": "商品頁",
+                "source_refs": [{"source_id": "page:1", "quote": "12 種維生素"}]}],
     "sell_ways": [
-        {"name": "單盒", "qty": 1, "price": 399, "list_price": 399, "note": "商品頁"},
-        {"name": "三盒組", "qty": 3, "price": 999, "list_price": 1197, "note": "商品頁"},
+        {"name": "單盒", "qty": 1, "price": 399, "list_price": 399, "note": "商品頁",
+         "source_refs": [{"source_id": "page:1", "quote": "單盒 NT$399"}]},
+        {"name": "三盒組", "qty": 3, "price": 999, "list_price": 1197, "note": "商品頁",
+         "source_refs": [{"source_id": "page:1", "quote": "三盒組 NT$999（原價 1,197）"}]},
         {"name": "壞的", "qty": 0, "price": 1, "list_price": None, "note": "商品頁"},
         {"name": "四", "qty": 4, "price": 1200, "list_price": None, "note": "商品頁"},
         {"name": "五", "qty": 5, "price": 1500, "list_price": None, "note": "商品頁"},
@@ -144,17 +155,19 @@ class ProductPrefillTest(_Base):
         status = self._status(pid)
         self.assertEqual((status["prefill_status"], status["prefill_error"]), ("done", None))
         prefill = self._row(pid)["prefill_json"]
-        self.assertEqual(prefill["intro"], _REPLY["intro"])
+        self.assertEqual(prefill["intro"], {"value": _REPLY["intro"]["value"], "note": "商品頁"})
         self.assertNotIn("difference", prefill)  # 「商品照片」 but no photo was read
         # out-of-vocabulary pain key dropped; a group without any pain key dropped; the 5th and
         # 6th groups beyond three dropped; an invented quote blanked, a verbatim one kept
         self.assertEqual([g["who"] for g in prefill["groups"]],
                          ["常加班的上班族", "怕買錯的新手爸媽", "第三群"])
-        self.assertEqual(prefill["groups"][0], _GROUP)
+        self.assertEqual(prefill["groups"][0],
+                         {k: v for k, v in _GROUP.items() if k != "source_refs"})
         self.assertEqual(prefill["groups"][1]["quote"], "")
-        self.assertEqual(prefill["proof"], [_REPLY["proof"][0]])
-        self.assertEqual(len(prefill["claims"]), 8)
-        self.assertEqual([w["name"] for w in prefill["sell_ways"]], ["單盒", "三盒組", "四", "五"])
+        self.assertEqual(prefill["proof"],
+                         [{k: v for k, v in _REPLY["proof"][0].items() if k != "source_refs"}])
+        self.assertEqual(len(prefill["claims"]), 1)
+        self.assertEqual([w["name"] for w in prefill["sell_ways"]], ["單盒", "三盒組"])
         self.assertIsNone(prefill["sell_ways"][0]["list_price"])  # not above the price
         self.assertEqual(prefill["sell_ways"][1]["list_price"], 1197)
         self.assertEqual((prefill["pages_read"], prefill["photos_read"]), (1, 0))
@@ -164,6 +177,7 @@ class ProductPrefillTest(_Base):
         self.assertIsNone(calls[0]["tools"])  # no web search
         content = calls[0]["messages"][0]["content"]
         self.assertIn(f"【商品頁】{_URL}", content[-1]["text"])
+        self.assertEqual(content[-1]["text"].count(_PAGE), 1)
         task = gateway.get_task(web.conn, self._row(pid)["llm_task_id"])
         assert task is not None
         self.assertEqual(task["task_type"], "intake_product_prefill")
@@ -191,7 +205,7 @@ class ProductPrefillTest(_Base):
         self.assertNotIn("【商品頁】", content[-1]["text"])
         prefill = self._row(pid)["prefill_json"]
         self.assertEqual((prefill["pages_read"], prefill["photos_read"]), (0, 3))
-        self.assertEqual(prefill["difference"]["note"], "商品照片")  # a photo was read now
+        self.assertNotIn("difference", prefill)  # No independent image text/OCR was supplied.
         self.assertNotIn("intro", prefill)  # 「商品頁」 but no page was read this time
 
     def test_cost_cap_refuses_before_calling(self):
@@ -291,21 +305,115 @@ class ProductPrefillTest(_Base):
                          ("failed", background_module.JOB_FAILED_MESSAGE))
 
 
+class ProductPrefillGroundingTest(_Base):
+    def test_frozen_disputed_statements_stay_proposals_and_rejected_claim_stays_forbidden(self):
+        text = (Path(__file__).resolve().parents[2] /
+                "scripts/drill/site/products_beast-gummy-value-bundle-3-boxes.txt").read_text(encoding="utf-8")
+        product_prefill.read_url = lambda url: (True, text, None)
+        phrases = ["軟糖構造上 幾乎不含水", "體積縮小約 10 倍",
+                   "相當於一杯 濃縮咖啡 帶來的提神效果", "派對或應酬、高體力勞動"]
+        claims = [{"text": phrase, "source_refs": [{"source_id": "page:1", "quote": phrase}]}
+                  for phrase in phrases]
+        # The transformed group is grounded interpretation, not a literal extracted customer fact.
+        product_prefill.PROVIDER = FakeProvider(response=_response({"claims": claims, "groups": [{
+            "who": "需要攜帶方便的通勤族", "pain_keys": ["effort"],
+            "quote": "", "when_used": "通勤途中",
+            "source_refs": [{"source_id": "page:1", "quote": "方便攜帶"}]}]}))
+        pid = self._create(name="Beast Gummy")
+        self._work()
+        who = self.client.get(self._step(pid, "/who")).json()["data"]
+        self.assertEqual(who["groups"][0]["source"], "ai")
+        self.assertEqual(who["groups"][0]["note"], "商品頁")
+        self.assertEqual(bi_repo.list_customer_groups(web.conn, self.bid, pid), [])
+        evidence = self.client.get(self._step(pid, "/evidence")).json()["data"]
+        self.assertEqual([c["text"] for c in evidence["claims"]], phrases)
+        self.assertTrue(all(c["source"] == "ai" and c["verdict"] is None
+                            and c["from_note"] == "商品頁" for c in evidence["claims"]))
+        self.assertEqual(bi_repo.list_claims_for_product(web.conn, self.bid, pid), [])
+        resp = self.client.put(self._step(pid, "/evidence"), json={"proof": [], "claims": [
+            {"text": phrases[0], "verdict": None}]})
+        self.assertEqual(resp.status_code, 400, resp.text)
+        resp = self.client.put(self._step(pid, "/evidence"), json={"proof": [], "claims": [
+            {"text": phrases[0], "verdict": "no"}]})
+        self.assertEqual(resp.status_code, 200, resp.text)
+        # A reread of the same sourced wording cannot silently turn a saved rejection into approval.
+        self.assertEqual(self.client.post(self._step(pid, "/scan")).status_code, 200)
+        self._work()
+        saved = self.client.get(self._step(pid, "/evidence")).json()["data"]["claims"]
+        rejected = next(c for c in saved if c["text"] == phrases[0])
+        self.assertEqual((rejected["source"], rejected["verdict"]), ("saved", "no"))
+        rows = bi_repo.list_claims_for_product(web.conn, self.bid, pid)
+        self.assertEqual([(r["claim_text"], r["claim_type"]) for r in rows],
+                         [(phrases[0], "forbidden")])
+        downstream = context_compiler.format_claims(rows)
+        self.assertEqual(len(downstream), 1)
+        self.assertIn("【絕對不能講", downstream[0])
+        self.assertNotIn("【可以講】", downstream[0])
+
+    def test_fetched_catalog_rejects_missing_forged_and_unknown_refs(self):
+        for refs in (None, [], [{"source_id": "page:1", "quote": "不存在的證明"}],
+                     [{"source_id": "page:99", "quote": "12 種維生素"}]):
+            with self.subTest(refs=refs):
+                item = {"note": "商品頁", "source_refs": refs}
+                if refs is not None:
+                    item["source_refs"] = refs
+                product_prefill.PROVIDER = FakeProvider(response=_response({
+                    "intro": {"value": "一天一顆", **item},
+                    "mechanism": {"value": "維生素做成軟糖", **item},
+                    "difference": {"value": "不用吞藥丸", **item},
+                    "groups": [{**_GROUP, **item}],
+                    "proof": [{"fact_key": "lab_report", "text": "SGS 重金屬檢驗合格", **item}],
+                    "claims": [{"text": "12 種維生素", **item}],
+                    "sell_ways": [{"name": "單盒", "qty": 1, "price": 399, **item}]}))
+                pid = self._create()
+                self._work()
+                prefill = self._row(pid)["prefill_json"]
+                self.assertNotIn("intro", prefill)
+                self.assertNotIn("mechanism", prefill)
+                self.assertNotIn("difference", prefill)
+                for key in ("groups", "proof", "claims", "sell_ways"):
+                    self.assertEqual(prefill[key], [])
+
+
 class ProductPrefillContractTest(unittest.TestCase):
     def _check(self, data, **kw):
-        args = {"page_text": _PAGE, "pages_read": 1, "photos_read": 0, **kw}
+        args = {"page_text": _PAGE, "pages_read": 1, "photos_read": 0,
+                "sources": intake_ai.prefill_sources([(_URL, _PAGE)], label="商品頁"), **kw}
         return product_prefill.validate_reply(data, **args)
 
     def test_unreadable_reply(self):
         for data in (None, [], "text", {"other": 1}):
             self.assertEqual(self._check(data), (None, 0))
 
-    def test_pain_keys_are_capped_at_two_and_limits_hold(self):
+    def test_grounded_claim_and_sell_way_limits_still_hold(self):
+        statements = [f"測試說法{i}。" for i in range(10)]
+        packages = [f"賣法{i}一次{i}件售價{i * 100}元。" for i in range(1, 7)]
+        page = "".join(statements + packages)
+        sources = intake_ai.prefill_sources([(_URL, page)], label="商品頁")
         prefill, dropped = self._check({
-            "intro": {"value": "字" * 201, "note": "商品頁"},
-            "groups": [{"who": "上班族", "pain_keys": ["effort", "cost", "identity"], "note": ""}],
-            "sell_ways": [{"name": "單盒", "qty": True, "price": 399, "note": "商品頁"},
-                          {"name": "單盒", "qty": 1, "price": "399", "note": "商品頁"}],
+            "claims": [{"text": text, "source_refs": [{"source_id": "page:1", "quote": text}]}
+                       for text in statements],
+            "sell_ways": [{"name": f"賣法{i}", "qty": i, "price": i * 100,
+                           "source_refs": [{"source_id": "page:1", "quote": packages[i - 1]}]}
+                          for i in range(1, 7)]}, page_text=page, sources=sources)
+        self.assertEqual(len(prefill["claims"]), product_prefill.MAX_CLAIMS)
+        self.assertEqual(len(prefill["sell_ways"]), product_prefill.MAX_SELL_WAYS)
+        self.assertEqual(dropped, 4)
+
+    def test_pain_keys_are_capped_at_two_and_limits_hold(self):
+        intro_refs = _REPLY["intro"]["source_refs"]
+        sell_way_refs = _REPLY["sell_ways"][0]["source_refs"]
+        sources = intake_ai.prefill_sources([(_URL, _PAGE)], label="商品頁")
+        for refs in (intro_refs, sell_way_refs):
+            self.assertEqual(intake_ai.source_note({"source_refs": refs}, sources), "商品頁")
+        prefill, dropped = self._check({
+            "intro": {"value": "字" * 201, "note": "商品頁", "source_refs": intro_refs},
+            "groups": [{"who": "上班族", "pain_keys": ["effort", "cost", "identity"],
+                        "source_refs": _GROUP["source_refs"]}],
+            "sell_ways": [{"name": "單盒", "qty": True, "price": 399,
+                           "note": "商品頁", "source_refs": sell_way_refs},
+                          {"name": "單盒", "qty": 1, "price": "399",
+                           "note": "商品頁", "source_refs": sell_way_refs}],
         })
         assert prefill is not None
         self.assertNotIn("intro", prefill)
@@ -320,9 +428,9 @@ class ProductPrefillContractTest(unittest.TestCase):
         assert prefill is not None
         self.assertEqual(dropped, 0)
         for key in ("intro", "mechanism", "difference"):
-            self.assertIn(key, prefill)
+            self.assertNotIn(key, prefill)
         counts = tuple(len(prefill[k]) for k in ("groups", "proof", "claims", "sell_ways"))
-        self.assertEqual(counts, (1, 1, 1, 1))
+        self.assertEqual(counts, (0, 0, 0, 0))
         self.assertEqual(providers.resolve_thinking(task_type="intake_product_prefill"), "low")
         self.assertIn("intake_product_prefill", providers.TASK_TYPE_LABELS)
 

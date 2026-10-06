@@ -9,6 +9,7 @@ import io
 import json
 import os
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from fastapi.testclient import TestClient
@@ -18,6 +19,7 @@ import app.intake as intake_module
 import app.main as main
 import app.shared.web as web
 from app import storage
+from app.brand_intelligence import repository as bi_repo
 from app.core import db as coredb
 from app.core import net
 from app.intake import ai as intake_ai
@@ -31,13 +33,17 @@ _SEQ = [0]
 _PAGE = "虛構軟糖品牌：給忙到沒空吃飯的人。滿 NT$999 免運。創辦人自己吞不下藥丸才做了軟糖。"
 
 _REPLY = {
-    "positioning": {"value": "給忙到沒空吃飯的人的維他命軟糖", "note": "頁面 1"},
-    "tone": {"values": ["親切", "神秘"], "note": "頁面 1"},  # 神秘 is not in TONES
+    "positioning": {"value": "給忙到沒空吃飯的人的軟糖", "note": "頁面 1",
+                    "source_refs": [{"source_id": "page:1", "quote": "給忙到沒空吃飯的人"}]},
+    "tone": {"values": ["親切", "神秘"], "note": "頁面 1",
+             "source_refs": [{"source_id": "page:1", "quote": "創辦人自己吞不下藥丸才做了軟糖"}]},
     "visual": {"value": "明亮、自然光、暖色系", "note": "品牌照片"},
     "proof": [{"fact_key": "founder_voice", "text": "創辦人自己吞不下藥丸才做了軟糖",
-               "note": "about 頁"}],
+               "note": "about 頁", "source_refs": [{"source_id": "page:1",
+                                                     "quote": "創辦人自己吞不下藥丸才做了軟糖"}]}],
     "policies": [
-        {"key": "ship_threshold", "params": {"threshold": 999}, "note": "頁面 1"},
+        {"key": "ship_threshold", "params": {"threshold": 999}, "note": "頁面 1",
+         "source_refs": [{"source_id": "page:1", "quote": "滿 NT$999 免運"}]},
         {"key": "free_lunch", "params": {}, "note": "頁面 1"},  # not in POLICY_TYPES
     ],
     "products": [{"name": "綜合維他命軟糖", "url": "https://example.com/p/1"}],
@@ -121,10 +127,11 @@ class PrefillScanTest(_Base):
         self.assertEqual(prefill["tone"], {"values": ["親切"], "note": "頁面 1"})  # 神秘 dropped
         # free_lunch dropped
         self.assertEqual([p["key"] for p in prefill["policies"]], ["ship_threshold"])
-        self.assertEqual(prefill["positioning"]["value"], "給忙到沒空吃飯的人的維他命軟糖")
-        self.assertEqual(prefill["visual"]["note"], "品牌照片")
-        self.assertEqual(prefill["proof"], _REPLY["proof"])
-        self.assertEqual(prefill["products"], _REPLY["products"])
+        self.assertEqual(prefill["positioning"]["value"], "給忙到沒空吃飯的人的軟糖")
+        self.assertNotIn("visual", prefill)  # Images have no independently quoted text.
+        self.assertEqual(prefill["proof"], [{"fact_key": "founder_voice",
+                                          "text": _REPLY["proof"][0]["text"], "note": "頁面 1"}])
+        self.assertEqual(prefill["products"], [])  # The old product has no grounded reference.
         self.assertEqual(prefill["not_found"], ["媒體報導", "銷售數據"])
         self.assertEqual((prefill["pages_read"], prefill["photos_read"]), (1, 1))
         self.assertEqual(len(intake_ai.PROVIDER.calls), 1)
@@ -133,14 +140,14 @@ class PrefillScanTest(_Base):
         bid = self._create(photos=1)
         status = self._scan(bid)
         self.assertEqual([r["area"] for r in status["found"]],
-                         ["品牌是誰", "品牌證據", "政策", "可能的商品"])
-        self.assertIn("「給忙到沒空吃飯的人的維他命軟糖」", status["found"][0]["text"])
+                         ["品牌是誰", "品牌證據", "政策"])
+        self.assertIn("「給忙到沒空吃飯的人的軟糖」", status["found"][0]["text"])
         self.assertIn("語氣親切", status["found"][0]["text"])
         self.assertEqual(status["found"][2]["text"], "滿 NT$999 免運")
-        self.assertEqual(status["found"][1]["note"], "about 頁")
+        self.assertEqual(status["found"][1]["note"], "頁面 1")
         self.assertEqual(status["not_found"], ["媒體報導", "銷售數據"])
-        # positioning + tone + visual + 1 proof + 1 policy
-        self.assertEqual(status["prefilled"], 5)
+        # Positioning + tone + one proof + one policy; image-only visual is absent.
+        self.assertEqual(status["prefilled"], 4)
         self.assertEqual((status["pages_read"], status["photos_read"]), (1, 1))
         self.assertIsNone(status["error"])
         onboarding = self.client.get(f"/api/intake/brands/{bid}/onboarding").json()["data"]
@@ -159,6 +166,7 @@ class PrefillScanTest(_Base):
         self.assertEqual(images[0]["source"]["media_type"], "image/jpeg")
         self.assertEqual(content[-1]["type"], "text")
         self.assertIn("【頁面 1】https://example.com/about", content[-1]["text"])
+        self.assertEqual(content[-1]["text"].count(_PAGE), 1)
         self.assertEqual(self._prefill(bid)["photos_read"], 5)
         refs = ir.get_active_draft(web.conn, bid)["llm_task_refs_json"]
         task = gateway.get_task(web.conn, refs[-1]["llm_task_id"])
@@ -269,27 +277,117 @@ class PrefillScanTest(_Base):
         self.assertEqual(self._status(bid)["status"], "none")
 
 
+class PrefillGroundingTest(_Base):
+    def test_frozen_refund_source_is_a_proposal_until_user_confirmation(self):
+        text = (Path(__file__).resolve().parents[2] /
+                "scripts/drill/site/pages_refund-policy.txt").read_text(encoding="utf-8")
+        intake_ai.read_url = lambda url: (True, text, None)
+        phrase = "並未拆封、未食用"
+        intake_ai.PROVIDER = FakeProvider(response=_response({"positioning": {
+            "value": "商家退貨須未拆封、未食用", "source_refs": [
+                {"source_id": "page:1", "quote": phrase}]}}))
+        bid = self._create(photos=0)
+        self._scan(bid)
+        url = f"/api/intake/brands/{bid}/onboarding/identity"
+        proposal = self.client.get(url).json()["data"]["positioning"]
+        self.assertEqual(proposal, {"value": "商家退貨須未拆封、未食用",
+                                    "source": "ai", "note": "頁面 1"})
+        self.assertEqual(bi_repo.list_brand_facts(web.conn, bid, status="confirmed"), [])
+        # Source presence does not establish legal validity; explicit user entry owns confirmation.
+        resp = self.client.put(url, json={"positioning": "使用者自己的品牌定位",
+                                          "tone": ["親切"], "visual": ""})
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self.assertEqual(self.client.get(url).json()["data"]["positioning"]["source"], "saved")
+
+    def test_every_brand_entry_requires_refs_and_photos_do_not_authorize_text(self):
+        for refs in (None, [], [{"source_id": "photo:1", "quote": "SGS"}],
+                     [{"source_id": "page:1", "quote": "不存在"}]):
+            with self.subTest(refs=refs):
+                ground = {"source_refs": refs, "note": "品牌照片"}
+                payload = {"positioning": {"value": "定位", **ground},
+                           "tone": {"values": ["親切"], **ground},
+                           "visual": {"value": "暖色", **ground},
+                           "proof": [{"fact_key": "lab_report", "text": "SGS", **ground}],
+                           "policies": [{"key": "ship_threshold",
+                                         "params": {"threshold": 999}, **ground}],
+                           "products": [{"name": "商品", **ground}]}
+                checked, _ = intake_ai.validate_prefill_reply(
+                    payload, pages_read=1, photos_read=1,
+                    sources=intake_ai.prefill_sources([("https://example.com", _PAGE)]))
+                self.assertEqual(intake_ai.found_areas(checked), set())
+
+    def test_normalized_quotes_and_multiple_refs_use_only_matching_catalog_entries(self):
+        sources = intake_ai.prefill_sources([("https://example.com/a", "滿 NT＄９９９ 免運"),
+                                            ("https://example.com/b", "顧客每天吞藥丸好麻煩")])
+        item = {"source_refs": [{"source_id": "page:1", "quote": "「滿 NT$999\n免運」"},
+                                {"source_id": "page:2", "quote": "每天吞藥丸好麻煩"}],
+                "note": "模型偽造的品牌照片標籤"}
+        self.assertEqual(intake_ai.source_note(item, sources), "頁面 1、頁面 2")
+        for ref in ({"source_id": "page:1", "quote": "每天吞藥丸好麻煩"},
+                    {"source_id": "page:2", "quote": ""}, {"source_id": [], "quote": "a"},
+                    {"source_id": "page:1", "quote": "\n「」"}, None):
+            with self.subTest(ref=ref):
+                self.assertIsNone(intake_ai.source_note(
+                    {"source_refs": [*item["source_refs"], ref]}, sources))
+
+    def test_valid_product_reference_renders_through_scan_api(self):
+        intake_ai.PROVIDER = FakeProvider(response=_response({"products": [{
+            "name": "軟糖", "url": None, "note": "模型編的來源",
+            "source_refs": [{"source_id": "page:1", "quote": "才做了軟糖"}]}]}))
+        bid = self._create(photos=0)
+        status = self._scan(bid)
+        self.assertEqual(status["found"], [{"area": "可能的商品", "text": "軟糖",
+                                           "note": "頁面 1"}])
+
+    def test_fetched_catalog_rejects_missing_forged_and_unknown_refs(self):
+        for refs in (None, [], [{"source_id": "page:1", "quote": "不存在的證明"}],
+                     [{"source_id": "page:99", "quote": "滿 NT$999 免運"}]):
+            with self.subTest(refs=refs):
+                item = {"value": "給忙到沒空吃飯的人", "note": "頁面 1"}
+                if refs is not None:
+                    item["source_refs"] = refs
+                intake_ai.PROVIDER = FakeProvider(response=_response({
+                    "positioning": item, "products": [{"name": "虛構商品", **item}]}))
+                bid = self._create(photos=0)
+                self._scan(bid)
+                prefill = self._prefill(bid)
+                self.assertNotIn("positioning", prefill)
+                self.assertEqual(prefill["products"], [])
+
+
 class PrefillContractTest(unittest.TestCase):
     def test_invented_sources_are_dropped(self):
         prefill, dropped = intake_ai.validate_prefill_reply(
             {"visual": {"value": "暖色", "note": "品牌照片"},  # no photo was read
-             "proof": [{"fact_key": "lab_report", "text": "SGS 檢驗", "note": "頁面 1"}]},
-            pages_read=1, photos_read=0)
+             "proof": [{"fact_key": "lab_report", "text": "SGS 檢驗", "note": "頁面 1",
+                        "source_refs": [{"source_id": "page:1", "quote": "SGS 檢驗"}]}]},
+            pages_read=1, photos_read=0,
+            sources=intake_ai.prefill_sources([("https://example.com", "SGS 檢驗")]))
         self.assertNotIn("visual", prefill)
         self.assertEqual(len(prefill["proof"]), 1)
         self.assertEqual(dropped, 1)
 
     def test_unknown_policy_params_are_stripped_and_limits_hold(self):
+        positioning_refs = [{"source_id": "page:1", "quote": "給忙到沒空吃飯的人"}]
+        sources = intake_ai.prefill_sources([
+            ("https://example.com", _PAGE),
+            ("https://example.com/catalog", "".join(f"商品{i}。" for i in range(21)))])
+        self.assertEqual(intake_ai.source_note({"source_refs": positioning_refs}, sources),
+                         "頁面 1")
         prefill, dropped = intake_ai.validate_prefill_reply(
-            {"positioning": {"value": "字" * 61, "note": "頁面 1"},
+            {"positioning": {"value": "字" * 61, "note": "頁面 1",
+                             "source_refs": positioning_refs},
              "policies": [{"key": "ship_threshold", "params": {"threshold": 999, "x": 1},
-                           "note": ""}],
-             "products": [{"name": f"商品{i}", "url": "ftp://x"} for i in range(21)],
+                           "source_refs": [{"source_id": "page:1", "quote": "滿 NT$999 免運"}]}],
+             "products": [{"name": f"商品{i}", "url": "ftp://x",
+                           "source_refs": [{"source_id": "page:2", "quote": f"商品{i}。"}]}
+                          for i in range(21)],
              "not_found": ["不存在的面向", "全店政策"]},
-            pages_read=1, photos_read=0)
+            pages_read=2, photos_read=0, sources=sources)
         self.assertNotIn("positioning", prefill)
         self.assertEqual(prefill["policies"],
-                         [{"key": "ship_threshold", "params": {"threshold": 999}, "note": ""}])
+                         [{"key": "ship_threshold", "params": {"threshold": 999},
+                           "note": "頁面 1"}])
         self.assertEqual(len(prefill["products"]), 20)
         self.assertIsNone(prefill["products"][0]["url"])
         self.assertEqual(prefill["not_found"], [])  # unknown area, and 全店政策 was found
@@ -306,9 +404,9 @@ class PrefillContractTest(unittest.TestCase):
             json.loads(json.dumps(reply)), pages_read=1, photos_read=0)
         self.assertEqual(dropped, 0)
         for key in ("positioning", "tone", "visual"):
-            self.assertIn(key, prefill)
+            self.assertNotIn(key, prefill)
         counts = tuple(len(prefill[k]) for k in ("proof", "policies", "products"))
-        self.assertEqual(counts, (1, 1, 1))
+        self.assertEqual(counts, (0, 0, 0))
         self.assertEqual(prefill["not_found"], reply["not_found"])
         self.assertEqual(providers.resolve_thinking(task_type="intake_prefill"), "low")
         self.assertIn("intake_prefill", providers.TASK_TYPE_LABELS)
