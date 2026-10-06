@@ -18,8 +18,8 @@ a proven common stop-condition blocker under `../README.md`; any such repair req
 - F51 retains the active-AI-queue W14 exception, user confirmed 2026-10-06; backend outcome redesign is outside this run.
 - F48–F51 remain open until the user sees combined screenshots and drill results and explicitly accepts them. No push.
 
-Status: P1 resumed from the sell-way money stop after F51-I15 at main d46b3c75 (original baseline ec72ce1a), completed normal
-uploads after the user enabled Chrome file access, and closed through the UI. P1 simulation and three platform levels reconcile.
-P2 reached platform handoff; readback and independent copy judging are underway. No real advertising performance is claimed.
-Original observations remain in B/run_1.md; before/after heads and restart evidence are in operator/notes.md.
-F51-I16's separate nonblocking offline-reason repair stays unmerged until the drill ends. No completed scores yet.
+Status: all3 B periods closed, exports frozen and independent blind judging completed. Strategy/copy/learning are5/5/5,
+so overall acceptance has not passed. Controls and faults continue on spare objects. Original money defect I15 was repaired
+at d46b3c75; control-phase save-race blocker I17 was repaired at2f3570c0 and restarted15:49 on2026-10-06 after all agents
+paused. Ordinary I16 offline-reason repair remains isolated until the drill ends. Original and repaired observations remain
+separate in raw reports. Full integration and combined human acceptance remain pending; see F51 Handoff and operator notes.
