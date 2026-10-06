@@ -1,6 +1,6 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useLocation } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/productsApi", () => ({
@@ -221,6 +221,40 @@ describe("FreeJobPage preview card (F50-I14, Contract K)", () => {
     expect(await screen.findByText("自由工作 #（建立後產生）")).toBeTruthy();
     expect(screen.queryByText(/更新於/)).toBeNull();
     expect(screen.queryByText(/小時前/)).toBeNull();
+  });
+});
+
+function FreeJobLocation() {
+  const location = useLocation();
+  return <output data-testid="free-job-location">{location.pathname}</output>;
+}
+
+describe("FreeJobPage presentational preview (F52-I17)", () => {
+  it("has no dead controls, skips preview during Tab navigation and still creates the real pack", async () => {
+    const user = userEvent.setup();
+    const { createFreePack } = await import("@/lib/workbenchApi");
+    mockParseFreeText.mockResolvedValue({ parsed: true, note: null, spec: spec({ outputs: [{ part: "copy", count: 1 }] }) });
+    vi.mocked(createFreePack).mockResolvedValue({ id: "wbp_created" } as Awaited<ReturnType<typeof createFreePack>>);
+    render(<MemoryRouter initialEntries={["/brands/brd_1/workbench/new"]}><FreeJobPage brandId="brd_1" /><FreeJobLocation /></MemoryRouter>);
+    const preview = (await screen.findByRole("heading", { name: "預覽將建立的工作項目" })).parentElement!;
+    expect(within(preview).queryAllByRole("button")).toHaveLength(0);
+    expect(within(preview).queryAllByRole("link")).toHaveLength(0);
+    expect(preview.querySelector('[tabindex]:not([tabindex="-1"]),input,select,textarea')).toBeNull();
+    expect(within(preview).getByText("預覽")).toBeTruthy();
+    expect(within(preview).queryByText("待處理")).toBeNull();
+    await user.click(within(preview).getByRole("heading", { name: "自由工作 #（建立後產生）" }));
+    expect(screen.getByTestId("free-job-location").textContent).toBe("/brands/brd_1/workbench/new");
+    await user.type(screen.getByLabelText("告訴 AI 你想創作什麼"), "新手夜跑主題，說明商品適用情境");
+    const create = screen.getByRole("button", { name: "建立自由工作 →" });
+    create.focus();
+    await user.tab();
+    expect(preview.contains(document.activeElement)).toBe(false);
+    await user.click(create);
+    expect(await screen.findByRole("button", { name: "確認並生成" })).toBeTruthy();
+    expect(within(preview).queryAllByRole("button")).toHaveLength(0);
+    await user.click(screen.getByRole("button", { name: "確認並生成" }));
+    await waitFor(() => expect(screen.getByTestId("free-job-location").textContent).toBe("/brands/brd_1/workbench/packs/wbp_created"));
+    expect(createFreePack).toHaveBeenCalledWith("brd_1", specToCreateBody(spec({ outputs: [{ part: "copy", count: 1 }] }), { text: "新手夜跑主題，說明商品適用情境", productId: null }));
   });
 });
 

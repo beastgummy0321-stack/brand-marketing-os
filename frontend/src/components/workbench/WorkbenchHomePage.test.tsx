@@ -19,7 +19,7 @@ vi.mock("@/components/layout/WorkspaceContext", () => ({
 }));
 
 import { closePack, listPacks, type PackCard } from "@/lib/workbenchApi";
-import { WorkbenchHomePage } from "./WorkbenchHomePage";
+import { PackCardTile, WorkbenchHomePage } from "./WorkbenchHomePage";
 
 const mockListPacks = vi.mocked(listPacks);
 const mockClosePack = vi.mocked(closePack);
@@ -182,5 +182,32 @@ describe("WorkbenchHomePage controls（F47）", () => {
     renderRouted();
     expect(await screen.findAllByText("已核准・還缺 1 組")).not.toHaveLength(0);
     expect(screen.queryByText("已完成", { selector: "[data-slot=badge]" })).toBeNull();
+  });
+});
+
+describe("Shared pack card variants (F52-I17)", () => {
+  it("preview removes title, next-step, menu and continue actions even for an actionable source card", async () => {
+    const user = userEvent.setup();
+    const pack = card();
+    const rendered = render(<MemoryRouter initialEntries={["/preview"]}><PackCardTile pack={pack} variant="preview" /><Where /></MemoryRouter>);
+    const tile = screen.getByRole("heading", { name: pack.name }).closest(".surface")!;
+    expect(within(tile as HTMLElement).queryAllByRole("button")).toHaveLength(0);
+    expect(within(tile as HTMLElement).queryAllByRole("link")).toHaveLength(0);
+    expect(tile.querySelector('[tabindex]:not([tabindex="-1"]),input,select,textarea')).toBeNull();
+    expect(within(tile as HTMLElement).getByText("預覽")).toBeTruthy();
+    expect(within(tile as HTMLElement).getByText("廣告排程")).toBeTruthy();
+    expect(within(tile as HTMLElement).getByText("4／4")).toBeTruthy();
+    expect(within(tile as HTMLElement).getByText("素材組總數 4")).toBeTruthy();
+    await user.click(screen.getByRole("heading", { name: pack.name }));
+    expect(screen.getByTestId("where").textContent).toBe("/preview");
+    rendered.unmount();
+  });
+
+  it.each(["title", "continue"])("real cards keep %s navigation to the real pack", async (control) => {
+    const user = userEvent.setup();
+    const pack = card();
+    render(<MemoryRouter initialEntries={["/workbench"]}><PackCardTile pack={pack} brandId="brd_1" onClose={vi.fn()} /><Where /></MemoryRouter>);
+    await user.click(screen.getByRole("button", { name: control === "title" ? /10\/17 秋季活動/ : "繼續 →" }));
+    expect(screen.getByTestId("where").textContent).toBe("/brands/brd_1/workbench/packs/wbp_ads");
   });
 });
