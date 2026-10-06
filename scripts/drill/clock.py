@@ -7,17 +7,24 @@ today for every org. Audit timestamps (`datetime.now(UTC)`) stay real, as that f
 docstring says they should. `app.ads.triage` binds the name at import, so it is patched too.
 
 Not for the product: only `scripts/drill/serve.py` and `scripts/drill/worker.py` call this.
+DRILL_CLOCK_PATH opts into an owned file; the default remains checkout-local.
 
     python -m scripts.drill.clock set 2026-10-02
     python -m scripts.drill.clock clear
     python -m scripts.drill.clock show
 """
 
+import os
 import sys
-from datetime import date, datetime
+from datetime import date
 from pathlib import Path
 
-TODAY_PATH = Path(__file__).resolve().parents[2] / ".scratch" / "drill" / "today"
+TODAY_PATH = Path(
+    os.environ.get(
+        "DRILL_CLOCK_PATH",
+        Path(__file__).resolve().parents[2] / ".scratch" / "drill" / "today",
+    )
+)
 
 
 def override() -> date | None:
@@ -39,6 +46,7 @@ def install() -> None:
     coresettings.today_for_org = today_for_org
     try:
         from app.ads import triage
+
         triage.today_for_org = today_for_org
     except ImportError:
         pass
@@ -53,6 +61,7 @@ def patch_modules(prefix: str = "app.") -> int:
     periodic sync throttle (`runtime._due`) compares against the real clock, so the operator
     requests syncs by hand per period (`fake_meta sync`), as the daily cron would."""
     import sys
+
     from app.core import db
 
     real = getattr(db, "_drill_real_now_utc", None) or db.now_utc
@@ -69,7 +78,11 @@ def patch_modules(prefix: str = "app.") -> int:
         o = override()
         if not o:
             return value
-        return value.astimezone(local).replace(year=o.year, month=o.month, day=o.day).astimezone(value.tzinfo)
+        return (
+            value.astimezone(local)
+            .replace(year=o.year, month=o.month, day=o.day)
+            .astimezone(value.tzinfo)
+        )
 
     n = 0
     for name, mod in list(sys.modules.items()):
