@@ -42,8 +42,9 @@ export function SellWaySummary({ name, shape, content, numbers, typedPrice, cost
         <span className="block text-[11.5px] text-muted-foreground">打平</span>
         {n?.break_even != null ? (
           <>
-            <b className="text-[15px] tabular-nums">{swAmount(Math.max(n.break_even, 0))}</b>
+            <b className="text-[15px] tabular-nums">{swAmount(n.break_even)}</b>
             {n.break_even_derived && <EstChip className="ml-1.5" />}
+            {n.break_even <= 0 && <span className="block text-[11.5px] text-warning">{n.break_even < 0 ? "未投廣告已虧損" : "沒有可用廣告空間"}</span>}
           </>
         ) : (
           <SwChip tone="warn">還算不出來</SwChip>

@@ -21,6 +21,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import ts from "typescript";
 
 const LIB_DIR = dirname(fileURLToPath(import.meta.url));
 const SRC_DIR = join(LIB_DIR, "..");
@@ -264,5 +265,46 @@ describe("figure guards (F51 Contract F ratchets)", () => {
     expect(lines("const t = roas.toFixed(2);\nconst u = capRoas.toFixed(1);")).toEqual([1, 2]);
     expect(lines("const v = row.roas_all_spend;\n<Figure basis=\"roas_all_spend\" value={v} />")).toEqual([]);
     expect(RULES["roas-format"].applies("components/cockpit/X.tsx")).toBe(false);
+  });
+});
+
+
+/** Parse calls rather than lines so operand order, comments and line breaks cannot hide a clamp. */
+function breakEvenClamps(source: string): number[] {
+  const tree = ts.createSourceFile("guard.tsx", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const hits: number[] = [];
+  function mentionsBreakEven(node: ts.Node): boolean {
+    if ((ts.isIdentifier(node) || ts.isStringLiteral(node)) && /^(break_even|breakEven)$/.test(node.text)) return true;
+    return ts.forEachChild(node, mentionsBreakEven) ?? false;
+  }
+  function visit(node: ts.Node) {
+    if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)
+      && ts.isIdentifier(node.expression.expression) && node.expression.expression.text === "Math"
+      && /^(min|max)$/.test(node.expression.name.text) && node.arguments.some(mentionsBreakEven)) {
+      hits.push(tree.getLineAndCharacterOfPosition(node.getStart(tree)).line + 1);
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(tree);
+  return hits;
+}
+
+describe("served break-even is never clamped", () => {
+  it("rejects frontend min/max calls over signed break-even", () => {
+    expect(sourceFiles().filter((f) => SOURCES(f.rel)).flatMap((f) =>
+      breakEvenClamps(f.source).map((line) => `${f.rel}:${line}`))).toEqual([]);
+  });
+  it.each([
+    "Math.max(n.break_even, 0)", "Math.min(0, n.break_even)",
+    "Math.max(\n  0,\n  n.breakEven\n)", "Math.min(0, (n.break_even ?? fallback))",
+    "Math.max(0, n[\"break_even\"])",
+  ])("rejects %s", (source) => {
+    expect(breakEvenClamps(`const value = ${source};`)).toEqual([1]);
+  });
+  it("keeps layout/progress math, comments and string examples valid", () => {
+    expect(breakEvenClamps(`const w = Math.max(width, 0);
+      const p = Math.min(100, progress);
+      // Math.max(n.break_even, 0)
+      const label = "Math.max(n.breakEven, 0)";`)).toEqual([]);
   });
 });
