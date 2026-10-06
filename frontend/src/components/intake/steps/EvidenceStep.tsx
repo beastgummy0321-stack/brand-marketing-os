@@ -52,6 +52,8 @@ function isEvidenceDraft(value: unknown): value is EvidenceDraft {
     && !!d.slots && typeof d.slots === "object" && Object.values(d.slots).every((v) => typeof v === "string")
     && Array.isArray(d.policies) && d.policies.every((p) => p && typeof p.key === "string" && !!p.params && typeof p.params === "object")
     && !!d.cooling && typeof d.cooling.applies === "boolean" && typeof d.cooling.disclosure === "string"
+    && (d.cooling.conditions === undefined || typeof d.cooling.conditions === "string")
+    && (d.cooling.source_note === undefined || typeof d.cooling.source_note === "string")
     && Array.isArray(d.forbidden) && d.forbidden.every((f) => f && typeof f.uid === "number" && typeof f.text === "string");
 }
 
@@ -86,13 +88,13 @@ export function EvidenceStep({ nav, back, onNext }: { nav: StepNav; back?: BarBa
             origin: p.source === "ai" ? "ai" : "saved", note: p.note, editing: false,
           })),
           slots: {}, policies: evidence.policies.map(chosenFromItem),
-          cooling: { applies: evidence.cooling_off.applies, disclosure: evidence.cooling_off.disclosure },
+          cooling: { ...evidence.cooling_off },
           forbidden: evidence.forbidden.map((f) => ({ uid: uid.current++, text: f.text, custom: false })),
         };
         setBaseline(saved);
         const draft = readStepDraft(draftKey, isEvidenceDraft) ?? saved;
         setProof(draft.proof); setSlots(draft.slots); setPolicies(draft.policies);
-        setCooling(draft.cooling); setForbidden(draft.forbidden);
+        setCooling({ ...saved.cooling, ...draft.cooling }); setForbidden(draft.forbidden);
         uid.current = Math.max(uid.current, ...draft.proof.map((p) => p.uid + 1), ...draft.forbidden.map((f) => f.uid + 1));
       })
       .catch((err: unknown) => {
@@ -111,7 +113,7 @@ export function EvidenceStep({ nav, back, onNext }: { nav: StepNav; back?: BarBa
   );
   const kindLabel = useMemo(() => new Map((loaded?.proof_kinds ?? []).map((k) => [k.key, k.label])), [loaded]);
   const openSlots = PROOF_SLOTS.filter((s) => !proof.some((p) => p.fact_key === s.kind));
-  const reason = loaded ? blockingReason(policies, loaded.policy_types, cooling) : null;
+  const reason = loaded ? blockingReason(policies, loaded.policy_types, cooling, loaded.cooling_off_limits) : null;
 
   const { saving, error, submit } = useFormSubmit(async () => {
     const input: OnboardingEvidenceInput = {
@@ -122,7 +124,11 @@ export function EvidenceStep({ nav, back, onNext }: { nav: StepNav; back?: BarBa
       policies: policies.map((p) => (p.key === "custom"
         ? { key: p.key, params: p.params, sentence: p.sentence }
         : { key: p.key, params: filled(p.params) })),
-      cooling_off: cooling.applies ? { applies: true } : { applies: false, disclosure: cooling.disclosure.trim() },
+      cooling_off: {
+        ...(cooling.applies ? { applies: true } : { applies: false, disclosure: cooling.disclosure.trim() }),
+        ...(cooling.conditions === undefined ? {} : { conditions: cooling.conditions.trim() }),
+        ...(cooling.source_note === undefined ? {} : { source_note: cooling.source_note.trim() }),
+      },
       forbidden: forbidden.map((f) => f.text.trim()).filter(Boolean),
     };
     await saveOnboardingEvidence(brandId, input);
@@ -149,6 +155,13 @@ export function EvidenceStep({ nav, back, onNext }: { nav: StepNav; back?: BarBa
   return (
     <form
       className="flex flex-col gap-4"
+      onKeyDown={(e) => {
+        // Enter finishes a local input edit; only the explicit submit control advances the step.
+        if (e.key === "Enter" && !e.nativeEvent.isComposing && e.target instanceof HTMLInputElement) {
+          e.preventDefault();
+          e.target.blur();
+        }
+      }}
       onSubmit={(e) => {
         e.preventDefault();
         if (loaded && !saving && !reason) void submit();
@@ -226,6 +239,7 @@ export function EvidenceStep({ nav, back, onNext }: { nav: StepNav; back?: BarBa
             onChange={setPolicies}
             cooling={cooling}
             onCooling={setCooling}
+            coolingLimits={loaded.cooling_off_limits}
             prefilled={prefilled}
           />
 
