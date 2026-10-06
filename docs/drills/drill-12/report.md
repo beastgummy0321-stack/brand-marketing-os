@@ -94,6 +94,10 @@ retained. Offline clock fallback showed host10/6 until the organization-clock re
 First fresh integration found3failures with3854passes+798subtests: I18 read task errors outside the sync owner, and two
 ABO/CBO fixture tests lacked their fake platform delivery vocabulary. I19 ab1a701f preserves the exact predicate in
 external_sync.clean_task_success and supplies the fixture-only vocabulary. No scanner allowances or production adapter
-changes. Targeted129tests+78subtests, independent exact-head review, finish and merge passed. A fresh full integration
-receipt follows when complete. All four features remain OPEN:
+changes. Targeted129tests+78subtests, independent exact-head review, finish and merge passed. Fresh full integration passed on code/document head a38ff12349c054e6acc3be435d770ad6ead8c1be:
+backend3858tests+803subtests, frontend1812tests/129files, architecture/type/lint/dependency checks, production build and
+Playwright runtime checks. Receipt: operator/final-integrate-clean.log; Harness receipt: .harness/runtime/integrations/F51.json.
+An intermediate run was stopped after inheriting drill-server queue/provider variables; it has no test verdict and is
+excluded. The final run removed those variables. Details: operator/integration-environment-note.md. Final receipt notes
+are documentation-only after that verified head; no further product changes. No human acceptance or feature closure. All four features remain OPEN:
 the drill fails the acceptance threshold and combined UI/report human acceptance has not been granted.
