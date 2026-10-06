@@ -28,9 +28,9 @@ export function CampaignChip({ objective, name, suffix, strong = false }: { obje
 }
 
 /** `.tag` (+ `.on`): one selectable angle tag. */
-export function TagToggle({ on, children, onClick, disabled, busy, disabledReason }: { on: boolean; children: ReactNode; onClick?: () => void; disabled?: boolean; busy?: boolean; disabledReason?: string | null }) {
+export function TagToggle({ on, children, onClick, busy, disabledReason }: { on: boolean; children: ReactNode; onClick?: () => void; busy?: boolean; disabledReason?: string | null }) {
   return (
-    <Button variant="outline" type="button" data-slot="tag-toggle" data-variant={on ? "on" : "off"} aria-pressed={on} disabled={disabled} busy={busy} disabledReason={disabledReason || (disabled ? "目前不能更換標籤" : undefined)} onClick={onClick}
+    <Button variant="outline" type="button" data-slot="tag-toggle" data-variant={on ? "on" : "off"} aria-pressed={on} busy={busy} disabledReason={disabledReason} onClick={onClick}
       className={cn("h-auto rounded-full border px-3.5 py-1 text-[13px] transition-colors", on ? "border-primary bg-primary text-primary-foreground" : "border-border bg-card hover:border-primary")}>
       {children}
     </Button>

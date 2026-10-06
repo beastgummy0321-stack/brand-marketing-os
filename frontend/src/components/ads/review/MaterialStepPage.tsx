@@ -263,7 +263,6 @@ function NewAdSection({ brandId, campaignId, review, newTestRecommendationId, de
   }
 
   const selected = readyPlacements.find((p) => p.id === placementId) ?? null;
-  const canSubmit = Boolean(selected && destinationEntityId && title.trim() && reason.trim() && !busy);
 
   async function submit() {
     if (busy) return;
@@ -316,9 +315,9 @@ function NewAdSection({ brandId, campaignId, review, newTestRecommendationId, de
         <label className="block text-sm">新廣告名稱<Input value={title} maxLength={200} disabled={busy} onChange={(e) => setTitle(e.target.value)} /></label>
         <label className="block text-sm">理由<Input value={reason} disabled={busy} onChange={(e) => setReason(e.target.value)} /></label>
         {!destinationEntityId && <p data-slot="destination-missing" className="text-sm text-warning">{destinationsNote ?? "還沒讀到這則廣告目前所屬的投放組；到投放結構按重新讀取後再試，仍可先確認素材安排。"}</p>}
-        {pending && <div className="rounded-md bg-warning/10 p-3 text-sm space-y-2"><p>上一次建立沒收到回應，結果尚未確認。請沿用同一次操作重試，不會重複建立。</p><Button variant="outline" disabled={busy} onClick={() => void submit()}>重試建立</Button></div>}
+        {pending && <div className="rounded-md bg-warning/10 p-3 text-sm space-y-2"><p>上一次建立沒收到回應，結果尚未確認。請沿用同一次操作重試，不會重複建立。</p><Button variant="outline" busy={busy} onClick={() => void submit()}>重試建立</Button></div>}
         {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
-        <Button disabled={!canSubmit || Boolean(pending)} onClick={() => void submit()}>{busy ? "建立中…" : "建立新廣告提議 →"}</Button>
+        <Button busy={busy} disabledReason={pending ? "先按重試建立，確認上一份提議的結果" : !selected ? "先選擇已就緒的成品" : !destinationEntityId ? destinationsNote ?? "先讀取這則廣告所屬的投放組" : !title.trim() ? "請填寫新廣告名稱" : !reason.trim() ? "請填寫建立理由" : undefined} onClick={() => void submit()}>{busy ? "建立中…" : "建立新廣告提議 →"}</Button>
       </div>
     </section>
   );

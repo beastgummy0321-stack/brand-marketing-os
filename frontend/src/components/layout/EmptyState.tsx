@@ -13,13 +13,12 @@ import { Button } from "./ui/button";
  *
  * F51 Contract D: the `onAction` button is a `Button` — `actionBusy` while the action it started runs (no
  * sentence; the label says 產生中…), `actionDisabledReason` when it cannot run (printed under it).
- * `actionDisabled` is deprecated (F51-I13 removes it once its callers pass one of the two). */
+ */
 export function EmptyState({
   title,
   description,
   actionHref,
   actionLabel,
-  actionDisabled = false,
   actionBusy = false,
   actionDisabledReason,
   onAction,
@@ -28,8 +27,6 @@ export function EmptyState({
   description: string;
   actionHref?: string;
   actionLabel?: string;
-  /** @deprecated pass `actionBusy` or `actionDisabledReason` (F51 Contract D). */
-  actionDisabled?: boolean;
   actionBusy?: boolean;
   actionDisabledReason?: string | null;
   onAction?: () => void;
@@ -44,7 +41,6 @@ export function EmptyState({
           onClick={onAction}
           busy={actionBusy}
           disabledReason={actionDisabledReason}
-          disabled={actionDisabled} // DISABLED_OK: forwards the deprecated prop until F51-I13 removes it
           className="mt-2"
         >
           {actionLabel}

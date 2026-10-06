@@ -200,7 +200,7 @@ function disabledLines(code: string): number[] {
       if (c === "{") depth++;
       else if (c === "}") depth--;
       else if (depth === 0 && (c === ">" || (c === "/" && code[i + 1] === ">"))) break;
-      else if (depth === 0 && code.startsWith("disabled=", i) && !/[\w-]/.test(code[i - 1] ?? "")) out.add(lineOf(i));
+      else if (depth === 0 && /^disabled(?=[=\s/>])/.test(code.slice(i)) && !/[\w-]/.test(code[i - 1] ?? "")) out.add(lineOf(i));
       i++;
     }
   }
@@ -398,6 +398,7 @@ describe("feedback guards (F51 Contract H／C／D ratchets)", () => {
     expect(lines('<BarNext label="下一步" disabled={!ok} />')).toEqual([1]);
     expect(lines("<StepButton disabled={a} />\n<WarnButton disabled={b}>x</WarnButton>")).toEqual([1, 2]);
     expect(lines('<EmptyState title="t" actionDisabled={busy} />')).toEqual([1]);
+    expect(lines("<Button disabled>Wait</Button>")).toEqual([1]);
     expect(lines("<Button busy={saving} disabledReason={why}>送出</Button>")).toEqual([]);
     expect(lines("<Input disabled={busy} />\n<select disabled={busy} />\n<Textarea disabled={busy} />")).toEqual([]);
     expect(lines('<Button aria-disabled="true" onClick={() => go({ disabled: true })}>x</Button>')).toEqual([]);
@@ -418,4 +419,10 @@ it("href detectors catch duplicate builders and internal raw anchors", () => {
   expect(hrefLines('<a\n href={path}>open</a>')).toEqual([1]);
   expect(hrefLines('<a href={path} target="_blank">open</a>')).toEqual([]);
   expect(hrefLines('<Link to={path}>open</Link>')).toEqual([]);
+});
+
+
+it("F51 sweep is complete: no per-issue allow modules remain", () => {
+  expect(Object.keys(import.meta.glob("./guards/*.allow.ts"))).toEqual([]);
+  expect(Object.keys(import.meta.glob("../components/ads/oneRulerPending/F51-*.ts"))).toEqual([]);
 });

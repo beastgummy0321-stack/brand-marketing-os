@@ -33,11 +33,10 @@ describe("Button busy／disabledReason", () => {
     expect(button().disabled).toBe(false);
   });
 
-  it("keeps the deprecated disabled prop working, and prints a reason passed beside it", () => {
-    const { rerender } = render(<Button disabled>送出</Button>);
-    expect((screen.getByRole("button", { name: "送出" }) as HTMLButtonElement).disabled).toBe(true);
-    rerender(<Button disabled disabledReason="名稱還沒填">送出</Button>);
-    expect(screen.getByText("名稱還沒填")).toBeTruthy();
+  it("rejects the removed disabled prop at compile time", () => {
+    // @ts-expect-error Callers must supply busy or a visible disabledReason.
+    const legacy = <Button disabled>Send</Button>;
+    expect(legacy).toBeTruthy();
   });
 
   it("keeps a caller's own aria-describedby beside the reason", () => {

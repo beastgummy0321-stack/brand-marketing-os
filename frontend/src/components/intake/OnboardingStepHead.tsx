@@ -119,19 +119,17 @@ export function OnboardingBar({ back, hint, children }: { back?: BarBack; hint?:
 }
 
 /** The bar's primary button (`.btn.pri`). F51 Contract D: it forwards `busy`／`disabledReason` to `Button`, so a
- * greyed-out 下一步 says why; `disabled` is deprecated (F51-I13 removes it once the steps pass a reason). */
-export function BarNext({ label, busy, disabledReason, disabled, onClick, type = "button" }: {
+ * greyed-out 下一步 says why. */
+export function BarNext({ label, busy, disabledReason, onClick, type = "button" }: {
   label: string;
   busy?: boolean;
   disabledReason?: string | null;
-  /** @deprecated pass `busy` or `disabledReason` (F51 Contract D). */
-  disabled?: boolean;
   onClick?: () => void;
   type?: "button" | "submit";
 }) {
   return (
     <Button type={type} size="lg" className="font-semibold" busy={busy} disabledReason={disabledReason}
-      disabled={disabled} /* DISABLED_OK: forwards the deprecated prop until F51-I13 removes it */ onClick={onClick}>
+      onClick={onClick}>
       {label} →
     </Button>
   );

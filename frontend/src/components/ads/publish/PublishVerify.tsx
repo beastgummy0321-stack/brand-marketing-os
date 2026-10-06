@@ -121,7 +121,7 @@ export function PublishVerify({ brandId, campaignId, name, view, platform, onVie
         ? <Button busy={busy !== null} onClick={() => void readAgain()}>{readAgainLabel}</Button>
       : todo + awaiting > 0 || unread === 0
         ? <Button asChild><Link to={publishPath(brandId, campaignId, "platform")}>繼續建剩下的 →</Link></Button>
-        : <Button disabled>回活動總覽 →</Button>;
+        : <Button disabledReason="先逐項確認平台無法自動核對的內容">回活動總覽 →</Button>;
   const waitingOnEye = !all && dev + nDiff === 0 && todo + awaiting === 0 && unread > 0;
 
   return (

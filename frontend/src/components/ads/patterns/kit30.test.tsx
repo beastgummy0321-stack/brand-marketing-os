@@ -323,7 +323,7 @@ function Picker({ onPick }: { onPick?: (v: string) => void }) {
     <PickGroup label="目標" value={v} onChange={(x) => { setV(x); onPick?.(x); }}>
       <PickCard value="sales" title="購買" icon="🛒" note="看每賣一筆花多少" />
       <PickCard value="lead" title="名單" icon="✉" note="看每筆名單成本" />
-      <PickCard value="engage" title="互動" icon="♡" note="看每次互動成本" disabled />
+      <PickCard value="engage" title="互動" icon="♡" note="看每次互動成本" disabledReason="尚未開放" />
       <PickCard value="traffic" title="流量" icon="↗" note="看每次點擊成本" />
     </PickGroup>
   );

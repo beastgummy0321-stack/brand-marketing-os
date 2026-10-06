@@ -79,8 +79,8 @@ export function AdRowMenu({ name, entityId, recordHref, requests }: {
       label={`更多：${name}`}
       items={[
         request
-          ? { label: "取消換掉這一則", onSelect: () => void requests.cancel(entityId), disabled: busy }
-          : { label: "換掉這一則", onSelect: () => void requests.replace(entityId), disabled: busy },
+          ? { label: "取消換掉這一則", onSelect: () => void requests.cancel(entityId), busy }
+          : { label: "換掉這一則", onSelect: () => void requests.replace(entityId), busy },
         { label: "看紀錄", onSelect: () => navigate(recordHref) },
       ]}
     />

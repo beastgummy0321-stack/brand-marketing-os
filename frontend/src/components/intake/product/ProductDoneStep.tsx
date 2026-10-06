@@ -189,7 +189,7 @@ export function ProductDoneStep({ brandId, productId, nav, what, completed, onGo
             <Link to={newCampaignPath(brandId, firstWay)}>用它建活動 →</Link>
           </Button>
         ) : (
-          <Button type="button" size="lg" className="px-[22px] font-semibold" disabled>用它建活動 →</Button>
+          <Button type="button" size="lg" className="px-[22px] font-semibold" busy={load.status === "loading"} disabledReason={!data ? "先重試讀取商品資料" : !data.ready ? "先完成商品資料，才能用它建立活動" : "先保存一個賣法，才能用它建立活動"}>用它建活動 →</Button>
         )}
         <Button asChild variant="outline" size="lg" className="font-semibold">
           <Link to={newProductPath(brandId)}>再建一個商品</Link>

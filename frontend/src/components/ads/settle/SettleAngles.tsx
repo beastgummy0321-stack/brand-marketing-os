@@ -29,7 +29,7 @@ export function angleOf(row: SettleRow, pick: AnglePick | undefined): string | n
     return text && text.length <= ANGLE_MAX ? text : null;
   }
   if (row.angles.status !== "ready") return null;
-  return row.angles.candidates[pick?.index ?? 0] ?? null;
+  return row.angles.candidates[pick?.index ?? 0] ?? null; // ZERO_OK: the first served candidate is the default selection.
 }
 
 export type JobsRead = { status: "loading" } | { status: "error" } | { status: "ready"; snapshot: ActiveJobsSnapshot };
@@ -51,7 +51,7 @@ function AngleRow({ row, view, pick, failed, onPick }: {
   const pending = row.angles.status === "pending" && !failed;
   const ready = row.angles.status === "ready" && row.angles.candidates.length > 0;
   const custom = pick?.kind === "custom";
-  const chosen = custom ? -1 : pick?.index ?? 0;
+  const chosen = custom ? -1 : pick?.index ?? 0; // ZERO_OK: zero indexes the default first candidate.
   const readFailed = failed || row.angles.status === "failed";
   return (
     <li className="grid grid-cols-[48px_minmax(0,1fr)] gap-3.5 border-t border-border py-4 first:border-t-0">
@@ -136,10 +136,10 @@ export function SettleAngles({ view, header, picks, onPick, jobs, onRetry, homeH
         </ol>
       </div>
       <div className="flex-1" />
-      <ActionBar back={{ label: "這期成績", to: resultHref }} exit={{ label: "晚點再結算", to: homeHref }} hint={hint}>
+      <ActionBar back={{ label: "這期成績", to: resultHref }} exit={{ label: "晚點再結算", to: homeHref }} hint={missing === 0 ? hint : undefined}>
         {missing === 0
           ? <Button asChild><Link to={noteHref}>都對，下一步 →</Link></Button>
-          : <Button disabled>都對，下一步 →</Button>}
+          : <Button disabledReason={hint ?? "先確認每則廣告的主打"}>都對，下一步 →</Button>}
       </ActionBar>
     </>
   );

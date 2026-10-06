@@ -461,7 +461,7 @@ export function AssetsBody({ brandId, campaign: c, refreshKey, advanced, onPlace
         {draft && (ready === null
           ? <Button asChild><Link to={publishHref}>確認上架清單 →</Link></Button>
           : ready === 0
-            ? <Button disabled>確認上架清單（0 則） →</Button>
+            ? <Button disabledReason="先確認至少一則廣告的圖與文案">確認上架清單（0 則） →</Button>
             : <Button asChild><Link to={publishHref}>確認上架清單（{ready} 則） →</Link></Button>)}
       </ActionBar>
     </div>

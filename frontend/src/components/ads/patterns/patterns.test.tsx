@@ -168,7 +168,7 @@ describe("review pieces（F23）", () => {
     expect(screen.getByText("待確認")).toBeTruthy();
     render(<EvidenceRow label="花費" previous={2900} current={3000} />);
     expect(screen.getByText("▲3%")).toBeTruthy();
-    render(<OptionCard icon="✚" title="換一張圖" note="x" disabled />);
+    render(<OptionCard icon="✚" title="換一張圖" note="x" disabledReason="接上後開放" />);
     expect((screen.getByRole("button", { name: /換一張圖/ }) as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByText("接上後開放")).toBeTruthy();
   });

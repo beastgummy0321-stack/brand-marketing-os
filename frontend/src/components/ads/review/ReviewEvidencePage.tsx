@@ -379,7 +379,7 @@ export function ReviewEvidencePage({ brandId, campaignId, entityId, reviewId }: 
               <p className="mt-2 text-sm text-muted-foreground">{review.error ?? "結果尚未確認，請稍後再試。"}</p>
             </div>
             {canRetry && (
-              <Button variant="outline" disabled={retrying} onClick={() => void handleRetry()}>
+              <Button variant="outline" busy={retrying} onClick={() => void handleRetry()}>
                 {retrying ? "送出中…" : "再請 AI 看一次"}
               </Button>
             )}
@@ -527,7 +527,7 @@ export function ReviewEvidencePage({ brandId, campaignId, entityId, reviewId }: 
                   <p className="mt-1 text-sm text-muted-foreground">它的說明沒通過事實檢查，系統先擋下。上面的數字是平台直接給的，照樣可以判斷。</p>
                 </div>
                 {canRetry && (
-                  <Button variant="outline" disabled={retrying} onClick={() => void handleRetry()}>
+                  <Button variant="outline" busy={retrying} onClick={() => void handleRetry()}>
                     {retrying ? "送出中…" : "再請 AI 看一次"}
                   </Button>
                 )}
@@ -551,17 +551,17 @@ export function ReviewEvidencePage({ brandId, campaignId, entityId, reviewId }: 
          * ActionBar 裡兩顆直接開 sheet 的按鈕，不做選單分組。 */}
         {showMenu && (
           <>
-            <Button variant="outline" disabled={busy} onClick={() => openSheet("deferred")}>暫緩</Button>
-            <Button variant="outline" disabled={busy} onClick={() => openSheet("unjudgeable")}>無法判定</Button>
+            <Button variant="outline" busy={busy} onClick={() => openSheet("deferred")}>暫緩</Button>
+            <Button variant="outline" busy={busy} onClick={() => openSheet("unjudgeable")}>無法判定</Button>
           </>
         )}
         {!running && !waiting && !failed && !closed && !completed && (
-          <Button asChild disabled={busy}>
+          <Button asChild busy={busy}>
             <Link to={reviewRoundPath(brandId, campaignId, review.id, "prepare")}>選擇處理方向 →</Link>
           </Button>
         )}
         {continueAction && (
-          <Button asChild disabled={busy}>
+          <Button asChild busy={busy}>
             <Link to={continueAction.href}>{continueAction.label} →</Link>
           </Button>
         )}
@@ -571,8 +571,8 @@ export function ReviewEvidencePage({ brandId, campaignId, entityId, reviewId }: 
         <DecisionSheet
           title={sheetKind === "deferred" ? "暫緩" : "無法判定"}
           actions={<>
-            <Button variant="outline" disabled={busy} onClick={closeSheet}>取消</Button>
-            <Button disabled={busy} onClick={() => void handleSaveDecision()}>{busy ? "保存中…" : "保存"}</Button>
+            <Button variant="outline" busy={busy} onClick={closeSheet}>取消</Button>
+            <Button busy={busy} onClick={() => void handleSaveDecision()}>{busy ? "保存中…" : "保存"}</Button>
           </>}
         >
           <label className="flex min-w-[220px] flex-1 flex-col gap-1 text-sm">

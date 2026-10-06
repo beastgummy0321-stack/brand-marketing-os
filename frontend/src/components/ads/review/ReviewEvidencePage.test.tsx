@@ -1,3 +1,4 @@
+import { adSpend, adResultView } from "./reviewFlow";
 /** frontend/src/components/ads/review/ReviewEvidencePage.test.tsx — F23-I02：`vi.mock` 掉
  * `@/lib/adsReviewApi`／`@/lib/adsTriageApi`，不打真的 API。覆蓋 Done 4：running/waiting/failed/
  * ready/deferred/unjudgeable/completed 各自的卡片與 bar，completed 導去正確的下一步；暫緩要未來
@@ -26,6 +27,8 @@ vi.mock("@/lib/adsTriageApi", async (importOriginal) => ({
 function period(overrides: Partial<ReviewPeriod> = {}): ReviewPeriod {
   return {
     row_count: 14, days_present: 14, days_expected: 14, missing_days: 0,
+    ad_spend: { value: 3000, currency: "TWD" },
+    ad_result_view: { metric_scope: "ad", currency: "TWD", result_kind: "purchase", result_action: "omni_purchase", result_attribution: "7d_click", result_count: 5, cost_per_result: 600, days_present: 14, days_known: 14, reason: null },
     series: [{
       metric_scope: "ad", attribution_key: "7d_click:omni_purchase", currency: "TWD", source: "graph",
       row_count: 14, days_present: 14,
@@ -66,7 +69,7 @@ function review(overrides: Partial<ReviewRound> = {}): ReviewRound {
     evidence_json: {
       target: { id: "aex_1", name: "撞車1150724", platform: "meta", source_account: "acc_1", native_id: "native_1" },
       window: { start: "2026-09-08", end: "2026-09-21", previous_start: "2026-08-25", previous_end: "2026-09-07", timezone: "Asia/Taipei", missing_days: [] },
-      current: period(), previous: period({ series: [{ metric_scope: "ad", attribution_key: "7d_click:omni_purchase", currency: "TWD", source: "graph", row_count: 14, days_present: 14, metrics: { spend: 2000, impressions: 80, clicks: 8, purchases: 8, revenue: 5000, ctr: 1, cpc: 1, cpa: 250, roas_platform: 2.5 }, known_counts: {} }], result_views: [{ metric_scope: "ad", currency: "TWD", result_kind: "purchase", result_action: "omni_purchase", result_attribution: "7d_click", result_count: 8, cost_per_result: 250, days_present: 14, days_known: 14, reason: null }] }),
+      current: period(), previous: period({ ad_spend: { value: 2000, currency: "TWD" }, ad_result_view: { metric_scope: "ad", currency: "TWD", result_kind: "purchase", result_action: "omni_purchase", result_attribution: "7d_click", result_count: 8, cost_per_result: 250, days_present: 14, days_known: 14, reason: null }, series: [{ metric_scope: "ad", attribution_key: "7d_click:omni_purchase", currency: "TWD", source: "graph", row_count: 14, days_present: 14, metrics: { spend: 2000, impressions: 80, clicks: 8, purchases: 8, revenue: 5000, ctr: 1, cpc: 1, cpa: 250, roas_platform: 2.5 }, known_counts: {} }], result_views: [{ metric_scope: "ad", currency: "TWD", result_kind: "purchase", result_action: "omni_purchase", result_attribution: "7d_click", result_count: 8, cost_per_result: 250, days_present: 14, days_known: 14, reason: null }] }),
       commerce: { current: commerce(), previous: commerce({ order_summary: { ...commerce().order_summary, count: 65, order_net_amount: 61700, paid_net_amount: 60645 } }) },
       conditions: { history: "unknown", creative_snapshot: { copy_fields: { title: "舊標題", body: "舊內文" } }, binding_count: 0 },
       previous_review: null, source_review: null,
@@ -169,13 +172,13 @@ describe("ReviewEvidencePage（F23-I02）各狀態的卡片與 bar", () => {
     expect(screen.getByRole("button", { name: "暫緩" })).toBeTruthy();
   });
 
-  it("ready：AI 建議、這則廣告（花費用 series 加總、不是 ROAS）、商城訂單、完整 bar、活的處理階梯", async () => {
+  it("ready：AI 建議、這則廣告（花費讀後端結果、不是 ROAS）、商城訂單、完整 bar、活的處理階梯", async () => {
     vi.mocked(reviewApi.getReview).mockResolvedValue(review());
     renderAt(roundPath());
     expect(await screen.findByText("先觀察一段時間")).toBeTruthy();
     expect(screen.getByText("花費持平但購買下降。")).toBeTruthy();
     expect(screen.getByText("這則廣告")).toBeTruthy();
-    expect(screen.getByText("3,000")).toBeTruthy(); // 花費（series 加總，不是 series[0] 的任意選取）
+    expect(screen.getByText("3,000")).toBeTruthy(); // Spend uses the served aggregate.
     expect(screen.queryByText(/ROAS/)).toBeNull(); // 沒有可信的單則 ROAS 存取器，三行不是四行
     expect(screen.getByText("商城訂單")).toBeTruthy();
     expect(screen.queryByText("這條素材的紀錄")).toBeNull(); // 銷售活動不顯示非銷售的紀錄卡
@@ -498,4 +501,18 @@ describe("ReviewEvidencePage（F30-I02）AI 說明被擋下與再請 AI 看一�
     expect(await screen.findByText("✦ AI 這次的說明沒採用")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "再請 AI 看一次" })).toBeNull();
   });
+});
+
+
+it("uses served unknowns for mixed currencies, without deriving totals from raw series", () => {
+  const source = period();
+  const mixed = period({
+    series: [source.series[0], { ...source.series[0], currency: "USD" }],
+    ad_spend: { value: null, currency: null },
+    ad_result_view: null,
+  });
+  expect(adSpend(mixed)).toBeNull();
+  expect(adResultView(mixed)).toBeNull();
+  expect(adSpend(period({ ad_spend: { value: 17, currency: "USD" } }))).toBe(17);
+  expect(adSpend(period({ ad_spend: undefined }))).toBeNull();
 });
