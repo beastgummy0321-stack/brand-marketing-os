@@ -117,10 +117,10 @@ test("冷啟動：建立精靈帶自己的圖 → 策略 → 自己填總額 →
 
   // --- 策略分頁：自己填總額（超過預算上限就第二次同意）、設上限、照這個方式進行 -------------------------------
   await page.getByRole("button", { name: "自己填總額", exact: true }).click();
-  await page.getByLabel("自己填這一期的總預算", { exact: true }).fill("800");
+  await page.getByLabel("自己填這一期的總預算", { exact: true }).fill("30000");
   const budget = responseFor(page, `/campaigns/${created.id}/strategy/scenario`);
   await page.getByRole("button", { name: "套用", exact: true }).click();
-  expect((await (await successful(budget)).json()).campaign.budget_planned).toBe(800);
+  expect((await (await successful(budget)).json()).campaign.budget_planned).toBe(30000);
   const capInput = page.getByLabel("每賣一筆最多花多少（上限）", { exact: true });
   await capInput.fill("300");
   const capSaved = responseFor(page, `/campaigns/${created.id}/target`, "PUT");
@@ -128,12 +128,19 @@ test("冷啟動：建立精靈帶自己的圖 → 策略 → 自己填總額 →
   await successful(capSaved);
   const plan = responseFor(page, `/campaigns/${created.id}/plan`);
   await page.getByRole("button", { name: "照這個方式進行 →", exact: true }).click();
-  const planned = (await (await successful(plan)).json()).campaign;
+  const planResponse = await successful(plan);
+  const planned = (await planResponse.json()).campaign;
   expect(planned.status).toBe("ready");
+  const approval = planResponse.request().postDataJSON();
+  expect(approval.expected_revision).toBe(planned.budget_basis_json.strategy.decision.revision);
+  expect(planned.budget_basis_json.strategy.decision.receipt.revision).toBe(approval.expected_revision);
   const plannedIds: string[] = planned.groups.flatMap((group: { ads: { id: string }[] }) => group.ads.map(ad => ad.id));
   // One ad per group; the group count follows the roles the strategy prompt offered (F33 Contract P).
   expect(planned.groups.length).toBeGreaterThan(0);
   expect(plannedIds).toHaveLength(planned.groups.length);
+  // The actual budget/cap formula bounds this happy path; roles never enlarge it.
+  expect(planned.capacity.ceiling).toBe(Math.floor(planned.capacity.daily / (300 * 2)) + 1);
+  expect(plannedIds.length).toBeLessThanOrEqual(planned.capacity.ceiling);
 
   // --- 素材分頁 → 進階 → 素材安排：改寫文案存新版、只用我的文案確認 ------------------------------------------
   const openPlacements = async () => {

@@ -23,6 +23,7 @@ from app.brand_intelligence import repository as bi_repo
 from app.core import db as coredb
 from app.core import settings as coresettings
 from app.llm import gateway, providers
+from app.tests.test_ads_strategy_decision import fixture_provider, bind_fixture
 from app.meta import repository as meta_repo
 from app.tests.fixtures.ads_external import outcome_seed
 
@@ -32,16 +33,13 @@ ACTOR = "測試員"
 
 
 def _fake(rendered_output: str) -> providers.FakeProvider:
-    return providers.FakeProvider(response=providers.ProviderResponse(
-        output_text=rendered_output, structured=None,
-        usage=providers.Usage(input_tokens=100, output_tokens=50), stop_reason="end_turn",
-    ))
+    return fixture_provider(rendered_output)
 
 
 def _coordinates(tag: str) -> dict:
     return {
         "audience": f"aud_{tag}", "pain": f"pain_{tag}", "angle": f"angle_{tag}",
-        "hook": f"hook_{tag}", "proof": f"proof_{tag}", "offer": f"offer_{tag}",
+        "hook": f"hook_{tag}", "proof": f"proof_{tag}", "offer": "none",
         "format": f"format_{tag}",
     }
 
@@ -383,9 +381,12 @@ class AlreadyAdoptedTest(StrategyTestBase):
             scenario_key="recommended", actor=ACTOR,
         )
 
-        with self.assertRaises(ValueError) as ctx:
-            self._generate()
-        self.assertEqual(str(ctx.exception), "strategy_already_adopted")
+        # Contract S: a still-draft plan can regenerate/reconfirm invalid bindings.
+        before = ads_repo.get_campaign(web.conn, self.org_id, self.brand_id, self.campaign["id"])
+        regenerated = self._generate()
+        self.assertEqual(regenerated["budget_planned"], before["budget_planned"])
+        self.assertEqual(sum(a["amount"] for a in regenerated["budget_basis_json"]["strategy"]["allocation"]),
+                         float(before["budget_planned"]))
 
 
 class CustomTotalInvalidTest(StrategyTestBase):
@@ -720,6 +721,9 @@ class SetAllocationTest(StrategyTestBase):
         try:
             plan.adopt_strategy(
                 web.conn, self.org_id, self.brand_id, self.campaign["id"], actor=ACTOR,
+                expected_revision=ads_repo.get_campaign(web.conn, self.org_id, self.brand_id,
+                    self.campaign["id"])["budget_basis_json"]["strategy"]["decision"]["revision"],
+                operation_id="allocation-fixture-adopt",
             )
         finally:
             plan.PROVIDER = orig_plan_provider
@@ -1333,8 +1337,11 @@ class BudgetCapRoutesTest(StrategyTestBase):
         after = response.json()["campaign"]
         self.assertEqual(after["budget_planned"], 15000)
         self.assertEqual(after["budget_scenario"], "recommended")
-        self.assertEqual(after["budget_basis_json"]["strategy"],
-                         before["budget_basis_json"]["strategy"])
+        before_strategy = before["budget_basis_json"]["strategy"]
+        after_strategy = after["budget_basis_json"]["strategy"]
+        self.assertEqual(after_strategy["allocation"], before_strategy["allocation"])
+        self.assertEqual(after_strategy["decision"]["slots"], before_strategy["decision"]["slots"])
+        self.assertNotEqual(after_strategy["decision"]["revision"], before_strategy["decision"]["revision"])
         scenarios = after["budget_basis_json"]["scenarios"]
         row = next(r for r in scenarios["scenarios"] if r["key"] == "recommended")
         self.assertEqual(row["over_cap"], 3000)
@@ -1345,7 +1352,11 @@ class BudgetCapRoutesTest(StrategyTestBase):
         orig_plan_provider = plan.PROVIDER
         plan.PROVIDER = _fake(_VALID_PLAN_REPLY)
         try:
-            adopted = self.client.post(self._url("/plan"), headers=self.headers)
+            current = ads_repo.get_campaign(web.conn, self.org_id, self.brand_id, self.campaign["id"])
+            adopted = self.client.post(self._url("/plan"), headers=self.headers, json={
+                "expected_revision": current["budget_basis_json"]["strategy"]["decision"]["revision"],
+                "operation_id": "budget-cap-fixture-adopt",
+            })
         finally:
             plan.PROVIDER = orig_plan_provider
         self.assertEqual(adopted.status_code, 200, adopted.text)
@@ -1645,10 +1656,8 @@ class _Replies:
     def complete(self, *, model, system, messages, max_tokens, timeout_s=120.0, effort=None,
                  tools=None, org_id=None):
         self.calls.append({"messages": messages})
-        return providers.ProviderResponse(
-            output_text=self.texts[min(len(self.calls), len(self.texts)) - 1], structured=None,
-            usage=providers.Usage(input_tokens=100, output_tokens=50), stop_reason="end_turn",
-        )
+        return fixture_provider(self.texts[min(len(self.calls), len(self.texts)) - 1]).complete(
+            model=model, system=system, messages=messages, max_tokens=max_tokens)
 
 
 def _number_reply() -> str:
@@ -1707,7 +1716,7 @@ class StrategyRefusalTest(StrategyTestBase):
     def test_every_refusal_code_has_a_sentence(self):
         self.assertEqual(set(strategy.REFUSALS), {
             "llm_failed", "reply_unreadable", "reply_invalid", "number_in_prose",
-            "role_unavailable", "pct_invalid", "role_repeated",
+            "role_unavailable", "pct_invalid", "role_repeated", "slots_missing",
         })
         for code in ("reply_invalid", "number_in_prose", "role_unavailable"):
             self.assertEqual(strategy._check_reply(  # noqa: SLF001

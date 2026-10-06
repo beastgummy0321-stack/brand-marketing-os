@@ -512,6 +512,9 @@ def set_strategy_allocation(
 # -- F03-I06: 採用策略 -> 投放組／廣告，以及後續編輯 ------------------------------------------
 
 _PLAN_ERRORS = {
+    "strategy_confirmation_required": (409, "請重新產生策略並確認每則廣告的安排。"),
+    "strategy_changed": (409, "策略或依據已改變，請重新載入後確認。"),
+    "strategy_infeasible": (409, "這份策略目前無法完整採用，請調整預算或安排。"),
     "campaign_unknown": (404, CAMPAIGN_UNKNOWN_MESSAGE),
     "plan_already_adopted": (400, "這個 Campaign 已經展開過投放結構，不能重新展開。"),
     "strategy_not_adopted": (400, "請先採用一個預算情境，才能展開投放結構。"),
@@ -522,8 +525,14 @@ _PLAN_ERRORS = {
 }
 
 
+class AdoptStrategyRequest(BaseModel):
+    expected_revision: str | None = None
+    operation_id: str | None = None
+
+
 @router.post("/brands/{brand_id}/campaigns/{campaign_id}/plan")
-def adopt_strategy(request: Request, brand_id: str, campaign_id: str):
+def adopt_strategy(request: Request, brand_id: str, campaign_id: str,
+                   body: AdoptStrategyRequest | None = None):
     """F03-I06：把已採用的策略角色分配展開成投放組／廣告，草稿 -> `ready`。"""
     actor = web.require_actor(request)
     web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
@@ -531,7 +540,13 @@ def adopt_strategy(request: Request, brand_id: str, campaign_id: str):
         with busy.claim(web.conn, campaign_id, "plan"):
             campaign = plan.adopt_strategy(
                 web.conn, actor.org_id, brand_id, campaign_id, actor=str(actor.user_id),
+                expected_revision=body.expected_revision if body else None,
+                operation_id=body.operation_id if body else None,
             )
+    except plan.StrategyConflict as exc:
+        status, message = _PLAN_ERRORS[str(exc)]
+        raise web.ApiError(status, str(exc), message,
+                           details={"reasons": exc.reasons}) from exc
     except plan.PlannerRefused as exc:
         raise _refused(exc, plan.PLAN_FAILED_MESSAGE) from exc
     except ValueError as exc:

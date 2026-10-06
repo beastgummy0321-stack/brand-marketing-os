@@ -20,6 +20,9 @@ prose only, and a reply whose prose carries a digit, `%` or `NT$` is refused.
 """
 
 import re
+import hashlib
+import json
+import math
 
 from app.ads import (
     budget,
@@ -69,6 +72,7 @@ REFUSALS = {
     "role_unavailable": "AI 分了這個品牌現在用不到的角色",
     "pct_invalid": "AI 給的比例加起來不是 100，或有負數",
     "role_repeated": "AI 把同一個角色分了兩次",
+    "slots_missing": "AI 沒有列出可採用的受眾、優惠與沿用安排",
 }
 
 
@@ -97,7 +101,8 @@ def _brand_facts_section(conn, brand_id: str) -> tuple[str, list[dict]]:
     lines = [f"- {f['label']}：{f['value']}" for f in kept]
     if omitted:
         lines.append(f"（另有 {len(omitted)} 筆較舊的品牌事實沒有列出）")
-    basis = [{"id": f["id"], "label": f["label"], "updated_at": f["updated_at"]} for f in kept]
+    basis = [{"id": f["id"], "label": f["label"], "value": f["value"],
+              "updated_at": f["updated_at"]} for f in kept]
     return "【品牌事實】\n" + "\n".join(lines), basis
 
 
@@ -211,7 +216,7 @@ def _check_reply(data, available: frozenset[str], names=()) -> tuple[dict | None
         if role not in available:
             return None, "role_unavailable"
         pct = item.get("pct")
-        if isinstance(pct, bool) or not isinstance(pct, (int, float)):
+        if isinstance(pct, bool) or not isinstance(pct, (int, float)) or not math.isfinite(pct):
             return invalid
         rationale = item.get("rationale")
         if _has_number([rationale], names):
@@ -234,12 +239,207 @@ def _check_reply(data, available: frozenset[str], names=()) -> tuple[dict | None
         return None, "role_repeated"
 
     return {
+        "slots": data.get("slots"),
         "allocation": validated_allocation,
         "why": _str_list(data.get("why")),
         "unknowns": _str_list(data.get("unknowns")),
         "alternatives": alternatives,
         "learning_goals": _str_list(data.get("learning_goals"))[:3],
     }, None
+
+
+def decision_context(ctx: dict, campaign: dict) -> dict:
+    """Stable IDs and decision facts; never hash render labels or read timestamps."""
+    carried = ctx.get("carried_candidates") or []
+    return {
+        "campaign_id": campaign["id"], "product_ids": ctx.get("product_ids") or [],
+        "dates": [str(campaign.get(k)) for k in ("start_date", "end_date")],
+        "objective": campaign.get("objective"), "goal": campaign.get("goal_text"),
+        "budget_planned": (float(campaign["budget_planned"])
+                           if campaign.get("budget_planned") is not None else None),
+        "constraints": campaign.get("constraints_json") or {},
+        "customers": [{"id": g["id"], "pain_keys": g.get("pain_keys") or []}
+                      for g in ctx["customer_groups"]],
+        "offers": [{"key": o["key"], "sentence": o["sentence"]} for o in ctx["offers"]],
+        "menu": sorted((r["dimension"], r["key"]) for r in ctx["menu"]),
+        "forbidden": ctx["forbidden"], "capacity": ctx.get("capacity"),
+        "learnings": [{"id": r["id"], "text": r.get("text")} for r in ctx["learnings"]["ads"]],
+        "ranked_ids": ctx["ranked_ids"], "calendar": ctx.get("calendar_evidence") or [],
+        "brand_facts": [{"id": r["id"], "value": r.get("value")}
+                        for r in ctx.get("brand_facts") or []],
+        "prices": [{k: r.get(k) for k in ("product_id", "price", "stale", "assumptions")}
+                   for r in ctx.get("prices") or []],
+        "product_facts": [{"id": k["id"], "facts": k["facts"]}
+                          for b in ctx.get("product_blocks") or [] for k in b["knowledge"]],
+        "results": [{**{k: r.get(k) for k in ("ad_id", "sales", "spend", "cost_per_sale",
+                                           "verdict", "flags")},
+                     "coordinates": [(v["dimension"], v["key"])
+                                     for v in r.get("coordinates") or []]}
+                    for c in ctx["learnings"]["ranked"]["campaigns"] for r in c["rows"]],
+        "previous_goals": (ctx.get("previous") or {}).get("learning_goals") or [],
+        "evidence_refs": (
+            [{"kind": "learning", "id": r["id"]} for r in ctx["learnings"]["ads"]]
+            + [{"kind": "learning", "id": i} for i in ctx["ranked_ids"]]
+            + [{"kind": "result", "id": r["ad_id"]}
+               for c in ctx["learnings"]["ranked"]["campaigns"] for r in c["rows"]]
+            + [{"kind": "brand_fact", "id": r["id"]} for r in ctx.get("brand_facts") or []]
+            + [{"kind": "calendar", "id": r["id"]} for r in ctx.get("calendar_evidence") or []]
+        ),
+        "carried": [{"id": i["ad"]["id"], "role": i["role"],
+                    "customer_group_id": i["ad"].get("customer_group_id"),
+                    "coordinates": {d: i["ad"].get(f"{d}_key") for d in plan._COORDINATE_DIMENSIONS},
+                    "creative": i["creative"], "eligibility": i.get("eligibility")} for i in carried],
+    }
+
+
+def executable_decision(ctx: dict, campaign: dict, payload: dict) -> dict:
+    """Validate a proposed commitment before it is served and again before persistence."""
+    slots = payload.get("slots") or (payload.get("decision") or {}).get("slots") or []
+    reasons = []
+    def refuse(code, message, ids=()):
+        reasons.append({"code": code, "message": message, "slot_ids": list(ids)})
+    allocation = payload.get("allocation") or []
+    roles = {r["role"] for r in allocation}
+    group_ids = {g["id"] for g in ctx["customer_groups"]}
+    offer_keys = {o["key"] for o in ctx["offers"]} | {"none"}
+    carried = {i["ad"]["id"]: i for i in ctx.get("carried_candidates") or []}
+    evidence = {("learning", r["id"]) for r in ctx["learnings"]["ads"]}
+    evidence |= {("learning", i) for i in ctx["ranked_ids"]}
+    evidence |= {("result", r["ad_id"]) for c in ctx["learnings"]["ranked"]["campaigns"]
+                 for r in c["rows"]}
+    evidence |= {("calendar", r["id"]) for r in ctx.get("calendar_evidence") or []}
+    evidence |= {("brand_fact", r["id"]) for r in ctx.get("brand_facts") or []}
+    seen, carry_seen, per_role, groups_per_role = set(), set(), {}, {}
+    if not isinstance(slots, list) or not slots:
+        refuse("slots_missing", "請重新產生策略，確認每則廣告的安排。")
+        slots = []
+    for slot in slots:
+        if (not isinstance(slot, dict) or any(not isinstance(slot.get(k), str)
+                for k in ("id", "role", "offer_key"))
+                or any(slot.get(k) is not None and not isinstance(slot.get(k), str)
+                       for k in ("customer_group_id", "carry_from_ad_id", "test_intent"))):
+            refuse("slot_invalid", "廣告安排格式無效。")
+            continue
+        sid, role = slot.get("id"), slot.get("role")
+        ids = [sid] if isinstance(sid, str) else []
+        if not isinstance(sid, str) or not sid.strip() or len(sid) > 100 or sid in seen:
+            refuse("slot_id_invalid", "每則廣告需要不同且有效的安排代號。", ids)
+        seen.add(sid)
+        if role not in roles:
+            refuse("slot_role_invalid", "廣告角色不在這份分配裡。", ids)
+        per_role[role] = per_role.get(role, 0) + 1
+        gid = slot.get("customer_group_id")
+        if (gid not in group_ids if group_ids else gid is not None):
+            refuse("customer_group_unavailable", "所選顧客群已刪除或不屬於這次企劃，請重選。", ids)
+        groups_per_role.setdefault(role, set()).add(gid)
+        if slot.get("offer_key") not in offer_keys:
+            refuse("offer_unavailable", "所選優惠這期不能使用，請重選。", ids)
+        carry_id, intent = slot.get("carry_from_ad_id"), slot.get("test_intent")
+        has_intent = isinstance(intent, str) and bool(intent.strip())
+        if bool(carry_id) == has_intent:
+            refuse("slot_intent_invalid", "請選擇沿用原廣告，或明確提出新測試。", ids)
+        if carry_id:
+            item = carried.get(carry_id)
+            if (carry_id in carry_seen or item is None or item["creative"] is None
+                    or (item.get("eligibility") or {}).get("state") == "blocked"):
+                refuse("carry_unavailable", "這則廣告的原圖文無法沿用，請修訂安排。", ids)
+            elif (item["ad"].get("customer_group_id") != gid
+                  or item["ad"].get("offer_key") != slot.get("offer_key")):
+                refuse("carry_binding_changed", "沿用原圖文必須保留它的顧客群與優惠。", ids)
+            carry_seen.add(carry_id)
+        refs = slot.get("evidence_refs")
+        if not isinstance(refs, list) or (evidence and not refs) or any(
+                not isinstance(r, dict) or not isinstance(r.get("kind"), str)
+                or not isinstance(r.get("id"), str)
+                or (r["kind"], r["id"]) not in evidence for r in refs):
+            refuse("evidence_unavailable", "安排引用的依據不在這次已讀資料裡。", ids)
+    if set(per_role) != roles or any(n > plan._MAX_ADS_PER_GROUP for n in per_role.values()):
+        refuse("role_capacity", "每個已分配角色需要廣告，且不能超過同組件數上限。")
+    if any(len(ids) > 1 for ids in groups_per_role.values()):
+        refuse("role_audience_conflict", "同一投放組不能承諾不同顧客群，請調整角色或安排。")
+    capacity = ctx.get("capacity")
+    if capacity is None:
+        refuse("capacity_unknown", "先設定有效的每筆成本上限與預算，才能確認安排是否放得下。")
+    elif len(slots) > capacity["ceiling"]:
+        refuse("capacity_exceeded", "預算放不下這些廣告，請調整預算或安排。", seen)
+    if capacity and allocation:
+        amounts = plan._role_amounts(allocation, capacity["daily"])
+        if any(amount <= 0 for amount in amounts.values()):
+            refuse("allocation_too_small", "部分角色分不到正數日預算，請調整比例或預算。")
+    if ctx["offers"] and not any(s.get("offer_key") != "none" for s in slots if isinstance(s, dict)):
+        refuse("offer_unused", "這期有可用優惠，請明確安排至少一則使用它。")
+    stable = {"inputs": decision_context(ctx, campaign), "slots": slots,
+              "allocation": [{"role": r["role"], "pct": r["pct"]} for r in allocation]}
+    revision = hashlib.sha256(json.dumps(stable, sort_keys=True, ensure_ascii=False,
+                                       default=str).encode()).hexdigest()
+    return {"schema_version": 1, "revision": revision, "state": "proposed", "slots": slots,
+            "feasibility": {"state": "blocked" if reasons else "ready", "reasons": reasons}}
+
+
+def refresh_decision(conn, org, brand, campaign, payload):
+    """Refresh bindings after budget/allocation edits; labels never determine a binding."""
+    if not payload.get("decision"):
+        return
+    ctx = planner_context.planner_context(conn, org, brand, sell_way.of_campaign(campaign),
+                                          campaign=campaign)
+    if ctx["capacity"] is None and campaign.get("budget_planned") is None:
+        scenarios = (campaign.get("budget_basis_json") or {}).get("scenarios") or {}
+        row = next((r for r in scenarios.get("scenarios", [])
+                    if r["key"] == scenarios.get("recommended")), {})
+        ctx["capacity"] = planner_context.capacity_of(row.get("daily"), ctx["cap"])
+    _, ctx["brand_facts"] = _brand_facts_section(conn, brand)
+    previous = payload["decision"]
+    payload["decision"] = executable_decision(ctx, campaign, payload)
+    if previous.get("state") in ("adopted", "modified"):
+        payload["decision"]["state"] = "modified"
+        payload["decision"]["receipt"] = previous.get("receipt")
+        payload["rationale_state"] = "stale"
+
+
+def served_decision(conn, org, brand, campaign, groups):
+    """Separate candidate facts, proposed commitments and actual saved targeting."""
+    payload = (campaign.get("budget_basis_json") or {}).get("strategy") or {}
+    saved = payload.get("decision")
+    decision = dict(saved) if saved else None
+    ctx = planner_context.planner_context(conn, org, brand, sell_way.of_campaign(campaign),
+                                          campaign=campaign)
+    if saved and saved.get("state") == "proposed":
+        _, ctx["brand_facts"] = _brand_facts_section(conn, brand)
+        if campaign.get("budget_planned") is None:
+            scenarios = (campaign.get("budget_basis_json") or {}).get("scenarios") or {}
+            row = next((r for r in scenarios.get("scenarios", [])
+                        if r["key"] == scenarios.get("recommended")), {})
+            ctx["capacity"] = planner_context.capacity_of(row.get("daily"), ctx["cap"])
+        current = executable_decision(ctx, campaign, payload)
+        decision["feasibility"] = current["feasibility"]
+        if current["revision"] != saved["revision"]:
+            decision["feasibility"] = {"state": "blocked", "reasons": [
+                *current["feasibility"]["reasons"], {"code": "strategy_changed",
+                    "message": "安排的依據已更新，請重新產生策略並確認。", "slot_ids": []}]}
+    decision = decision or {
+        "schema_version": 1, "revision": "", "state": "legacy_unbound", "slots": [],
+        "feasibility": {"state": "blocked", "reasons": [{
+            "code": "strategy_confirmation_required", "message": "舊策略尚未綁定安排，請重新產生並確認。",
+            "slot_ids": [],
+        }]},
+    }
+    names = {g["id"]: g["who"] for g in ctx["customer_groups"]}
+    proposed = [s for s in decision["slots"] if isinstance(s, dict)]
+    proposed_ids = {s["customer_group_id"] for s in proposed
+                    if isinstance(s.get("customer_group_id"), str)}
+    ads = [a for g in groups for a in g.get("ads") or []]
+    actual_ids = set(a.get("customer_group_id") for a in ads) - {None}
+    decision["facts"] = {
+        "available": {"customer_groups": len(names), "customer_group_names": list(names.values())},
+        "proposed": {"customer_groups": len(proposed_ids), "delivery_groups": len(set(
+            s["role"] for s in proposed if isinstance(s.get("role"), str))), "ads": len(decision["slots"]),
+            "customer_group_names": [names.get(i, "已刪除的顧客群") for i in sorted(proposed_ids)],
+            "unknown_audience_ads": sum(s.get("customer_group_id") is None for s in proposed)},
+        "actual": {"customer_groups": len(actual_ids), "delivery_groups": len(groups), "ads": len(ads),
+            "customer_group_names": [names.get(i, "已刪除的顧客群") for i in sorted(actual_ids)],
+            "unknown_audience_ads": sum(a.get("customer_group_id") is None for a in ads)},
+    }
+    return decision
 
 
 def _apply_amounts(allocation: list[dict], total: float | None) -> list[dict]:
@@ -378,7 +578,7 @@ def generate(conn, org_id: str, brand_id: str, campaign_id: str, *, actor: str) 
     campaign = ads_repo.get_campaign(conn, org_id, brand_id, campaign_id)
     if campaign is None:
         raise ValueError("campaign_unknown")
-    if campaign.get("budget_planned") is not None:
+    if campaign["status"] != "draft":
         # 重算今天只會拿新推薦的情境總額去 split() ——已採用的 `budget_planned` 會悄悄跟畫面上
         # 存的分配金額對不上，F03-I06 已經照 `budget_planned` 建過投放組(§0)。
         raise ValueError("strategy_already_adopted")
@@ -390,6 +590,7 @@ def generate(conn, org_id: str, brand_id: str, campaign_id: str, *, actor: str) 
     ctx = planner_context.planner_context(
         conn, org_id, brand_id, sell_way.of_campaign(campaign), campaign=campaign,
     )
+    ctx["brand_facts"] = facts_basis
 
     brand = bi_repo.get_brand(conn, brand_id)
     assert brand is not None  # 已經讀得到這個品牌的 campaign，品牌本身一定還在
@@ -409,7 +610,7 @@ def generate(conn, org_id: str, brand_id: str, campaign_id: str, *, actor: str) 
     recommended_row = next(
         row for row in scenario_result["scenarios"] if row["key"] == scenario_result["recommended"]
     )
-    if ctx["capacity"] is None:
+    if ctx["capacity"] is None and campaign.get("budget_planned") is None:
         # No adopted budget yet: the capacity line reads the recommended scenario's day.
         ctx["capacity"] = planner_context.capacity_of(recommended_row["daily"], cap)
 
@@ -440,6 +641,8 @@ def generate(conn, org_id: str, brand_id: str, campaign_id: str, *, actor: str) 
         + "\n\n" + facts_text
         + sections
         + "\n\n" + scenarios_text
+        + "\n\n【可綁定安排】\n" + json.dumps(decision_context(ctx, campaign),
+                                                ensure_ascii=False, default=str)
     )
 
     context = gateway.TaskContext(
@@ -466,14 +669,18 @@ def generate(conn, org_id: str, brand_id: str, campaign_id: str, *, actor: str) 
         payload, code = _check_reply(data, frozenset(available_roles), names)
         if payload is None:
             raise _refused(code or "reply_invalid", task_row["id"])
+        if not isinstance(payload.get("slots"), list) or not payload["slots"]:
+            raise _refused("slots_missing", task_row["id"])
         return task_row, payload
 
     task_row, strategy_payload = plan.ask_with_one_retry(conn, ask, campaign_id=campaign_id)
 
     strategy_payload["allocation"] = _apply_amounts(
-        strategy_payload["allocation"], recommended_row["total"],
+        strategy_payload["allocation"], campaign.get("budget_planned") or recommended_row["total"],
     )
     strategy_payload["facts"] = _facts(ctx, strategy_payload["allocation"], recommended_row)
+    strategy_payload["decision"] = executable_decision(ctx, campaign, strategy_payload)
+    strategy_payload.pop("slots", None)
 
     estimated_fields = ["daily", "total"] if scenario_result["mode"] == "cold_start" else []
     basis = {
@@ -546,7 +753,8 @@ def _facts(ctx: dict, allocation: list[dict], scenario_row: dict | None, *,
             for key, count in adopted["offers"].items()
         ) or "這期的廣告沒有用優惠"
     else:
-        groups = _groups_fact([g["who"] for g in ctx["customer_groups"]], "這期沒有列出顧客群")
+        groups = ("可選顧客群：" + "、".join(g["who"] for g in ctx["customer_groups"])
+                  if ctx["customer_groups"] else "沒有可選顧客群，受眾未知")
         offers = "可用的優惠：" + "；".join(
             f"〈{offer['label']}〉{offer['sentence']}" for offer in ctx["offers"]
         ) if ctx["offers"] else "沒有可用優惠"
@@ -554,7 +762,7 @@ def _facts(ctx: dict, allocation: list[dict], scenario_row: dict | None, *,
     if capacity is None and scenario_row is not None:
         capacity = planner_context.capacity_of(scenario_row.get("daily"), ctx["cap"])
     if capacity is not None:
-        capacity = {**capacity, "ceiling": max(capacity["ceiling"], len(allocation))}
+        capacity = {**capacity}
     counts = [c["counts"] for c in ctx["learnings"]["ranked"]["campaigns"]]
     learnings = (
         f"讀了上幾期的排名：留下 {sum(c['keep'] for c in counts)} 則、"
@@ -677,6 +885,8 @@ def select_scenario(conn, org_id: str, brand_id: str, campaign_id: str, *,
         resplit, budget_planned = plan.resplit_groups(conn, org_id, brand_id, campaign, total)
     strategy_payload = dict(strategy_payload)
     strategy_payload["allocation"] = _apply_amounts(strategy_payload["allocation"], total)
+    refresh_decision(conn, org_id, brand_id,
+                     {**campaign, "budget_planned": budget_planned}, strategy_payload)
     budget_basis_json = {**budget_basis_json, "strategy": strategy_payload}
     ads_repo.select_scenario(
         conn, org_id, brand_id, campaign_id, scenario_key=scenario_key,
@@ -714,7 +924,7 @@ def set_allocation(conn, org_id: str, brand_id: str, campaign_id: str, *,
         if role not in existing_by_role:
             raise ValueError("allocation_invalid")
         pct = item.get("pct")
-        if isinstance(pct, bool) or not isinstance(pct, (int, float)):
+        if isinstance(pct, bool) or not isinstance(pct, (int, float)) or not math.isfinite(pct):
             raise ValueError("allocation_invalid")
         existing = existing_by_role[role]
         validated_allocation.append({
@@ -741,6 +951,7 @@ def set_allocation(conn, org_id: str, brand_id: str, campaign_id: str, *,
 
     strategy_payload = dict(strategy_payload)
     strategy_payload["allocation"] = _apply_amounts(validated_allocation, total)
+    refresh_decision(conn, org_id, brand_id, campaign, strategy_payload)
     budget_basis_json = {**budget_basis_json, "strategy": strategy_payload}
     ads_repo.save_strategy(conn, org_id, brand_id, campaign_id, budget_basis_json=budget_basis_json)
     detail = ads_repo.campaign_detail(conn, org_id, brand_id, campaign_id)

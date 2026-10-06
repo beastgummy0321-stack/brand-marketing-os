@@ -55,6 +55,19 @@ markdown fence 包起來、物件前後不留一個字。**
 
 ## 交付內容
 
+Contract S: also return `slots`, an explicit array of assignments using only IDs from
+`【可綁定安排】`. Each has `id`, `role`, `customer_group_id` (null only when no groups are
+available), `offer_key`, `carry_from_ad_id` or a nonempty `test_intent` (exactly one),
+and `evidence_refs:[{kind,id}]`. Evidence kinds are learning, result, calendar, brand_fact.
+Retain a carried ad in its previous role by default; any role movement must be an explicit
+slot assignment. Keep its audience and offer with its original image/copy. Do not promote
+every relative winner. New tests must test a stated buying proposition. Explain percentages
+as recommendations with sample limits; do not claim a calculated optimum. Every allocated
+role needs a slot, one role targets one customer group, and the whole proposal must fit the
+served ceiling. Never promise more distinct audiences than slots. Use `none` for no offer.
+Use stable descriptive slot IDs. Empty evidence is allowed only when the prepared context
+contains no relevant evidence; never invent citations.
+
 - `allocation`：一個陣列，每一項是 `{"role", "pct", "rationale"}`：
   - `role`：只能用【可用角色】列出的角色，不能自己加（英文 key 照抄，程式要拿去對照；
     中文名稱由程式自己填，不用你回）。每個角色最多出現一次；不打算投的角色就不要列

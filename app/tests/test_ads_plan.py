@@ -20,22 +20,20 @@ from app.brand_intelligence import repository as bi_repo
 from app.core import approval as approval_mod
 from app.core import db as coredb
 from app.llm import gateway, providers
+from app.tests.test_ads_strategy_decision import fixture_provider, bind_fixture
 
 ACTOR = "測試員"
 OFFERS_HEADER = planner_context.OFFERS_HEADER
 
 
 def _fake(rendered_output: str) -> providers.FakeProvider:
-    return providers.FakeProvider(response=providers.ProviderResponse(
-        output_text=rendered_output, structured=None,
-        usage=providers.Usage(input_tokens=100, output_tokens=50), stop_reason="end_turn",
-    ))
+    return fixture_provider(rendered_output)
 
 
 def _coordinates(tag: str) -> dict:
     return {
         "audience": f"aud_{tag}", "pain": f"pain_{tag}", "angle": f"angle_{tag}",
-        "hook": f"hook_{tag}", "proof": f"proof_{tag}", "offer": f"offer_{tag}",
+        "hook": f"hook_{tag}", "proof": f"proof_{tag}", "offer": "none",
         "format": f"format_{tag}",
     }
 
@@ -95,8 +93,19 @@ class PlanTestBase(unittest.TestCase):
                                          created_by=ACTOR)
 
     def _adopt(self, campaign_id: str) -> dict:
+        campaign = ads_repo.get_campaign(web.conn, self.org_id, self.brand_id, campaign_id)
+        decision = campaign["budget_basis_json"]["strategy"].get("decision")
+        if not decision:
+            try:
+                reply = json.loads(plan.PROVIDER.response.output_text)
+            except (AttributeError, ValueError):
+                reply = None
+            revision = bind_fixture(web.conn, self.org_id, self.brand_id, campaign_id, reply)
+        else:
+            revision = decision["revision"]
         return plan.adopt_strategy(
             web.conn, self.org_id, self.brand_id, campaign_id, actor=ACTOR,
+            expected_revision=revision, operation_id=f"fixture-{campaign_id}-{campaign['status']}",
         )
 
     def _assert_refusal(self, exc: Exception, code: str) -> None:
@@ -183,7 +192,7 @@ class AdoptTwiceRefusedTest(PlanTestBase):
 
         with self.assertRaises(ValueError) as ctx:
             self._adopt(campaign["id"])
-        self.assertEqual(str(ctx.exception), "plan_already_adopted")
+        self.assertEqual(str(ctx.exception), "strategy_changed")
 
 
 class LastGroupDeleteRefusedTest(PlanTestBase):
@@ -555,15 +564,15 @@ class RankedLearningGateTest(PlanTestBase):
             {"new": (1, "box"), "retarget": (2, "metro"), "explore": (1, "other")},
         ))
 
-    def test_a_plan_reusing_no_kept_pair_passes_because_the_kept_ad_is_carried(self):
-        # F48 Contract K: the keep half of the gate is met by construction -- the 留下 ad of the
-        # newest closed campaign of this sell-way is carried in, so the reply may explore.
+    def test_a_plan_can_explicitly_test_when_a_kept_ad_has_no_reusable_creative(self):
+        # Contract S: an unavailable original is not silently copied as a missing-material ad.
         detail = self._adopt_reply(_pair_reply(
             {"new": (2, "box"), "retarget": (1, "fresh"), "explore": (2, "other")},
         ))
         self.assertEqual(detail["status"], "ready")
         names = [ad["name"] for g in detail["groups"] for ad in g["ads"]]
-        self.assertIn("考前一週・書包一盒", names)
+        self.assertNotIn("考前一週・書包一盒", names)
+        self.assertIn("new-廣告", names)
         self.assertNotIn("通勤族・地鐵十分鐘", names)  # 換掉 is never carried
 
     def test_a_kept_pair_with_other_coordinates_changed_passes(self):
@@ -1256,9 +1265,12 @@ class OffersInDeliveryPlanPromptTest(PlanTestBase):
         campaign = self._bundle_campaign()
         # `free_shipping` is not in this menu, so `_gate_reply` turns it into `none` first.
         for reply in (_offer_reply({}), _offer_reply({"new": "free_shipping"})):
-            with self.assertRaises(ValueError) as ctx:
+            with self.assertRaises(plan.StrategyConflict) as ctx:
                 self._adopt_reply(campaign, reply)
-            self._assert_refusal(ctx.exception, "offer_unused")
+            self.assertEqual(str(ctx.exception), "strategy_infeasible")
+            self.assertIn("offer_unused", {r["code"] for r in ctx.exception.reasons})
+        self.assertEqual(web.conn.execute("SELECT id FROM llm_task WHERE brand_id=%s AND "
+            "context_scope_json->>'campaign_id'=%s", (self.brand_id, campaign["id"])).fetchall(), [])
         reloaded = ads_repo.campaign_detail(web.conn, self.org_id, self.brand_id, campaign["id"])
         self.assertEqual(reloaded["status"], "draft")  # nothing was written
         self.assertEqual(reloaded["groups"], [])
@@ -1381,17 +1393,21 @@ class CarriedKeepAdsTest(PlanTestBase):
 
         detail, prompt = self._adopt_reply(_two_role_reply())
         ads = self._ads(detail)
-        self.assertEqual(set(ads), {"留下-有素材", "留下-沒素材", "再行銷-補位", "探索-補位"})
+        self.assertEqual(set(ads), {"留下-有素材", "再行銷-補位", "探索-補位"})
+        self.assertNotIn("留下-沒素材", ads)
         carried = ads["留下-有素材"]
         for dim in ("audience", "pain", "angle", "hook", "proof", "offer", "format"):
             self.assertEqual(carried[f"{dim}_key"], self.kept[f"{dim}_key"])
-        self.assertEqual(carried["coordinates_snapshot_json"]["carried_from"],
+        source = carried["coordinates_snapshot_json"]["carried_from"]
+        self.assertEqual({k: source[k] for k in ("campaign_id", "ad_id")},
                          {"campaign_id": self.previous["id"], "ad_id": self.kept["id"]})
+        self.assertIsNotNone(source["placement_id"])
+        self.assertEqual(source["placement_revision"], 1)
         self.assertEqual(carried["carried_label"], "沿用上一期")
         self.assertIsNone(carried["carry_note"])
         self.assertIsNone(ads["再行銷-補位"]["carried_label"])
         by_group = {g["role"]: [ad["name"] for ad in g["ads"]] for g in detail["groups"]}
-        self.assertEqual(by_group["new"], ["留下-有素材", "留下-沒素材"])
+        self.assertEqual(by_group["new"], ["留下-有素材"])
 
         # Same original, same copy, confirmed and assigned: the slot reads ready.
         material = carried["material_placement_id"]
@@ -1404,8 +1420,6 @@ class CarriedKeepAdsTest(PlanTestBase):
         view = slots.read(web.conn, self.org_id, self.brand_id, self.campaign["id"])
         states = {s["name"]: s["state"] for g in view["groups"] for s in g["slots"]}
         self.assertEqual(states["留下-有素材"], "ready")
-        self.assertEqual(states["留下-沒素材"], "missing")
-        self.assertEqual(ads["留下-沒素材"]["carry_note"], "上一期的素材找不到，要重新準備")
 
         self.assertIn("【已沿用的廣告】", prompt)
         self.assertIn("- 「留下-有素材」｜投放組 new｜顧客群 未指定｜audience=aud_keep1、", prompt)
@@ -1414,10 +1428,13 @@ class CarriedKeepAdsTest(PlanTestBase):
         self.assertNotIn("換掉-這則", set(ads))
 
     def test_a_reply_above_the_ceiling_is_refused_with_nothing_written(self):
-        # Two carried + three planned = 5 > ceiling 4.
+        # One eligible carried + four planned = 5 > ceiling 4; refuse before adoption.
+        reply = json.loads(_VALID_PLAN_REPLY)
+        reply["groups"][0]["ads"].append({**reply["groups"][0]["ads"][0], "name": "extra"})
         with self.assertRaises(ValueError) as ctx:
-            self._adopt_reply(_VALID_PLAN_REPLY)
-        self._assert_refusal(ctx.exception, "menu_violation")
+            self._adopt_reply(json.dumps(reply, ensure_ascii=False))
+        self.assertIsInstance(ctx.exception, plan.StrategyConflict)
+        self.assertIn("capacity_exceeded", {r["code"] for r in ctx.exception.reasons})
         reloaded = ads_repo.campaign_detail(web.conn, self.org_id, self.brand_id,
                                             self.campaign["id"])
         self.assertEqual((reloaded["status"], reloaded["groups"]), ("draft", []))
@@ -1447,7 +1464,7 @@ class CarriedKeepAdsTest(PlanTestBase):
                 {"ads_campaign_id": self.campaign["id"]})
         }
         self.assertNotIn(ads["留下-有素材"]["id"], packed)
-        self.assertIn(ads["留下-沒素材"]["id"], packed)
+        self.assertNotIn("留下-沒素材", ads)
         self.assertIn(ads["探索-補位"]["id"], packed)
 
     def test_the_payload_serves_capacity_and_menu(self):
@@ -1468,7 +1485,7 @@ class CarriedKeepAdsTest(PlanTestBase):
         campaign = response.json()["campaign"]
         self.assertEqual(campaign["capacity"],
                          {"daily": 2142, "cap": 300, "can_support": 3, "ceiling": 4,
-                          "carried": 2})
+                          "carried": 1})
         menu = {(row["dimension"], row["key"]) for row in campaign["menu"]}
         self.assertNotIn(("proof", "lab_report"), menu)  # no evidence registered
 
@@ -1616,10 +1633,8 @@ class _Replies:
         self.calls.append({"messages": messages})
         if self.error is not None:
             raise self.error
-        return providers.ProviderResponse(
-            output_text=self.texts[min(len(self.calls), len(self.texts)) - 1], structured=None,
-            usage=providers.Usage(input_tokens=100, output_tokens=50), stop_reason="end_turn",
-        )
+        return fixture_provider(self.texts[min(len(self.calls), len(self.texts)) - 1]).complete(
+            model=model, system=system, messages=messages, max_tokens=max_tokens)
 
     def prompt(self, n: int) -> str:
         return self.calls[n]["messages"][0]["content"]
@@ -1720,8 +1735,11 @@ class PlanRefusalTest(PlanTestBase):
         from app import main
 
         plan.PROVIDER = _Replies(_forbidden_name_reply())
+        revision = bind_fixture(web.conn, self.org_id, self.brand_id, self.campaign["id"])
+        web.conn.commit()
         response = TestClient(main.app).post(
-            f"/api/ads/brands/{self.brand_id}/campaigns/{self.campaign['id']}/plan")
+            f"/api/ads/brands/{self.brand_id}/campaigns/{self.campaign['id']}/plan",
+            json={"expected_revision": revision, "operation_id": "refusal-route-fixture"})
         self.assertEqual(response.status_code, 502)
         reason = plan.REFUSALS["name_forbidden"]
         self.assertEqual(response.json()["error"], {

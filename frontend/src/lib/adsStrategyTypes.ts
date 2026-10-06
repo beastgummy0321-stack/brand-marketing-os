@@ -24,6 +24,9 @@ export interface StrategyFact {
 }
 
 export interface StrategyPayload {
+  /** Explicit structure or money edits invalidate the original recommendation. */
+  rationale_state?: "stale";
+  decision?: StrategyDecision;
   allocation: StrategyAllocationItem[];
   why: string[];
   unknowns: string[];
@@ -33,6 +36,34 @@ export interface StrategyPayload {
   /** F48 Contract S: the facts the program built (groups／offers／numbers／capacity／learnings); a strategy from
    * before F48 read through a backend that predates it has none. */
   facts?: StrategyFact[] | null;
+}
+
+/** Contract S: accepted bindings and the backend-owned adoption receipt. */
+export interface StrategyDecision {
+  schema_version: 1;
+  revision: string;
+  state: "proposed" | "adopted" | "modified" | "legacy_unbound";
+  facts?: {
+    available: { customer_groups: number; customer_group_names: string[] };
+    proposed: StrategyAssignmentFacts;
+    actual: StrategyAssignmentFacts;
+  };
+  slots: {
+    id: string; role: StrategyRole; customer_group_id: string | null; offer_key: string;
+    carry_from_ad_id: string | null; test_intent: string | null;
+    evidence_refs: {kind: "learning" | "result" | "calendar" | "brand_fact"; id: string}[];
+  }[];
+  feasibility: {state: "ready" | "blocked"; reasons: {
+    code: string; message: string; slot_ids: string[];
+  }[]};
+  receipt?: {revision: string; operation_id: string; slots: {
+    slot_id: string; group_id: string; ad_id: string; carry_from_ad_id: string | null;
+  }[]};
+}
+
+export interface StrategyAssignmentFacts {
+  customer_groups: number; delivery_groups: number; ads: number;
+  customer_group_names: string[]; unknown_audience_ads: number;
 }
 
 export interface StrategyBasisFact {

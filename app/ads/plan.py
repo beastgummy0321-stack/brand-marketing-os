@@ -20,6 +20,7 @@ Private to app/ads (container contract §1): only `routes.py` imports this modul
 """
 
 import logging
+import json
 import re
 from collections.abc import Set as AbstractSet
 from datetime import date
@@ -341,6 +342,7 @@ def _check_reply(data, roles: AbstractSet[str], *, covered: AbstractSet[str] = f
             validated_ads.append({
                 "name": ad_name, "coordinates": coords, "scene": scene,
                 "customer_group": ad.get("customer_group"),
+                "slot_id": ad.get("slot_id"),
             })
         validated_groups.append({"role": role, "name": name.strip(), "ads": validated_ads})
 
@@ -545,7 +547,7 @@ def _target_role(previous_role: str | None, role_order: list[str]) -> str:
     plan did not adopt goes to the `new` group, else the first adopted group."""
     if previous_role is not None and previous_role in role_order:
         return previous_role
-    return "new" if "new" in role_order else role_order[0]
+    raise ValueError("strategy_infeasible")
 
 
 def _select_carried(kept: list[dict], role_order: list[str], ceiling: int) -> list[dict]:
@@ -613,24 +615,6 @@ def _carried_snapshot(previous: dict, lookup: dict) -> dict:
     return snapshot
 
 
-def _carry_creatives(conn, org_id: str, brand_id: str, campaign_id: str, placed: list,
-                     actor: str) -> None:
-    """Contract K: each carried ad whose creative was found gets it through the slot path
-    (`slots.carry`); a refusal leaves a normal ad (its slot reads what is missing). The plan is
-    committed first: the slot path commits, and a refusal rolls back only its own placement."""
-    from app.ads import slots  # lazy: slots -> assets -> plan
-
-    if not placed:
-        return
-    conn.commit()
-    for ad_id, creative in placed:
-        try:
-            slots.carry(conn, org_id, brand_id, campaign_id, ad_id, creative["asset_id"],
-                        creative["copy_fields"], actor)
-        except ValueError:
-            conn.rollback()
-
-
 def served(conn, org_id: str, brand_id: str, campaign: dict) -> dict:
     """The campaign payload's plan fields (F48-I06; the structure editor reads them):
     `menu` = this period's coordinate menu `[{dimension, key, label}]` (`planner_context.menu`,
@@ -648,7 +632,7 @@ def served(conn, org_id: str, brand_id: str, campaign: dict) -> dict:
         "allocation") or []
     daily = budget.daily_of(campaign.get("budget_planned"),
                             _days(campaign.get("start_date"), campaign.get("end_date")))
-    capacity = planner_context.capacity_of(daily, cap, len(allocation))
+    capacity = planner_context.capacity_of(daily, cap)
     if capacity is not None:
         capacity["carried"] = sum(
             1 for group in campaign.get("groups") or [] for ad in group.get("ads") or []
@@ -661,20 +645,142 @@ def served(conn, org_id: str, brand_id: str, campaign: dict) -> dict:
     }
 
 
-def adopt_strategy(conn, org_id: str, brand_id: str, campaign_id: str, *, actor: str) -> dict:
-    """草稿 -> `ready`：把已採用的策略角色分配展開成投放組／廣告。再跑一次（`status` 已經
-    不是 `draft`）一律拒絕——第二次展開會讓已經綁定平台的節點變孤兒（§0）。
+class StrategyConflict(ValueError):
+    """An actionable revision exit, with feasibility details for the API."""
+    def __init__(self, code, reasons=()):
+        super().__init__(code)
+        self.reasons = list(reasons)
 
-    F48-I06: the prompt is `planner_context`'s sections; 留下 ads of the newest closed campaign
-    of this sell-way are carried in first (Contract K, up to the ceiling of Contract C) and the
-    model plans only the rest; a reply above `ceiling − carried`, re-running a 換掉 pair or
-    naming an ad with a 「不能講」 entry is refused with nothing written."""
+
+def _checked_decision(conn, org, brand, campaign, expected_revision):
+    from app.ads import strategy
+    payload = (campaign.get("budget_basis_json") or {}).get("strategy") or {}
+    decision = payload.get("decision")
+    if not expected_revision or not decision or decision.get("schema_version") != 1:
+        raise StrategyConflict("strategy_confirmation_required")
+    if decision["revision"] != expected_revision:
+        raise StrategyConflict("strategy_changed")
+    refreshed = {**payload}
+    strategy.refresh_decision(conn, org, brand, campaign, refreshed)
+    current = refreshed["decision"]
+    if current["feasibility"]["state"] == "blocked":
+        raise StrategyConflict("strategy_infeasible", current["feasibility"]["reasons"])
+    if current["revision"] != expected_revision:
+        raise StrategyConflict("strategy_changed")
+    return decision
+
+
+def _match_slots(groups, slots):
+    """Delivery may fill creative details; it cannot replace any accepted binding."""
+    planned = {s["id"]: s for s in slots if not s["carry_from_ad_id"]}
+    seen = set()
+    for group in groups:
+        for ad in group["ads"]:
+            sid = ad.get("slot_id")
+            slot = planned.get(sid)
+            gid = (ad.get("customer_group") or {}).get("id")
+            if (not slot or sid in seen or slot["role"] != group["role"]
+                    or slot["customer_group_id"] != gid
+                    or slot["offer_key"] != ad["coordinates"]["offer"]):
+                raise StrategyConflict("strategy_infeasible", [{
+                    "code": "delivery_binding_changed",
+                    "message": "生成的投放安排與你確認的策略不同，請修訂後再確認。",
+                    "slot_ids": [sid] if sid else [],
+                }])
+            seen.add(sid)
+    if seen != set(planned):
+        raise StrategyConflict("strategy_infeasible", [{
+            "code": "delivery_slot_missing", "message": "生成結果漏了已確認的安排，請重試。",
+            "slot_ids": sorted(set(planned) - seen),
+        }])
+
+
+def _persist_decision(conn, org, brand, campaign, decision, groups, carried, allocation,
+                      daily_total, days, vocab_lookup, actor, operation_id):
+    """All groups, ads, carry placements and the receipt share one transaction."""
+    from app.ads import slots
+    campaign_id = campaign["id"]
+    amounts = _role_amounts(allocation, daily_total)
+    by_role = {g["role"]: g for g in groups}
+    full_lookup = _vocabulary_lookup(ads_repo.coordinate_vocabulary(conn, org, brand))
+    platform = (campaign.get("constraints_json") or {}).get("platform")
+    channel = channels.default_channel_key(conn, org, brand, platform)
+    receipt = {"revision": decision["revision"], "operation_id": operation_id, "slots": []}
+    conn.execute("SAVEPOINT ads_strategy_adoption")
+    try:
+        for row in allocation:
+            role = row["role"]
+            planned = by_role.get(role) or {}
+            group = ads_repo.create_group(conn, org, brand, campaign_id, channel_key=channel,
+                                          name=planned.get("name") or f"{row['label']}組",
+                                          role=role, daily_budget=amounts[role])
+            for item in carried:
+                if item["target"] != role:
+                    continue
+                prior = item["ad"]
+                snapshot = _carried_snapshot(prior, full_lookup)
+                snapshot["carried_from"].update({
+                    "placement_id": item["creative"].get("placement_id"),
+                    "placement_revision": item["creative"].get("placement_revision"),
+                })
+                snapshot["strategy_slot"] = {"slot_id": item["slot_id"],
+                                              "revision": decision["revision"]}
+                ad = ads_repo.create_ad(conn, org, brand, campaign_id, group["id"],
+                        name=prior["name"],
+                        coordinates={d: prior.get(f"{d}_key") for d in _COORDINATE_DIMENSIONS},
+                        coordinates_snapshot=snapshot, scene=prior.get("scene"),
+                        customer_group_id=prior.get("customer_group_id"))
+                creative = item["creative"]
+                slots.carry(conn, org, brand, campaign_id, ad["id"], creative["asset_id"],
+                            creative["copy_fields"], actor, atomic=True)
+                receipt["slots"].append({"slot_id": item["slot_id"], "group_id": group["id"],
+                                         "ad_id": ad["id"], "carry_from_ad_id": prior["id"]})
+            for planned_ad in planned.get("ads") or []:
+                snapshot = _snapshot(planned_ad, vocab_lookup)
+                snapshot["strategy_slot"] = {"slot_id": planned_ad["slot_id"],
+                                             "revision": decision["revision"]}
+                ad = ads_repo.create_ad(conn, org, brand, campaign_id, group["id"],
+                        name=planned_ad["name"], coordinates=planned_ad["coordinates"],
+                        coordinates_snapshot=snapshot, scene=planned_ad["scene"],
+                        customer_group_id=(planned_ad.get("customer_group") or {}).get("id"))
+                receipt["slots"].append({"slot_id": planned_ad["slot_id"], "group_id": group["id"],
+                                         "ad_id": ad["id"], "carry_from_ad_id": None})
+        basis = campaign["budget_basis_json"]
+        payload = {**basis["strategy"], "decision": {**decision, "state": "adopted",
+                                                    "receipt": receipt}}
+        ads_repo.save_strategy(conn, org, brand, campaign_id,
+                                budget_basis_json={**basis, "strategy": payload})
+        ads_repo.set_budget_planned(conn, org, brand, campaign_id,
+                                   budget_planned=budget.total_of(sum(amounts.values()), days))
+        ads_repo.set_campaign_status(conn, org, brand, campaign_id, "ready")
+    except Exception:
+        conn.execute("ROLLBACK TO SAVEPOINT ads_strategy_adoption")
+        conn.execute("RELEASE SAVEPOINT ads_strategy_adoption")
+        raise
+    conn.execute("RELEASE SAVEPOINT ads_strategy_adoption")
+    conn.commit()
+
+
+def adopt_strategy(conn, org_id: str, brand_id: str, campaign_id: str, *, actor: str,
+                   expected_revision: str | None = None, operation_id: str | None = None) -> dict:
+    """Adopt exactly the displayed decision, or replay its successful operation receipt.
+
+    Resolve every carry before generation. Gateway IO finishes before the campaign write lock;
+    the accepted slots, placements and receipt are then persisted in one transaction."""
     ads_repo.require_internal_campaign(conn, org_id, brand_id, campaign_id)
     campaign = ads_repo.get_campaign(conn, org_id, brand_id, campaign_id)
     if campaign is None:
         raise ValueError("campaign_unknown")
+    if not isinstance(operation_id, str) or not operation_id.strip() or len(operation_id) > 128:
+        raise StrategyConflict("strategy_confirmation_required")
+    saved = ((campaign.get("budget_basis_json") or {}).get("strategy") or {}).get("decision") or {}
+    receipt = saved.get("receipt") or {}
+    if (saved.get("state") == "adopted" and receipt.get("operation_id") == operation_id
+            and receipt.get("revision") == expected_revision):
+        return ads_repo.campaign_detail(conn, org_id, brand_id, campaign_id)
+    decision = _checked_decision(conn, org_id, brand_id, campaign, expected_revision)
     if campaign["status"] != "draft":
-        raise ValueError("plan_already_adopted")
+        raise StrategyConflict("strategy_changed")
 
     budget_basis = campaign.get("budget_basis_json") or {}
     strategy_payload = budget_basis.get("strategy")
@@ -704,10 +810,10 @@ def adopt_strategy(conn, org_id: str, brand_id: str, campaign_id: str, *, actor:
 
     # F48 Contracts C + K: the ceiling, and last period's 留下 ads carried in before the model.
     ceiling = _ceiling(ctx["capacity"])
-    carried = _select_carried(
-        coordinate_learning.keep_ads(conn, org_id, brand_id, sell_way), role_order, ceiling,
-    )
-    remaining = ceiling - len(carried)
+    candidates = {i["ad"]["id"]: i for i in ctx["carried_candidates"]}
+    carried = [{**candidates[s["carry_from_ad_id"]], "target": s["role"], "slot_id": s["id"]}
+               for s in decision["slots"] if s["carry_from_ad_id"]]
+    remaining = len(decision["slots"]) - len(carried)
     covered = {item["target"] for item in carried}
     room = {
         role: _MAX_ADS_PER_GROUP - sum(1 for item in carried if item["target"] == role)
@@ -735,6 +841,9 @@ def adopt_strategy(conn, org_id: str, brand_id: str, campaign_id: str, *, actor:
         + "\n\n" + _materials_text(conn, org_id, brand_id)
         + "\n\n" + _capacity_text(ctx["capacity"], ceiling)
         + "\n\n" + _carried_text(carried, listed_groups, remaining)
+        + "\n\n【已確認的新安排】\n" + json.dumps(
+            [s for s in decision["slots"] if not s["carry_from_ad_id"]], ensure_ascii=False)
+        + "\n\n【安排可用的顧客】\n" + json.dumps(listed_groups, ensure_ascii=False, default=str)
     )
     _, replace_pairs = coordinate_learning.gate_pairs(
         ctx["learnings"]["ranked"], set(customer_group_ids),
@@ -773,7 +882,9 @@ def adopt_strategy(conn, org_id: str, brand_id: str, campaign_id: str, *, actor:
         )
         if validated is None:
             raise _refused(code or "reply_invalid", task_row["id"])
-        return _checked_groups(validated, task_row["id"], **checks)
+        checked = _checked_groups(validated, task_row["id"], **checks)
+        _match_slots(checked, decision["slots"])
+        return checked
 
     if remaining > 0:
         validated_groups = ask_with_one_retry(conn, ask, campaign_id=campaign_id)
@@ -784,53 +895,21 @@ def adopt_strategy(conn, org_id: str, brand_id: str, campaign_id: str, *, actor:
             note_refusal(conn, exc, campaign_id=campaign_id, attempt=1)
             raise
 
-    # 金額只由程式算：`budget.split()` 是唯一分餘數的地方，總和精準等於 daily_total
-    # （F03-I06「這個 issue 的第一件事」——split() 已經是 F03-I04 驗過的邏輯，這裡不重寫）。
-    # F48 Contract M: adopt rounds the total -- `budget_planned := total_of(Σ group daily, days)`
-    # below, in this transaction, so `budget_total == budget_planned` after adopt.
-    amount_by_role = _role_amounts(allocation, daily_total)
-    adopted_total = budget.total_of(sum(amount_by_role.values()), days)
-    groups_by_role = {group["role"]: group for group in validated_groups}
-    labels_by_role = {row["role"]: row.get("label") or row["role"] for row in allocation}
-    full_lookup = _vocabulary_lookup(ads_repo.coordinate_vocabulary(conn, org_id, brand_id))
-
-    declared_platform = (campaign.get("constraints_json") or {}).get("platform")
-    channel_key = channels.default_channel_key(conn, org_id, brand_id, declared_platform)
-
-    placed: list = []
-    for role in role_order:
-        plan_group = groups_by_role.get(role)
-        group_row = ads_repo.create_group(
-            conn, org_id, brand_id, campaign_id, channel_key=channel_key,
-            name=plan_group["name"] if plan_group else f"{labels_by_role[role]}組",
-            role=role, daily_budget=amount_by_role[role],
-        )
-        # Contract K: groups first, carried ads next, then the model's ads.
-        for item in carried:
-            if item["target"] != role:
-                continue
-            previous = item["ad"]
-            new_ad = ads_repo.create_ad(
-                conn, org_id, brand_id, campaign_id, group_row["id"], name=previous["name"],
-                coordinates={dim: previous.get(f"{dim}_key") for dim in _COORDINATE_DIMENSIONS},
-                coordinates_snapshot=_carried_snapshot(previous, full_lookup),
-                scene=previous.get("scene"), customer_group_id=previous.get("customer_group_id"),
-            )
-            if item["creative"] is not None:
-                placed.append((new_ad["id"], item["creative"]))
-        for ad in (plan_group or {}).get("ads", []):
-            customer_group = ad.get("customer_group")
-            ads_repo.create_ad(
-                conn, org_id, brand_id, campaign_id, group_row["id"], name=ad["name"],
-                coordinates=ad["coordinates"], coordinates_snapshot=_snapshot(ad, vocab_lookup),
-                scene=ad["scene"],
-                customer_group_id=customer_group["id"] if customer_group else None,
-            )
-
-    ads_repo.set_budget_planned(conn, org_id, brand_id, campaign_id, budget_planned=adopted_total)
-    ads_repo.set_campaign_status(conn, org_id, brand_id, campaign_id, "ready")
-    # The structure is complete before any creative is placed (the slot path commits).
-    _carry_creatives(conn, org_id, brand_id, campaign_id, placed, actor)
+    # The gateway commits its task before this final lock; no plan writes precede it.
+    conn.execute("SELECT id FROM ads_campaign WHERE org_id=%s AND brand_id=%s AND id=%s "
+                 "FOR UPDATE", (org_id, brand_id, campaign_id))
+    current = ads_repo.get_campaign(conn, org_id, brand_id, campaign_id)
+    saved = ((current.get("budget_basis_json") or {}).get("strategy") or {}).get("decision") or {}
+    receipt = saved.get("receipt") or {}
+    if (saved.get("state") == "adopted" and receipt.get("operation_id") == operation_id
+            and receipt.get("revision") == expected_revision):
+        return ads_repo.campaign_detail(conn, org_id, brand_id, campaign_id)
+    decision = _checked_decision(conn, org_id, brand_id, current, expected_revision)
+    if current["status"] != "draft":
+        raise StrategyConflict("strategy_changed")
+    _match_slots(validated_groups, decision["slots"])
+    _persist_decision(conn, org_id, brand_id, current, decision, validated_groups, carried,
+                      allocation, daily_total, days, vocab_lookup, actor, operation_id)
     detail = ads_repo.campaign_detail(conn, org_id, brand_id, campaign_id)
     assert detail is not None
     return detail
@@ -930,6 +1009,8 @@ def update_group(conn, org_id: str, brand_id: str, group_id: str, updates: dict,
 
     before = {k: group.get(k) for k in updates}
     updated = ads_repo.update_group_fields(conn, org_id, brand_id, group_id, updates)
+    if updates:
+        ads_repo.invalidate_strategy_decision(conn, org_id, brand_id, group["campaign_id"])
 
     if group["local_state"] == "bound" and updates:
         kind = next(
@@ -960,11 +1041,13 @@ def create_group(conn, org_id: str, brand_id: str, campaign_id: str, *, name: st
     _check_budget_ceiling(conn, org_id, brand_id, campaign_id, other_total + daily_budget)
     declared_platform = (campaign.get("constraints_json") or {}).get("platform")
     channel_key = channels.default_channel_key(conn, org_id, brand_id, declared_platform)
-    return ads_repo.create_group(
+    created = ads_repo.create_group(
         conn, org_id, brand_id, campaign_id, channel_key=channel_key, name=name.strip(),
         role=role, daily_budget=daily_budget, start_date=_parse_date(start_date),
         end_date=_parse_date(end_date),
     )
+    ads_repo.invalidate_strategy_decision(conn, org_id, brand_id, campaign_id)
+    return created
 
 
 def delete_group(conn, org_id: str, brand_id: str, group_id: str) -> None:
@@ -974,6 +1057,7 @@ def delete_group(conn, org_id: str, brand_id: str, group_id: str) -> None:
     if group["local_state"] == "bound":
         raise ValueError("group_bound")
     ads_repo.delete_group(conn, org_id, brand_id, group_id)
+    ads_repo.invalidate_strategy_decision(conn, org_id, brand_id, group["campaign_id"])
 
 
 def _refuse_off_menu(excluded: dict, coordinates: dict) -> None:
@@ -1021,10 +1105,12 @@ def create_ad(conn, org_id: str, brand_id: str, campaign_id: str, group_id: str,
     vocabulary_rows = ads_repo.coordinate_vocabulary(conn, org_id, brand_id)
     vocab_lookup = _vocabulary_lookup(vocabulary_rows)
     snapshot = {dim: vocab_lookup.get((dim, key), {"key": key}) for dim, key in coords.items()}
-    return ads_repo.create_ad(
+    created = ads_repo.create_ad(
         conn, org_id, brand_id, campaign_id, group_id, name=name.strip(), coordinates=coords,
         coordinates_snapshot=snapshot,
     )
+    ads_repo.invalidate_strategy_decision(conn, org_id, brand_id, campaign_id)
+    return created
 
 
 def update_ad(conn, org_id: str, brand_id: str, ad_id: str, updates: dict, *, actor: str) -> dict:
@@ -1059,6 +1145,8 @@ def update_ad(conn, org_id: str, brand_id: str, ad_id: str, updates: dict, *, ac
             dim: ad.get(f"{dim}_key") for dim in updates["coordinates"]
         }
     updated = ads_repo.update_ad_fields(conn, org_id, brand_id, ad_id, updates)
+    if updates:
+        ads_repo.invalidate_strategy_decision(conn, org_id, brand_id, ad["campaign_id"])
 
     if ad["local_state"] == "bound" and updates:
         after = {k: updated.get(k) for k in updates if k != "coordinates"}
@@ -1080,3 +1168,4 @@ def delete_ad(conn, org_id: str, brand_id: str, ad_id: str) -> None:
     if ad["local_state"] == "bound":
         raise ValueError("ad_bound")
     ads_repo.delete_ad(conn, org_id, brand_id, ad_id)
+    ads_repo.invalidate_strategy_decision(conn, org_id, brand_id, ad["campaign_id"])

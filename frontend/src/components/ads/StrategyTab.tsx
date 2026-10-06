@@ -178,6 +178,7 @@ export function StrategyTab({
   const [allocationError, setAllocationError] = useState<string | null>(null);
   const [primaryBusy, setPrimaryBusy] = useState(false);
   const [primaryError, setPrimaryError] = useState<string | null>(null);
+  const adoption = useRef<{ revision: string; operationId: string } | null>(null);
   // F48 decision 8: the ad sets the last saved total re-split (an adopted, still unbound plan); null otherwise.
   const [resplit, setResplit] = useState<ResplitRow[] | null>(null);
   // F50 Contract J (R7 B4): a planner call still running for this campaign (`c.busy`, served by the campaign read, or
@@ -252,7 +253,15 @@ export function StrategyTab({
   }, "儲存預算失敗，請稍後再試。");
 
   const adopt = () => run(async () => {
-    onCampaignChange(await adoptStrategy(brandId, c.id));
+    const revision = strategy?.decision?.revision;
+    if (!revision) throw new Error("請重新產生策略並確認每則廣告的安排。");
+    if (adoption.current?.revision !== revision) {
+      adoption.current = { revision, operationId: crypto.randomUUID() };
+    }
+    onCampaignChange(await adoptStrategy(brandId, c.id, {
+      expected_revision: revision, operation_id: adoption.current.operationId,
+    }));
+    adoption.current = null;
     onChangeTab("structure");
   }, "展開投放結構失敗，請稍後再試。");
 

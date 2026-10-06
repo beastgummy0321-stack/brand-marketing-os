@@ -1,5 +1,11 @@
 # 部門任務：投放中心——把策略角色展開成投放組與廣告（ads_delivery_plan）
 
+Contract S: `【已確認的新安排】` binds every new ad. Return its exact `slot_id`, role,
+customer group (the listed group number resolving to the bound ID), and offer key.
+Return every listed new slot exactly once. Do not add slots, drop them, move roles,
+change an audience or substitute a different offer. Fill creative details only.
+Carried ads are already bound and retain their original image/copy; never generate them again.
+
 任務代號：ADS-DELIVERY-PLAN-TASK-V1（本行是這份任務檔的識別行，請照樣保留，不要在回覆裡
 重複貼出）。
 

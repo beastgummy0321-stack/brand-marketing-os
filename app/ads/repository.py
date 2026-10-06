@@ -257,6 +257,10 @@ def update_campaign(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str
         )
     row = get_campaign(conn, org_id, brand_id, campaign_id)
     assert row is not None
+    if set(updates) & {"goal_text", "objective", "start_date", "end_date", "constraints_json",
+                       "product_ids", "audience_hint"}:
+        _refresh_strategy_decision(conn, org_id, brand_id, row)
+        row = get_campaign(conn, org_id, brand_id, campaign_id)
     return row
 
 
@@ -436,6 +440,9 @@ def save_campaign_target(
         "WHERE org_id=%s AND brand_id=%s AND id=%s",
         tuple(params),
     )
+    current = get_campaign(conn, org_id, brand_id, campaign_id)
+    if current:
+        _refresh_strategy_decision(conn, org_id, brand_id, current)
     conn.commit()
     return get_campaign_target(conn, org_id, brand_id, campaign_id)
 
@@ -897,7 +904,8 @@ def campaign_detail(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str
 
         facts = strategy.current_facts(conn, org_id, brand_id, campaign, groups=groups)
         detail["budget_basis_json"] = {
-            **budget_basis_json, "strategy": {**budget_basis_json["strategy"], "facts": facts},
+            **budget_basis_json, "strategy": {**budget_basis_json["strategy"], "facts": facts,
+                "decision": strategy.served_decision(conn, org_id, brand_id, campaign, groups)},
         }
     return detail
 
@@ -1063,6 +1071,44 @@ def save_strategy(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, 
     return row
 
 
+def _refresh_strategy_decision(conn, org, brand, campaign):
+    """Keep an explicitly edited draft current and an adopted rationale visibly stale."""
+    basis = campaign.get("budget_basis_json") or {}
+    payload = basis.get("strategy")
+    if payload and payload.get("decision"):
+        from app.ads import strategy
+        payload = {**payload}
+        strategy.refresh_decision(conn, org, brand, campaign, payload)
+        save_strategy(conn, org, brand, campaign["id"],
+                      budget_basis_json={**basis, "strategy": payload})
+
+
+def invalidate_strategy_decision(conn, org, brand, campaign_id):
+    """An explicit structure edit cannot keep an old approval/rationale current."""
+    campaign = get_campaign(conn, org, brand, campaign_id)
+    basis = (campaign or {}).get("budget_basis_json") or {}
+    payload = basis.get("strategy") or {}
+    decision = payload.get("decision")
+    if not decision or decision.get("state") == "proposed":
+        return
+    import hashlib
+    import json
+    groups = list_groups(conn, org, brand, campaign_id)
+    ads = list_ads_for_campaign(conn, org, brand, campaign_id)
+    semantic = {"groups": [{k: g.get(k) for k in ("id", "role", "daily_budget")} for g in groups],
+                "ads": [{k: a.get(k) for k in ("id", "group_id", "customer_group_id", "offer_key")}
+                        for a in ads]}
+    revision = hashlib.sha256(json.dumps(semantic, sort_keys=True, default=str).encode()).hexdigest()
+    updated = {**decision, "state": "modified", "revision": revision,
+               "feasibility": {"state": "blocked", "reasons": [{
+                   "code": "structure_modified", "message": "投放結構已修改，原策略理由與核准已失效。",
+                   "slot_ids": [],
+               }]}}
+    save_strategy(conn, org, brand, campaign_id,
+                  budget_basis_json={**basis, "strategy": {**payload, "decision": updated,
+                      "rationale_state": "stale"}})
+
+
 def select_scenario(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, *,
                      scenario_key: str, budget_planned: float, budget_basis_json: dict) -> dict:
     """F03-I05: 使用者採用的情境（或手改的總額）——寫 `budget_planned`／`budget_scenario`；
@@ -1110,6 +1156,8 @@ def set_budget_cap(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str,
     )
     row = get_campaign(conn, org_id, brand_id, campaign_id)
     assert row is not None
+    _refresh_strategy_decision(conn, org_id, brand_id, row)
+    row = get_campaign(conn, org_id, brand_id, campaign_id)
     return row
 
 

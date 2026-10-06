@@ -23,6 +23,7 @@ from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi_repo
 from app.core import db as coredb
 from app.llm import providers
+from app.tests.test_ads_strategy_decision import fixture_provider
 
 ACTOR = "測試員"
 ADS_DIR = Path(__file__).resolve().parent.parent / "ads"
@@ -35,10 +36,7 @@ _HEADERS = (
 
 def _fake(reply) -> providers.FakeProvider:
     text = reply if isinstance(reply, str) else json.dumps(reply, ensure_ascii=False)
-    return providers.FakeProvider(response=providers.ProviderResponse(
-        output_text=text, structured=None,
-        usage=providers.Usage(input_tokens=100, output_tokens=50), stop_reason="end_turn",
-    ))
+    return fixture_provider(text)
 
 
 def _reply(**overrides) -> dict:
@@ -247,7 +245,7 @@ class StrategyPromptAndFactsTest(_Fixture):
         detail, _ = self._generate(campaign, _reply())
         facts = {f["kind"]: f["text"] for f in detail["budget_basis_json"]["strategy"]["facts"]}
         self.assertEqual(list(facts), ["groups", "offers", "numbers", "capacity", "learnings"])
-        self.assertEqual(facts["groups"], "這期打 1 群：下班後夜跑的上班族")
+        self.assertEqual(facts["groups"], "可選顧客群：下班後夜跑的上班族")
         self.assertTrue(facts["offers"].startswith("可用的優惠：〈限定優惠價〉"), facts["offers"])
         self.assertIn("上限每筆 300", facts["numbers"])
         self.assertIn("這個賣法還沒有結案過", facts["numbers"])
@@ -264,7 +262,10 @@ class StrategyPromptAndFactsTest(_Fixture):
                 "coordinates": {**coordinates, "offer": "discount" if role == "new" else "none"},
             }]} for role in ("new", "explore")
         ]})
-        plan.adopt_strategy(web.conn, self.org_id, self.brand_id, campaign["id"], actor=ACTOR)
+        current = ads_repo.get_campaign(web.conn, self.org_id, self.brand_id, campaign["id"])
+        plan.adopt_strategy(web.conn, self.org_id, self.brand_id, campaign["id"], actor=ACTOR,
+                            expected_revision=current["budget_basis_json"]["strategy"]["decision"]["revision"],
+                            operation_id="context-fixture-adopt")
 
         detail = ads_repo.campaign_detail(web.conn, self.org_id, self.brand_id, campaign["id"])
         assert detail is not None
