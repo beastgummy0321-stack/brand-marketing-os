@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { X } from "lucide-react";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { Skeleton } from "@/components/layout/Skeleton";
@@ -18,7 +18,7 @@ import { PanelSaveButton } from "../shared/PanelSaveButton";
 type LoadState =
   | { status: "loading" }
   | { status: "error"; message: string }
-  | { status: "ready"; coordinates: Coordinate[] };
+  | { status: "ready"; coordinates: Coordinate[]; refreshError?: string };
 
 function coordinateError(err: unknown): string {
   return err instanceof Error ? err.message : "讀取失敗，請稍後再試。";
@@ -29,18 +29,64 @@ function coordinateError(err: unknown): string {
  * `/api/schedule/brands/{brandId}/coordinates` 三支端點，不經過 `fetchLibrary()`
  * （station ① decision 3）。 */
 export function CoordinatesTab({ brandId }: { brandId: string }) {
+  // Each brand owns its selection and draft; an old request cannot replace a new brand's rows.
+  return <BrandCoordinatesTab key={brandId} brandId={brandId} />;
+}
+
+function BrandCoordinatesTab({ brandId }: { brandId: string }) {
   const [state, setState] = useState<LoadState>({ status: "loading" });
   const [dimension, setDimension] = useState<CoordinateDimension>("angle");
+  const [selectedCategory, setSelectedCategory] = useState("");
   const [panelOpen, setPanelOpen] = useState(false);
+  const request = useRef(0);
+  const categorySelect = useRef<HTMLSelectElement>(null);
+  const activeDimension = useRef<HTMLButtonElement>(null);
 
-  const load = useCallback(() => {
-    setState({ status: "loading" });
-    fetchCoordinates(brandId)
-      .then((coordinates) => setState({ status: "ready", coordinates }))
-      .catch((err: unknown) => setState({ status: "error", message: coordinateError(err) }));
+  function restoreFocus() {
+    (categorySelect.current ?? activeDimension.current)?.focus();
+  }
+
+  const load = useCallback(async () => {
+    const currentRequest = ++request.current;
+    // Refresh keeps the mounted controls, selection and focus. Initial reads still use the skeleton.
+    setState((previous) => previous.status === "ready"
+      ? { status: "ready", coordinates: previous.coordinates }
+      : { status: "loading" });
+    try {
+      const coordinates = await fetchCoordinates(brandId);
+      if (currentRequest === request.current) setState({ status: "ready", coordinates });
+    } catch (err) {
+      if (currentRequest !== request.current) return;
+      const message = coordinateError(err);
+      setState((previous) => previous.status === "ready"
+        ? { ...previous, refreshError: message }
+        : { status: "error", message });
+    }
   }, [brandId]);
 
-  useEffect(load, [load]);
+  useEffect(() => {
+    void load();
+    return () => { request.current += 1; };
+  }, [load]);
+
+  useEffect(() => {
+    if (state.status !== "ready") return;
+    const categories = state.coordinates.filter((c) => c.dimension === dimension)
+      .map((c) => c.category ?? "未分類");
+    // A ready-screen input can arrive before this effect. Normalize the latest choice,
+    // never the empty selection captured by the earlier ready render.
+    setSelectedCategory((current) => categories.includes(current) ? current : categories[0] ?? "");
+  }, [state, dimension]);
+
+  async function saved(coordinate: Coordinate) {
+    // The response confirms this row even if the subsequent reread fails.
+    setState((previous) => previous.status === "ready"
+      ? { status: "ready", coordinates: previous.coordinates.some((c) => c.id === coordinate.id)
+        ? previous.coordinates.map((c) => c.id === coordinate.id ? coordinate : c)
+        : [...previous.coordinates, coordinate] }
+      : previous);
+    await load();
+  }
 
   let content: ReactNode;
   if (state.status === "loading") {
@@ -73,6 +119,7 @@ export function CoordinatesTab({ brandId }: { brandId: string }) {
               return (
                 <button
                   key={key}
+                  ref={active ? activeDimension : undefined}
                   type="button"
                   onClick={() => setDimension(key)}
                   className={
@@ -110,7 +157,12 @@ export function CoordinatesTab({ brandId }: { brandId: string }) {
             description="按上面「新增座標」新增一個，或先看看其他維度。"
           />
         ) : (
-          <CoordinateGroups brandId={brandId} coordinates={shown} onChanged={load} />
+          <CoordinateGroups brandId={brandId} coordinates={shown}
+            selectedCategory={selectedCategory} onCategoryChange={setSelectedCategory} onChanged={saved}
+            categorySelect={categorySelect} onFocusFallback={restoreFocus} />
+        )}
+        {state.refreshError && (
+          <EmptyState title="讀取失敗" description={state.refreshError} actionLabel="重新載入" onAction={load} />
         )}
       </div>
     );
@@ -126,9 +178,9 @@ export function CoordinatesTab({ brandId }: { brandId: string }) {
           brandId={brandId}
           defaultDimension={dimension}
           onClose={() => setPanelOpen(false)}
-          onSaved={() => {
+          onSaved={(coordinate) => {
             setPanelOpen(false);
-            load();
+            void saved(coordinate);
           }}
         />
       )}
@@ -141,13 +193,20 @@ export function CoordinatesTab({ brandId }: { brandId: string }) {
 function CoordinateGroups({
   brandId,
   coordinates,
+  selectedCategory,
+  onCategoryChange,
+  categorySelect,
+  onFocusFallback,
   onChanged,
 }: {
   brandId: string;
   coordinates: Coordinate[];
-  onChanged: () => void;
+  selectedCategory: string;
+  onCategoryChange: (category: string) => void;
+  categorySelect: RefObject<HTMLSelectElement | null>;
+  onFocusFallback: () => void;
+  onChanged: (coordinate: Coordinate) => Promise<void>;
 }) {
-  const [selectedCategory, setSelectedCategory] = useState("");
   const groups = new Map<string, Coordinate[]>();
   for (const c of coordinates) {
     const key = c.category ?? "未分類";
@@ -160,7 +219,7 @@ function CoordinateGroups({
   const items = groups.get(category) ?? [];
   return (
     <div className="flex flex-col gap-3">
-      <label className="flex items-center gap-3 text-sm text-muted-foreground">分類<select value={category} onChange={e => setSelectedCategory(e.target.value)}>{[...groups].map(([key,rows]) => <option key={key} value={key}>{key}（{rows.length}）</option>)}</select></label>
+      <label className="flex items-center gap-3 text-sm text-muted-foreground">分類<select ref={categorySelect} value={category} onChange={e => onCategoryChange(e.target.value)}>{[...groups].map(([key,rows]) => <option key={key} value={key}>{key}（{rows.length}）</option>)}</select></label>
           <div className="overflow-x-auto border-t border-border">
             <table className="text-left text-sm">
               <thead className="bg-muted text-muted-foreground">
@@ -182,7 +241,7 @@ function CoordinateGroups({
                       )}
                     </td>
                     <td className="px-4 py-2 text-right">
-                      <DisableToggle brandId={brandId} coordinate={c} onChanged={onChanged} />
+                      <DisableToggle brandId={brandId} coordinate={c} onChanged={onChanged} onFocusFallback={onFocusFallback} />
                     </td>
                   </tr>
                 ))}
@@ -197,30 +256,44 @@ function DisableToggle({
   brandId,
   coordinate,
   onChanged,
+  onFocusFallback,
 }: {
   brandId: string;
   coordinate: Coordinate;
-  onChanged: () => void;
+  onChanged: (coordinate: Coordinate) => Promise<void>;
+  onFocusFallback: () => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const input = useRef<HTMLInputElement>(null);
   const enabled = coordinate.disabled_at === null;
 
   function toggle() {
+    const hadFocus = document.activeElement === input.current;
     setBusy(true);
     setError(null);
     setCoordinateDisabled(brandId, coordinate.id, enabled)
       .then(onChanged)
       .catch((err: unknown) => {
-        setBusy(false);
         setError(err instanceof Error ? err.message : "更新失敗，請稍後再試。");
+      })
+      .finally(() => {
+        setBusy(false);
+        // Disabling can move focus to the body; do not steal it if the user moved elsewhere.
+        if (hadFocus) {
+          requestAnimationFrame(() => {
+            if (document.activeElement !== document.body && document.activeElement !== input.current) return;
+            if (input.current) input.current.focus();
+            else onFocusFallback();
+          });
+        }
       });
   }
 
   return (
     <div className="flex flex-col items-end gap-0.5">
       <label className="flex items-center justify-end gap-1.5 text-sm text-foreground">
-        <input type="checkbox" checked={enabled} disabled={busy} onChange={toggle} />
+        <input ref={input} type="checkbox" checked={enabled} disabled={busy} onChange={toggle} />
         {enabled ? "啟用" : "已停用"}
       </label>
       {error && <span className="text-xs text-danger">{error}</span>}
@@ -237,15 +310,15 @@ function CoordinateFormPanel({
   brandId: string;
   defaultDimension: CoordinateDimension;
   onClose: () => void;
-  onSaved: () => void;
+  onSaved: (coordinate: Coordinate) => void;
 }) {
   const [dimension, setDimension] = useState<CoordinateDimension>(defaultDimension);
   const [label, setLabel] = useState("");
   const [category, setCategory] = useState("");
 
   const form = useFormSubmit(async () => {
-    await createCoordinate(brandId, { dimension, label, category });
-    onSaved();
+    const coordinate = await createCoordinate(brandId, { dimension, label, category });
+    onSaved(coordinate);
   });
 
   return (
@@ -262,6 +335,7 @@ function CoordinateFormPanel({
         </button>
       </div>
       <form
+        {...form.formProps}
         className="flex flex-col gap-4"
         onSubmit={(e) => {
           e.preventDefault();
