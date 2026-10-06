@@ -4,10 +4,10 @@ vi.mock("@/components/layout/WorkspaceContext", () => ({ useWorkspace: () => ({ 
  * becomes; an empty required param or a 不適用 cooling-off without text blocks 下一步 with the reason in the bar;
  * 下一步 sends every list in full through `PUT …/onboarding/evidence`; 自訂 results join their lists. No server:
  * the API calls are fakes. */
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/intakeOnboardingApi", async () => {
   const actual = await vi.importActual<typeof import("@/lib/intakeOnboardingApi")>("@/lib/intakeOnboardingApi");
@@ -122,7 +122,7 @@ describe("EvidenceStep", () => {
     expect(row.textContent).toContain("廣告裡會當成：免運・");
     expect(within(row).getByText("✦ 運費說明頁")).toBeTruthy();
     expect(screen.getByText("7 天猶豫期")).toBeTruthy();
-    expect(screen.getByText("網購依法都有，顧客收到 7 天內可以退")).toBeTruthy();
+    expect(screen.getByText("商家設定：適用")).toBeTruthy();
     expect(nextButton().disabled).toBe(false);
   });
 
@@ -200,7 +200,7 @@ describe("EvidenceStep", () => {
     renderStep();
 
     expect((await screen.findByLabelText("網頁上的告知文字") as HTMLTextAreaElement).value).toBe("生鮮食品不適用七天猶豫期");
-    await userEvent.click(screen.getByRole("button", { name: "改成「不適用」並填網頁上的告知文字" }));
+    await userEvent.click(screen.getByRole("button", { name: "改回「適用」" }));
     expect(screen.queryByLabelText("網頁上的告知文字")).toBeNull();
     await userEvent.click(nextButton());
     await waitFor(() => expect(mockSave).toHaveBeenCalled());
@@ -379,4 +379,167 @@ it("restores unsaved evidence and Enter commits only the inline edit", async () 
   cleanup();
   renderStep();
   expect(await screen.findByText("仍未儲存的證據")).toBeTruthy();
+});
+
+describe("F52-I21 merchant return policy", () => {
+  beforeEach(() => {
+    mockFetch.mockReset();
+    mockSave.mockReset();
+    mockSave.mockResolvedValue(evidence());
+  });
+
+  const openMerchant = async () => {
+    await userEvent.click(await screen.findByText("商家退換貨條件與來源（選填）"));
+    return {
+      conditions: screen.getByLabelText("商家退換貨條件"),
+      source: screen.getByLabelText("政策來源"),
+    };
+  };
+
+  it("retains a loaded merchant record in submission even when its editor stays closed", async () => {
+    mockFetch.mockResolvedValue(evidence({ cooling_off: { applies: true, disclosure: "", conditions: "完整包裝", source_note: "店家文件" } }));
+    renderStep();
+    await screen.findByRole("region", { name: "全店政策" });
+    await userEvent.click(nextButton());
+    await waitFor(() => expect(mockSave).toHaveBeenCalledOnce());
+    expect(mockSave.mock.calls[0][1].cooling_off).toEqual({ applies: true, conditions: "完整包裝", source_note: "店家文件" });
+  });
+
+  it("preserves the exemption draft through applicable and back", async () => {
+    mockFetch.mockResolvedValue(evidence({ cooling_off: { applies: false, disclosure: "店家提供的原始告知文字" } }));
+    renderStep();
+    await screen.findByLabelText("網頁上的告知文字");
+    await userEvent.click(screen.getByRole("button", { name: /改.*「.*適用」/ }));
+    await userEvent.click(screen.getByRole("button", { name: /改.*「.*適用」/ }));
+    expect((screen.getByLabelText("網頁上的告知文字") as HTMLTextAreaElement).value).toBe("店家提供的原始告知文字");
+  });
+
+  it("loads merchant fields separately from offers and reads the saved fixture back", async () => {
+    let saved = evidence({ cooling_off: { applies: true, disclosure: "", conditions: "包裝完整可申請", source_note: "商家政策文件" } });
+    mockFetch.mockImplementation(async () => saved);
+    mockSave.mockImplementation(async (_brand, body) => {
+      saved = { ...saved, cooling_off: { ...saved.cooling_off, ...body.cooling_off } };
+      return saved;
+    });
+    const onNext = renderStep();
+    const { conditions, source } = await openMerchant();
+    expect((conditions as HTMLTextAreaElement).value).toBe("包裝完整可申請");
+    expect((source as HTMLInputElement).value).toBe("商家政策文件");
+    expect(screen.queryByText("網購依法都有，顧客收到 7 天內可以退")).toBeNull();
+    await userEvent.clear(conditions);
+    await userEvent.type(conditions, "未拆封，請先聯繫客服");
+    await userEvent.click(nextButton());
+    await waitFor(() => expect(onNext).toHaveBeenCalledOnce());
+    expect(mockSave.mock.calls[0][1].cooling_off).toEqual({ applies: true, conditions: "未拆封，請先聯繫客服", source_note: "商家政策文件" });
+    expect(mockSave.mock.calls[0][1].policies).toEqual([{ key: "ship_threshold", params: { threshold: 999 } }]);
+    cleanup();
+    renderStep();
+    expect(((await openMerchant()).conditions as HTMLTextAreaElement).value).toBe("未拆封，請先聯繫客服");
+  });
+
+  it("keeps all three unsent texts across toggles and a remount, including exemption submission", async () => {
+    mockFetch.mockResolvedValue(evidence({ cooling_off: { applies: false, disclosure: "商家頁面上的原始告知文字", conditions: "原條件", source_note: "原來源" } }));
+    renderStep();
+    const { conditions, source } = await openMerchant();
+    await userEvent.clear(conditions);
+    await userEvent.type(conditions, "未送出的條件");
+    await userEvent.clear(source);
+    await userEvent.type(source, "未送出的來源");
+    await userEvent.clear(screen.getByLabelText("網頁上的告知文字"));
+    await userEvent.type(screen.getByLabelText("網頁上的告知文字"), "未送出的商家例外告知文字");
+    await userEvent.click(screen.getByRole("button", { name: "改回「適用」" }));
+    expect(screen.queryByLabelText("網頁上的告知文字")).toBeNull();
+    cleanup();
+    const onNext = renderStep();
+    const restored = await openMerchant();
+    expect((restored.conditions as HTMLTextAreaElement).value).toBe("未送出的條件");
+    expect((restored.source as HTMLInputElement).value).toBe("未送出的來源");
+    await userEvent.click(screen.getByRole("button", { name: "改成「不適用」並填網頁上的告知文字" }));
+    expect((screen.getByLabelText("網頁上的告知文字") as HTMLTextAreaElement).value).toBe("未送出的商家例外告知文字");
+    await userEvent.click(nextButton());
+    await waitFor(() => expect(onNext).toHaveBeenCalledOnce());
+    expect(mockSave.mock.calls[0][1].cooling_off).toEqual({ applies: false, disclosure: "未送出的商家例外告知文字", conditions: "未送出的條件", source_note: "未送出的來源" });
+  });
+
+  it.each(["conditions", "source_note"] as const)("explicitly clears %s and preserves the other field", async (field) => {
+    mockFetch.mockResolvedValue(evidence({ cooling_off: { applies: true, disclosure: "", conditions: "完整包裝", source_note: "店家文件" } }));
+    renderStep();
+    const fields = await openMerchant();
+    await userEvent.clear(field === "conditions" ? fields.conditions : fields.source);
+    await userEvent.click(nextButton());
+    await waitFor(() => expect(mockSave).toHaveBeenCalledOnce());
+    expect(mockSave.mock.calls[0][1].cooling_off).toEqual({ applies: true, conditions: field === "conditions" ? "" : "完整包裝", source_note: field === "source_note" ? "" : "店家文件" });
+  });
+
+  it("preserves omitted legacy fields and enters a local source edit without advancing", async () => {
+    mockFetch.mockResolvedValue(evidence());
+    const onNext = renderStep();
+    const { source } = await openMerchant();
+    source.focus();
+    fireEvent.keyDown(source, { key: "Enter", isComposing: true });
+    expect(document.activeElement).toBe(source);
+    await userEvent.type(source, "文件名稱{Enter}");
+    expect(mockSave).not.toHaveBeenCalled();
+    expect(onNext).not.toHaveBeenCalled();
+    await userEvent.type(within(chosenRow("ship_threshold")).getByLabelText("門檻 NT$"), "{Enter}");
+    expect(mockSave).not.toHaveBeenCalled();
+    await userEvent.click(nextButton());
+    await waitFor(() => expect(onNext).toHaveBeenCalledOnce());
+    expect(mockSave.mock.calls[0][1].cooling_off).toEqual({ applies: true, source_note: "文件名稱" });
+  });
+
+  it("merges an older local draft with served merchant fields", async () => {
+    sessionStorage.setItem("intake-draft:test-org:brd_1:evidence", JSON.stringify({
+      proof: [], slots: {}, policies: [], forbidden: [], cooling: { applies: true, disclosure: "" },
+    }));
+    mockFetch.mockResolvedValue(evidence({ cooling_off: { applies: true, disclosure: "", conditions: "商家條件", source_note: "已知來源" } }));
+    renderStep();
+    const { conditions, source } = await openMerchant();
+    expect((conditions as HTMLTextAreaElement).value).toBe("商家條件");
+    expect((source as HTMLInputElement).value).toBe("已知來源");
+  });
+
+  it("uses served text limits with Unicode character counting and keeps rejected edits", async () => {
+    mockFetch.mockResolvedValue(evidence({ cooling_off_limits: { conditions: 3, source_note: 4 } }));
+    mockSave.mockRejectedValue(new Error("儲存暫時失敗"));
+    const onNext = renderStep();
+    const { conditions, source } = await openMerchant();
+    await userEvent.type(conditions, "😀😀😀");
+    expect(nextButton().disabled).toBe(false);
+    await userEvent.type(conditions, "甲");
+    expect(nextButton().disabled).toBe(true);
+    expect(screen.getByText("商家退換貨條件最多 3 字")).toBeTruthy();
+    await userEvent.clear(conditions);
+    await userEvent.type(source, "來源文字長");
+    expect(nextButton().disabled).toBe(true);
+    expect(screen.getByText("政策來源最多 4 字")).toBeTruthy();
+    await userEvent.clear(source);
+    await userEvent.type(source, "文件");
+    await userEvent.click(nextButton());
+    expect((await screen.findByRole("alert")).textContent).toBe("儲存暫時失敗");
+    expect(onNext).not.toHaveBeenCalled();
+    expect((source as HTMLInputElement).value).toBe("文件");
+    cleanup();
+    renderStep();
+    expect(((await openMerchant()).source as HTMLInputElement).value).toBe("文件");
+  });
+
+  it("accepts the legacy 200 character boundary and waits for save acknowledgment before advancing", async () => {
+    mockFetch.mockResolvedValue(evidence({ cooling_off: { applies: true, disclosure: "", conditions: "😀".repeat(200), source_note: "甲".repeat(200) } }));
+    let acknowledge!: (value: OnboardingEvidence) => void;
+    mockSave.mockImplementation(() => new Promise((resolve) => { acknowledge = resolve; }));
+    const onNext = renderStep();
+    const { conditions } = await openMerchant();
+    expect(nextButton().disabled).toBe(false);
+    await userEvent.type(conditions, "甲");
+    expect(nextButton().disabled).toBe(true);
+    await userEvent.type(conditions, "{Backspace}");
+    expect(nextButton().disabled).toBe(false);
+    await userEvent.click(nextButton());
+    await waitFor(() => expect(mockSave).toHaveBeenCalledOnce());
+    expect(onNext).not.toHaveBeenCalled();
+    expect(nextButton().disabled).toBe(true);
+    acknowledge(evidence());
+    await waitFor(() => expect(onNext).toHaveBeenCalledOnce());
+  });
 });

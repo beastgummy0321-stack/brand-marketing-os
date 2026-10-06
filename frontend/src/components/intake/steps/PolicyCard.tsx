@@ -5,7 +5,7 @@ import { AiTag } from "../shared/AiTag";
 import { CustomEscape, CustomMark, type CustomOption } from "../shared/CustomEscape";
 
 /** 「全店政策」 of brand onboarding `#/b4` (prototype `policyCard()` of
- * `.harness/scratch/prototype/f41-onboarding/index.html`): the fixed 7 天猶豫期 row, the registry's common
+ * `.harness/scratch/prototype/f41-onboarding/index.html`): the merchant-configured 7 天猶豫期 row, the registry's common
  * chips, 「更多政策」 with the rest grouped, the chosen policies (「你有的」) with their params and the offer they
  * become in ads, and 「自訂」. Controlled: `EvidenceStep` owns the lists and saves them on 下一步. Chip order,
  * groups, params and offer labels all come from the API registry (`policy_types`). */
@@ -27,7 +27,14 @@ export interface ChosenPolicy {
 export interface CoolingOff {
   applies: boolean;
   disclosure: string;
+  /** Missing legacy fields remain omitted until edited; an explicit blank clears that field. */
+  conditions?: string;
+  source_note?: string;
 }
+
+type CoolingLimits = { conditions: number; source_note: number };
+/** Fallback for older API responses; current limits come from the server's policy rule owner. */
+const LEGACY_COOLING_LIMITS: CoolingLimits = { conditions: 200, source_note: 200 };
 
 /** Server rule (`vocab.COOLING_OFF_DISCLOSURE_MIN_CHARS`): the disclosure is at least 10 characters. */
 export const DISCLOSURE_MIN_CHARS = 10;
@@ -49,7 +56,7 @@ const isEmpty = (v: PolicyParamValue | undefined) => v === undefined || String(v
 
 /** Why 下一步 is blocked, or null: the first chosen policy with a required param left empty
  * (「滿額免運還沒填門檻」), then a 不適用 cooling-off without its disclosure text. */
-export function blockingReason(chosen: ChosenPolicy[], types: PolicyType[], cooling: CoolingOff): string | null {
+export function blockingReason(chosen: ChosenPolicy[], types: PolicyType[], cooling: CoolingOff, limits = LEGACY_COOLING_LIMITS): string | null {
   const byKey = new Map(types.map((t) => [t.key, t]));
   for (const p of chosen) {
     const spec = byKey.get(p.key);
@@ -58,6 +65,12 @@ export function blockingReason(chosen: ChosenPolicy[], types: PolicyType[], cool
   }
   if (!cooling.applies && cooling.disclosure.trim().length < DISCLOSURE_MIN_CHARS) {
     return `不適用 7 天猶豫期，要填網頁上的告知文字（至少 ${DISCLOSURE_MIN_CHARS} 字）`;
+  }
+  if (Array.from(cooling.conditions?.trim() ?? "").length > limits.conditions) {
+    return `商家退換貨條件最多 ${limits.conditions} 字`;
+  }
+  if (Array.from(cooling.source_note?.trim() ?? "").length > limits.source_note) {
+    return `政策來源最多 ${limits.source_note} 字`;
   }
   return null;
 }
@@ -68,18 +81,20 @@ function paramWord(label: string): string {
   return word.length >= 2 ? word : `「${label}」`;
 }
 
-export function PolicyCard({ brandId, types, chosen, onChange, cooling, onCooling, prefilled }: {
+export function PolicyCard({ brandId, types, chosen, onChange, cooling, onCooling, coolingLimits = LEGACY_COOLING_LIMITS, prefilled }: {
   brandId: string;
   types: PolicyType[];
   chosen: ChosenPolicy[];
   onChange: (update: (prev: ChosenPolicy[]) => ChosenPolicy[]) => void;
   cooling: CoolingOff;
   onCooling: (next: CoolingOff) => void;
+  coolingLimits?: CoolingLimits;
   /** What the step loaded, by key: re-picking a policy brings back its loaded params and tag. */
   prefilled: Map<string, ChosenPolicy>;
 }) {
   const [more, setMore] = useState(false);
   const disclosureId = useId();
+  const merchantId = useId();
   const common = types.filter((t) => t.common);
   const rest = types.filter((t) => !t.common);
   const groups = [...new Set(rest.map((t) => t.group))];
@@ -130,35 +145,64 @@ export function PolicyCard({ brandId, types, chosen, onChange, cooling, onCoolin
   };
 
   return (
-    <EvidenceCard title="全店政策" note="每個商品都適用；有勾的才會寫進廣告" slot="policy-card">
-      <Item className="bg-muted">
-        <Chip>7 天猶豫期</Chip>
+    <EvidenceCard title="全店政策" note="全店共用的政策與商家條件" slot="policy-card">
+      <Item className="items-start bg-muted">
+        <Chip className="mt-0.5">7 天猶豫期</Chip>
         <div className="min-w-0 flex-1">
-          <b className="font-medium">網購依法都有，顧客收到 7 天內可以退</b>
+          <b className="font-medium">商家設定：{cooling.applies ? "適用" : "不適用"}</b>
           <div className="text-[11.5px] text-muted-foreground">
-            消保法 §19；固定顯示、不能取消。賣的是易腐敗食品等法定例外，才
             <button
               type="button"
               aria-expanded={!cooling.applies}
               aria-controls={cooling.applies ? undefined : disclosureId}
               className="text-[11.5px] font-medium whitespace-nowrap text-primary hover:underline"
-              onClick={() => onCooling(cooling.applies ? { applies: false, disclosure: cooling.disclosure } : { applies: true, disclosure: "" })}
+              onClick={() => onCooling({ ...cooling, applies: !cooling.applies })}
             >
-              改成「不適用」並填網頁上的告知文字
+              {cooling.applies ? "改成「不適用」並填網頁上的告知文字" : "改回「適用」"}
             </button>
           </div>
           {!cooling.applies && (
-            <textarea
-              id={disclosureId}
-              rows={2}
-              aria-label="網頁上的告知文字"
-              required
-              className={cn(INPUT, "mt-2")}
-              value={cooling.disclosure}
-              autoFocus={!cooling.disclosure}
-              onChange={(e) => onCooling({ applies: false, disclosure: e.target.value })}
-            />
+            <>
+              <label htmlFor={disclosureId} className="mt-2 block text-xs text-muted-foreground">網頁上的告知文字（不適用時必填）</label>
+              <textarea
+                id={disclosureId}
+                rows={2}
+                aria-label="網頁上的告知文字"
+                required
+                className={cn(INPUT, "mt-2")}
+                value={cooling.disclosure}
+                autoFocus={!cooling.disclosure}
+                onChange={(e) => onCooling({ ...cooling, disclosure: e.target.value })}
+              />
+            </>
           )}
+          <details className="mt-2">
+            <summary className="cursor-pointer text-[13px] font-medium text-primary focus-visible:outline-primary">
+              商家退換貨條件與來源（選填）
+            </summary>
+            <p className="mt-2 text-xs text-muted-foreground">商家提供，與優惠分開記錄</p>
+            <label htmlFor={`${merchantId}-conditions`} className="mt-2 mb-1 block text-xs text-muted-foreground">商家退換貨條件</label>
+            <textarea
+              id={`${merchantId}-conditions`}
+              rows={2}
+              className={INPUT}
+              value={cooling.conditions ?? ""}
+              placeholder="填商家實際提供的條件；沒有就留空"
+              aria-describedby={`${merchantId}-conditions-limit`}
+              onChange={(e) => onCooling({ ...cooling, conditions: e.target.value })}
+            />
+            <p id={`${merchantId}-conditions-limit`} className="mt-1 text-xs text-muted-foreground">最多 {coolingLimits.conditions} 字</p>
+            <label htmlFor={`${merchantId}-source`} className="mt-2 mb-1 block text-xs text-muted-foreground">政策來源</label>
+            <input
+              id={`${merchantId}-source`}
+              className={INPUT}
+              value={cooling.source_note ?? ""}
+              placeholder="提供者、頁面或文件；不知道就留空"
+              aria-describedby={`${merchantId}-source-limit`}
+              onChange={(e) => onCooling({ ...cooling, source_note: e.target.value })}
+            />
+            <p id={`${merchantId}-source-limit`} className="mt-1 text-xs text-muted-foreground">最多 {coolingLimits.source_note} 字</p>
+          </details>
         </div>
       </Item>
 
