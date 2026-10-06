@@ -126,7 +126,7 @@ describe("edits during an earlier sell-way save", () => {
     fireEvent.change(field("成本"), { target: { value: "30" } });
     fireEvent.change(field("運費成本"), { target: { value: "10" } });
     await act(async () => resolveFirst(sellWays([way({ ...stored, price: 180 })])));
-    await userEvent.click(within(editor()).getByRole("button", { name: "完成", exact: true }));
+    await userEvent.click(within(editor()).getByRole("button", { name: "完成" }));
     await waitFor(() => expect(lastBody()[0]).toMatchObject({ price: "180", list_price: "200", cost: "30", shipping: "10" }));
     cleanup();
     renderStep();
@@ -150,7 +150,7 @@ describe("edits during an earlier sell-way save", () => {
     fireEvent.change(field("成本"), { target: { value: "30" } });
     await act(async () => resolveFirst(sellWays([way({ ...initial, price: 180, cost: 99 })])));
     expect(field("成本").value).toBe("30");
-    await userEvent.click(within(editor()).getByRole("button", { name: "完成", exact: true }));
+    await userEvent.click(within(editor()).getByRole("button", { name: "完成" }));
     await waitFor(() => expect(lastBody()[0]).toMatchObject({ price: "180", cost: "30" }));
   });
 });
