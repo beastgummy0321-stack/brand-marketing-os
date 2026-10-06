@@ -462,6 +462,116 @@ def test_registered_names_are_stripped_before_the_scan():
     assert claims.forbidden_hits({"body": "超能特惠組"}, ["特惠"], names=names) == []
 
 
+def _drill12_registered_sell_way(brand_id: str) -> tuple[str, str]:
+    """Reconstruct recorded identity/economics on a disposable brand, not historical status."""
+    product = bi_repo.create_product(
+        web.conn, brand_id, name="Beast Gummy 咖啡因機能軟糖", actor=ACTOR,
+    )["id"]
+    way = bi_repo.save_sell_way(
+        web.conn, brand_id, name="超能特惠組（3盒免運費）", actor=ACTOR,
+        product_id=product, free_shipping=True,
+        economics={"selling_price": 999, "list_price": 1500,
+                   "unit_variable_cost": 360, "shipping_cost": 80},
+    )
+    return product, way["id"]
+
+
+def test_f52_registered_name_characterization():
+    """The observed warning is real; the reported shortened-name identity assumption is false."""
+    brand = _brand()
+    _, way = _drill12_registered_sell_way(brand)
+    copy = {"body": "超能特惠組免運，適合帶到每次訓練前使用。"}
+    broad = workbench_module.validate_claims(web.conn, coredb.DEV_ORG_ID, brand, way, copy)
+    narrowed = workbench_module.validate_claims(
+        web.conn, coredb.DEV_ORG_ID, brand, way, copy, offer_key="free_shipping",
+    )
+    assert broad["unsupported_promises"] == []
+    assert narrowed["unsupported_promises"] == ["特惠"]
+    names = claims.registered_names(web.conn, brand)
+    full_name = "Beast Gummy 咖啡因機能軟糖 · 超能特惠組（3盒免運費）"
+    assert bi_repo.get_product(web.conn, brand, way)["name"] == full_name
+    assert full_name in names and "超能特惠組（3盒免運費）" in names
+    assert "超能特惠組" not in names and "超能特惠組免運" not in names
+    for text in (full_name, "超能特惠組（3盒免運費）"):
+        for offer_key in (None, "free_shipping", "none"):
+            result = workbench_module.validate_claims(
+                web.conn, coredb.DEV_ORG_ID, brand, way, {"body": text}, offer_key=offer_key,
+            )
+            assert result["unsupported_promises"] == [], (text, offer_key)
+            assert result["forbidden_terms"] == []
+            assert result["missing_offer"] == []
+
+
+def test_f52_exact_names_preserve_overlap_delimiters_and_surrounding_promises():
+    brand = _brand()
+    _, way = _drill12_registered_sell_way(brand)
+    long_name = "優惠免運" + "完整登記名稱" * 20 + "特惠組"
+    for name in ("優惠盒", "優惠盒免運加贈典藏", long_name):
+        bi_repo.create_product(web.conn, brand, name=name, actor=ACTOR)
+    # Longest matching identity must be removed before its shorter overlapping name.
+    for name in ("優惠盒免運加贈典藏", long_name, "超能特惠組（3盒免運費）"):
+        result = workbench_module.validate_claims(
+            web.conn, coredb.DEV_ORG_ID, brand, way, {"body": name}, offer_key="none",
+        )
+        assert result["unsupported_promises"] == []
+    for text, expected in (
+        (f"{long_name}，今天特惠", ["特惠"]),
+        ("超能特惠組（3盒免運費），現在優惠買一送一", ["優惠", "買一送"]),
+        ("超能特惠組（3盒免運費），全館免運", ["免運"]),
+        ("超能特惠組（3盒免運費）再送一盒", ["再送"]),
+    ):
+        result = workbench_module.validate_claims(
+            web.conn, coredb.DEV_ORG_ID, brand, way, {"body": text}, offer_key="none",
+        )
+        assert result["unsupported_promises"] == expected
+
+
+def test_f52_archived_other_brand_and_unregistered_prefixes_never_become_aliases():
+    brand = _brand()
+    _, way = _drill12_registered_sell_way(brand)
+    archived = bi_repo.create_product(web.conn, brand, name="封存特惠盒", actor=ACTOR)
+    bi_repo.update_product(web.conn, brand, archived["id"], name=archived["name"],
+                           status="archived", actor=ACTOR)
+    other_brand = _brand()
+    foreign = bi_repo.create_product(web.conn, other_brand, name="他牌優惠盒", actor=ACTOR)
+    # A delimiter without the actual parent prefix does not register a suffix alias.
+    bi_repo.create_product(web.conn, brand, name="未關聯商品 · 自訂特惠盒", actor=ACTOR)
+    names = claims.registered_names(web.conn, brand)
+    assert archived["name"] not in names and foreign["name"] not in names
+    assert "自訂特惠盒" not in names
+    for text, expected in (
+        (archived["name"], ["特惠"]), (foreign["name"], ["優惠"]),
+        ("自訂特惠盒", ["特惠"]), ("超能特惠組免運", ["特惠", "免運"]),
+    ):
+        assert workbench_module.validate_claims(
+            web.conn, coredb.DEV_ORG_ID, brand, way, {"body": text}, offer_key="none",
+        )["unsupported_promises"] == expected
+    with pytest.raises(ValueError, match="找不到此品牌商品"):
+        workbench_module.validate_claims(web.conn, coredb.DEV_ORG_ID, brand, foreign["id"], {})
+
+
+def test_f52_registered_identity_does_not_hide_forbidden_or_statutory_statements():
+    brand = _brand()
+    product, way = _drill12_registered_sell_way(brand)
+    bi_repo.set_regulatory_regime(web.conn, brand, "food_tw", actor=ACTOR)
+    bi_repo.create_claim(web.conn, brand, actor=ACTOR, product_id=product,
+                         claim_type="forbidden", claim_text="治療")
+    name = "超能特惠組（3盒免運費）"
+    reminder = workbench_module.validate_claims(
+        web.conn, coredb.DEV_ORG_ID, brand, way, {"body": f"{name}，改善便秘"}, offer_key="none",
+    )
+    assert reminder["unsupported_promises"] == [] and reminder["forbidden_terms"] == []
+    assert [hit["term"] for hit in reminder["statutory_hits"]] == ["改善便秘"]
+    assert reminder["statutory_warning"] is not None
+    forbidden = workbench_module.validate_claims(
+        web.conn, coredb.DEV_ORG_ID, brand, way, {"body": f"{name}，治療疲勞買一送一"},
+        offer_key="none",
+    )
+    assert forbidden["unsupported_promises"] == ["買一送"]
+    assert forbidden["forbidden_terms"] == ["治療"]
+    assert [hit["term"] for hit in forbidden["statutory_hits"]] == ["治療"]
+
+
 _DISCOUNT_ROWS = [{"id": "offer:discount:p", "text": "新會員首購禮：首購 9 折", "proof": False,
                    "offer_key": "discount"}]
 
@@ -534,6 +644,46 @@ def test_statutory_reminder_facade_is_the_statutory_warning_shape():
 
 
 class TestAdoptionWarning(_WorkbenchPackApiTestBase):
+    def test_f52_version_warning_uses_exact_identity_and_the_selected_offer(self):
+        product, way = _drill12_registered_sell_way(self.brand_id)
+        bi_repo.set_regulatory_regime(web.conn, self.brand_id, "food_tw", actor=ACTOR)
+        bi_repo.create_claim(web.conn, self.brand_id, actor=ACTOR, product_id=product,
+                             claim_type="forbidden", claim_text="治療")
+        name = "超能特惠組（3盒免運費）"
+        cases = [
+            (name, None, None, None), (name, "free_shipping", None, None),
+            ("超能特惠組免運，適合帶到每次訓練前使用。", None, None, None),
+            ("超能特惠組免運，適合帶到每次訓練前使用。", "free_shipping", "特惠", None),
+            (f"{name}，今天特惠", "free_shipping", "特惠", None),
+            (f"{name}，治療疲勞", "free_shipping", "治療", "治療"),
+            (f"{name}，改善便秘", "free_shipping", None, "改善便秘"),
+        ]
+        pack = self._submit_pack([
+            self._one_set(str(i), {"copy": 1}, product_id=way,
+                          coordinates={"offer": offer} if offer else {})
+            for i, (_, offer, _, _) in enumerate(cases)
+        ])
+        for brief, (text, _, term, statutory) in zip(self._briefs(pack), cases, strict=True):
+            repository.write_output(
+                web.conn, org_id=self.org_id, brand_id=self.brand_id, brief_id=brief["id"],
+                part="copy", generation_round=1, body_json=[{"sets": [{"body": text}]}],
+                coordinates_json=None, llm_task_id=None,
+            )
+            response = self.client.get(f"/api/workbench/brands/{self.brand_id}/sets/{brief['id']}")
+            assert response.status_code == 200, response.text
+            version = response.json()["set"]["products"]["copy"]["versions"][0]
+            warning = version["claim_warning"]
+            if term is None:
+                assert warning is None, text
+            else:
+                assert f"「{term}」" in warning["message"], text
+                assert warning["href"] == f"/brands/{self.brand_id}/library?tab=claims"
+            reminder = version["statutory_warning"]
+            if statutory is None:
+                assert reminder is None, text
+            else:
+                assert [hit["term"] for hit in reminder["terms"]] == [statutory]
+
     def test_legacy_output_warns_but_selection_and_pack_approval_continue(self):
         pack = self._submit_pack([self._one_set("1", {"copy": 1})])
         brief = self._briefs(pack)[0]

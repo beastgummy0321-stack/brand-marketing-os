@@ -11,6 +11,8 @@ from app import background, workbench
 from app.ads import asset_suggestion_policy as policy
 from app.ads import asset_suggestions as suggestions
 from app.ads import external_repository as external
+from app.ads import repository as campaigns
+from app.ads import slots
 from app.ads import user_assets_repository as assets
 from app.brand_intelligence import repository as brands
 from app.core import db, settings
@@ -39,7 +41,7 @@ class SuggestionsTest(unittest.TestCase):
         patch.object(providers, "resolve_model", return_value="claude-haiku-4-5").start()
         self.addCleanup(patch.stopall)
 
-    def placement(self, copy=None, status="ready"):
+    def placement(self, copy=None, status="ready", *, ad_id=None):
         asset_id = db.new_id("aua")
         self.conn.execute(
             "INSERT INTO ads_user_asset(id,org_id,brand_id,sha256,storage_key,filename,"
@@ -61,6 +63,8 @@ class SuggestionsTest(unittest.TestCase):
             asset_id,
             copy or {"headline": " 原標題 ", "body": " 原文\n照留 ", "description": "原說明"},
             "test",
+            ad_id=ad_id,
+            purpose="品牌介紹" if ad_id else None,
         )
         self.conn.commit()
         return row
@@ -596,6 +600,92 @@ class SuggestionsTest(unittest.TestCase):
         self.assertEqual(result["status"], "manual_ready")
         self.assertIsNone(result["suggestion_batch_id"])
         self.assertEqual(result["copy_fields"], row["copy_fields"])
+        self.assertEqual(len(self.fake.calls), 0)
+
+    def test_f52_slot_and_manual_edits_keep_registered_identity_scoped(self):
+        """Original shortened copy and exact controls take the real slot/edit confirmation path."""
+        from fastapi.testclient import TestClient
+
+        from app.main import app
+
+        product = brands.create_product(
+            self.conn, self.brand, name="Beast Gummy 咖啡因機能軟糖", actor="test",
+        )["id"]
+        way = brands.save_sell_way(
+            self.conn, self.brand, name="超能特惠組（3盒免運費）", product_id=product,
+            economics={"selling_price": 999, "list_price": 1500,
+                       "unit_variable_cost": 360, "shipping_cost": 80},
+            free_shipping=True, actor="test",
+        )["id"]
+        brands.set_regulatory_regime(self.conn, self.brand, "food_tw", actor="test")
+        brands.create_claim(self.conn, self.brand, actor="test", product_id=product,
+                            claim_type="forbidden", claim_text="治療")
+        self.campaign = campaigns.create_campaign(self.conn, self.org, self.brand, {
+            "name": "Registered identity routes", "goal_text": "品牌介紹", "objective": "awareness",
+            "target_cost": 450, "budget_planned": 10500,
+            "start_date": "2026-10-06", "end_date": "2026-10-12",
+            "context_json": {"product_ids": [way]},
+        }, created_by="test")["id"]
+        group = campaigns.create_group(
+            self.conn, self.org, self.brand, self.campaign, channel_key="meta", name="投放組",
+            role="new", daily_budget=1500,
+        )
+        client = TestClient(app)
+        name = "超能特惠組（3盒免運費）"
+        cases = [
+            (f"Beast Gummy 咖啡因機能軟糖 · {name}", [], None), (name, [], None),
+            ("超能特惠組免運，適合帶到每次訓練前使用。", ["特惠"], None),
+            (f"{name}，今天特惠", ["特惠"], None),
+            (f"{name}，治療疲勞", ["治療"], "治療"),
+            (f"{name}，改善便秘", [], "改善便秘"),
+        ]
+        for text, terms, statutory in cases:
+            with self.subTest(copy=text):
+                ad = campaigns.create_ad(
+                    self.conn, self.org, self.brand, self.campaign, group["id"], name="品牌介紹",
+                    coordinates={"offer": "free_shipping", "format": "single_image"},
+                    coordinates_snapshot={"offer": {"key": "free_shipping", "label": "免運"}},
+                )
+                self.conn.commit()
+                copy = {"headline": "品牌介紹", "body": text, "description": "查看商品資訊"}
+                row = self.placement(copy, ad_id=ad["id"])
+                slots.carry(self.conn, self.org, self.brand, self.campaign, ad["id"],
+                            row["asset_id"], copy, "test")
+                view = slots.read(self.conn, self.org, self.brand, self.campaign)
+                slot = next(s for g in view["groups"] for s in g["slots"] if s["ad_id"] == ad["id"])
+                self.assertEqual(slot["state"], "blocked" if terms else "ready")
+                current = assets.placement(
+                    self.conn, self.org, self.brand, self.campaign, row["id"],
+                )
+                self.assertEqual([t for d in current["blocked_reasons"] for t in d["terms"]], terms)
+                url = f"/api/ads/brands/{self.brand}/campaigns/{self.campaign}"
+                # The actual slot editor and generic placement editor must recheck the same scope.
+                edited = client.post(f"{url}/slots/{ad['id']}/copy", json={
+                    "copy_fields": {"body": f"{text}。這次編輯"},
+                })
+                self.assertEqual(edited.status_code, 200, edited.text)
+                revised = edited.json()["placement"]
+                self.assertEqual([t for d in revised["blocked_reasons"] for t in d["terms"]], terms)
+                manual = client.patch(f"{url}/placements/{revised['id']}", json={
+                    "expected_revision": revised["revision"], "copy_fields": copy,
+                })
+                self.assertEqual(manual.status_code, 200, manual.text)
+                final = manual.json()["placement"]
+                self.assertEqual(final["copy_fields"], copy)
+                self.assertEqual([t for d in final["blocked_reasons"] for t in d["terms"]], terms)
+                self.assertEqual(final["confirmed_at"] is not None, not terms)
+                readback = client.get(f"{url}/slots")
+                self.assertEqual(readback.status_code, 200, readback.text)
+                slot = next(s for g in readback.json()["groups"] for s in g["slots"]
+                            if s["ad_id"] == ad["id"])
+                self.assertEqual(slot["state"], "blocked" if terms else "ready")
+                self.assertEqual(slot["offer_key"], "free_shipping")
+                if statutory:
+                    self.assertEqual(
+                        [hit["term"] for hit in slot["statutory"]["terms"]], [statutory],
+                    )
+                else:
+                    self.assertIsNone(slot["statutory"])
         self.assertEqual(len(self.fake.calls), 0)
 
     def test_manual_api_success_risk_pending_and_version_conflict(self):
