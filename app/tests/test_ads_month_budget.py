@@ -538,6 +538,15 @@ class ImportedCampaignMonthCoverageTest(unittest.TestCase):
         )
         launch = {"kind": "launch", "target_id": self.campaign, "after": {
             "daily_amount": 140, "end_date": "2026-09-13"}}
+        task = {"section": "structure", "campaign_id": self.campaign,
+                "status": "succeeded", "started_at": stamp - timedelta(minutes=1),
+                "completed_at": stamp, "errors": []}
+        self.conn.execute(
+            "INSERT INTO ads_external_sync_job(id,org_id,brand_id,platform,source_account,tasks) "
+            "VALUES(%s,%s,%s,'meta','act_1',%s)",
+            (db.new_id("asj"), self.org, self.brand,
+             db.jsonb({self.campaign + ":structure": task})),
+        )
         cases = [
             ({}, 560),
             ({"status": "success", "last_success_at": stamp - timedelta(days=2)}, 560),
@@ -555,3 +564,19 @@ class ImportedCampaignMonthCoverageTest(unittest.TestCase):
                     self.conn, self.org, self.brand, date(2026, 9, 1), date(2026, 9, 10))
                 result = calculate(entities=entities, observations=observations, pending=[launch])
                 self.assertEqual(result["reserved_increases"], reserved)
+        external.record_sync(
+            self.conn, self.org, self.brand, self.campaign, section="structure",
+            state={"status": "success", "last_success_at": stamp, "error": None},
+        )
+        for observed in (stamp - timedelta(days=2), stamp + timedelta(seconds=1), None):
+            with (self.subTest(observed=observed),
+                  patch.object(budget, "now_utc", return_value=stamp)):
+                self.conn.execute(
+                    "UPDATE ads_external_entity SET last_success_at=%s "
+                    "WHERE org_id=%s AND brand_id=%s AND campaign_id=%s",
+                    (observed, self.org, self.brand, self.campaign),
+                )
+                entities, observations, _ = budget._inventory(
+                    self.conn, self.org, self.brand, date(2026, 9, 1), date(2026, 9, 10))
+                result = calculate(entities=entities, observations=observations, pending=[launch])
+                self.assertEqual(result["reserved_increases"], 560)

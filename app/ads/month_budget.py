@@ -333,6 +333,7 @@ def _inventory(conn, org, brand, start, today):
     ]
     issues = []
     accounts = []
+    structure_reads = {}
     for channel in channels.CHANNELS:
         reader = channels.external_reader(channel["key"])
         if reader:
@@ -362,6 +363,9 @@ def _inventory(conn, org, brand, start, today):
             "AND platform=%s AND source_account=%s",
             (org, brand, platform, account_id),
         ).fetchone()
+        for task in ((job["tasks"] if job else {}) or {}).values():
+            if task.get("section") == "structure" and task.get("campaign_id"):
+                structure_reads[(platform, account_id, task["campaign_id"])] = task
         monthly = ((job["tasks"] if job else {}) or {}).get(
             "monthly:" + start.strftime("%Y-%m"), {}
         )
@@ -410,7 +414,21 @@ def _inventory(conn, org, brand, start, today):
                     and _fresh(structure.get("last_success_at")))
         for entity in entities:
             if entity.get("campaign_id") == campaign["id"]:
-                entity["launch_read_verified"] = verified
+                task = structure_reads.get(
+                    (entity["platform"], entity["source_account"], campaign["id"]), {})
+                # A complete read may omit an old owner retained in the cache. Its own
+                # timestamp must belong to this read, not a later status-only refresh.
+                stamps = [task.get("started_at"), entity.get("last_success_at"),
+                          task.get("completed_at")]
+                times = [datetime.fromisoformat(str(s).replace("Z", "+00:00"))
+                         if s else None for s in stamps]
+                first, observed, last = [
+                    t if t is None or t.tzinfo else t.replace(tzinfo=UTC) for t in times]
+                entity["launch_read_verified"] = bool(
+                    verified and task.get("status") == "succeeded"
+                    and not task.get("errors") and _fresh(task.get("completed_at"))
+                    and first is not None and observed is not None and last is not None
+                    and first <= observed <= last)
         if campaign["origin"] == "imported":
             campaign_accounts = {
                 (e["platform"], e["source_account"])
