@@ -24,6 +24,8 @@ def root(**changes):
         "budget_amount": 100,
         "currency": "TWD",
         "native_status": "ACTIVE",
+        "sync_status": "success",
+        "launch_read_verified": True,
         **changes,
     }
 
@@ -211,7 +213,8 @@ class MonthlyCalculationTest(unittest.TestCase):
             "daily_amount": 140, "start_date": "2026-09-10", "end_date": "2026-09-13"}}
         increase = {"kind": "budget", "target_id": "s0", "target": {"end_date": "2026-09-13"},
                     "before": {"daily_amount": 70}, "after": {"daily_amount": 84}}
-        result = calculate(entities=[parent, *children], observations=[], pending=[launch, increase])
+        result = calculate(
+            entities=[parent, *children], observations=[], pending=[launch, increase])
         self.assertEqual(result["ongoing_estimate"], 560)
         self.assertEqual(result["reserved_increases"], 56)
         self.assertEqual(result["available"], 9384)
@@ -220,7 +223,8 @@ class MonthlyCalculationTest(unittest.TestCase):
         owner = root(campaign_id="internal", budget_amount=140, end_date="2026-09-13")
         launch = {"kind": "launch", "target_id": "internal", "after": {
             "daily_amount": 140, "end_date": "2026-09-13"}}
-        result = calculate(entities=[owner], observations=[spend("2026-09-10", 100)], pending=[launch])
+        result = calculate(
+            entities=[owner], observations=[spend("2026-09-10", 100)], pending=[launch])
         self.assertEqual(result["known_spend"], 100)
         self.assertEqual(result["ongoing_estimate"], 460)
         self.assertEqual(result["reserved_increases"], 0)
@@ -261,6 +265,20 @@ class MonthlyCalculationTest(unittest.TestCase):
                 self.assertEqual(result["reserved_increases"], 560)
                 self.assertIsNone(result["available"])
                 self.assertFalse(result["can_increase"])
+
+    def test_launch_hold_requires_known_running_and_clean_structure_read(self):
+        launch = {"kind": "launch", "target_id": "internal", "after": {
+            "daily_amount": 140, "end_date": "2026-09-13"}}
+        for extra in ({"native_status": None}, {"native_status": "MYSTERY"},
+                      {"sync_status": "failed"}, {"launch_read_verified": False},
+                      {"launch_read_verified": None}):
+            with self.subTest(extra=extra):
+                owner = root(campaign_id="internal", budget_amount=140,
+                             end_date="2026-09-13", **extra)
+                result = calculate(entities=[owner], observations=[], pending=[launch])
+                self.assertEqual(result["reserved_increases"], 560)
+                if extra.get("native_status", "ACTIVE") != "ACTIVE":
+                    self.assertIsNone(result["available"])
 
     def test_ongoing_owners_name_each_running_entity_with_days_times_daily(self):
         # F40-I01: the approve page's 預留 breakdown -- 9/10 … 9/14 is 5 days at 100 a day.
@@ -506,3 +524,34 @@ class ImportedCampaignMonthCoverageTest(unittest.TestCase):
         self.read(date(2026, 9, 1), date(2026, 9, 4))
         self.read(date(2026, 9, 6), date(2026, 9, 10))
         self.assertIn(self.GAP, self.issues())
+
+    def test_inventory_requires_fresh_complete_structure_before_launch_credit(self):
+        from datetime import UTC, datetime, timedelta
+
+        stamp = datetime(2026, 9, 10, 12, tzinfo=UTC)
+        external.upsert_entity(
+            self.conn, self.org, self.brand, self.campaign,
+            {"platform": "meta", "source_account": "act_1", "native_kind": "campaign",
+             "native_id": "c1", "native_status": "ACTIVE", "sync_status": "success",
+             "last_success_at": stamp, "budget_type": "daily", "budget_amount": 140,
+             "currency": "TWD", "end_date": date(2026, 9, 13)},
+        )
+        launch = {"kind": "launch", "target_id": self.campaign, "after": {
+            "daily_amount": 140, "end_date": "2026-09-13"}}
+        cases = [
+            ({}, 560),
+            ({"status": "success", "last_success_at": stamp - timedelta(days=2)}, 560),
+            ({"status": "success", "last_success_at": stamp}, 0),
+            ({"status": "partial", "error": "incomplete"}, 560),
+            ({"status": "failed", "error": "offline"}, 560),
+        ]
+        for state, reserved in cases:
+            with self.subTest(state=state), patch.object(budget, "now_utc", return_value=stamp):
+                external.record_sync(
+                    self.conn, self.org, self.brand, self.campaign,
+                    section="structure", state=state,
+                )
+                entities, observations, _ = budget._inventory(
+                    self.conn, self.org, self.brand, date(2026, 9, 1), date(2026, 9, 10))
+                result = calculate(entities=entities, observations=observations, pending=[launch])
+                self.assertEqual(result["reserved_increases"], reserved)

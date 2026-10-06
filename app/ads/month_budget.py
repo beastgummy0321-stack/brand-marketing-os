@@ -123,6 +123,10 @@ def _launch_hold(item, owners, by_id, *, start, today):
         scope = tuple(entity.get(k) for k in ("org_id", "brand_id", "platform", "source_account"))
         node, seen = entity, set()
         while node and node.get("campaign_id") == campaign_id and node["id"] not in seen:
+            if (not campaign_id or lifecycle.ad_running(node) is not True
+                    or node.get("sync_status") != "success"
+                    or node.get("launch_read_verified") is not True):
+                break
             seen.add(node["id"])
             if not node.get("parent_native_id"):
                 eligible.append(owner)
@@ -133,7 +137,8 @@ def _launch_hold(item, owners, by_id, *, start, today):
     result = Decimal(0)
     for offset in range(max((stop - begin).days + 1, 0)):
         day = begin + timedelta(days=offset)
-        represented = sum((o["daily"] for o in eligible if o["begin"] <= day <= o["stop"]), Decimal(0))
+        represented = sum(
+            (o["daily"] for o in eligible if o["begin"] <= day <= o["stop"]), Decimal(0))
         result += max(daily - represented, Decimal(0))
     return result
 
@@ -235,7 +240,7 @@ def calculate(*, amount, currency, start, today, entities, observations, pending
         begin = max(first_future, _date(entity.get("start_date")) or first_future)
         if stop < begin:
             continue
-        if entity.get("native_status") is None:
+        if lifecycle.ad_running(entity) is None:
             issues.append("部分活動是否持續投放尚不明，請讀回平台設定。")
         if entity.get("currency") != currency or entity.get("budget_amount") is None:
             issues.append("持續投放的預算金額、單位或幣別未核實。")
@@ -396,6 +401,16 @@ def _inventory(conn, org, brand, start, today):
     for campaign in conn.execute(
         "SELECT * FROM ads_campaign WHERE org_id=%s AND brand_id=%s", (org, brand)
     ).fetchall():
+        # Only a complete, clean structure read proves budget fields. A status-only
+        # verification can refresh entity bookkeeping while retaining an old budget.
+        structure = ((campaign.get("context_json") or {}).get("external_sync") or {}).get(
+            "structure", {})
+        verified = (structure.get("status") == "success"
+                    and not structure.get("error")
+                    and _fresh(structure.get("last_success_at")))
+        for entity in entities:
+            if entity.get("campaign_id") == campaign["id"]:
+                entity["launch_read_verified"] = verified
         if campaign["origin"] == "imported":
             campaign_accounts = {
                 (e["platform"], e["source_account"])
