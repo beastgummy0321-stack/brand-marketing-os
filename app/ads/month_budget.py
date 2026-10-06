@@ -9,7 +9,7 @@ import re
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 
-from app.ads import channels, lifecycle
+from app.ads import channels, external_sync, lifecycle
 from app.ads import coverage as read_coverage
 from app.ads.external_repository import is_monthly_budget_row
 from app.brand_intelligence import repository as brands
@@ -425,8 +425,8 @@ def _inventory(conn, org, brand, start, today):
                 first, observed, last = [
                     t if t is None or t.tzinfo else t.replace(tzinfo=UTC) for t in times]
                 entity["launch_read_verified"] = bool(
-                    verified and task.get("status") == "succeeded"
-                    and not task.get("errors") and _fresh(task.get("completed_at"))
+                    verified and external_sync.clean_task_success(task)
+                    and _fresh(task.get("completed_at"))
                     and first is not None and observed is not None and last is not None
                     and first <= observed <= last)
         if campaign["origin"] == "imported":

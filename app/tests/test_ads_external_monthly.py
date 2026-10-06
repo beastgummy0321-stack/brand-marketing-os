@@ -4,9 +4,9 @@ import unittest
 from datetime import date
 from unittest.mock import patch
 
+from app.ads import adapters, month_budget
 from app.ads import external_repository as repo
 from app.ads import external_sync as sync
-from app.ads import month_budget
 from app.ads.adapters import meta_read
 from app.ads.adapters.external import SourcePage, SourceReadError
 from app.ads.adapters.meta_read import MetaReader
@@ -283,6 +283,15 @@ class AboMonthDelegationTest(unittest.TestCase):
         self.conn = db.current()
         self.org, self.brand = setup_brand(self.conn)
         self.reader = MonthlyReader(self.brand)
+        # This isolated reader owns a status vocabulary, like a real platform adapter.
+        status_table = adapters._status_table
+        delivery_patch = patch.object(
+            adapters, "_status_table",
+            side_effect=lambda platform: {"ACTIVE": ("running", "Running")}
+            if platform == "fixture" else status_table(platform),
+        )
+        delivery_patch.start()
+        self.addCleanup(delivery_patch.stop)
         for mock in (
             patch.object(
                 sync.channels, "external_reader",

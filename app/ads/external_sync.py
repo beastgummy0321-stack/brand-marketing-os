@@ -104,6 +104,11 @@ def outcome(tasks, *, campaign_id=None):
     return _result("found", None)
 
 
+def clean_task_success(task):
+    """Whether one task finished cleanly; consumers never interpret raw task errors."""
+    return task.get("status") == "succeeded" and not task.get("errors")
+
+
 def failed_outcome(exc):
     """The outcome of a read that could not even start (`account_reader` raised)."""
     return _result("failed", getattr(exc, "code", None) or "source_error")
