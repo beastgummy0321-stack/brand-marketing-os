@@ -173,7 +173,16 @@ POLICY_TYPES = [
      "offer_key": "discount", "common": False, "threshold": None,
      "template": "常態優惠碼：{code}"},
 ]
-POLICY_TYPES_BY_KEY = {p["key"]: p for p in POLICY_TYPES}
+# Merchant statements have their own registry record and never enter the offer chooser.
+MERCHANT_RETURN_CONDITIONS_KEY = "merchant_return_conditions"
+MERCHANT_RETURN_TEXT_MAX_CHARS = 200
+MERCHANT_RETURN_POLICY = {
+    "key": MERCHANT_RETURN_CONDITIONS_KEY, "group": "商家政策", "label": "商家退換貨條件",
+    "params": [{"name": "conditions", "label": "商家退換貨條件", "kind": "text", "optional": True},
+               {"name": "source_note", "label": "政策來源", "kind": "text", "optional": True}],
+    "offer_key": None, "common": False, "threshold": None,
+}
+POLICY_TYPES_BY_KEY = {p["key"]: p for p in [*POLICY_TYPES, MERCHANT_RETURN_POLICY]}
 
 # The 7-day cooling-off (消保法 §19) always applies and is shown fixed; a brand selling a statutory
 # exception stores ONE policy fact with this key and `params_json.disclosure` (the notice on its
@@ -225,7 +234,10 @@ def normalize_policy_params(key: str, params: dict | None) -> dict:
                 continue
             raise ValueError(f"「{spec['label']}」要填「{p['label']}」")
         if p["kind"] == "text":
-            out[p["name"]] = str(raw).strip()
+            text = str(raw).strip()
+            if key == MERCHANT_RETURN_CONDITIONS_KEY and len(text) > MERCHANT_RETURN_TEXT_MAX_CHARS:
+                raise ValueError(f"「{p['label']}」最多 {MERCHANT_RETURN_TEXT_MAX_CHARS} 字。")
+            out[p["name"]] = text
             continue
         n = _policy_number(raw, label=p["label"])
         if p["kind"] == "percent" and not (0 < n <= 100):
@@ -241,8 +253,9 @@ def _policy_display(value, kind: str) -> str:
 
 
 def policy_sentence(key: str, params: dict | None) -> str:
-    """Compose a registry policy's ad-ready sentence from its params (e.g. ship_threshold
+    """Compose a registry policy's sentence from its params (e.g. ship_threshold
     {threshold: 999} -> 「滿 NT$999 免運」). The cooling-off exemption's sentence is its disclosure.
+    Merchant return conditions retain the merchant's wording, not an ad or legal conclusion.
     Validates like `normalize_policy_params`; custom policies carry their own sentence."""
     if key == COOLING_OFF_EXEMPT_KEY:
         disclosure = str((params or {}).get("disclosure") or "").strip()
@@ -253,6 +266,8 @@ def policy_sentence(key: str, params: dict | None) -> str:
     if spec is None:
         raise ValueError(f"未知的全店政策：{key}")
     clean = normalize_policy_params(key, params)
+    if key == MERCHANT_RETURN_CONDITIONS_KEY:
+        return clean.get("conditions", "")
     if spec.get("template_bare") and not clean.get(spec["threshold"]):
         return spec["template_bare"]
     kinds = {p["name"]: p["kind"] for p in spec["params"]}
@@ -448,7 +463,10 @@ def _choices(items) -> dict:
 def require(kind: str, value) -> str:
     """`value` when it is a key of the vocab list `kind`, else `InputRuleError` naming the choices."""
     label, items = REQUIRE_KINDS[kind]
-    return input_rules.one_of(value, label, _choices(items))
+    choices = _choices(items)
+    if kind == "policy":
+        choices[MERCHANT_RETURN_CONDITIONS_KEY] = MERCHANT_RETURN_POLICY["label"]
+    return input_rules.one_of(value, label, choices)
 
 
 def _label(pairs, value):

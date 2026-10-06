@@ -27,7 +27,7 @@ class PolicyRegistryTest(unittest.TestCase):
         """The prototype's 26 `POLICIES`; offer keys are OFFER_LABELS keys; the four threshold
         types name their threshold param."""
         self.assertEqual(len(vocab.POLICY_TYPES), 26)
-        self.assertEqual(len(vocab.POLICY_TYPES_BY_KEY), 26)
+        self.assertEqual(len(vocab.POLICY_TYPES_BY_KEY), 27)
         self.assertEqual(sum(1 for p in vocab.POLICY_TYPES if p["common"]), 8)
         for p in vocab.POLICY_TYPES:
             self.assertIn(p["offer_key"], vocab.OFFER_LABELS, p["key"])
