@@ -448,3 +448,16 @@ describe("BundlePage — 編輯組合", () => {
     expect(screen.getByTestId("where").textContent).toBe(`/brands/${B}/products`);
   });
 });
+
+
+it("shared bundle price preserves the drill loss and explicit cap", async () => {
+  mockPage.mockResolvedValue(PAGE);
+  mockFetch.mockResolvedValue(bundle({ price: 100, cost: 25, shipping: 80, break_even: -5, cap_per_sale: 450, cap_is_default: false }));
+  renderPage("sw_duo");
+  await screen.findByRole("heading", { name: "編輯組合" });
+  expect(breakEven()).toContain("打平 NT$ -5");
+  expect(breakEven()).toContain("未投廣告已虧損");
+  expect(breakEven()).not.toContain("每筆最多花");
+  expect(input("每筆上限（空著＝打平）").value).toBe("450");
+  expect(screen.getByText("高於打平")).toBeTruthy();
+});

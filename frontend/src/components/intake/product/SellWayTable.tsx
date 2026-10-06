@@ -193,10 +193,12 @@ export function PriceBlock({ idPrefix, shape, draft, numbers, free, showCloseRat
   const ownCap = n && !n.cap_is_default ? n.cap_per_sale : null;
   const capTyped = draft.cap_per_sale.trim();
   const capOver = capTyped !== "" && ownCap != null && n?.break_even != null && ownCap > n.break_even;
-  const capDefault = n?.break_even != null ? amount(Math.max(n.break_even, 0)) : null;
+  const noAdRoom = n?.break_even != null && n.break_even <= 0;
+  const capDefault = !noAdRoom && n?.cap_is_default && n.cap_per_sale != null ? amount(n.cap_per_sale) : null;
   const capSum = capTyped !== ""
     ? `每筆上限 ${ownCap != null ? amount(ownCap) : capTyped}`
-    : capDefault !== null ? `每筆上限＝打平 ${capDefault}` : "每筆上限＝打平";
+    : noAdRoom ? "每筆上限：沒有可用廣告空間"
+      : capDefault !== null ? `每筆上限＝打平 ${capDefault}` : "每筆上限＝打平";
   const landSum = landingPlaceholder !== undefined ? `・落地頁：${draft.landing_url.trim() ? "自訂" : "商品頁"}` : "";
   return (
     <div data-slot="price-block">
@@ -280,7 +282,7 @@ function Note({ tone, children }: { tone?: "est" | "warn" | "error"; children: R
   );
 }
 
-/** Prototype `result()`: 打平 (the server's break-even, 推算 when it uses a derived number; 「賣一筆就虧」 at or below 0;
+/** Prototype `result()`: 打平 (the server's break-even, 推算 when it uses a derived number; pre-advertising loss below 0, no advertising room at 0;
  * 「還算不出來：…」 with the reason and, for a base without a cost, the jump to it) and 「廣告裡的優惠」 (the sell-way's own
  * offer sentences). */
 function Result({ numbers: n, shape, pending, missing, showCloseRate, onFillCost, fillCostWhere }: {
@@ -302,7 +304,7 @@ function Result({ numbers: n, shape, pending, missing, showCloseRate, onFillCost
     be = (
       <>
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-          <b className="text-base font-[650] tabular-nums">每筆最多花 {formatCurrency(Math.max(n.break_even, 0))}</b>
+          <b className="text-base font-[650] tabular-nums">{n.break_even > 0 ? "每筆最多花" : "打平"} {formatCurrency(n.break_even)}</b>
           {n.break_even_derived && <EstChip />}
         </div>
         <div className="text-[11.5px] text-muted-foreground">
@@ -310,7 +312,7 @@ function Result({ numbers: n, shape, pending, missing, showCloseRate, onFillCost
         </div>
         {n.break_even <= 0 && (
           <div className="text-[11.5px] font-medium text-warning">
-            {showCloseRate ? "這個價錢賣一筆就虧" : `這個價錢賣一筆就虧 ${formatCurrency(-n.break_even)}`}，廣告花多少都不划算
+            {n.break_even < 0 ? "未投廣告已虧損，沒有可用廣告空間" : "沒有可用廣告空間"}
           </div>
         )}
       </>

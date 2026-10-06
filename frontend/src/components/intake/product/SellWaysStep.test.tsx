@@ -427,3 +427,61 @@ describe("SellWaysStep", () => {
     expect(within(editor()).getByText("假設")).toBeTruthy();
   });
 });
+
+
+describe("signed served break-even", () => {
+  it.each([-5, 0, 40, null])("preserves %s in summary and editor", async (value) => {
+    mockFetch.mockResolvedValue(sellWays([way({ ...TRIAL, shipping: value === -5 ? 80 : 35, break_even: value, cap_per_sale: value })]));
+    renderStep();
+    await screen.findByRole("button", { name: `編輯「${TRIAL.name}」` });
+    expect(summary(TRIAL.name).textContent).toContain(value === null ? "還算不出來" : String(value));
+    if (value === -5) expect(summary(TRIAL.name).textContent).toContain("未投廣告已虧損");
+    await edit(TRIAL.name);
+    const text = editor().textContent!;
+    if (value === -5) {
+      expect(text).toContain("打平 NT$ -5");
+      expect(text).toContain("未投廣告已虧損");
+      expect(text).not.toContain("每筆最多花");
+    } else if (value === 0) {
+      expect(text).toContain("沒有可用廣告空間");
+      expect(text).not.toContain("虧");
+      expect(text).not.toContain("每筆最多花");
+    } else if (value === 40) expect(text).toContain("每筆最多花 NT$ 40");
+    else expect(text).toContain("還算不出來");
+    const cap = field("每筆上限（空著＝打平）");
+    expect(cap.placeholder).toBe(value !== null && value > 0 ? String(value) : "");
+    if (value !== null && value <= 0) expect(text).toContain("每筆上限：沒有可用廣告空間");
+  });
+
+  it("reads a positive default cap from the server instead of rebuilding it", async () => {
+    mockFetch.mockResolvedValue(sellWays([way({ ...TRIAL, cap_per_sale: 37 })]));
+    renderStep();
+    await edit(TRIAL.name);
+    expect(field("每筆上限（空著＝打平）").placeholder).toBe("37");
+    expect(editor().textContent).toContain("每筆上限＝打平 37");
+  });
+
+  it("keeps the explicit cap and above-break-even warning on the drill loss", async () => {
+    mockFetch.mockResolvedValue(sellWays([way({ ...TRIAL, shipping: 80, break_even: -5, cap_per_sale: 450, cap_is_default: false })]));
+    renderStep();
+    await edit(TRIAL.name);
+    expect(field("每筆上限（空著＝打平）").value).toBe("450");
+    expect(editor().textContent).toContain("每筆上限 450");
+    expect(editor().textContent).toContain("高於打平");
+    expect(editor().textContent).toContain("打平 NT$ -5");
+  });
+
+  it.each([-5, 0])("the saved cost-detour status does not offer %s as spend", async (value) => {
+    mockFetch.mockResolvedValue(sellWays([NO_COST.box, NO_COST.c52]));
+    mockSave.mockResolvedValue(sellWays([BOX, way({ ...C52, break_even: value })]));
+    renderStep();
+    await edit("5 盒＋2 包");
+    await userEvent.click(within(editor()).getByRole("button", { name: "去填單盒的成本 →" }));
+    await userEvent.type(field("成本"), "50");
+    await userEvent.click(within(editor()).getByRole("button", { name: "填好了，回到「5 盒＋2 包」" }));
+    await waitFor(() => expect(screen.getByRole("status").textContent).toContain("沒有可用廣告空間"));
+    expect(screen.getByRole("status").textContent).not.toContain("每筆最多花");
+    if (value < 0) expect(screen.getByRole("status").textContent).toContain("未投廣告已虧損");
+    else expect(screen.getByRole("status").textContent).not.toContain("虧");
+  });
+});

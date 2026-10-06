@@ -261,7 +261,9 @@ export function SellWaysStep({ brandId, productId, nav, back, onNext }: {
       setOpen(back);
       setFocus(`${back}-name`);
       setStatus(w?.break_even != null
-        ? `「${w.name}」的打平算出來了：每筆最多花 ${formatCurrency(Math.max(w.break_even, 0))}`
+        ? w.break_even > 0
+          ? `「${w.name}」的打平算出來了：每筆最多花 ${formatCurrency(w.break_even)}`
+          : `「${w.name}」的打平算出來了：${formatCurrency(w.break_even)}，${w.break_even < 0 ? "未投廣告已虧損，" : ""}沒有可用廣告空間`
         : `「${target?.name ?? ""}」還差：${(w?.cost_missing ?? []).map((m) => m.name).join("、")}還沒填成本`);
     } else {
       setOpen(null);
