@@ -81,13 +81,13 @@ export function TodayDecisions({ brandId, state, syncing, recovering, sync, onRe
     );
   } else if (state.status === "error") {
     body = (
-      <div className="relative">
+      <div className="grid items-center rounded-xl bg-danger/10 sm:grid-cols-[minmax(0,1fr)_auto] [&>[data-slot=result-hero]]:bg-transparent">
         <ResultHero
           tone="bad"
           title="今天的判斷讀取失敗"
-          note={`${sync?.last_success_at ? `上次成功 ${stamp(sync.last_success_at, timezone)}・` : ""}已保存的決定都還在`}
+          note={<><span className="block break-words">{state.message}</span><span className="block">{`${sync?.last_success_at ? `上次成功 ${stamp(sync.last_success_at, timezone)}・` : ""}已保存的決定都還在`}</span></>}
         />
-        <Button variant="outline" className="absolute top-1/2 right-5 -translate-y-1/2" onClick={onRetry}>重新讀取</Button>
+        <Button variant="outline" className="mx-5 mb-5 justify-self-start sm:mb-0" onClick={onRetry}>重新讀取</Button>
       </div>
     );
   } else if (!open.length) {

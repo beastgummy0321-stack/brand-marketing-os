@@ -19,7 +19,7 @@ import { TodayDecisions, homeBoard, type QueueState } from "./home/TodayDecision
 import { proposalAction } from "./home/status";
 
 type RecoveryState = { status: "loading" } | { status: "error" } | { status: "ready"; recovery: AdsRecovery };
-type HomeState = { status: "loading" } | { status: "error" } | { status: "ready"; home: HomeOverview };
+type HomeState = { status: "loading" } | { status: "error"; message: string } | { status: "ready"; home: HomeOverview };
 
 /** The query key an approval's month-budget link names itself by (F49-I11 builds `?budget=edit&return=<path>`). */
 const BUDGET_RETURN_PARAM = "return";
@@ -65,7 +65,7 @@ function AdsHome({ brandId }: { brandId: string }) {
   const clock = useOrgClock();
   const homeRead = useApiRead((signal) => getHomeOverview(brandId, undefined, signal), [brandId]);
   const homeState: HomeState = homeRead.data !== null ? { status: "ready", home: homeRead.data }
-    : homeRead.status === "error" ? { status: "error" } : { status: "loading" };
+    : homeRead.status === "error" ? { status: "error", message: homeRead.error } : { status: "loading" };
   const queueRead = useApiRead((signal) => refreshQueue(brandId, signal), [brandId]);
   const queueState: QueueState = queueRead.status === "ready" ? { status: "ready", queue: queueRead.data }
     : queueRead.status === "error" ? { status: "error", message: queueRead.error } : { status: "loading" };

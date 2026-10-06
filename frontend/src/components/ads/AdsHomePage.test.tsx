@@ -14,6 +14,7 @@ import { refreshQueue, type CloseoutQueueRow, type QueueItem, type QueueKind, ty
 import { getMonthlyBudget, saveMonthlyBudget, type MonthlyBudget } from "@/lib/adsChangeApi";
 import { getRecovery, type AdsRecovery } from "@/lib/adsStatusApi";
 import { AdsHomePage } from "./AdsHomePage";
+import { ApiNetworkError } from "@/lib/http";
 // F50 Contract K: the org clock reads the workspace org zone; dates assert Asia/Taipei output, never the runner's.
 vi.mock("@/components/layout/WorkspaceContext", () => ({ useWorkspace: () => ({ scope: "user:org", identity: { user: { id: "u", email: "a@example.com" }, org: { id: "o", name: "測試", kind: "personal", role: "owner", timezone: "Asia/Taipei", today: "2026-10-01" }, orgs: [] } }) }));
 
@@ -285,6 +286,37 @@ describe("AdsHomePage (F28-I08 board D)", () => {
     expect(await screen.findByText("今天沒有要決定的事")).toBeTruthy();
     expect(screen.getByText("沒有要決定的事")).toBeTruthy();
     expect(screen.getByRole("link", { name: "看每月回顧" }).getAttribute("href")).toBe("/brands/brd_1/ads/month");
+  });
+
+  it.each(["home", "queue", "both"])("shows the central network reason for %s failure and retries independently", async (failed) => {
+    const error = new ApiNetworkError(false);
+    if (failed !== "queue") vi.mocked(getHomeOverview).mockRejectedValueOnce(error).mockResolvedValue(home());
+    if (failed !== "home") vi.mocked(refreshQueue).mockRejectedValueOnce(error).mockResolvedValue(queue([]));
+    renderPage();
+    expect(await screen.findAllByText(error.message)).toHaveLength(failed === "both" ? 2 : 1);
+    if (failed !== "queue") {
+      const money = screen.getByRole("region", { name: "這個月的錢" });
+      expect(within(money).getByText(error.message)).toBeTruthy();
+      await userEvent.click(within(money).getByRole("button", { name: "重新讀取" }));
+      expect(await screen.findByText("60,000 TWD")).toBeTruthy();
+      if (failed === "both") expect(screen.getAllByText(error.message)).toHaveLength(1);
+    }
+    if (failed !== "home") {
+      const decisions = screen.getByRole("region", { name: /需要你決定/ });
+      expect(within(decisions).getByText(error.message)).toBeTruthy();
+      await userEvent.click(within(decisions).getByRole("button", { name: "重新讀取" }));
+      expect(await screen.findByText("今天沒有要決定的事")).toBeTruthy();
+    }
+    expect(screen.queryByText(error.message)).toBeNull();
+  });
+
+  it("preserves a served error and the POST queue's uncertain-outcome message without translating them again", async () => {
+    const queueError = new ApiNetworkError(true);
+    vi.mocked(getHomeOverview).mockRejectedValueOnce(new Error("花費資料暫時無法提供"));
+    vi.mocked(refreshQueue).mockRejectedValueOnce(queueError);
+    renderPage();
+    expect(await screen.findByText("花費資料暫時無法提供")).toBeTruthy();
+    expect(await screen.findByText(queueError.message)).toBeTruthy();
   });
 
   it("queue read fails: only the decisions block fails (hero + retry); the money, band and rows still render; retry recovers", async () => {
