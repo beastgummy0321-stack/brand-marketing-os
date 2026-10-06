@@ -61,7 +61,14 @@ function campaign(overrides: Partial<CampaignDetail> = {}): CampaignDetail {
     start_date: "2026-09-08", end_date: "2026-10-08", status: "draft", budget_planned: null, budget_scenario: null,
     budget_basis_json: {
       strategy: {
-        decision: {schema_version: 1, revision: "displayed-revision", state: "proposed", slots: [],
+        decision: {schema_version: 1, revision: "displayed-revision", state: "proposed", slots: [
+          {id: "slot-new", role: "new", customer_group_id: "students", offer_key: "free_shipping",
+            carry_from_ad_id: null, test_intent: "測試通勤者的購買理由", rationale: "依登記事實提出假設，尚無投放樣本。", evidence_refs: [],
+            display: {customer_group_label: "通勤者", offer_label: "免運：三盒以上免運", carried_ad_label: null, evidence: [], evidence_omitted: 0}},
+        ],
+          facts: {available: {customer_groups: 5, customer_group_names: ["健身者", "通勤者"]},
+            proposed: {customer_groups: 1, delivery_groups: 1, ads: 1, customer_group_names: ["通勤者"], unknown_audience_ads: 0},
+            actual: {customer_groups: 0, delivery_groups: 0, ads: 0, customer_group_names: [], unknown_audience_ads: 0}},
           feasibility: {state: "ready", reasons: []}},
         allocation: [
           { role: "new", label: "新客", pct: 60, rationale: null, amount: null },
@@ -141,6 +148,12 @@ describe("StrategyTab (F28-I09)", () => {
     expect(bar().hasAttribute("disabled")).toBe(true);
   });
 
+  it.each([0, -1])("a nonpositive cap (%s) never permits adoption", async (value) => {
+    renderTab(campaign({cap: cap(value), budget_planned: 30000, budget_scenario: "cap"}));
+    expect((await screen.findByRole("button", {name: "照這個方式進行 →"})).hasAttribute("disabled")).toBe(true);
+    expect(within(barEl()).getByText("先設上限")).toBeTruthy();
+  });
+
   it("an in-cap pick is saved by the bar as the user's choice, then adopting is the next action", async () => {
     const user = userEvent.setup();
     const saved = campaign({ budget_planned: 27900, budget_scenario: "minimum" });
@@ -185,6 +198,7 @@ describe("StrategyTab (F28-I09)", () => {
     const adopted = campaign({ budget_planned: 30000, budget_scenario: "cap", groups: [group()] });
     vi.mocked(adoptStrategy).mockResolvedValue(adopted);
     const { onChangeTab } = renderTab(campaign({ budget_planned: 30000, budget_scenario: "cap" }));
+    expect(await screen.findByText("確認後建立投放結構")).toBeTruthy();
     await user.click(await screen.findByRole("button", { name: "照這個方式進行 →" }));
     expect(adoptStrategy).toHaveBeenCalledWith("brd_1", "cmp_1", {
       expected_revision: "displayed-revision", operation_id: expect.any(String),
@@ -230,9 +244,87 @@ describe("StrategyTab (F28-I09)", () => {
     const initial = campaign({ budget_planned: 30000, budget_scenario: "cap" });
     initial.budget_basis_json.strategy!.decision = undefined;
     renderTab(initial);
-    await user.click(await screen.findByRole("button", { name: "照這個方式進行 →" }));
-    await screen.findByText("請重新產生策略並確認每則廣告的安排。");
+    expect((await screen.findByRole("button", { name: "照這個方式進行 →" })).hasAttribute("disabled")).toBe(true);
+    vi.mocked(generateStrategy).mockResolvedValue(campaign());
+    await user.click(screen.getByRole("button", { name: "重新產生策略" }));
+    expect(generateStrategy).toHaveBeenCalledWith("brd_1", "cmp_1");
     expect(adoptStrategy).not.toHaveBeenCalled();
+  });
+
+  it("a blocked served decision keeps budget revision usable and cannot be adopted", async () => {
+    const user = userEvent.setup();
+    const c = campaign({ budget_planned: 30000, budget_scenario: "cap" });
+    c.budget_basis_json.strategy!.decision!.feasibility = {state: "blocked", reasons: [
+      {code: "capacity_exceeded", message: "目前預算無法容納這份安排，請調整預算或重新產生。", slot_ids: ["slot-new"]},
+    ]};
+    renderTab(c);
+    expect((await screen.findByRole("button", { name: "照這個方式進行 →" })).hasAttribute("disabled")).toBe(true);
+    expect(screen.getByText("目前預算無法容納這份安排，請調整預算或重新產生。")).toBeTruthy();
+    await user.click(screen.getByRole("radio", {name: /最低/}));
+    expect(screen.getByRole("button", {name: "儲存預算 27,900"}).hasAttribute("disabled")).toBe(false);
+    expect(adoptStrategy).not.toHaveBeenCalled();
+  });
+
+  it("modified rationale never re-enables adoption merely because feasibility is ready", async () => {
+    const c = campaign({ budget_planned: 30000, budget_scenario: "cap" });
+    c.budget_basis_json.strategy!.decision!.state = "modified";
+    c.budget_basis_json.strategy!.rationale_state = "stale";
+    renderTab(c);
+    expect((await screen.findByRole("button", {name: "照這個方式進行 →"})).hasAttribute("disabled")).toBe(true);
+    expect(screen.getAllByText("安排或預算已修改，原建議理由已失效。請重新產生策略。").length).toBeGreaterThan(0);
+    expect(screen.queryByText("依登記事實提出假設，尚無投放樣本。")).toBeNull();
+  });
+
+  it("shows each served binding and distinct server counts without pairing aggregate names", async () => {
+    const user = userEvent.setup();
+    const c = campaign({budget_planned: 30000, budget_scenario: "cap"});
+    c.budget_basis_json.strategy!.decision!.slots.push({
+      id: "slot-carry", role: "new", customer_group_id: "fitness", offer_key: "none", carry_from_ad_id: "original",
+      test_intent: null, rationale: "保留相對有效的內容，仍需再驗證。", evidence_refs: [{kind: "result", id: "original"}],
+      display: {customer_group_label: "健身者", offer_label: "不使用優惠", carried_ad_label: "健身原版",
+        evidence: [{kind: "result", id: "original", label: "上期／健身原版"}], evidence_omitted: 0},
+    });
+    renderTab(c);
+    await screen.findByText("通勤者・免運：三盒以上免運");
+    const rows = Array.from(document.querySelectorAll("[data-slot=strategy-commitment]"));
+    expect(rows[0].textContent).toContain("新測試：測試通勤者的購買理由");
+    expect(rows[0].textContent).not.toContain("健身者");
+    expect(rows[1].textContent).toContain("健身者・不使用優惠");
+    expect(rows[1].textContent).toContain("保留原廣告：健身原版");
+    await user.click(screen.getByRole("button", {name: "為什麼這樣建議"}));
+    expect(screen.getByText("依據：上期／健身原版")).toBeTruthy();
+    const summary = document.querySelector("[data-slot=assignment-summary]")!;
+    expect(summary.textContent).toContain("可選顧客群5 群");
+    expect(summary.textContent).toContain("提議安排1 群・1 個投放組・1 則廣告");
+    expect(summary.textContent).toContain("實際投放結構0 群・0 個投放組・0 則廣告");
+    expect(getCampaign).not.toHaveBeenCalled();
+  });
+
+  it("unsaved allocation editing cannot adopt a revision the user has not applied", async () => {
+    const user = userEvent.setup();
+    renderTab(campaign({budget_planned: 30000, budget_scenario: "cap"}));
+    await user.click(await screen.findByRole("button", {name: "調整比例"}));
+    expect(bar().hasAttribute("disabled")).toBe(true);
+    expect(screen.getByText("先套用或取消比例調整")).toBeTruthy();
+    expect(adoptStrategy).not.toHaveBeenCalled();
+  });
+
+  it("a server revision refusal stays blocked until a fresh displayed revision arrives", async () => {
+    const user = userEvent.setup();
+    vi.mocked(adoptStrategy).mockRejectedValue(new ApiResponseError("安排已更新，請重新確認。", 409, {}, {code: "strategy_changed"}));
+    const c = campaign({budget_planned: 30000, budget_scenario: "cap"});
+    const callbacks = {onCampaignChange: vi.fn(), onChangeTab: vi.fn()};
+    const view = render(<MemoryRouter><StrategyTab brandId="brd_1" campaign={c} {...callbacks} launchApproved={false} /></MemoryRouter>);
+    await user.click(await screen.findByRole("button", {name: "照這個方式進行 →"}));
+    await screen.findByText("安排已更新，請重新確認。");
+    expect(bar().hasAttribute("disabled")).toBe(true);
+    view.rerender(<MemoryRouter><StrategyTab brandId="brd_1" campaign={{...c}} {...callbacks} launchApproved={false} /></MemoryRouter>);
+    expect(bar().hasAttribute("disabled")).toBe(true);
+    const fresh = campaign({budget_planned: 30000, budget_scenario: "cap"});
+    fresh.budget_basis_json.strategy!.decision!.revision = "freshly-reviewed";
+    view.rerender(<MemoryRouter><StrategyTab brandId="brd_1" campaign={fresh} {...callbacks} launchApproved={false} /></MemoryRouter>);
+    expect(bar().hasAttribute("disabled")).toBe(false);
+    expect(getCampaign).not.toHaveBeenCalled();
   });
 
   it("on a platform (live) the bar has no next step here and the allocation is no longer editable", async () => {
@@ -535,7 +627,7 @@ describe("StrategyTab (F28-I09)", () => {
     });
   });
 
-  describe("F42-I13: 「這期會用：…」 inside 預算怎麼分 (prototype f41-drill8 ② `used`)", () => {
+  describe("F52-I03: available materials inside the existing allocation card", () => {
     /** `app/ads/materials_in_hand.py::read` in its real shape: two policy-backed offers, one confirmed proof, photo only. */
     const MATERIALS: NonNullable<CampaignDetail["materials"]> = {
       offers: [
@@ -555,7 +647,7 @@ describe("StrategyTab (F28-I09)", () => {
       expect(used!.compareDocumentPosition(section.querySelector("[data-slot=allocation-bar]")!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
       const chips = Array.from(used!.querySelectorAll("[data-slot=chip]")).map((el) => el.textContent);
       expect(chips).toEqual(["組合加贈：三盒 NT$999 另送一盒", "免運：三盒以上免運", "檢驗報告", "只排照片（單圖、輪播）"]);
-      expect(used!.textContent).toMatch(/^這期會用：/);
+      expect(used!.textContent).toMatch(/^可用素材：/);
       const proof = within(used!).getByLabelText("檢驗報告：SGS 檢驗：重金屬、塑化劑未檢出（2026/08）");
       expect(proof.getAttribute("title")).toBe("SGS 檢驗：重金屬、塑化劑未檢出（2026/08）");
       expect(used!.textContent).not.toMatch(/bundle|free_shipping|lab_test/);
@@ -582,7 +674,7 @@ describe("StrategyTab (F28-I09)", () => {
       renderTab(campaign({ materials: null }));
       await screen.findByRole("heading", { name: "預算怎麼分" });
       expect(row()).toBeNull();
-      expect(screen.queryByText("這期會用：")).toBeNull();
+      expect(screen.queryByText("可用素材：")).toBeNull();
     });
   });
 

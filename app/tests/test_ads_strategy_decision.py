@@ -184,6 +184,27 @@ class DecisionRegressionTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             plan._target_role("explore", ["new"])
 
+    def test_display_keeps_observed_sample_limits_on_result_and_learning_refs(self):
+        ctx = {
+            "customer_groups": [], "offers": [], "carried_candidates": [],
+            "ranked_ids": ["learn"], "brand_facts": [], "calendar_evidence": [],
+            "learnings": {"ads": [], "ranked": {"campaigns": [{
+                "campaign_name": "Earlier period", "rows": [{
+                    "ad_id": "ad", "ad_name": "Original", "learning_id": "learn",
+                    "verdict_label": "留下", "flags": ["樣本少", "相對最好，仍高於上限"],
+                }],
+            }]}},
+        }
+        display = strategy._slot_display(ctx, {
+            "customer_group_id": None, "offer_key": "none", "carry_from_ad_id": None,
+            "evidence_refs": [{"kind": "result", "id": "ad"}, {"kind": "learning", "id": "learn"}],
+        })
+        self.assertEqual(display["customer_group_label"], "尚未指定顧客群")
+        for reference in display["evidence"]:
+            self.assertEqual(
+                reference["label"], "Earlier period／Original（留下・樣本少・相對最好，仍高於上限）"
+            )
+
 
 class ExecutableDecisionAcceptanceTest(unittest.TestCase):
     def setUp(self):
@@ -328,6 +349,48 @@ class ExecutableDecisionAcceptanceTest(unittest.TestCase):
             expected_revision=decision["revision"],
             operation_id=operation,
         )
+
+    def test_served_labels_follow_each_binding_without_mutating_saved_decision(self):
+        prior, _ = self.previous()
+        campaign = self.campaign()
+        accepted = self.propose(campaign, [
+            self.slot("new", self.people[1]["id"]),
+            self.slot("explore", self.people[0]["id"], "none", prior["id"]),
+        ])
+        current = ads_repo.get_campaign(web.conn, self.org, self.brand, campaign["id"])
+        original = deepcopy(current)
+        served = strategy.served_decision(web.conn, self.org, self.brand, current, [])
+        self.assertEqual(served["revision"], accepted["revision"])
+        self.assertEqual(served["slots"][0]["display"]["customer_group_label"], "Students")
+        self.assertIn("免運", served["slots"][0]["display"]["offer_label"])
+        self.assertEqual(served["slots"][1]["display"]["customer_group_label"], "Fitness buyers")
+        self.assertEqual(served["slots"][1]["display"]["offer_label"], "不使用優惠")
+        self.assertEqual(served["slots"][1]["display"]["carried_ad_label"], prior["name"])
+        self.assertEqual(current, original)
+        served["slots"][0]["evidence_refs"].append({"kind": "result", "id": "modified-read"})
+        self.assertEqual(current, original)
+        self.assertEqual(
+            ads_repo.get_campaign(web.conn, self.org, self.brand, campaign["id"]), original
+        )
+
+    def test_served_unknown_labels_do_not_invent_an_audience_or_original(self):
+        campaign = self.campaign()
+        self.propose(campaign, [self.slot("new", None, "none")])
+        current = ads_repo.get_campaign(web.conn, self.org, self.brand, campaign["id"])
+        slot = current["budget_basis_json"]["strategy"]["decision"]["slots"][0]
+        slot.update(customer_group_id="deleted", offer_key="deleted", carry_from_ad_id="deleted")
+        slot["evidence_refs"] = [{"kind": "learning", "id": "deleted"}] * 5
+        original = deepcopy(current)
+        served = strategy.served_decision(web.conn, self.org, self.brand, current, [])
+        display = served["slots"][0]["display"]
+        self.assertEqual(display["customer_group_label"], "已刪除或不在本期的顧客群")
+        self.assertEqual(display["offer_label"], "已失效或不在本期的優惠")
+        self.assertEqual(display["carried_ad_label"], "原廣告已不在可保留資料中")
+        self.assertEqual(display["evidence"][0]["label"], "依據已不在本期資料中")
+        self.assertEqual(display["evidence_omitted"], 2)
+        self.assertEqual(len(served["slots"][0]["evidence_refs"]), 5)
+        self.assertEqual(served["feasibility"]["state"], "blocked")
+        self.assertEqual(current, original)
 
     def assert_empty(self, campaign):
         detail = ads_repo.campaign_detail(web.conn, self.org, self.brand, campaign["id"])
