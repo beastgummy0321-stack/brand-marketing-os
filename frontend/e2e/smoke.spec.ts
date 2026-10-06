@@ -108,7 +108,7 @@ test("走完切片後活下來的主要畫面", async ({ page }) => {
   await expect(page.getByRole("tab", { name: "圖片" })).toBeVisible();
   // Memory queue deliberately does not run workers: queued work must not look empty.
   await expect(page.getByText("素材已排隊，等待生成。")).toBeVisible();
-  await expect(page.getByRole("button", { name: "生成中…" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "素材生成中，完成後才能再生成", exact: true })).toBeDisabled();
   await expect(page.getByText("還沒有生成過")).toHaveCount(0);
 
   // --- 商品（F43-I07）-------------------------------------------------------

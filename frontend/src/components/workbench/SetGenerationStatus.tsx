@@ -2,11 +2,11 @@ import { useState } from "react";
 import { Button } from "@/components/layout/ui/button";
 import { WorkerStoppedNotice } from "@/components/layout/WorkerStoppedNotice";
 import { useWorkerHealth } from "@/lib/useWorkerHealth";
-import { runProduct, type ProductPart, type SetDetail } from "@/lib/workbenchApi";
+import { type ProductPart, type SetDetail } from "@/lib/workbenchApi";
 
 /** How often the studio re-reads a set while a round runs (the page's own poll). */
 const SET_POLL_MS = 3000;
-/** The copy / script count a rerun uses when the part never ran (the studio's own default). */
+/** The script count a rerun uses when the part never ran (the studio's own default). */
 const DEFAULT_COUNT = 4;
 
 /** The set studio's generation-status block (moved out of `SetStudioPage.tsx`, F47-I04):
@@ -14,19 +14,16 @@ const DEFAULT_COUNT = 4;
  *   worker-stopped notice follows, whose 再檢查一次 re-reads the worker and the set (`onReload`);
  * - a poll that fails says it will retry;
  * - a failed round shows the server's `generation.error` (the brief's `last_error`, cleared by the next success) with
- *   「重新生成」, which runs `part` again the way the part's own button does (image: no count; else the part's last
- *   count) — disabled with the lock's reason when that part is locked. */
+ *   「重新生成」 runs the open part (copy/image: no count; script: its last count),
+ *   disabled with the lock's reason when that part is locked. */
 export function SetGenerationStatus({
-  brandId,
   set,
   generating,
   pollError,
   part,
   onReload,
-  onRunStarted,
-  onUpdated,
+  onRun,
 }: {
-  brandId: string;
   set: SetDetail;
   generating: boolean;
   pollError: string | null;
@@ -34,29 +31,22 @@ export function SetGenerationStatus({
    * which part failed), `null` when the set has none. */
   part: ProductPart | null;
   onReload: () => Promise<unknown>;
-  /** The part this browser started (the studio names it on the other tabs' buttons), `null` when it did not start. */
-  onRunStarted: (part: ProductPart | null) => void;
-  onUpdated: (next: SetDetail) => void;
+  /** The keyed studio owns pending requests and their errors across part navigation. */
+  onRun: (part: ProductPart, count?: number) => Promise<void>;
 }) {
   const worker = useWorkerHealth(generating, SET_POLL_MS);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const failed = set.generation?.status === "failed";
   const partLocked = part ? (set.products[part]?.locked ?? set.lock.locked) : true;
 
   async function regenerate() {
     if (!part) return;
     setBusy(true);
-    setError(null);
-    const count = part === "image_prompt"
-      ? undefined
-      : ((set.products[part]?.generation_settings.count as number | undefined) ?? DEFAULT_COUNT);
-    onRunStarted(part);
+    const count = part === "video_script"
+      ? ((set.products[part]?.generation_settings.count as number | undefined) ?? DEFAULT_COUNT)
+      : undefined;
     try {
-      onUpdated(await runProduct(brandId, set.id, part, count));
-    } catch (err) {
-      onRunStarted(null);
-      setError(err instanceof Error ? err.message : "重新生成沒有送出，請稍後再試。");
+      await onRun(part, count);
     } finally {
       setBusy(false);
     }
@@ -89,7 +79,6 @@ export function SetGenerationStatus({
               {busy ? "送出中…" : "重新生成"}
             </Button>
           )}
-          {error && <span className="w-full text-xs">{error}</span>}
         </div>
       )}
     </>

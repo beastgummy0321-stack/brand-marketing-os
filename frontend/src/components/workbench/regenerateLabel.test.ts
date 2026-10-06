@@ -7,7 +7,6 @@ const base: RegenerateLabelInput = {
   generating: false,
   ownRequestInFlight: false,
   runningPart: null,
-  productState: "待選定",
   idleLabel: "再生成一輪（10 張）",
 };
 
@@ -30,12 +29,10 @@ describe("regenerateLabel", () => {
     });
   });
 
-  it("starter unknown → 另一個部分 when the product has versions, 生成中… when it is empty", () => {
+  it("starter unknown does not infer a part from its saved output", () => {
     expect(regenerateLabel({ ...base, generating: true })).toEqual({
-      label: "正在生成另一個部分，完成後才能再生成",
-      title: "正在生成另一個部分，完成後才能再生成",
+      label: "素材生成中，完成後才能再生成",
+      title: "素材生成中，完成後才能再生成",
     });
-    expect(regenerateLabel({ ...base, generating: true, productState: "未生成" }))
-      .toEqual({ label: "生成中…" });
   });
 });
