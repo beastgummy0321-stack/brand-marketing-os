@@ -18,4 +18,6 @@ a proven common stop-condition blocker under `../README.md`; any such repair req
 - F51 retains the active-AI-queue W14 exception, user confirmed 2026-10-06; backend outcome redesign is outside this run.
 - F48–F51 remain open until the user sees combined screenshots and drill results and explicitly accepts them. No push.
 
-Status: preparation only; no persona run or score yet.
+Status: P1 resumed from the sell-way money stop after F51-I15 at main d46b3c75 (original baseline ec72ce1a).
+Original observations remain in B/run_1.md; before/after heads and restart evidence are in operator/notes.md.
+F51-I16's separate nonblocking offline-reason repair stays unmerged until the drill ends. No completed scores yet.

@@ -257,3 +257,8 @@ restored on reload, Back and step-bar navigation, and dropped after a successful
 Enter in an inline evidence editor saves only that edit, without submitting the whole step. Errors, buttons and derived
 figures follow `ads.md` section 6.53 and `design-system.md` sections 6-7. Draft/history behavior has targeted component tests;
 full drill and human acceptance are separate checks.
+
+F51-I15 preserves the served signed `break_even` in sell-way summaries, shared price editors and save feedback. A negative
+value states loss before advertising; zero states no advertising room. Explicit `cap_per_sale` stays unchanged, including the
+above-break-even warning. Default cap display reads the served cap; the browser never clamps break-even to zero. Component
+regressions and the frontend figure guard cover this drill-12 money-stop repair; persona rerun is recorded separately.
