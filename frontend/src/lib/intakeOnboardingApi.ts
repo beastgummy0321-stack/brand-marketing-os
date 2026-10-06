@@ -206,7 +206,9 @@ export interface OnboardingEvidence {
   policies: PolicyItem[];
   policy_types: PolicyType[];
   /** 7 天猶豫期 (消保法 §19): applies unless the brand sells a statutory exception. */
-  cooling_off: { applies: boolean; disclosure: string };
+  cooling_off: { applies: boolean; disclosure: string; conditions?: string; source_note?: string };
+  /** Policy-owner text limits; absent on older servers. */
+  cooling_off_limits?: { conditions: number; source_note: number };
   forbidden: { id: string | null; text: string }[];
   /** e.g. 「台灣食品（食安法）」; "" when the brand has no regime. */
   regime_label: string;
@@ -215,7 +217,8 @@ export interface OnboardingEvidence {
 export interface OnboardingEvidenceInput {
   proof: { id?: string | null; fact_key: ProofKind; text: string }[];
   policies: { key: string; params: Record<string, PolicyParamValue>; sentence?: string }[];
-  cooling_off: { applies: boolean; disclosure?: string };
+  /** Omitted merchant fields preserve saved text; empty strings clear individual fields. */
+  cooling_off: { applies: boolean; disclosure?: string; conditions?: string; source_note?: string };
   forbidden: string[];
 }
 

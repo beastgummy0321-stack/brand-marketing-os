@@ -546,7 +546,7 @@ def _policy_shape(key: str, params: dict, sentence: str, offer_key: str | None, 
 def _ai_policy(item: dict) -> dict | None:
     key = item.get("key")
     spec = vocab.POLICY_TYPES_BY_KEY.get(key) if isinstance(key, str) else None
-    if spec is None:
+    if spec is None or spec["offer_key"] is None:
         return None
     raw = item.get("params")
     params: dict = raw if isinstance(raw, dict) else {}
@@ -575,9 +575,12 @@ def get_evidence(conn: Conn, brand_id: str) -> dict:
 
     saved = bi_repo.list_brand_policies(conn, brand_id)
     exempt = next((p for p in saved if p["key"] == vocab.COOLING_OFF_EXEMPT_KEY), None)
+    merchant = next((p["params"] for p in saved
+                     if p["key"] == vocab.MERCHANT_RETURN_CONDITIONS_KEY), {})
     policies = [_policy_shape(p["key"], p["params"], p["sentence"], p["offer_key"],
                               label=p["label"], source="saved")
-                for p in saved if p["key"] != vocab.COOLING_OFF_EXEMPT_KEY]
+                for p in saved if p["key"] not in
+                (vocab.COOLING_OFF_EXEMPT_KEY, vocab.MERCHANT_RETURN_CONDITIONS_KEY)]
     seen_keys = {p["key"] for p in policies}
     for item in prefill.get("policies") or []:
         shaped = _ai_policy(item) if isinstance(item, dict) else None
@@ -590,9 +593,13 @@ def get_evidence(conn: Conn, brand_id: str) -> dict:
         "proof": proof,
         "proof_kinds": [{"key": k, "label": label} for k, label in vocab.PROOF_KINDS],
         "policies": policies,
-        "policy_types": [_policy_type_view(p) for p in vocab.POLICY_TYPES],
+        "policy_types": [_policy_type_view(p) for p in vocab.POLICY_TYPES if p["offer_key"]],
         "cooling_off": {"applies": exempt is None,
-                        "disclosure": (exempt["params"].get("disclosure") or "") if exempt else ""},
+                        "disclosure": (exempt["params"].get("disclosure") or "") if exempt else "",
+                        "conditions": merchant.get("conditions", ""),
+                        "source_note": merchant.get("source_note", "")},
+        "cooling_off_limits": {p["name"]: vocab.MERCHANT_RETURN_TEXT_MAX_CHARS
+                               for p in vocab.MERCHANT_RETURN_POLICY["params"]},
         "forbidden": [{"id": r["id"], "text": r["content"]}
                       for r in _forbidden_rules(conn, brand_id)],
         "regime_label": REGIME_LABELS.get(brand.get("regulatory_regime") or "", ""),
@@ -658,20 +665,29 @@ def _missing_params(items: list) -> dict:
     return errors
 
 
-def _check_policies(value, cooling_off) -> list:
+def _check_policies(value, cooling_off, saved_merchant: dict | None = None) -> list:
     if not isinstance(value, list):
         raise ValueError("全店政策清單格式不對。")
     items = []
     for item in value:
         if not isinstance(item, dict):
             raise ValueError("全店政策清單格式不對。")
-        if item.get("key") == vocab.COOLING_OFF_EXEMPT_KEY:
+        if item.get("key") in (vocab.COOLING_OFF_EXEMPT_KEY, vocab.MERCHANT_RETURN_CONDITIONS_KEY):
             raise ValueError("7 天猶豫期請在「7 天猶豫期」那一列設定。")
         items.append({"key": item.get("key"), "params": item.get("params") or {},
                       "sentence": item.get("sentence")})
     if missing := _missing_params(items):
         raise FieldErrors(missing)
     cooling_off = cooling_off if isinstance(cooling_off, dict) else {"applies": True}
+    # Omitted optional fields preserve merchant text; explicit blank fields clear it.
+    merchant = dict(saved_merchant or {})
+    for param in vocab.MERCHANT_RETURN_POLICY["params"]:
+        name = param["name"]
+        if name in cooling_off:
+            merchant[name] = cooling_off[name]
+    merchant = vocab.normalize_policy_params(vocab.MERCHANT_RETURN_CONDITIONS_KEY, merchant)
+    if merchant:
+        items.append({"key": vocab.MERCHANT_RETURN_CONDITIONS_KEY, "params": merchant})
     if cooling_off.get("applies") is False:
         disclosure = str(cooling_off.get("disclosure") or "").strip()
         vocab.policy_sentence(vocab.COOLING_OFF_EXEMPT_KEY, {"disclosure": disclosure})  # length
@@ -697,7 +713,9 @@ def put_evidence(conn: Conn, brand_id: str, body: dict, *, actor: str) -> dict:
     policies go first because `save_brand_policies` validates its whole list before writing."""
     existing_proof = {f["id"]: f for f in _confirmed_facts(conn, brand_id, "proof")}
     proof = _check_proof(body.get("proof", []), set(existing_proof))
-    policies = _check_policies(body.get("policies", []), body.get("cooling_off"))
+    saved_merchant = next((p["params"] for p in bi_repo.list_brand_policies(conn, brand_id)
+                           if p["key"] == vocab.MERCHANT_RETURN_CONDITIONS_KEY), {})
+    policies = _check_policies(body.get("policies", []), body.get("cooling_off"), saved_merchant)
     forbidden = _check_forbidden(body.get("forbidden", []))
 
     bi_repo.save_brand_policies(conn, brand_id, policies, actor=actor)

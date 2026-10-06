@@ -109,6 +109,86 @@ class _Base(unittest.TestCase):
                 "X-Org-Id": org_id}
 
 
+class MerchantReturnConditionsTest(_Base):
+    """Merchant text is retained independently of exemption and promotional policy lists."""
+
+    def _save(self, bid, cooling_off, policies=None):
+        return self._put(bid, "/evidence", {"proof": [], "policies": policies or [],
+                                             "cooling_off": cooling_off, "forbidden": []})
+
+    def test_save_reload_and_old_client_preserve_each_field(self):
+        bid = self._create()
+        custom = {"key": "custom", "params": {"label": "回購禮", "offer_key": "bundle"},
+                  "sentence": "第三次購買附贈隨身包"}
+        conditions = "商品須未拆封，請先聯絡客服提供訂單編號。"
+        source = "商家提供的退換貨說明，尚未提供公開網址"
+        response = self._save(bid, {"applies": True, "conditions": conditions,
+                                    "source_note": source}, [custom])
+        self.assertEqual(response.status_code, 200, response.text)
+        data = self._get(bid, "/evidence")
+        self.assertEqual(data["cooling_off"]["conditions"], conditions)
+        self.assertEqual(data["cooling_off"]["source_note"], source)
+        self.assertEqual(data["cooling_off_limits"], {"conditions": 200, "source_note": 200})
+        self.assertEqual([p["key"] for p in data["policies"]], ["custom"])
+        self.assertEqual(data["policies"][0]["sentence"], custom["sentence"])
+        self.assertTrue(all(p["offer_key"] for p in data["policy_types"]))
+        self.assertEqual(self._save(bid, {"applies": True}, [custom]).status_code, 200)
+        self.assertEqual(self._get(bid, "/evidence")["cooling_off"], data["cooling_off"])
+        self.assertEqual(self._put(bid, "/evidence", {"policies": [custom]}).status_code, 200)
+        self.assertEqual(self._get(bid, "/evidence")["cooling_off"], data["cooling_off"])
+        # Clearing one field does not clear the omitted other field.
+        self.assertEqual(self._save(bid, {"applies": True, "conditions": ""}, [custom]).status_code, 200)
+        cooling = self._get(bid, "/evidence")["cooling_off"]
+        self.assertEqual((cooling["conditions"], cooling["source_note"]), ("", source))
+        self.assertEqual(self._save(bid, {"applies": True, "source_note": ""}, [custom]).status_code, 200)
+        cooling = self._get(bid, "/evidence")["cooling_off"]
+        self.assertEqual((cooling["conditions"], cooling["source_note"]), ("", ""))
+        self.assertEqual([p["key"] for p in bi_repo.list_brand_policies(web.conn, bid)], ["custom"])
+
+    def test_exemption_requires_disclosure_and_keeps_unsent_conditions(self):
+        bid = self._create()
+        self.assertEqual(self._save(bid, {"applies": True, "conditions": "商家自述條件"}).status_code, 200)
+        invalid = self._save(bid, {"applies": False, "disclosure": ""})
+        self.assertEqual(invalid.status_code, 400)
+        self.assertTrue(self._get(bid, "/evidence")["cooling_off"]["applies"])
+        disclosure = "商家提供的不適用告知文字，須由商家確認。"
+        self.assertEqual(self._save(bid, {"applies": False, "disclosure": disclosure}).status_code, 200)
+        cooling = self._get(bid, "/evidence")["cooling_off"]
+        self.assertEqual(cooling, {"applies": False, "disclosure": disclosure,
+                                   "conditions": "商家自述條件", "source_note": ""})
+        self.assertEqual(self._save(bid, {"applies": True}).status_code, 200)
+        self.assertEqual(self._get(bid, "/evidence")["cooling_off"]["conditions"], "商家自述條件")
+
+    def test_limits_refuse_before_writing_and_tenant_cannot_read_or_save(self):
+        bid = self._create()
+        for field in ("conditions", "source_note"):
+            with self.subTest(field=field):
+                accepted = {"applies": True, field: "文" * 200}
+                self.assertEqual(self._save(bid, accepted).status_code, 200)
+                before = self._get(bid, "/evidence")
+                rejected = self._save(bid, {"applies": True, field: "文" * 201}, [{"key": "ship_all"}])
+                self.assertEqual(rejected.status_code, 400, rejected.text)
+                self.assertIn("200", rejected.text)
+                self.assertEqual(self._get(bid, "/evidence"), before)
+        headers = self._other_org_headers()
+        self.assertEqual(self.client.get(self._url(bid, "/evidence"), headers=headers).status_code, 404)
+        self.assertEqual(self.client.put(self._url(bid, "/evidence"), headers=headers,
+                         json={"cooling_off": {"applies": True, "conditions": "入侵覆寫"}}).status_code, 404)
+        self.assertEqual(self._get(bid, "/evidence"), before)
+
+    def test_legacy_blank_and_special_key_is_not_a_regular_policy(self):
+        bid = self._create()
+        self._store_prefill(bid, {"policies": [{"key": "merchant_return_conditions",
+                                               "params": {"conditions": "未確認的掃描條件"}}]})
+        self.assertEqual(self._get(bid, "/evidence")["policies"], [])
+        self.assertEqual(self._save(bid, {"applies": True}).status_code, 200)
+        cooling = self._get(bid, "/evidence")["cooling_off"]
+        self.assertEqual((cooling["conditions"], cooling["source_note"]), ("", ""))
+        self.assertEqual(self._save(bid, {"applies": True}, [
+            {"key": "merchant_return_conditions", "params": {"conditions": "應走專用欄位"}}
+        ]).status_code, 400)
+
+
 # ---------------------------------------------------------------------------
 # GET "" / POST /complete / step numbering
 # ---------------------------------------------------------------------------
@@ -305,7 +385,8 @@ class EvidenceTest(_Base):
         self.assertEqual(data["proof"], [])
         self.assertEqual(data["policies"], [])
         self.assertEqual(data["forbidden"], [])
-        self.assertEqual(data["cooling_off"], {"applies": True, "disclosure": ""})
+        self.assertEqual(data["cooling_off"], {"applies": True, "disclosure": "",
+                                               "conditions": "", "source_note": ""})
         self.assertEqual(data["regime_label"], "")
         self.assertEqual(len(data["policy_types"]), 26)
         self.assertEqual(sum(1 for p in data["policy_types"] if p["common"]), 8)
@@ -368,7 +449,8 @@ class EvidenceTest(_Base):
         self.assertEqual(data["policies"], [])
         self.assertEqual(data["forbidden"], [])
         self.assertEqual(data["cooling_off"],
-                         {"applies": False, "disclosure": "本商品為易腐敗之食品，不適用七天猶豫期"})
+                         {"applies": False, "disclosure": "本商品為易腐敗之食品，不適用七天猶豫期",
+                          "conditions": "", "source_note": ""})
         self.assertEqual(bi_repo.available_offer_keys(web.conn, bid), set())
 
     def test_empty_lists_are_valid(self):
