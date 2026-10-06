@@ -4,7 +4,7 @@
  * delete guard, the free-shipping sentence and the PUT body (composed rows name their bases, no `qty`). Fixtures are the
  * prototype's product (`.harness/scratch/prototype/f45-sell-way-components`) shaped like
  * `app/intake/product_onboarding.py::_sell_way_row()` (see `app/tests/test_intake_product_api.py` `_b1`). No server. */
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -105,6 +105,55 @@ const field = (label: string) => within(editor()).getByLabelText(label) as HTMLI
 const edit = async (name: string) => userEvent.click(await screen.findByRole("button", { name: `編輯「${name}」` }));
 const finish = () => screen.getByRole("button", { name: "完成商品建檔 →" });
 const lastBody = () => mockSave.mock.calls[mockSave.mock.calls.length - 1][2];
+
+describe("edits during an earlier sell-way save", () => {
+  it("sends later money edits on Done and keeps them after remount", async () => {
+    let stored = way({ ...TRIAL, used_by: [] });
+    let resolveFirst!: (value: ProductSellWays) => void;
+    mockFetch.mockImplementation(async () => sellWays([stored]));
+    mockSave.mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve; }));
+    mockSave.mockImplementation(async (_brand, _product, body) => {
+      stored = way({ ...stored, price: Number(body[0].price), list_price: Number(body[0].list_price),
+        cost: Number(body[0].cost), shipping: Number(body[0].shipping), break_even: 140, cap_per_sale: 140 });
+      return sellWays([stored]);
+    });
+    renderStep();
+    await edit(TRIAL.name);
+    fireEvent.change(field("售價"), { target: { value: "180" } });
+    fireEvent.blur(field("售價"));
+    await waitFor(() => expect(mockSave).toHaveBeenCalledTimes(1));
+    fireEvent.change(field("原價"), { target: { value: "200" } });
+    fireEvent.change(field("成本"), { target: { value: "30" } });
+    fireEvent.change(field("運費成本"), { target: { value: "10" } });
+    await act(async () => resolveFirst(sellWays([way({ ...stored, price: 180 })])));
+    await userEvent.click(within(editor()).getByRole("button", { name: "完成" }));
+    await waitFor(() => expect(lastBody()[0]).toMatchObject({ price: "180", list_price: "200", cost: "30", shipping: "10" }));
+    cleanup();
+    renderStep();
+    await edit(TRIAL.name);
+    expect(field("原價").value).toBe("200");
+    expect(field("成本").value).toBe("30");
+    expect(field("運費成本").value).toBe("10");
+  });
+
+  it("does not replace a newer explicit cost with an old assumed-cost response", async () => {
+    const initial = way({ ...TRIAL, cost: null, assumptions: ["cost"], used_by: [] });
+    let resolveFirst!: (value: ProductSellWays) => void;
+    mockFetch.mockResolvedValue(sellWays([initial]));
+    mockSave.mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve; }));
+    mockSave.mockResolvedValue(sellWays([way({ ...initial, price: 180, cost: 30, assumptions: [] })]));
+    renderStep();
+    await edit(TRIAL.name);
+    fireEvent.change(field("售價"), { target: { value: "180" } });
+    fireEvent.blur(field("售價"));
+    await waitFor(() => expect(mockSave).toHaveBeenCalledTimes(1));
+    fireEvent.change(field("成本"), { target: { value: "30" } });
+    await act(async () => resolveFirst(sellWays([way({ ...initial, price: 180, cost: 99 })])));
+    expect(field("成本").value).toBe("30");
+    await userEvent.click(within(editor()).getByRole("button", { name: "完成" }));
+    await waitFor(() => expect(lastBody()[0]).toMatchObject({ price: "180", cost: "30" }));
+  });
+});
 
 /** A PUT answered like `product_onboarding._check_row_components` (F50 Contract I): every row is sent as typed, so a
  * composed row saved on blur before its contents are in is refused keyed by row; `qtyRefusals` maps a typed quantity

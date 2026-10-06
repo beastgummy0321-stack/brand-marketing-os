@@ -163,13 +163,17 @@ export function SellWaysStep({ brandId, productId, nav, back, onNext }: {
         const byId = new Map(res.sell_ways.filter((w) => w.id).map((w) => [w.id as string, w]));
         const byName = new Map(res.sell_ways.map((w) => [fold(w.name), w]));
         const serverFor = new Map(sent.map((s) => [s.key, (s.id && byId.get(s.id)) || byName.get(s.name)]));
+        // A receipt acknowledges the submitted snapshot, not edits made while it was pending.
+        const acknowledged = current.map((r) => {
+          const w = serverFor.get(r.key);
+          return w ? { ...r, id: w.id, draft: adoptAssumedCost(r.draft, w) } : r;
+        });
         // The server's view joins each row; a cost it assumed becomes the input's value.
         const next = rowsRef.current.map((r) => {
           const w = serverFor.get(r.key);
           return w ? { ...r, id: w.id, server: w, draft: adoptAssumedCost(r.draft, w) } : r;
         });
-        const saved = sendable(next);
-        savedSig.current = saved ? sig(saved, show) : signature;
+        savedSig.current = sig(acknowledged, show);
         if (alive.current) {
           setSaveError(null);
           rowErrorsRef.current = {};
