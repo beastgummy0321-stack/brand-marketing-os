@@ -53,7 +53,7 @@ export function ChangeComposer({ targets, month, pending, initial, initialDraft,
         const choices = targets.filter(t => item.kind === "copy" ? t.native_kind === "ad" : item.kind === "budget" ? t.native_kind !== "ad" : true);
         const previous = originalCopy(target);
         return <div key={index} className="rounded-lg border border-border p-4 space-y-3">
-          <div className="flex items-center justify-between"><h3 className="text-sm font-semibold">變更 {index + 1}</h3>{items.length > 1 && <Button aria-label={`移除變更 ${index + 1}`} size="icon-sm" variant="ghost" disabled={locked} onClick={() => setItems(rows => rows.filter((_, i) => i !== index))}><Trash2 /></Button>}</div>
+          <div className="flex items-center justify-between"><h3 className="text-sm font-semibold">變更 {index + 1}</h3>{items.length > 1 && <Button aria-label={`移除變更 ${index + 1}`} size="icon-sm" variant="ghost" busy={busy} disabledReason={pending ? "先核對上一筆保存結果" : undefined} onClick={() => setItems(rows => rows.filter((_, i) => i !== index))}><Trash2 /></Button>}</div>
           <div className="grid gap-3 xl:grid-cols-2">
             <label className="text-sm">變更內容<select aria-label={`變更 ${index + 1} 類型`} className="mt-1 w-full" value={item.kind} disabled={locked || Boolean(materialId)} onChange={e => update(index, blank(targets, e.target.value as ChangeKind))}>{Object.entries(kindLabel).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
             <label className="text-sm">操作對象<select aria-label={`變更 ${index + 1} 對象`} className="mt-1 w-full" value={item.target_id} disabled={locked} onChange={e => { const selected = targets.find(t => t.id === e.target.value); update(index, { target_id: e.target.value, ...(item.kind === "copy" && !materialId ? { after: originalCopy(selected) } : {}) }); }}><option value="">請選擇</option>{choices.map(t => <option key={t.id} value={t.id}>{targetLabel(t)}</option>)}</select></label>
@@ -69,7 +69,7 @@ export function ChangeComposer({ targets, month, pending, initial, initialDraft,
         </div>;
       })}
       {validation && <p role="alert" className="text-sm text-destructive">{validation}</p>}
-      <div className="flex flex-wrap items-center justify-between gap-3"><Button variant="outline" disabled={locked || Boolean(materialId) || items.length >= 10} onClick={() => setItems(rows => [...rows, blank(targets)])}><Plus />新增一項變更</Button><div className="flex gap-2"><Button variant="outline" disabled={busy || Boolean(pending)} onClick={onClose}>取消</Button><Button disabled={busy} onClick={save}>{busy ? "保存中…" : pending ? "重試同一份清單" : "保存清單，檢視並核准"}</Button></div></div>
+      <div className="flex flex-wrap items-center justify-between gap-3"><Button variant="outline" busy={busy} disabledReason={pending ? "先核對上一筆保存結果" : materialId ? "這份素材變更只處理目前這一項" : items.length >= 10 ? "一份清單最多十項變更" : undefined} onClick={() => setItems(rows => [...rows, blank(targets)])}><Plus />新增一項變更</Button><div className="flex gap-2"><Button variant="outline" busy={busy} disabledReason={pending ? "先核對上一筆保存結果" : undefined} onClick={onClose}>取消</Button><Button busy={busy} onClick={save}>{busy ? "保存中…" : pending ? "重試同一份清單" : "保存清單，檢視並核准"}</Button></div></div>
     </div>
   </section>;
 }

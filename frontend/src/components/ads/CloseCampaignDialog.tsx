@@ -52,7 +52,7 @@ function CoverageNote({ gap, syncError, syncing, reread, onSync, onSkip, closing
 }) {
   const n = gap.missing_days.length;
   const syncButton = (label: string) => (
-    <Button type="button" variant="outline" size="sm" onClick={() => onSync?.()} disabled={!onSync || syncing || closing}>
+    <Button type="button" variant="outline" size="sm" onClick={() => onSync?.()} busy={syncing || closing} disabledReason={!onSync ? "目前無法重新讀取平台" : undefined}>
       <RefreshCw size={14} className={syncing ? "animate-spin" : "hidden"} />
       {syncing ? "讀取中…" : label}
     </Button>
@@ -67,7 +67,7 @@ function CoverageNote({ gap, syncError, syncing, reread, onSync, onSkip, closing
         </p>
         <div className="flex flex-wrap gap-2">
           {syncButton("再讀一次")}
-          <Button type="button" variant="outline" size="sm" onClick={onSkip} disabled={syncing || closing}>
+          <Button type="button" variant="outline" size="sm" onClick={onSkip} busy={syncing || closing}>
             仍讀不到，跳過缺日結案
           </Button>
         </div>
@@ -247,10 +247,10 @@ export function CloseCampaignDialog({ brandId, campaign: c, onClose, onCampaignC
         )}
         {closeError && <p className="text-sm text-danger">{closeError}</p>}
         <DialogFooter>
-          <Button type="button" variant="outline" onClick={onClose} disabled={closing}>
+          <Button type="button" variant="outline" onClick={onClose} busy={closing}>
             取消
           </Button>
-          <Button type="button" onClick={() => void handleClose()} disabled={closing || confirmHeld}>
+          <Button type="button" onClick={() => void handleClose()} busy={closing || syncing} disabledReason={confirmHeld ? "先重新讀取缺少的日期，或確認略過" : undefined}>
             {closing ? "結案中…" : "確認結案"}
           </Button>
         </DialogFooter>

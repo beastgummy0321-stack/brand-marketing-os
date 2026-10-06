@@ -1,3 +1,4 @@
+import { campaignPath } from "@/lib/adsRoutes";
 import { isRejected } from "@/lib/http";
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
@@ -147,7 +148,7 @@ function Panel({ brandId, campaignId, scope, mode = "all", refreshKey = 0, onHan
     try {
       const result = await refreshHandoffSources(brandId, campaignId, signal);
       const jobIds = (result.jobs?.length ? result.jobs : [result.job]).map(job => job.id);
-      if (!signal.aborted) setCandidateRead(prev => ({ jobIds, round: (prev?.round ?? 0) + 1 }));
+      if (!signal.aborted) setCandidateRead(prev => ({ jobIds, round: (prev?.round ?? 0) + 1 })); // ZERO_OK: Local candidate-read attempt counter starts at zero before the first attempt.
     }
     catch (err) { if (!signal.aborted) setCandidateError(message(err)); }
     finally { if (!signal.aborted) setBusy(""); }
@@ -173,7 +174,7 @@ function Panel({ brandId, campaignId, scope, mode = "all", refreshKey = 0, onHan
     {data && stale && <LaunchStalePanel brandId={brandId} campaignId={campaignId} stale={stale} items={data.items}
       onDecided={(value, outcome) => { setData(value); setLaunchOutcome(outcome); setReload(n => n + 1); }}
       onReload={outcome => { setLaunchOutcome(outcome ?? null); setReload(n => n + 1); }} />}
-    {regular && <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-lg font-semibold">人工交接與平台核對</h2><p className="text-sm text-muted-foreground">平台操作完成後，逐項回報並讀回核對；找不到物件時保留待核對，不要再建立一次。</p></div><Button variant="outline" disabled={Boolean(busy)} onClick={() => { setCandidateError(""); setLaunchOutcome(null); setReload(n => n + 1); }}>重新讀取</Button></div>}
+    {regular && <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-lg font-semibold">人工交接與平台核對</h2><p className="text-sm text-muted-foreground">平台操作完成後，逐項回報並讀回核對；找不到物件時保留待核對，不要再建立一次。</p></div><Button variant="outline" busy={Boolean(busy)} onClick={() => { setCandidateError(""); setLaunchOutcome(null); setReload(n => n + 1); }}>重新讀取</Button></div>}
     {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
     {!data && !error && <p role="status">讀取交接內容…</p>}
     {data && <>
@@ -183,9 +184,9 @@ function Panel({ brandId, campaignId, scope, mode = "all", refreshKey = 0, onHan
       {mode !== "new-ad" && regular && <>
         <div className="flex flex-wrap items-end gap-3">
           {sources.length > 0 && <label className="text-sm">候選來源帳戶<select className="mt-1 block w-full" value={source} disabled={Boolean(busy)} onChange={e => void loadSource(e.target.value)}>{sources.map(row => <option key={`${row.platform}:${row.account_id}`} value={`${row.platform}:${row.account_id}`}>{row.label} · {row.name || row.account_id}</option>)}</select></label>}
-          {rootCursor && <Button variant="outline" disabled={Boolean(busy)} onClick={() => void loadSource(source, rootCursor)}>更多平台活動</Button>}
-          {entityCursor && <Button variant="outline" disabled={Boolean(busy)} onClick={() => void moreEntities()}>更多已讀回物件</Button>}
-          <Button variant="outline" disabled={Boolean(busy)} onClick={() => void refreshSources()}>更新平台候選</Button>
+          {rootCursor && <Button variant="outline" busy={Boolean(busy)} onClick={() => void loadSource(source, rootCursor)}>更多平台活動</Button>}
+          {entityCursor && <Button variant="outline" busy={Boolean(busy)} onClick={() => void moreEntities()}>更多已讀回物件</Button>}
+          <Button variant="outline" busy={Boolean(busy)} onClick={() => void refreshSources()}>更新平台候選</Button>
         </div>
         {candidateRead && <CandidateReadLine key={candidateRead.round} brandId={brandId} campaignId={campaignId} jobIds={candidateRead.jobIds} onFinished={() => setReload(n => n + 1)} />}
         {candidateError && <p role="alert" className="text-sm text-warning">候選清單暫時不完整：{candidateError}。可重讀或展開進階欄位核對識別。</p>}
@@ -247,12 +248,12 @@ function HandoffRow({ item, parent, nodes, source, busy, onReport, onCheck, onRe
       </Disclosure>
       {item.planned_kind === "ad" && <label className="flex items-start gap-2 text-sm"><input type="checkbox" checked={identity.user_verified} disabled={busy} onChange={e => setIdentity(old => ({ ...old, user_verified: e.target.checked }))} />我已人工比較這則廣告的圖片／影片與核准素材（只記人工核對）</label>}
       {missingParent && <p className="text-sm text-warning">請先核對上層物件，再選擇這一項。</p>}
-      <div className="flex flex-wrap items-center gap-2"><Button variant="outline" disabled={busy || Boolean(item.reported_at)} disabledReason={item.reported_at ? `${formatInstant(item.reported_at, timezone, "md_hm")} 已回報；接著讀回核對這一項` : undefined} onClick={onReport}>{item.reported_at ? "已回報人工操作" : "我已到平台操作"}</Button><Button disabled={busy || !ready || missingParent || item.status === "stale"} disabledReason={busy ? undefined : checkBlocked} onClick={() => onCheck({ ...identity, platform: identity.platform.trim(), source_account: identity.source_account.trim(), native_kind: identity.native_kind.trim(), native_id: identity.native_id.trim() })}>{item.status === "unknown" ? "重新讀回核對" : "讀回並核對此物件"}</Button>
+      <div className="flex flex-wrap items-center gap-2"><Button variant="outline" busy={busy} disabledReason={item.reported_at ? `${formatInstant(item.reported_at, timezone, "md_hm")} 已回報；接著讀回核對這一項` : undefined} onClick={onReport}>{item.reported_at ? "已回報人工操作" : "我已到平台操作"}</Button><Button busy={busy} disabledReason={busy ? undefined : checkBlocked} onClick={() => onCheck({ ...identity, platform: identity.platform.trim(), source_account: identity.source_account.trim(), native_kind: identity.native_kind.trim(), native_id: identity.native_id.trim() })}>{item.status === "unknown" ? "重新讀回核對" : "讀回並核對此物件"}</Button>
         {failedRead && <p data-slot="readback-error" className="text-sm text-warning">{failedRead}</p>}</div>
       {item.entity_id && item.native_kind === "ad" && item.status !== "stale" && <Disclosure label="已停用的廣告：重新檢視方案">
         <p className="mb-3 text-sm text-muted-foreground">若你已在平台停用這則廣告，可讀回確認後重審新方案。仍啟用、無法讀回或只有設定差異時，都不會開放重建。</p>
         <label className="block text-sm">重審原因<Textarea value={reconsiderReason} disabled={busy} onChange={e => setReconsiderReason(e.target.value)} maxLength={2000} /></label>
-        <Button className="mt-3" variant="outline" disabled={busy || !reconsiderReason.trim()} onClick={() => onReconsider(reconsiderReason.trim())}>核對已停用，重審新方案</Button>
+        <Button className="mt-3" variant="outline" busy={busy} disabledReason={!reconsiderReason.trim() ? "請填寫重新考慮的原因" : undefined} onClick={() => onReconsider(reconsiderReason.trim())}>核對已停用，重審新方案</Button>
       </Disclosure>}
     </div>
   </article>;
@@ -276,7 +277,7 @@ function NewAdForm({ brandId, campaignId, scope, data }: { brandId: string; camp
   useEffect(() => { lifetime.current = new AbortController(); return () => lifetime.current.abort(); }, []);
   const groups = data.destinations.filter(node => node.native_kind !== "ad" && node.parent_native_id);
   const locked = busy || Boolean(pending);
-  const changeHref = (id: string) => `/brands/${encodeURIComponent(brandId)}/ads/campaigns/${encodeURIComponent(campaignId)}?tab=changes&change=${encodeURIComponent(id)}`;
+  const changeHref = (id: string) => campaignPath(brandId, campaignId, {tab: "changes", change: id});
   async function save() {
     if (busy || pending?.changeSetId) return;
     const placement = data.ready_placements.find(row => row.id === placementId);
@@ -312,7 +313,7 @@ function NewAdForm({ brandId, campaignId, scope, data }: { brandId: string; camp
       <label className="block text-sm">新增理由<Textarea value={reason} maxLength={2000} disabled={locked} onChange={e => setReason(e.target.value)} /></label>
       <p className="text-xs text-muted-foreground">沿用既有父層預算仍須在核准時核對，不能假定新增廣告不增加花費。</p>
       {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
-      {pending?.changeSetId ? <div className="flex flex-wrap gap-2"><Button asChild><Link to={changeHref(pending.changeSetId)}>前往檢視並核准</Link></Button><Button variant="outline" onClick={() => { sessionStorage.removeItem(storageKey); setPending(null); setTitle(""); setPlacementId(""); setDestination(""); setReason(""); setError(""); }}>建立另一份新增清單</Button></div> : <Button disabled={busy || (!pending && (!data.ready_placements.length || !groups.length))} disabledReason={busy || pending ? undefined : !data.ready_placements.length ? "還沒有已確認、原檔可用的素材：先在素材頁確認版本" : !groups.length ? data.destinations_note ?? "這個活動在平台上還沒有可加入的投放組" : undefined} onClick={() => void save()}>{busy ? "保存中…" : pending ? "重試同一份新增清單" : "保存清單，檢視並核准"}</Button>}
+      {pending?.changeSetId ? <div className="flex flex-wrap gap-2"><Button asChild><Link to={changeHref(pending.changeSetId)}>前往檢視並核准</Link></Button><Button variant="outline" onClick={() => { sessionStorage.removeItem(storageKey); setPending(null); setTitle(""); setPlacementId(""); setDestination(""); setReason(""); setError(""); }}>建立另一份新增清單</Button></div> : <Button busy={busy} disabledReason={busy || pending ? undefined : !data.ready_placements.length ? "還沒有已確認、原檔可用的素材：先在素材頁確認版本" : !groups.length ? data.destinations_note ?? "這個活動在平台上還沒有可加入的投放組" : undefined} onClick={() => void save()}>{busy ? "保存中…" : pending ? "重試同一份新增清單" : "保存清單，檢視並核准"}</Button>}
     </div>
   </section>;
 }

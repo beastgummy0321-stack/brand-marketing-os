@@ -54,8 +54,8 @@ export function PublishPlatform({ brandId, campaignId, name, view, platform, onV
     const byKey = new Map(item.fields.map((f) => [f.key, f]));
     const reason = readbackReason(item);
     const action = done ? <Chip tone="ok">已核對</Chip>
-      : awaitsReadback(item.state) ? <Button size="sm" variant="ghost" disabled={busy !== null} onClick={() => void unreport(item)}>{busy === item.id ? "取消中…" : "取消"}</Button>
-      : <Button size="sm" variant="outline" disabled={busy !== null} onClick={() => void report(item)}>
+      : awaitsReadback(item.state) ? <Button size="sm" variant="ghost" busy={busy !== null} onClick={() => void unreport(item)}>{busy === item.id ? "取消中…" : "取消"}</Button>
+      : <Button size="sm" variant="outline" busy={busy !== null} onClick={() => void report(item)}>
         {busy === item.id ? "回報中…" : item.state === "mismatch" ? "我改好了" : "我建好了"}
       </Button>;
     return (
@@ -96,11 +96,11 @@ export function PublishPlatform({ brandId, campaignId, name, view, platform, onV
       </section>
       {error && <p role="alert" className="text-sm text-danger">{error}</p>}
       <ActionBar back={{ label: "還沒做完，先離開", to: `${campaignPath(brandId, campaignId)}?tab=changes` }}
-        hint={allVerified || toRead ? undefined : "先勾起已建好的項目"}>
+        hint={undefined}>
         {allVerified ? (
           <Button asChild><Link to={campaignPath(brandId, campaignId)}>回活動總覽 →</Link></Button>
         ) : (
-          <Button disabled={busy !== null || toRead === 0} onClick={() => void readBack()}>
+          <Button busy={busy !== null} disabledReason={toRead === 0 ? "先勾起已建好的項目" : undefined} onClick={() => void readBack()}>
             {busy === "readback" ? "讀回中…" : `我在 ${platform.label} 做完了，讀回核對${toRead ? `（${toRead} 項）` : ""} →`}
           </Button>
         )}

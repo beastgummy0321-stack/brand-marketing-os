@@ -394,7 +394,7 @@ export function VerifyPage({ brandId, campaignId, setId }: {
         {actionError && <p role="alert" className="text-sm text-destructive">{actionError}</p>}
         <div className="flex-1" />
         <ActionBar>
-          <Button variant="outline" disabled={busy} onClick={() => void handleCheckAll()}>{busy ? "核對中…" : "⟳ 全部重新核對"}</Button>
+          <Button variant="outline" busy={busy} onClick={() => void handleCheckAll()}>{busy ? "核對中…" : "⟳ 全部重新核對"}</Button>
           {nextOrHome}
         </ActionBar>
       </div>
@@ -407,7 +407,7 @@ export function VerifyPage({ brandId, campaignId, setId }: {
 
   const kind = kindRaw as Kind;
   const again = (
-    <Button variant="outline" disabled={busy} onClick={() => void handleCheck(item)}>
+    <Button variant="outline" busy={busy} onClick={() => void handleCheck(item)}>
       {busy ? "核對中…" : "⟳ 重新核對"}
     </Button>
   );

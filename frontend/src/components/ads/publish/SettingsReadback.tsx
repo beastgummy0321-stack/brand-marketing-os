@@ -20,8 +20,8 @@ export function UnreadAllBar({ count, reasons, platform, busy = false, running =
         <b>{count} 項讀不到</b>
         {reason && <span className="ml-1 text-xs text-muted-foreground">（{reason}）</span>}
       </span>
-      <Button disabled={busy} onClick={onAll}>{running ? "記錄中…" : `我在 ${platform} 都看過了，全部標記`}</Button>
-      <Button variant="outline" disabled={busy} onClick={onEach}>逐項標記</Button>
+      <Button busy={busy} onClick={onAll}>{running ? "記錄中…" : `我在 ${platform} 都看過了，全部標記`}</Button>
+      <Button variant="outline" busy={busy} onClick={onEach}>逐項標記</Button>
     </div>
   );
 }
@@ -70,7 +70,7 @@ export function SettingsReadback({ brandId, campaignId, readback, platform = "�
         <div>
           {fields.map((field) => (
             <ReadbackRow key={field.key} field={field} platform={platform} action={field.state === "unreadable" ? (
-              <Button size="sm" variant="outline" disabled={busy !== null} onClick={() => void confirm(field.key)}>
+              <Button size="sm" variant="outline" busy={busy !== null} onClick={() => void confirm(field.key)}>
                 {busy === field.key ? "記錄中…" : "我看過了，一樣"}
               </Button>
             ) : undefined} />

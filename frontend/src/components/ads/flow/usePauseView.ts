@@ -1,3 +1,4 @@
+import { campaignPath } from "@/lib/adsRoutes";
 /** F45-I06 (ads.md §6.49): the pause page's own read of one ad (Contract P) and the pieces of the page that
  * depend only on it and on the URL — the back link, the dates it prints, the window line. Root cause it closes
  * (drill 10 §1 #4): the page used to find its ad only through a home-queue row, so every entry that is not the
@@ -32,7 +33,7 @@ export interface PauseBack { label: string; to: string }
 export function pauseBack(brandId: string, campaignId: string, from: string | null, ref: string | null): PauseBack {
   const home = { label: "投放中心", to: `/brands/${brandId}/ads` };
   const kind = from as PauseFrom | null;
-  if (kind === "perf") return { label: "成效", to: `/brands/${brandId}/ads/campaigns/${campaignId}?tab=perf` };
+  if (kind === "perf") return { label: "成效", to: campaignPath(brandId, campaignId, {tab: "perf"}) };
   if (kind === "review" && ref) return { label: "覆盤", to: reviewRoundPath(brandId, campaignId, ref, "prepare") };
   if (kind === "verify" && ref) return { label: "核對結果", to: changeStepPath(brandId, campaignId, ref, "verify") };
   return home;

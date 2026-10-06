@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { Button } from "@/components/layout/ui/button";
 import { Input } from "@/components/layout/ui/input";
 import { Skeleton } from "@/components/layout/Skeleton";
-import { formatCount, formatCurrency } from "@/lib/format";
+import { formatCount, formatMoney } from "@/lib/format";
 import type { ChangeItem, MonthlyBudget, OngoingOwner } from "@/lib/adsChangeApi";
 import type { QueueScale, TriageItem } from "@/lib/adsTriageApi";
 import type { AnglesStatus } from "@/lib/adsAnglesApi";
@@ -27,7 +27,7 @@ export function NextOrHome({ next, homeHref, quiet = false }: { next: NextAction
   return <Button variant={variant} asChild><Link to={next.href}>{next.closeout ? "結案這一期" : "下一件"} →</Link></Button>;
 }
 
-const nt = (value: number | null) => (value === null ? formatCurrency(null) : `NT$ ${perSaleAmount(value)}`);
+const nt = (value: number | null, currency: string | null = null) => value === null ? "尚待確認" : formatMoney(value, currency ?? "幣別不明");
 
 /** The stop-loss meter (prototype F45 `evidence()`): with sales, the cost per sale against the cap; without, the
  * spend against the served 沒賣出 line (`unsoldLine`, F48 Contract R-API). The axis is the kit's cost axis around a
@@ -146,8 +146,8 @@ export const ANGLE_MAX = 40;
  * 再點「＋ 自訂」換成手動輸入，不是互斥的兩套 UI。選到的內容（含自訂）就是要送出的 `angle`，
  * 不選就是 `undefined`（`buildPauseDraftItem` 對空字串／未選一律不送這個欄位）。`onRetry` 只在「讀取本身失敗」
  * （Contract K，不是後端判斷失敗）時給：多一塊 `ReadFailed` 可重試，「＋ 自訂」照樣可用。 */
-export function PauseLearnCard({ status, candidates, angle, customOpen, disabled, onSelect, onOpenCustom, onCustomChange, onRetry }: {
-  status: AnglesStatus; candidates: string[]; angle: string; customOpen: boolean; disabled: boolean;
+export function PauseLearnCard({ status, candidates, angle, customOpen, busy, onSelect, onOpenCustom, onCustomChange, onRetry }: {
+  status: AnglesStatus; candidates: string[]; angle: string; customOpen: boolean; busy: boolean;
   onSelect: (value: string) => void; onOpenCustom: () => void; onCustomChange: (value: string) => void;
   onRetry?: () => void;
 }) {
@@ -167,10 +167,10 @@ export function PauseLearnCard({ status, candidates, angle, customOpen, disabled
       <div className="flex flex-wrap items-center gap-1.5">
         {status === "pending" && [0, 1, 2].map((i) => <Skeleton key={i} className="h-7 w-16 rounded-full" />)}
         {status === "ready" && candidates.map((c) => (
-          <TagToggle key={c} on={!customOpen && angle === c} disabled={disabled} onClick={() => onSelect(c)}>{c}</TagToggle>
+          <TagToggle key={c} on={!customOpen && angle === c} busy={busy} onClick={() => onSelect(c)}>{c}</TagToggle>
         ))}
         {status !== "pending" && (
-          <TagToggle on={customOpen} disabled={disabled} onClick={onOpenCustom}>＋ 自訂</TagToggle>
+          <TagToggle on={customOpen} busy={busy} onClick={onOpenCustom}>＋ 自訂</TagToggle>
         )}
       </div>
       {customOpen && (
@@ -179,7 +179,7 @@ export function PauseLearnCard({ status, candidates, angle, customOpen, disabled
           aria-label="自訂主打"
           value={angle}
           maxLength={ANGLE_MAX}
-          disabled={disabled}
+          disabled={busy}
           onChange={(e) => onCustomChange(e.target.value)}
           placeholder="輸入這則廣告主打什麼"
         />
@@ -224,8 +224,9 @@ function Swatch({ tone }: { tone: keyof typeof SWATCH_TONE }) {
 }
 
 /** `YYYY-MM` → the month number the copy names (「10 月」). */
-function monthOf(month: string): number {
-  return Number(month.split("-")[1]) || 0;
+function monthOf(month: string): number | string {
+  const value = Number(month.split("-")[1]);
+  return Number.isInteger(value) && value >= 1 && value <= 12 ? value : "不明";
 }
 /** A month-budget amount as the prototype prints it (bare, thousands-separated); `null` is the honest unknown. */
 function money(value: number | null): string {
@@ -259,7 +260,7 @@ function ReserveTerm() {
 export interface ExtraBasis { month: number; days: number; period_total: number | null }
 /** The launch's spend words: 「{N} 月的 {days} 天要花 X（整期 Y）」 with a basis (no 整期 part without a total), else the
  * plain 「這期要花 X」 (an older backend). Every number is served; nothing is recomputed here. */
-function extraSpendText(extra: number, basis: ExtraBasis | null): string {
+function extraSpendText(extra: number | null, basis: ExtraBasis | null): string {
   if (!basis) return `這期要花 ${money(extra)}`;
   const whole = basis.period_total === null ? "" : `（整期 ${money(basis.period_total)}）`;
   return `${basis.month} 月的 ${basis.days} 天要花 ${money(extra)}${whole}`;
@@ -284,17 +285,17 @@ function reserveLine(owners: OngoingOwner[]): string | null {
  * （design-system §7「誠實的空狀態」）。`launch`（F41-I05 第一次上架清單，原型 `#/publish` 的 `budgetBar()`）：
  * 這段叫「這期要花」，放不下時截到剩下的額度、改畫危險色，最後一格印「不夠 X」。 */
 function BudgetBar({ budget, extra = 0, launch = false, extraText }: {
-  budget: MonthlyBudget; extra?: number; launch?: boolean;
+  budget: MonthlyBudget; extra?: number | null; launch?: boolean;
   /** The extra segment's legend words (`extraSpendText`); default 「這次要花 X」. */
   extraText?: string;
 }) {
   const { amount, known_spend, ongoing_estimate, reserved_increases, available } = budget;
   const reserved = ongoing_estimate === null ? null : ongoing_estimate + reserved_increases;
-  const known = amount !== null && amount > 0 && known_spend !== null && reserved !== null && available !== null;
+  const known = extra !== null && amount !== null && amount > 0 && known_spend !== null && reserved !== null && available !== null;
   const pct = (v: number) => Math.max(0, Math.min(100, (v / (amount as number)) * 100));
-  const left = available === null ? null : available - extra;
+  const left = available === null || extra === null ? null : available - extra;
   const short = launch && left !== null && left < 0;
-  const extraWidth = launch && available !== null ? Math.min(extra, Math.max(0, available)) : extra;
+  const extraWidth = extra === null ? null : launch && available !== null ? Math.min(extra, Math.max(0, available)) : extra;
   const extraTone = short ? "danger" : "success";
   return (
     <div className="mt-2 space-y-1.5">
@@ -303,7 +304,7 @@ function BudgetBar({ budget, extra = 0, launch = false, extraText }: {
           <>
             <div className="bg-chart-rest" style={{ width: `${pct(known_spend as number)}%` }} />
             <div className="bg-border" style={{ width: `${pct(reserved as number)}%` }} />
-            {extra > 0 && <div className={SWATCH_TONE[extraTone]} style={{ width: `${pct(extraWidth)}%` }} />}
+            {extra !== null && extra > 0 && extraWidth !== null && <div className={SWATCH_TONE[extraTone]} style={{ width: `${pct(extraWidth)}%` }} />}
             <div className="bg-primary" style={{ width: `${pct(Math.max(0, left as number))}%` }} />
           </>
         )}
@@ -311,7 +312,7 @@ function BudgetBar({ budget, extra = 0, launch = false, extraText }: {
       <div className="numeric flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
         <span className="inline-flex items-center gap-1.5"><Swatch tone="chart-rest" />已花 {money(known_spend)}</span>
         <span className="inline-flex items-center gap-1.5"><Swatch tone="border" /><ReserveTerm /> {money(reserved)}</span>
-        {extra > 0 && <span className="inline-flex items-center gap-1.5"><Swatch tone={extraTone} />{extraText ?? `這次要花 ${money(extra)}`}</span>}
+        {(extra === null || extra > 0) && <span className="inline-flex items-center gap-1.5"><Swatch tone={extraTone} />{extraText ?? `這次要花 ${money(extra)}`}</span>}
         <span className="inline-flex items-center gap-1.5"><Swatch tone="primary" />{short ? `不夠 ${money(-(left as number))}` : `還剩 ${money(left)}`}</span>
       </div>
     </div>
@@ -330,7 +331,7 @@ function BudgetBar({ budget, extra = 0, launch = false, extraText }: {
  * F49 Contract Q（drill-11 Q4）：`returnTo`＝呼叫這張卡的頁面自己的路徑；「設定／提高 N 月月預算」連結帶
  * `&return=<returnTo>`，首頁月預算存好後給「← 回到剛才的核准」（F49-I08）。選填：沒給就是原本的連結。 */
 export function BudgetFitCard({ read, month, extra = 0, premiseChanged, busy, onRecheck, budgetHref, returnTo, launch }: {
-  read: ApiRead<MonthlyBudget | null>; month: string; extra?: number;
+  read: ApiRead<MonthlyBudget | null>; month: string; extra?: number | null;
   premiseChanged: boolean; busy: boolean; onRecheck: () => void; budgetHref: string;
   returnTo?: string;
   launch?: { strategyHref: string; extraBasis?: ExtraBasis | null };
@@ -342,7 +343,7 @@ export function BudgetFitCard({ read, month, extra = 0, premiseChanged, busy, on
   const budget = read.data;
   const n = monthOf(budget?.month ?? month);
   const launchText = launch ? extraSpendText(extra, launch.extraBasis ?? null) : undefined;
-  const fits = budget?.available !== null && budget?.available !== undefined && budget.available - extra >= 0;
+  const fits = extra !== null && budget?.available !== null && budget?.available !== undefined && budget.available - extra >= 0;
   const state = premiseChanged ? "recheck" : budget && budget.amount === null ? "unset"
     : launch && budget && budget.available !== null && !fits ? "short" : "fit";
   const reserved = budget && budget.ongoing_estimate !== null ? budget.ongoing_estimate + budget.reserved_increases : null;
@@ -373,7 +374,7 @@ export function BudgetFitCard({ read, month, extra = 0, premiseChanged, busy, on
       {state === "recheck" && (
         <div className="mt-3 flex flex-wrap items-center gap-3.5">
           <p className="text-sm"><b>計畫、素材或月份已改變</b><span className="text-muted-foreground">，這批內容要重新對一次</span></p>
-          <Button variant="outline" disabled={busy} onClick={onRecheck}>{busy ? "檢查中…" : "重新檢查"}</Button>
+          <Button variant="outline" busy={busy} onClick={onRecheck}>{busy ? "檢查中…" : "重新檢查"}</Button>
         </div>
       )}
       {state === "unset" && (
@@ -422,7 +423,7 @@ export function BudgetEvidence({ item, scale, bestAdThumbnailUrl, fit }: {
   const before = scale ? scale.from : item?.before.daily_amount ?? null;
   const after = scale ? scale.to : item?.after.daily_amount ?? null;
   const pct = before !== null && after !== null && before > 0 ? Math.round(((after - before) / before) * 100) : null;
-  const extra = scale?.month.extra_needed ?? 0;
+  const extra = scale?.month.extra_needed ?? null;
   const targetValue = scale?.target.value ?? null;
   const cost = scale?.cost_per_result ?? null;
   const meterMax = targetValue !== null && targetValue > 0 ? rulerScale(targetValue, cost === null ? [] : [cost]).max : null;
@@ -442,7 +443,7 @@ export function BudgetEvidence({ item, scale, bestAdThumbnailUrl, fit }: {
           <div className="text-right">
             <p className="text-xs text-muted-foreground">每日預算</p>
             <p className="numeric flex items-center gap-2 text-lg font-semibold">
-              <span>{formatTargetAmount(before)} → {formatTargetAmount(after)}</span>
+              <span>{nt(before, scale?.owner.currency ?? null)} → {nt(after, scale?.owner.currency ?? null)}</span>
               {pct !== null && <Chip tone="ok">{pct > 0 ? "+" : ""}{pct}%</Chip>}
             </p>
           </div>

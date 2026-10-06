@@ -1,3 +1,4 @@
+import { campaignPath } from "@/lib/adsRoutes";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { Badge } from "@/components/layout/ui/badge";
@@ -433,7 +434,7 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
   const pauseTriage = pauseView?.triage ?? null;
   const crumb = pauseMode
     ? [{ label: "投放中心", href: homeHref },
-      ...(pauseTriage ? [{ label: pauseTriage.campaign_name, href: `/brands/${brandId}/ads/campaigns/${campaignId}?tab=perf` }] : []),
+      ...(pauseTriage ? [{ label: pauseTriage.campaign_name, href: campaignPath(brandId, campaignId, {tab: "perf"}) }] : []),
       { label: "暫停" }]
     : [{ label: "投放中心", href: homeHref }, { label: "確認" }];
   const readLoading = pauseMode ? pauseRead.status === "loading" : queueRead.status === "loading" && !queue;
@@ -548,7 +549,7 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
   // F40-I08: why 核准 is grey on a budget set, printed beside the button (prototype `#/approve` `.reason`):
   // (iii) the premise changed → 重新檢查 first; (ii) the month has no budget yet → set it first. Same inputs as
   // the 本月預算放得下 card, so the card's state and the button's reason can never disagree.
-  const budgetMonthNumber = Number((budgetRead.data?.month ?? budgetMonth).split("-")[1]) || 0;
+  const budgetMonthNumber = Number((budgetRead.data?.month ?? budgetMonth).split("-")[1]) || "不明";
   const approveBlock = kind !== "budget" ? null
     : premiseSet ? "內容變了，先按「重新檢查」"
     : budgetRead.data?.amount === null ? `要先設 ${budgetMonthNumber} 月月預算`
@@ -667,7 +668,7 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
             onRetry={angleRead.status === "error" ? angleRead.reload : undefined}
             angle={angleChoice}
             customOpen={angleCustomOpen}
-            disabled={busy}
+            busy={busy}
             onSelect={(c) => { setAngleChoice(c); setAngleCustomOpen(false); }}
             onOpenCustom={() => { setAngleCustomOpen(true); setAngleChoice(""); }}
             onCustomChange={(v) => setAngleChoice(v.slice(0, ANGLE_MAX))}
@@ -686,10 +687,10 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
           to: editCopyHref ?? cleanupBackHref ?? abBackHref ?? homeHref,
         }}
         exit={settled ? undefined : { label: "先不要，回投放中心", to: homeHref }}
-        hint={settled || drift ? undefined : nothingPicked ? "一則都沒勾，沒有可核准的" : "核准不會改動平台"}
+        hint={settled || drift ? undefined : nothingPicked ? undefined : "核准不會改動平台"}
       >
         {!settled && (
-          <Button variant="outline" disabled={busy} onClick={openSheet}>拒絕／暫緩</Button>
+          <Button variant="outline" busy={busy} onClick={openSheet}>拒絕／暫緩</Button>
         )}
         {ahead && changeSet ? (
           <Button asChild><Link to={changeStepPath(brandId, campaignId, changeSet.id, ahead)}>{AHEAD_LABEL[ahead]} →</Link></Button>
@@ -697,8 +698,7 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
           <AdoptLatestButton busy={busy} onClick={() => void adopt()} />
         ) : !settled ? (
           <>
-            {approveBlock && <span role="status" className="inline-flex items-center gap-1.5 text-xs font-medium text-warning">⚠ {approveBlock}</span>}
-            <Button disabled={busy || nothingPicked || approveBlock !== null} onClick={() => void handleApprove()}>{busy ? "處理中…" : `${approveLabel} →`}</Button>
+            <Button busy={busy} disabledReason={approveBlock ?? (nothingPicked ? "一則都沒勾，沒有可核准的" : undefined)} onClick={() => void handleApprove()}>{busy ? "處理中…" : `${approveLabel} →`}</Button>
           </>
         ) : <NextOrHome next={nextAction} homeHref={homeHref} />}
       </ActionBar>}
@@ -706,8 +706,8 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
       {sheetOpen && (
         <DecisionSheet
           actions={<>
-            <Button variant="outline" disabled={busy} onClick={() => setSheetOpen(false)}>取消</Button>
-            <Button disabled={busy} onClick={() => void handleSaveDecision()}>{busy ? "保存中…" : "保存"}</Button>
+            <Button variant="outline" busy={busy} onClick={() => setSheetOpen(false)}>取消</Button>
+            <Button busy={busy} onClick={() => void handleSaveDecision()}>{busy ? "保存中…" : "保存"}</Button>
           </>}
         >
           <Segmented
