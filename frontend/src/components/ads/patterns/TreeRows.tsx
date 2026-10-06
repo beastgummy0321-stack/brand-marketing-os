@@ -13,6 +13,7 @@ export interface TreeNodeInfo { kind: string; name: string; note?: ReactNode }
 export interface TreeLeaf {
   key: string;
   name: string;
+  note?: ReactNode;
   thumbnailUrl: string | null;
   missing?: boolean;
   missingLabel?: string;
@@ -52,8 +53,9 @@ export function TreeRows({ root, groups }: { root: TreeNodeInfo; groups: TreeGro
                     {leaf.missing
                       ? <span aria-hidden="true" className="size-7 shrink-0 rounded-lg border-[1.5px] border-dashed border-grade-thin bg-muted" />
                       : <Thumb url={leaf.thumbnailUrl} size={28} />}
-                    <span className="text-xs font-medium [overflow-wrap:anywhere]">
+                    <span className="min-w-0 text-xs font-medium [overflow-wrap:anywhere]">
                       {leaf.missing ? <span className="text-muted-foreground">{leaf.missingLabel ?? "缺素材"}</span> : leaf.name}
+                      {leaf.note && <span data-part="note" className="mt-1 block font-normal leading-relaxed text-muted-foreground">{leaf.note}</span>}
                     </span>
                   </span>
                   {(leaf.chip || leaf.value !== undefined) && (

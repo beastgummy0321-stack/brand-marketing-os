@@ -38,17 +38,24 @@ function leafValue(a: StructureAd, breakEven: number | null, rules: AdsRules | n
 
 function leafOf(a: StructureAd, i: number, breakEven: number | null, rules: AdsRules | null): TreeLeaf {
   const key = a.entity_id ?? a.ad_id ?? `ad-${i}`;
+  const binding = a.assignment;
+  const note = binding ? <>
+    <span className="block">對誰：{binding.customer_group_label}</span>
+    <span className="block">情境：{binding.scene || "尚未指定情境"}</span>
+    <span className="block">優惠：{binding.offer_label}</span>
+    {binding.carry_from_ad_id && <span className="block">沿用：{binding.carry_from_ad_label}{binding.carry_placement_revision !== null ? `・素材第 ${binding.carry_placement_revision} 版` : "・原素材版本讀不到"}</span>}
+  </> : a.ad_id === null ? "平台廣告，未綁定本機顧客、情境與優惠" : undefined;
   // Not on a platform yet: nothing to grade, nothing spent. F49 Contract T: its material cell is the slot's served
   // chip (`slot_label`, from the one slot read); a slot not ready with no picture yet keeps the dashed tile beside the
   // ad's name. A failed slot read serves no state: the name alone, never a guessed word.
   if (a.entity_id === null) {
     const state = a.slot_state ?? null;
     const chip = state && a.slot_label ? <Chip tone={STATE_TONE[state]}>{a.slot_label}</Chip> : undefined;
-    if (state && state !== "ready" && !a.thumbnail_url) return { key, name: a.name, thumbnailUrl: null, missing: true, missingLabel: a.name, chip };
-    return { key, name: a.name, thumbnailUrl: a.thumbnail_url, chip };
+    if (state && state !== "ready" && !a.thumbnail_url) return { key, name: a.name, note, thumbnailUrl: null, missing: true, missingLabel: a.name, chip };
+    return { key, name: a.name, note, thumbnailUrl: a.thumbnail_url, chip };
   }
   return {
-    key, name: a.name, thumbnailUrl: a.thumbnail_url, dimmed: a.closing,
+    key, name: a.name, note, thumbnailUrl: a.thumbnail_url, dimmed: a.closing,
     chip: a.closing ? <Chip>關閉中</Chip> : <GradeTermChip grade={a.grade} label={a.grade_label} reasonCode={a.reason_code} />,
     value: leafValue(a, breakEven, rules),
   };
@@ -57,7 +64,7 @@ function leafOf(a: StructureAd, i: number, breakEven: number | null, rules: AdsR
 function groupOf(g: StructureGroup, i: number, breakEven: number | null, rules: AdsRules | null): TreeGroup {
   return {
     key: g.group_id ?? `group-${i}`, kind: "廣告組", name: g.name,
-    note: `${daily(g.daily_budget)}・${g.ads.length} 則`,
+    note: <>{g.role_label && <span className="block">{g.role_label}</span>}{`${daily(g.daily_budget)}・${g.ads.length} 則`}</>,
     leaves: g.ads.map((a, j) => leafOf(a, j, breakEven, rules)),
   };
 }
@@ -94,6 +101,16 @@ export function StructureTab({ brandId, campaign: c, planKey }: {
       )}
       {data && groups.length > 0 && (
         <>
+          {data.plan && <div role="status" className="mb-3 text-xs leading-relaxed text-muted-foreground">
+            <p>{data.plan.state === "modified" ? "安排已修改；原接受紀錄僅供追溯。" : data.plan.accepted_revision ? "以下是已儲存的實際安排。" : "這份安排尚無策略接受版本。"}</p>
+            {data.plan.reasons.map((reason, i) => <p key={`${reason.code}-${i}`}>{reason.message}</p>)}
+            <details className="mt-1">
+              <summary className="cursor-pointer">查看安排版本</summary>
+              <p className="[overflow-wrap:anywhere]">目前版本：{data.plan.revision || "尚未綁定"}</p>
+              <p className="[overflow-wrap:anywhere]">接受版本：{data.plan.accepted_revision || "尚未接受"}</p>
+            </details>
+          </div>}
+          {data.plan === null && c.origin !== "imported" && <p className="mb-3 text-xs text-muted-foreground">這是舊安排，沒有可核對的策略接受版本。</p>}
           <TreeRows
             root={{ kind: "活動", name: c.name, note: (
               // An imported objective can be a whole sentence: two lines at most, the full text on hover.

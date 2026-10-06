@@ -174,4 +174,38 @@ describe("StructureTab (F30-I08)", () => {
     await screen.findByText("A・廣泛受眾");
     expect(getCampaignStructure).toHaveBeenCalledTimes(2);
   });
+
+  it("F52-I04: saved bindings are secondary leaf notes and modified reasons are served", async () => {
+    const result = { groups: [{ ...LIVE.groups[0], role: "explore", role_label: "探索", ads: [ad({
+      name: "實際安排", assignment: {
+        slot_id: "slot_a", accepted_revision: "accepted", customer_group_id: "customer_a",
+        customer_group_label: "考前會在書包備一盒的學生", scene: "晚自習前",
+        offer_key: "free_shipping", offer_label: "免運：全館免運",
+        carry_from_ad_id: "old_ad", carry_from_ad_label: "上期的書包一盒",
+        carry_placement_id: "placement_1", carry_placement_revision: 2,
+      },
+    })] }], plan: { state: "modified", revision: "current", accepted_revision: "accepted",
+      operation_id: "op_a", reasons: [{ code: "structure_modified",
+        message: "投放結構已修改，原策略理由與核准已失效。", slot_ids: [] }] } } as CampaignStructure;
+    vi.mocked(getCampaignStructure).mockResolvedValue(result);
+    render(<StructureTab brandId="brd_1" campaign={campaign()} planKey="changed" />);
+    const node = (await screen.findByText("實際安排")).closest("li") as HTMLElement;
+    expect(within(node).getByText("對誰：考前會在書包備一盒的學生")).toBeTruthy();
+    expect(within(node).getByText("情境：晚自習前")).toBeTruthy();
+    expect(within(node).getByText("優惠：免運：全館免運")).toBeTruthy();
+    expect(within(node).getByText("沿用：上期的書包一盒・素材第 2 版")).toBeTruthy();
+    expect(within(node).getByText("划算")).toBeTruthy();
+    expect(screen.getByText("探索")).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toContain("原策略理由與核准已失效");
+    expect(node.textContent).not.toMatch(/customer_a|old_ad|slot_a|placement_1/);
+    expect(node.querySelector("[data-part=name] [data-part=note]")).toBeTruthy();
+  });
+
+  it("F52-I04: imported/unplanned ads explicitly lack a saved customer binding", async () => {
+    vi.mocked(getCampaignStructure).mockResolvedValue({ groups: [{ ...LIVE.groups[0], group_id: null,
+      ads: [ad({ ad_id: null, assignment: null })] }], plan: null });
+    render(<StructureTab brandId="brd_1" campaign={campaign({ origin: "imported" })} planKey="native" />);
+    expect(await screen.findByText("平台廣告，未綁定本機顧客、情境與優惠")).toBeTruthy();
+    expect(screen.queryByRole("status")).toBeNull();
+  });
 });
