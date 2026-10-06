@@ -175,7 +175,7 @@ def _found_rows(prefill: dict) -> list:
                      "note": _notes(*policies)})
     products = [p for p in prefill.get("products") or [] if isinstance(p, dict) and p.get("name")]
     if products:
-        rows.append({"area": "可能的商品", "note": "",
+        rows.append({"area": "可能的商品", "note": _notes(*products),
                      "text": _join([p["name"] for p in products], "、")})
     return rows
 

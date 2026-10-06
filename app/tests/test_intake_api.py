@@ -142,9 +142,12 @@ class QuickPathTest(_Base):
         self.assertIsNone(state.get_draft(bid))  # nothing started
 
     def test_prefill_keeps_a_product_url_only_when_it_is_full(self):
+        sources = intake_ai.prefill_sources([("https://shop.example/catalog", "甲、乙、丙")])
         products, _dropped = intake_ai._check_products([
-            {"name": "甲", "url": "https://"}, {"name": "乙", "url": " https://shop.example/b "},
-            {"name": "丙", "url": "shop.example/c"}])
+            {"name": "甲", "url": "https://", "source_refs": [{"source_id": "page:1", "quote": "甲"}]},
+            {"name": "乙", "url": " https://shop.example/b ", "source_refs": [{"source_id": "page:1", "quote": "乙"}]},
+            {"name": "丙", "url": "shop.example/c", "source_refs": [{"source_id": "page:1", "quote": "丙"}]}],
+            lambda item: intake_ai.source_note(item, sources))
         self.assertEqual([p["url"] for p in products], [None, "https://shop.example/b", None])
 
     def test_restart_blocked_when_draft_already_running(self):
