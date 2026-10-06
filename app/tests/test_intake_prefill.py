@@ -290,10 +290,12 @@ class PrefillGroundingTest(_Base):
         self._scan(bid)
         url = f"/api/intake/brands/{bid}/onboarding/identity"
         proposal = self.client.get(url).json()["data"]["positioning"]
-        self.assertEqual(proposal, {"value": "商家退貨須未拆封、未食用", "source": "ai", "note": "頁面 1"})
+        self.assertEqual(proposal, {"value": "商家退貨須未拆封、未食用",
+                                    "source": "ai", "note": "頁面 1"})
         self.assertEqual(bi_repo.list_brand_facts(web.conn, bid, status="confirmed"), [])
         # Source presence does not establish legal validity; explicit user entry owns confirmation.
-        resp = self.client.put(url, json={"positioning": "使用者自己的品牌定位", "tone": ["親切"], "visual": ""})
+        resp = self.client.put(url, json={"positioning": "使用者自己的品牌定位",
+                                          "tone": ["親切"], "visual": ""})
         self.assertEqual(resp.status_code, 200, resp.text)
         self.assertEqual(self.client.get(url).json()["data"]["positioning"]["source"], "saved")
 
@@ -306,10 +308,12 @@ class PrefillGroundingTest(_Base):
                            "tone": {"values": ["親切"], **ground},
                            "visual": {"value": "暖色", **ground},
                            "proof": [{"fact_key": "lab_report", "text": "SGS", **ground}],
-                           "policies": [{"key": "ship_threshold", "params": {"threshold": 999}, **ground}],
+                           "policies": [{"key": "ship_threshold",
+                                         "params": {"threshold": 999}, **ground}],
                            "products": [{"name": "商品", **ground}]}
-                checked, _ = intake_ai.validate_prefill_reply(payload, pages_read=1, photos_read=1,
-                                                              sources=intake_ai.prefill_sources([("https://example.com", _PAGE)]))
+                checked, _ = intake_ai.validate_prefill_reply(
+                    payload, pages_read=1, photos_read=1,
+                    sources=intake_ai.prefill_sources([("https://example.com", _PAGE)]))
                 self.assertEqual(intake_ai.found_areas(checked), set())
 
     def test_normalized_quotes_and_multiple_refs_use_only_matching_catalog_entries(self):
@@ -323,7 +327,8 @@ class PrefillGroundingTest(_Base):
                     {"source_id": "page:2", "quote": ""}, {"source_id": [], "quote": "a"},
                     {"source_id": "page:1", "quote": "\n「」"}, None):
             with self.subTest(ref=ref):
-                self.assertIsNone(intake_ai.source_note({"source_refs": [*item["source_refs"], ref]}, sources))
+                self.assertIsNone(intake_ai.source_note(
+                    {"source_refs": [*item["source_refs"], ref]}, sources))
 
     def test_valid_product_reference_renders_through_scan_api(self):
         intake_ai.PROVIDER = FakeProvider(response=_response({"products": [{
@@ -331,7 +336,8 @@ class PrefillGroundingTest(_Base):
             "source_refs": [{"source_id": "page:1", "quote": "才做了軟糖"}]}]}))
         bid = self._create(photos=0)
         status = self._scan(bid)
-        self.assertEqual(status["found"], [{"area": "可能的商品", "text": "軟糖", "note": "頁面 1"}])
+        self.assertEqual(status["found"], [{"area": "可能的商品", "text": "軟糖",
+                                           "note": "頁面 1"}])
 
     def test_fetched_catalog_rejects_missing_forged_and_unknown_refs(self):
         for refs in (None, [], [{"source_id": "page:1", "quote": "不存在的證明"}],
@@ -362,20 +368,26 @@ class PrefillContractTest(unittest.TestCase):
         self.assertEqual(dropped, 1)
 
     def test_unknown_policy_params_are_stripped_and_limits_hold(self):
+        positioning_refs = [{"source_id": "page:1", "quote": "給忙到沒空吃飯的人"}]
+        sources = intake_ai.prefill_sources([
+            ("https://example.com", _PAGE),
+            ("https://example.com/catalog", "".join(f"商品{i}。" for i in range(21)))])
+        self.assertEqual(intake_ai.source_note({"source_refs": positioning_refs}, sources),
+                         "頁面 1")
         prefill, dropped = intake_ai.validate_prefill_reply(
-            {"positioning": {"value": "字" * 61, "note": "頁面 1"},
+            {"positioning": {"value": "字" * 61, "note": "頁面 1",
+                             "source_refs": positioning_refs},
              "policies": [{"key": "ship_threshold", "params": {"threshold": 999, "x": 1},
                            "source_refs": [{"source_id": "page:1", "quote": "滿 NT$999 免運"}]}],
              "products": [{"name": f"商品{i}", "url": "ftp://x",
                            "source_refs": [{"source_id": "page:2", "quote": f"商品{i}。"}]}
                           for i in range(21)],
              "not_found": ["不存在的面向", "全店政策"]},
-            pages_read=2, photos_read=0,
-            sources=intake_ai.prefill_sources([("https://example.com", _PAGE),
-                                              ("https://example.com/catalog", "".join(f"商品{i}。" for i in range(21)))]))
+            pages_read=2, photos_read=0, sources=sources)
         self.assertNotIn("positioning", prefill)
         self.assertEqual(prefill["policies"],
-                         [{"key": "ship_threshold", "params": {"threshold": 999}, "note": "頁面 1"}])
+                         [{"key": "ship_threshold", "params": {"threshold": 999},
+                           "note": "頁面 1"}])
         self.assertEqual(len(prefill["products"]), 20)
         self.assertIsNone(prefill["products"][0]["url"])
         self.assertEqual(prefill["not_found"], [])  # unknown area, and 全店政策 was found

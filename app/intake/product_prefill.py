@@ -249,7 +249,8 @@ def _check_sell_ways(items, note_of) -> tuple[list, int]:
 
 
 def validate_reply(data, *, page_text: str, pages_read: int,
-                   photos_read: int, sources: list[ai.PrefillSource] | None = None) -> tuple[dict | None, int]:
+                   photos_read: int,
+                   sources: list[ai.PrefillSource] | None = None) -> tuple[dict | None, int]:
     """Program check of the product prefill reply -> (prefill, dropped entry count). `None` =
     unreadable (not an object, or none of the contract's keys). Every entry is checked on its own;
     notes are generated from quoted references to this call's fetched text catalog."""
