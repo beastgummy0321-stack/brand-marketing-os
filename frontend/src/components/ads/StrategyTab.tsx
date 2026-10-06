@@ -376,7 +376,7 @@ export function StrategyTab({
               </div>
               {c.materials && <MaterialsRow materials={c.materials} />}
               <StrategyAssignmentSummary decision={decision} />
-              <p className="mb-3 text-xs text-muted-foreground">{stale ? "目前比例已修改，原建議理由已失效。" : "比例是本輪建議；有限樣本與相對成績不能證明最佳分配，仍需實際投放驗證。"}</p>
+              <p className="mb-3 text-xs text-muted-foreground">{stale ? "目前比例已修改，原建議理由已失效。" : "比例是本輪建議；有限樣本與相對成績不能證明最佳分配，仍有不確定性。"}</p>
               {decisionBlocker && <div className="mb-3 rounded-md border border-border p-3 text-sm">
                 <p>{decisionBlocker}</p>
                 <ul className="mt-1 space-y-1 text-[13px] text-muted-foreground">
@@ -459,7 +459,7 @@ export function StrategyTab({
                 <h3 className="text-[13px] font-semibold">{item.label}安排依據</h3>
                 <StrategyCommitments decision={decision} role={item.role} stale={stale} details />
               </section>)}
-              {stale && <p className="text-muted-foreground">原建議理由已失效；此處保留原依據供查閱，重新產生後再確認新安排。</p>}
+              {stale && <p className="text-muted-foreground">原建議理由已失效；重新產生後再確認新安排。</p>}
               {!stale && strategy.why.length > 0 && <ul className="list-disc space-y-1 pl-5">{strategy.why.map((line, i) => <li key={i}>{line}</li>)}</ul>}
               {!stale && (strategy.learning_goals ?? []).length > 0 && (
                 <div>

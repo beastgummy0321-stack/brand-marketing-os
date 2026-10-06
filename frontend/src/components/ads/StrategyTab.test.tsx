@@ -266,6 +266,7 @@ describe("StrategyTab (F28-I09)", () => {
   });
 
   it("modified rationale never re-enables adoption merely because feasibility is ready", async () => {
+    const user = userEvent.setup();
     const c = campaign({ budget_planned: 30000, budget_scenario: "cap" });
     c.budget_basis_json.strategy!.decision!.state = "modified";
     c.budget_basis_json.strategy!.rationale_state = "stale";
@@ -273,6 +274,8 @@ describe("StrategyTab (F28-I09)", () => {
     expect((await screen.findByRole("button", {name: "照這個方式進行 →"})).hasAttribute("disabled")).toBe(true);
     expect(screen.getAllByText("安排或預算已修改，原建議理由已失效。請重新產生策略。").length).toBeGreaterThan(0);
     expect(screen.queryByText("依登記事實提出假設，尚無投放樣本。")).toBeNull();
+    await user.click(screen.getByRole("button", {name: "為什麼這樣建議"}));
+    expect(screen.getByText("原建議理由已失效；重新產生後再確認新安排。")).toBeTruthy();
   });
 
   it("shows each served binding and distinct server counts without pairing aggregate names", async () => {
@@ -286,6 +289,7 @@ describe("StrategyTab (F28-I09)", () => {
     });
     renderTab(c);
     await screen.findByText("通勤者・免運：三盒以上免運");
+    expect(screen.getByText("比例是本輪建議；有限樣本與相對成績不能證明最佳分配，仍有不確定性。")).toBeTruthy();
     const rows = Array.from(document.querySelectorAll("[data-slot=strategy-commitment]"));
     expect(rows[0].textContent).toContain("新測試：測試通勤者的購買理由");
     expect(rows[0].textContent).not.toContain("健身者");
