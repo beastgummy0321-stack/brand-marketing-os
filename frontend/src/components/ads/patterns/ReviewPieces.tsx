@@ -55,20 +55,20 @@ export function Ladder({ steps, current }: { steps: string[]; current?: number }
   );
 }
 
-/** `.opt` (+ `.pick`): one direction card on 選方向. `disabled` = not available here (grey, not
- * clickable); `disabledNote` says why (default 接上後開放 — never a refusal wording).
+/** `.opt` (+ `.pick`): one direction card on 選方向. `disabledReason` = not available here (grey, not
+ * clickable); the supplied reason says why.
  * `recommendedLabel`/`recommendedTone` word the recommended chip: default 建議 in accent (prototype `chip v`);
  * F30 ai-blocked: 照順序先試 in neutral (prototype `chip`) when the pick comes from the ladder, not from an AI. */
-export function OptionCard({ icon, title, note, picked = false, recommended = false, recommendedLabel = "建議", recommendedTone = "accent", disabled = false, disabledNote = "接上後開放", disabledReason, busy = false, onClick }: {
+export function OptionCard({ icon, title, note, picked = false, recommended = false, recommendedLabel = "建議", recommendedTone = "accent", disabledReason, busy = false, onClick }: {
   icon: ReactNode; title: string; note: string; picked?: boolean; recommended?: boolean;
-  recommendedLabel?: string; recommendedTone?: "accent" | "neutral"; disabled?: boolean; disabledNote?: string; disabledReason?: string | null; busy?: boolean; onClick?: () => void;
+  recommendedLabel?: string; recommendedTone?: "accent" | "neutral"; disabledReason?: string | null; busy?: boolean; onClick?: () => void;
 }) {
   const reasonId = useId();
-  const reason = disabledReason || (disabled ? disabledNote : null);
+  const reason = disabledReason || null;
   const unavailable = Boolean(busy || reason);
   return (
     <button type="button" data-slot="option-card" data-variant={unavailable ? "reserved" : picked ? "picked" : "open"}
-      aria-pressed={unavailable ? undefined : picked} disabled={unavailable} aria-busy={busy || undefined} aria-describedby={reason ? reasonId : undefined} onClick={onClick}
+      aria-pressed={unavailable ? undefined : picked} disabled={unavailable} /* DISABLED_OK: native control derives state from busy or its visible reason */ aria-busy={busy || undefined} aria-describedby={reason ? reasonId : undefined} onClick={onClick}
       className={cn("rounded-xl border p-5 text-left transition-colors",
         unavailable ? "cursor-default border-border bg-muted text-muted-foreground" : picked ? "border-primary bg-accent shadow-[0_0_0_1px_var(--primary)]" : "border-border bg-card hover:border-primary")}>
       <div className="text-2xl" aria-hidden="true">{icon}</div>

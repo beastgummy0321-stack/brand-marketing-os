@@ -259,8 +259,7 @@ export function PreparePage({ brandId, campaignId, reviewId }: {
               recommendedLabel={ladderOnly ? "照順序先試" : undefined}
               recommendedTone={ladderOnly ? "neutral" : undefined}
               picked={o.key === selected}
-              disabled={disabled}
-              disabledNote={disabled ? (copyEditable?.reason ?? "這則廣告的文字目前不能單獨修改。") : undefined}
+              disabledReason={disabled ? (copyEditable?.reason ?? "這則廣告的文字目前不能單獨修改。") : undefined}
               onClick={disabled ? undefined : () => pick(o.key)}
             />
           );
@@ -296,7 +295,7 @@ export function PreparePage({ brandId, campaignId, reviewId }: {
       <div className="flex-1" />
       <ActionBar back={{ label: "看證據", to: reviewRoundPath(brandId, campaignId, review.id) }} exit={{ label: "先不要，回投放中心", to: homeHref }}>
         {selected && (
-          <Button disabled={busy} onClick={() => void handleSave()}>
+          <Button busy={busy} onClick={() => void handleSave()}>
             {busy ? "保存中…" : `${PRIMARY_LABEL[selected]} →`}
           </Button>
         )}

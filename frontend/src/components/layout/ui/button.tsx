@@ -42,8 +42,7 @@ const buttonVariants = cva(
  *  - `busy` → `aria-busy`, no sentence (the label already says 儲存中…);
  *  - a reason → one muted sentence right after the button, wired as its accessible description
  *    (`aria-describedby`), so a greyed-out control always says why.
- * `disabled` is still accepted (deprecated: F51-I13 removes it from the type once the sweeps converted every
- * caller); a reason passed beside it is printed while the button is disabled and not busy. */
+ */
 function Button({
   className,
   variant = "default",
@@ -51,9 +50,8 @@ function Button({
   asChild = false,
   busy = false,
   disabledReason,
-  disabled,
   ...props
-}: React.ComponentProps<"button"> &
+}: Omit<React.ComponentProps<"button">, "disabled"> &
   VariantProps<typeof buttonVariants> & {
     asChild?: boolean;
     /** The action this button started is running: disabled, `aria-busy`, no sentence. */
@@ -63,7 +61,7 @@ function Button({
   }) {
   const Comp = asChild ? Slot.Root : "button";
   const reasonId = React.useId();
-  const isDisabled = Boolean(busy || disabledReason || disabled);
+  const isDisabled = Boolean(busy || disabledReason);
   const showReason = Boolean(isDisabled && !busy && disabledReason);
   const describedBy = showReason
     ? [props["aria-describedby"], reasonId].filter(Boolean).join(" ")

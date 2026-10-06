@@ -1,3 +1,4 @@
+import { campaignPath } from "@/lib/adsRoutes";
 import { isRejected } from "@/lib/http";
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
@@ -312,9 +313,7 @@ export function CopyPage({ brandId, campaignId, reviewId }: {
   const { titles: oldTitles, bodies: oldBodies } = oldVariants(review);
   const rec = adjustRecommendation(review);
   const noAiCopy = aiCopyOf(review) === null;
-  const moreVersionsHref = `/brands/${brandId}/ads/campaigns/${campaignId}`
-    + `?tab=assets&material_new=1&review=${encodeURIComponent(review.id)}`
-    + (rec ? `&recommendation=${encodeURIComponent(rec.id)}` : "");
+  const moreVersionsHref = campaignPath(brandId, campaignId, { tab: "assets", material_new: 1, review: review.id, recommendation: rec?.id });
 
   function updateVariant(list: "titles" | "bodies", index: number, value: string) {
     (list === "titles" ? setVariantTitles : setVariantBodies)((v) => v.map((x, i) => (i === index ? value : x)));
@@ -367,7 +366,7 @@ export function CopyPage({ brandId, campaignId, reviewId }: {
         <div className="flex items-center gap-4 rounded-xl border border-warning/30 bg-warning/10 p-4">
           <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-warning text-base font-semibold text-white" aria-hidden="true">?</div>
           <b className="flex-1">上次保存沒收到回應</b>
-          <Button disabled={busy} onClick={() => void attemptCommit(pendingDraft)}>
+          <Button busy={busy} onClick={() => void attemptCommit(pendingDraft)}>
             {busy ? "核對中…" : "再核對一次（不會重複建立）"}
           </Button>
         </div>
@@ -426,7 +425,7 @@ export function CopyPage({ brandId, campaignId, reviewId }: {
                     <div className="mb-1.5 flex items-center justify-between">
                       <h3 className="text-xs font-medium text-muted-foreground">{label}{itemsMax !== null && `（最多 ${itemsMax} 則）`}</h3>
                       <Button
-                        type="button" variant="outline" size="sm" disabled={busy || (itemsMax !== null && values.length >= itemsMax)}
+                        type="button" variant="outline" size="sm" busy={busy} disabledReason={itemsMax !== null && values.length >= itemsMax ? `最多 ${itemsMax} 個版本` : undefined}
                         onClick={() => addVariant(list)}
                       >
                         + 新增{label}
@@ -440,7 +439,7 @@ export function CopyPage({ brandId, campaignId, reviewId }: {
                             : <Textarea aria-label={`新內文 ${i + 1}`} rows={3} value={v} disabled={busy} onChange={(e) => updateVariant(list, i, e.target.value)} />}
                           <Button
                             type="button" variant="ghost" size="icon-sm" aria-label={`刪除${label} ${i + 1}`}
-                            disabled={busy} onClick={() => removeVariant(list, i)}
+                            busy={busy} onClick={() => removeVariant(list, i)}
                           >
                             <X className="size-4" />
                           </Button>
@@ -475,7 +474,7 @@ export function CopyPage({ brandId, campaignId, reviewId }: {
 
       <div className="flex-1" />
       <ActionBar back={{ label: "選方向", to: reviewRoundPath(brandId, campaignId, review.id, "prepare") }} exit={{ label: "先不要，回投放中心", to: homeHref }}>
-        <Button disabled={busy || pendingDraft !== null || !initialized} onClick={handleSave}>
+        <Button busy={busy} disabledReason={pendingDraft !== null ? "先重試上一份尚未確認保存結果的清單" : !initialized ? "先等目前文案讀取完成" : undefined} onClick={handleSave}>
           {busy ? "保存中…" : "加入變更清單 →"}
         </Button>
       </ActionBar>

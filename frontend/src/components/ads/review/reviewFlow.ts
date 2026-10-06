@@ -5,7 +5,7 @@ import { campaignPath } from "@/lib/adsRoutes";
  * (改文案) reuse the same path/accessor helpers instead of re-deriving them — same pattern as
  * `flow/changeFlow.ts` for the light flow. */
 import type { QueueItem, QueuePayload, TriageHistoryEntry } from "@/lib/adsTriageApi";
-import type { CommerceEvidence, Recommendation, ReviewPeriod, ReviewResultView } from "@/lib/adsReviewApi";
+import type { CommerceEvidence, Recommendation, ReviewPeriod } from "@/lib/adsReviewApi";
 import { formatInstant } from "@/lib/orgClock";
 import { decisionPosition } from "../home/status";
 import { perSaleAmount } from "../patterns/csv";
@@ -58,23 +58,12 @@ export function formatWindowDate(date: string): string {
   return `${Number(m)}/${Number(d)}`;
 }
 
-/** This ad's own known spend, summed across every `attribution_key` subgroup of the `ad` scope —
- * mirrors `app/ads/triage.py::_ad_spend` exactly (issue Done #3): any unknown subgroup, or more
- * than one currency among them, makes the whole window's spend unknown. Never an arbitrary pick
- * (feature Decisions "NOT `series[0]`, which `ReviewEvidence.tsx:32` uses"). */
+/** The API owns window aggregation and currency ambiguity; the browser prints its answer. */
 export function adSpend(period: ReviewPeriod): number | null {
-  const entries = period.series.filter((s) => s.metric_scope === "ad");
-  if (entries.length === 0 || entries.some((s) => s.metrics.spend === null)) return null;
-  if (new Set(entries.map((s) => s.currency)).size > 1) return null;
-  return entries.reduce((sum, s) => sum + (s.metrics.spend as number), 0);
+  return period.ad_spend?.value ?? null;
 }
-
-/** This ad's own result view — mirrors `app/ads/triage.py::_ad_window`: more than one `ad`-scope
- * `result_views` entry has no single unambiguous view, treated as unknown, never an arbitrary
- * pick. `null` when there is exactly zero or more than one. */
-export function adResultView(period: ReviewPeriod): ReviewResultView | null {
-  const views = (period.result_views ?? []).filter((v) => v.metric_scope === "ad");
-  return views.length === 1 ? views[0] : null;
+export function adResultView(period: ReviewPeriod): ReviewPeriod["ad_result_view"] {
+  return period.ad_result_view ?? null;
 }
 
 /** Title by `recommendation` (feature Decisions "看證據 cards"). */
@@ -89,7 +78,7 @@ export const RECOMMENDATION_TITLE: Record<Recommendation["recommendation"], stri
  * (`app/orders/commerce_evidence.py:88`) — never a condition. The 「報表期間待確認」 chip instead
  * reads the actual unknown counts (feature Decisions "看證據 cards"). */
 export function commerceCoverageWarn(summary: CommerceEvidence["order_summary"]): boolean {
-  return (summary.unknown_amount_count ?? 0) > 0 || summary.unknown_payment_count > 0;
+  return (summary.unknown_amount_count == null || summary.unknown_amount_count > 0) || summary.unknown_payment_count > 0;
 }
 
 export function formatTargetAmount(value: number | null): string {

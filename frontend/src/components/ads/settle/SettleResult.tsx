@@ -224,14 +224,14 @@ export function SettleResult({ view, header, homeHref, angleHref, noteHref }: {
       <ActionBar
         back={{ label: "投放中心", to: homeHref }}
         exit={open ? { label: "晚點再結算", to: homeHref } : undefined}
-        hint={open ? "這一步還不會寫進筆記本" : view.status === "not_ended" ? "這個月還沒結束，結束後才能結算" : undefined}
+        hint={open ? "這一步還不會寫進筆記本" : undefined}
       >
         <Button variant="outline" onClick={() => downloadSettleCsv(view)}>下載 CSV</Button>
         {view.status === "written"
           ? <Button asChild><Link to={noteHref}>看寫進筆記本的內容 →</Link></Button>
           : open
             ? <Button asChild><Link to={angleHref}>下一步：確認主打什麼 →</Link></Button>
-            : <Button disabled>下一步：確認主打什麼 →</Button>}
+            : <Button disabledReason={view.status === "not_ended" ? "這個月還沒結束，結束後才能結算" : "目前沒有可結算的項目"}>下一步：確認主打什麼 →</Button>}
       </ActionBar>
     </>
   );

@@ -7,8 +7,8 @@ import { Thumb } from "./LoopPieces";
  * pattern: Tab reaches the picked card (or every card while nothing is picked), arrows and Home/End move to and
  * pick the next enabled card, Space/Enter pick the focused one.
  * Two layouts, as the prototype: with `thumbnailUrl` (a product — 52px thumbnail beside the words) or with
- * `icon` (`.pk.goal` — an objective, icon tile above the words). A `disabled` card is a reserved seat: grey, not
- * pickable, and its `disabledNote` (default 「尚未開放」) replaces the note. `data-slot="pick-group"` /
+ * `icon` (`.pk.goal` — an objective, icon tile above the words). A `disabledReason` card is a reserved seat: grey, not
+ * pickable, and its `disabledReason` replaces the note. `data-slot="pick-group"` /
  * `"pick-card"`, `data-variant` picked／open／reserved. */
 
 interface PickCtx { value: string | null; pick: (value: string) => void }
@@ -48,7 +48,7 @@ export function PickGroup({ label, value, onChange, children, className }: {
   );
 }
 
-export function PickCard({ value, title, note, badge, thumbnailUrl, icon, disabled = false, disabledNote = "尚未開放", disabledReason, busy = false }: {
+export function PickCard({ value, title, note, badge, thumbnailUrl, icon, disabledReason, busy = false }: {
   value: string;
   title: string;
   note?: ReactNode;
@@ -56,8 +56,6 @@ export function PickCard({ value, title, note, badge, thumbnailUrl, icon, disabl
   /** Product layout; `null` draws the neutral tile. Leave undefined for the icon layout. */
   thumbnailUrl?: string | null;
   icon?: ReactNode;
-  disabled?: boolean;
-  disabledNote?: string;
   disabledReason?: string | null;
   busy?: boolean;
 }) {
@@ -65,12 +63,12 @@ export function PickCard({ value, title, note, badge, thumbnailUrl, icon, disabl
   const checked = ctx?.value === value;
   const product = thumbnailUrl !== undefined;
   const reasonId = useId();
-  const reason = disabledReason || (disabled ? disabledNote : null);
+  const reason = disabledReason || null;
   const unavailable = Boolean(busy || reason);
   const words = reason || note;
   return (
     <button type="button" role="radio" aria-checked={checked} data-slot="pick-card" data-value={value}
-      data-variant={unavailable ? "reserved" : checked ? "picked" : "open"} disabled={unavailable} aria-busy={busy || undefined} aria-describedby={reason ? reasonId : undefined}
+      data-variant={unavailable ? "reserved" : checked ? "picked" : "open"} disabled={unavailable} /* DISABLED_OK: native control derives state from busy or its visible reason */ aria-busy={busy || undefined} aria-describedby={reason ? reasonId : undefined}
       tabIndex={checked || ctx?.value == null ? 0 : -1} onClick={() => ctx?.pick(value)}
       className={cn("flex rounded-xl border text-left transition-colors disabled:cursor-default disabled:opacity-100",
         product ? "items-center gap-3 p-3" : "flex-col items-start gap-1.5 p-[18px]",

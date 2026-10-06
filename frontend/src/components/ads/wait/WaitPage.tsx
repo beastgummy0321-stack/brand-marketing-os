@@ -1,3 +1,4 @@
+import { campaignPath } from "@/lib/adsRoutes";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
@@ -272,7 +273,7 @@ export function WaitPage({ brandId, campaignId }: { brandId: string; campaignId:
   const busy = posting || recheckRound > 0;
 
   const homeHref = `/brands/${brandId}/ads`;
-  const campaignHref = `/brands/${brandId}/ads/campaigns/${campaignId}`;
+  const campaignHref = campaignPath(brandId, campaignId);
 
   if (state.status === "loading") {
     return (
@@ -333,7 +334,7 @@ export function WaitPage({ brandId, campaignId }: { brandId: string; campaignId:
                     <Link to={row.action.href}>{row.action.label} →</Link>
                   </Button>
                 ) : row.action?.kind === "resync" ? (
-                  <Button variant="outline" size="sm" disabled={busy} onClick={() => void recheck()}>重新檢查 →</Button>
+                  <Button variant="outline" size="sm" busy={busy} onClick={() => void recheck()}>重新檢查 →</Button>
                 ) : row.auto ? (
                   <Chip tone="neutral">自動</Chip>
                 ) : undefined
@@ -373,11 +374,11 @@ export function WaitPage({ brandId, campaignId }: { brandId: string; campaignId:
           <Button asChild><Link to={campaignHref}>回活動繼續準備 →</Link></Button>
         ) : ended ? (
           <>
-            <Button variant="outline" disabled={busy} onClick={() => void recheck()}>{busy ? "檢查中…" : "重新檢查"}</Button>
+            <Button variant="outline" busy={busy} onClick={() => void recheck()}>{busy ? "檢查中…" : "重新檢查"}</Button>
             <Button asChild><Link to={`${campaignHref}?tab=perf&close=1`}>結案這一期 →</Link></Button>
           </>
         ) : (
-          <Button disabled={busy} onClick={() => void recheck()}>{busy ? "檢查中…" : "重新檢查 →"}</Button>
+          <Button busy={busy} onClick={() => void recheck()}>{busy ? "檢查中…" : "重新檢查 →"}</Button>
         )}
       </ActionBar>
     </div>

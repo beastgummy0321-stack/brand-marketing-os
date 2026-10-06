@@ -49,13 +49,13 @@ export function DecisionCard({
                     <p className="text-xs text-muted-foreground">{item.reason}</p>
                   </div>
                   <div className="flex shrink-0 gap-2">
-                    <Button size="sm" disabled={!onAgree} busy={busy} disabledReason={disabledReason || (!onAgree ? "目前還不能同意這項決定" : undefined)} onClick={() => onAgree?.(item.id)}>
+                    <Button size="sm" busy={busy} disabledReason={disabledReason || (!onAgree ? "目前還不能同意這項決定" : undefined)} onClick={() => onAgree?.(item.id)}>
                       同意
                     </Button>
-                    <Button size="sm" variant="outline" disabled={!onDefer} busy={busy} disabledReason={disabledReason || (!onDefer ? "目前還不能延後這項決定" : undefined)} onClick={() => onDefer?.(item.id)}>
+                    <Button size="sm" variant="outline" busy={busy} disabledReason={disabledReason || (!onDefer ? "目前還不能延後這項決定" : undefined)} onClick={() => onDefer?.(item.id)}>
                       先不要
                     </Button>
-                    <Button size="sm" variant="outline" disabled={!onWhy} busy={busy} disabledReason={disabledReason || (!onWhy ? "目前還不能查看原因" : undefined)} onClick={() => onWhy?.(item.id)}>
+                    <Button size="sm" variant="outline" busy={busy} disabledReason={disabledReason || (!onWhy ? "目前還不能查看原因" : undefined)} onClick={() => onWhy?.(item.id)}>
                       查看原因
                     </Button>
                   </div>

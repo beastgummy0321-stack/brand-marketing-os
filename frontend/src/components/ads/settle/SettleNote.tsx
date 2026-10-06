@@ -110,7 +110,7 @@ export function SettleNote({ view, header, picks, busy, error, onWrite, homeHref
       </div>
       <div className="flex-1" />
       <ActionBar back={{ label: "確認主打", to: angleHref }} exit={{ label: "晚點再結算", to: homeHref }} hint="寫進後，下一個新活動的策略會讀">
-        <Button disabled={busy || rows.length === 0} onClick={onWrite}>{busy ? "寫入中…" : `寫進筆記本（${rows.length} 條）→`}</Button>
+        <Button busy={busy} disabledReason={rows.length === 0 ? "還沒有可寫進筆記本的項目" : undefined} onClick={onWrite}>{busy ? "寫入中…" : `寫進筆記本（${rows.length} 條）→`}</Button>
       </ActionBar>
     </>
   );
