@@ -235,6 +235,7 @@ export function GroupPanel({
         </Button>
       </div>
       <div className="surface-body flex flex-col gap-4">
+        <p className="text-xs text-muted-foreground">儲存結構變更後，原策略理由與核准會失效，請重新確認策略。</p>
         <BoundNotice localState={g.local_state} />
         {isLastGroup && <p className="text-sm text-muted-foreground">{LAST_GROUP_REASON}</p>}
         {restored && <p role="status" className="text-sm text-warning">
@@ -398,6 +399,7 @@ export function AdPanel({
       <div className="surface-body flex flex-col gap-4">
         {a.carry_note && <p data-slot="carry-note" className="text-xs text-muted-foreground">{a.carry_note}</p>}
         <BoundNotice localState={a.local_state} />
+        <p className="text-xs text-muted-foreground">這裡的「受眾」調整觸及方式，不會更換上方顧客群。儲存設定後，原策略理由與核准會失效，請重新確認策略。</p>
         {restored && <p role="status" className="text-sm text-warning">
           已恢復未儲存草稿；最新已保存值可能已變更，請確認後再儲存。
         </p>}

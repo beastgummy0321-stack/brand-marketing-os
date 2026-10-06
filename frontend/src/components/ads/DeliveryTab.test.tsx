@@ -14,6 +14,7 @@ import type { AdRow, CampaignDetail, DeliveryGroupRow } from "@/lib/adsApi";
 import { adoptStrategy, dispatchPack, getCampaign, patchAd, patchGroup } from "@/lib/adsApi";
 import { fetchCoordinates, type Coordinate } from "@/lib/coordinatesApi";
 import { fetchChannels } from "@/lib/adsLaunchApi";
+import { getCampaignStructure } from "@/lib/adsWorkspaceApi";
 import { DeliveryTab } from "./DeliveryTab";
 
 function renderWithRouter(ui: ReactElement) {
@@ -617,6 +618,61 @@ describe("DeliveryTab: one budget, the period's menu and carried ads (F48-I10)",
     await vi.waitFor(() => expect(onCampaignChange).toHaveBeenLastCalledWith(fresh));
     expect(getCampaign).toHaveBeenCalledTimes(1);
     expect(getCampaign).toHaveBeenCalledWith("brd_1", "cmp_1");
+  });
+
+  it("F52-I04: coordinate-only edit reads back the saved campaign and its revised contract", async () => {
+    vi.mocked(getCampaign).mockReset();
+    const user = userEvent.setup();
+    vi.mocked(fetchCoordinates).mockResolvedValueOnce([vocab("offer", "free_shipping", "免運")]);
+    const saved = ad({ offer_key: "free_shipping" });
+    const fresh = campaign({ name: "伺服器確認的新安排", groups: [group({ ads: [saved] })],
+      budget_basis_json: { ...WITH_STRATEGY, strategy: { ...WITH_STRATEGY.strategy,
+        decision: { schema_version: 1, state: "modified", revision: "server-new-revision", slots: [],
+          feasibility: { state: "blocked", reasons: [{ code: "structure_modified",
+            message: "投放結構已修改，原策略理由與核准已失效。", slot_ids: [] }] },
+          receipt: { revision: "accepted-revision", operation_id: "op", slots: [] } },
+      } },
+    });
+    vi.mocked(patchAd).mockResolvedValueOnce(saved);
+    vi.mocked(getCampaign).mockResolvedValueOnce(fresh);
+    const { onCampaignChange } = renderTab(campaign());
+    await user.click(screen.getByRole("button", { name: "進階：編輯這一組（投放組）" }));
+    await user.click(screen.getByRole("button", { name: /^廣告一/ }));
+    await user.selectOptions(await screen.findByRole("combobox", { name: "優惠" }), "free_shipping");
+    await user.click(screen.getByRole("button", { name: "儲存變更" }));
+    await vi.waitFor(() => expect(onCampaignChange).toHaveBeenLastCalledWith(fresh));
+    expect(getCampaign).toHaveBeenCalledWith("brd_1", "cmp_1");
+  });
+
+  it("F52-I04: a changed coordinate or role refreshes the structure even when names/budget stay", async () => {
+    const c = campaign();
+    const view = renderTab(c);
+    await vi.waitFor(() => expect(getCampaignStructure).toHaveBeenCalledTimes(1));
+    view.rerender(<MemoryRouter><DeliveryTab brandId="brd_1" campaign={{ ...c,
+      groups: [{ ...c.groups[0], role: "explore", ads: c.groups[0].ads.map((a) => ({ ...a, offer_key: "free_shipping" })) }],
+    }} onCampaignChange={view.onCampaignChange} onChangeTab={view.onChangeTab} /></MemoryRouter>);
+    await vi.waitFor(() => expect(getCampaignStructure).toHaveBeenCalledTimes(2));
+  });
+
+  it("F52-I04: a pending save readback cannot update a different campaign/brand", async () => {
+    vi.mocked(getCampaign).mockReset();
+    const user = userEvent.setup();
+    let complete!: (c: CampaignDetail) => void;
+    vi.mocked(patchGroup).mockResolvedValueOnce(group({ name: "改名" }));
+    vi.mocked(getCampaign).mockReturnValueOnce(new Promise((resolve) => { complete = resolve; }));
+    const view = renderTab(campaign());
+    await user.click(screen.getByRole("button", { name: "進階：編輯這一組（投放組）" }));
+    await user.click(screen.getByRole("button", { name: /^投放組/ }));
+    await user.clear(screen.getByDisplayValue("投放組"));
+    await user.type(screen.getByRole("textbox", { name: "名稱" }), "改名");
+    await user.click(screen.getByRole("button", { name: "儲存變更" }));
+    await vi.waitFor(() => expect(getCampaign).toHaveBeenCalledOnce());
+    view.onCampaignChange.mockClear();
+    view.rerender(<MemoryRouter><DeliveryTab brandId="other_brand" campaign={campaign({ id: "other_campaign" })}
+      onCampaignChange={view.onCampaignChange} onChangeTab={view.onChangeTab} /></MemoryRouter>);
+    complete(campaign({ name: "late old result" }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(view.onCampaignChange).not.toHaveBeenCalled();
   });
 
   it("capacity prints as one line under the tree, as served", () => {

@@ -22,6 +22,7 @@ from app.ads import (
     campaign_stage,
     change_control_launch,
     coverage,
+    customer_groups,
     home_overview,
     lifecycle,
     month_summary,
@@ -29,12 +30,16 @@ from app.ads import (
     queue_done,
     repository,
     review_evidence,
+    sell_way,
     slots,
+    strategy,
     targets,
     triage,
 )
 from app.ads.external_repository import is_monthly_budget_row
+from app.brand_intelligence import repository as bi_repo
 from app.core import settings as coresettings
+from app.core import vocab
 
 TOTALS_DAYS = 14
 TIMELINE_CAP = 50
@@ -362,7 +367,7 @@ def _platform_ad(entity, graded, closing, *, ad_id=None, name=None) -> dict:
     current = (item or {}).get("current") or {}
     return {
         "ad_id": ad_id, "entity_id": entity["id"],
-        "name": name or entity.get("name") or entity["native_id"],
+        "name": name or entity.get("name") or "平台廣告（名稱讀不到）",
         "thumbnail_url": triage._thumbnail_url(entity),
         "grade": item["grade"] if item else None,
         "grade_label": item["grade_label"] if item else None,
@@ -376,7 +381,76 @@ def _platform_ad(entity, graded, closing, *, ad_id=None, name=None) -> dict:
         "results": home_overview._count_out(current.get("result_count")),
         "closing": entity["id"] in closing, "missing_material": False,
         "slot_state": None, "slot_label": None,
+        "assignment": None,
     }
+
+
+def _structure_plan(campaign):
+    """Saved contract identity only; proposed slots cannot replace actual assignments."""
+    decision = ((campaign.get("budget_basis_json") or {}).get("strategy") or {}).get("decision")
+    if not decision:
+        return None, {}
+    receipt = decision.get("receipt") or {}
+    return {
+        "state": decision["state"], "revision": decision["revision"],
+        "accepted_revision": receipt.get("revision"), "operation_id": receipt.get("operation_id"),
+        "reasons": (decision.get("feasibility") or {}).get("reasons") or [],
+    }, {r["ad_id"]: r for r in receipt.get("slots") or []}
+
+
+def _structure_assignments(conn, org, brand, campaign, ads, receipt_by_ad, plan):
+    """Resolve current scoped labels and accepted provenance by actual ad id.
+
+    Deleted bindings are never replaced with snapshot labels or proposed choices. A failed
+    label read is unknown, not a claim that a binding was deleted.
+    """
+    customers = home_overview._guarded(
+        conn, "structure.customers", lambda: customer_groups.groups_by_id(conn, brand, campaign),
+    )
+    offers = home_overview._guarded(conn, "structure.offers", lambda: bi_repo.offer_sources(
+        conn, brand, sell_way.of_campaign(campaign),
+    ))
+    offer_labels = {} if offers is None else {
+        key: "、".join(row["sentence"] for row in offers if row["offer_key"] == key)
+        for key in {row["offer_key"] for row in offers}
+    }
+    carried = {}
+    out = {}
+    for ad in ads:
+        receipt = receipt_by_ad.get(ad["id"]) or {}
+        carry = (ad.get("coordinates_snapshot_json") or {}).get("carried_from") or {}
+        carry_id = receipt.get("carry_from_ad_id") or carry.get("ad_id")
+        if carry_id and carry_id not in carried:
+            carried[carry_id] = repository.get_ad(conn, org, brand, carry_id)
+        source = carried.get(carry_id)
+        customer_id = ad.get("customer_group_id")
+        customer = (customers or {}).get(customer_id)
+        offer_key = ad.get("offer_key")
+        customer_label = "尚未指定顧客群"
+        if customer_id:
+            customer_label = (customer.get("who") if customer else
+                              "顧客資料讀不到" if customers is None else
+                              "已刪除或不在這個商品的顧客群")
+        if not offer_key:
+            offer_label = "尚未指定優惠"
+        elif offer_key == "none":
+            offer_label = "不使用優惠"
+        elif offer_key in offer_labels:
+            offer_label = f"{vocab.offer_label(offer_key)}：{offer_labels[offer_key]}"
+        else:
+            offer_label = "優惠資料讀不到" if offers is None else "已失效或不在本期的優惠"
+        out[ad["id"]] = {
+            "slot_id": receipt.get("slot_id"),
+            "accepted_revision": (plan or {}).get("accepted_revision") if receipt else None,
+            "customer_group_id": customer_id, "customer_group_label": customer_label,
+            "scene": ad.get("scene"), "offer_key": offer_key, "offer_label": offer_label,
+            "carry_from_ad_id": carry_id,
+            "carry_from_ad_label": (source["name"] if source else "原廣告已刪除或讀不到")
+            if carry_id else None,
+            "carry_placement_id": carry.get("placement_id"),
+            "carry_placement_revision": carry.get("placement_revision"),
+        }
+    return out
 
 
 def structure(conn, org_id: str, brand_id: str, campaign_id: str) -> dict:
@@ -405,9 +479,15 @@ def structure(conn, org_id: str, brand_id: str, campaign_id: str) -> dict:
     groups: list[dict] = []
     placed: set = set()
     group_of_parent: dict = {}
+    plan, receipt_by_ad = (
+        (None, {}) if campaign["origin"] == "imported" else _structure_plan(campaign)
+    )
     if campaign["origin"] != "imported":
         matched = _planned_entities(conn, org_id, brand_id, campaign_id)
         ads = repository.list_ads_for_campaign(conn, org_id, brand_id, campaign_id)
+        assignments = _structure_assignments(
+            conn, org_id, brand_id, campaign, ads, receipt_by_ad, plan,
+        )
         slot_of = _slot_states(conn, org_id, brand_id, campaign_id)
         for group in repository._groups_for_campaign(conn, org_id, brand_id, campaign_id):
             group_entity = by_id.get(matched.get(("group", group["id"])))
@@ -423,6 +503,7 @@ def structure(conn, org_id: str, brand_id: str, campaign_id: str) -> dict:
                         "grade_label": None, "reason_code": None, "sample": None,
                         "cost_per_result": None, "results": None, "closing": False,
                         **_slot_fields(slot_of.get(ad["id"])),
+                        "assignment": assignments[ad["id"]],
                     })
                     continue
                 placed.add(entity["id"])
@@ -432,9 +513,12 @@ def structure(conn, org_id: str, brand_id: str, campaign_id: str) -> dict:
                     **_platform_ad(entity, graded, closing, ad_id=ad["id"], name=ad["name"]),
                     "slot_state": (slot_of.get(ad["id"]) or {}).get("state"),
                     "slot_label": (slot_of.get(ad["id"]) or {}).get("state_label"),
+                    "assignment": assignments[ad["id"]],
                 })
             groups.append({
                 "group_id": group["id"], "name": group["name"],
+                "role": group["role"],
+                "role_label": strategy._ROLE_LABELS.get(group["role"], "角色未知"),
                 # A group on a platform: its platform daily budget (the fact, a later budget
                 # change included); a plan-only group: the plan's own figure.
                 "daily_budget": _entity_daily_budget(group_entity) if group_entity is not None
@@ -455,13 +539,14 @@ def structure(conn, org_id: str, brand_id: str, campaign_id: str) -> dict:
         if parent_key not in platform_groups:
             platform_groups[parent_key] = {
                 "group_id": None,
-                "name": (parent or {}).get("name") or entity.get("parent_native_id") or "",
+                "role": None, "role_label": "平台廣告組，未綁定本機角色",
+                "name": (parent or {}).get("name") or "平台廣告組（名稱讀不到）",
                 "daily_budget": _entity_daily_budget(parent), "ads": [],
             }
         platform_groups[parent_key]["ads"].append(ad)
     # Plan groups keep the plan's order; platform parents follow by name (ads inside by name).
     groups.extend(sorted(platform_groups.values(), key=lambda g: g["name"]))
-    return {"groups": groups}
+    return {"groups": groups, "plan": plan}
 
 
 # ---------------------------------------------------------------------------

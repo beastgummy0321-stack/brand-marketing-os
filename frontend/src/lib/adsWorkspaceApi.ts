@@ -91,6 +91,21 @@ export interface CampaignWorkspace {
   draft: WorkspaceDraft | null;
 }
 
+/** Current stored assignment. The accepted receipt identifies provenance, not current choices. */
+export interface StructureAssignment {
+  slot_id: string | null;
+  accepted_revision: string | null;
+  customer_group_id: string | null;
+  customer_group_label: string;
+  scene: string | null;
+  offer_key: string | null;
+  offer_label: string;
+  carry_from_ad_id: string | null;
+  carry_from_ad_label: string | null;
+  carry_placement_id: string | null;
+  carry_placement_revision: number | null;
+}
+
 export interface StructureAd {
   /** The planned ad (app-built); null for a platform ad the plan does not hold. */
   ad_id: string | null;
@@ -118,6 +133,8 @@ export interface StructureAd {
   slot_state?: SlotState | null;
   /** F49 Contract T: that state's chip word (served; never a local word table). */
   slot_label?: string | null;
+  /** Null for an unplanned platform ad; optional only for older fixtures. */
+  assignment?: StructureAssignment | null;
 }
 
 export interface StructureGroup {
@@ -126,9 +143,20 @@ export interface StructureGroup {
   name: string;
   daily_budget: number | null;
   ads: StructureAd[];
+  role?: string | null;
+  role_label?: string;
 }
 
-export interface CampaignStructure { groups: StructureGroup[] }
+export interface CampaignStructure {
+  groups: StructureGroup[];
+  plan?: {
+    state: string;
+    revision: string;
+    accepted_revision: string | null;
+    operation_id: string | null;
+    reasons: { code: string; message: string; slot_ids: string[] }[];
+  } | null;
+}
 
 export type TimelineState = "verified" | "platform" | "check" | "rejected" | "draft" | "stale";
 

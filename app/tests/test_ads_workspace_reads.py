@@ -810,6 +810,7 @@ class ImportedStructureTest(_WithReader):
             "reason_code": None, "sample": _fake_sample(5),
             "results": 5, "closing": False, "missing_material": False,
             "slot_state": None, "slot_label": None,
+            "assignment": None,
         })
         self.assertTrue(a_ads[0]["closing"])  # approved pause, readback not confirmed yet
         self.assertEqual(a_ads[0]["results"], 0)
@@ -882,6 +883,117 @@ class AppBuiltStructureTest(_WithReader):
 
         return mock.patch.object(slots, "read", side_effect=read)
 
+    def test_f52_actual_bindings_and_receipt_survive_modified_decision(self):
+        conn, org, brand, campaign = self.conn, self.org, self.brand, self.campaign
+        product = bi_repo.create_product(conn, brand, name="商品", actor="test")["id"]
+        customers = bi_repo.save_customer_groups(conn, brand, product, [
+            {"who": "訓練前不方便配水的人", "pain_keys": ["effort"],
+             "when_used": "出門前"},
+        ], actor="test")
+        customer_id = customers[0]["id"]
+        repository.update_campaign(conn, org, brand, campaign,
+                                   {"product_ids": [product]})
+        bi_repo.save_brand_policies(conn, brand, [{"key": "ship_all", "params": {}}], actor="test")
+        snapshot = {"strategy_slot": {"slot_id": "slot_actual", "revision": "accepted"}}
+        conn.execute(
+            "UPDATE ads_ad SET customer_group_id=%s,scene=%s,offer_key=%s,"
+            "coordinates_snapshot_json=%s WHERE id=%s",
+            (customer_id, "訓練前沒有水", "free_shipping", db.jsonb(snapshot), self.ready),
+        )
+        receipt = {"revision": "accepted", "operation_id": "op_accepted", "slots": [
+            {"ad_id": self.ready, "group_id": self.group, "slot_id": "slot_actual",
+             "carry_from_ad_id": None},
+        ]}
+        repository.save_strategy(conn, org, brand, campaign, budget_basis_json={"strategy": {
+            "decision": {"schema_version": 1, "state": "adopted", "revision": "accepted",
+                         "receipt": receipt, "slots": [{"id": "wrong_proposal",
+                             "customer_group_id": "wrong_customer", "offer_key": "discount"}]},
+        }})
+        repository.invalidate_strategy_decision(conn, org, brand, campaign)
+        conn.commit()
+        stored = repository.get_campaign(conn, org, brand, campaign)
+        decision = stored["budget_basis_json"]["strategy"]["decision"]
+        result = workspace_reads.structure(conn, org, brand, campaign)
+        self.assertEqual(result["plan"], {
+            "state": "modified", "revision": decision["revision"],
+            "accepted_revision": "accepted", "operation_id": "op_accepted",
+            "reasons": decision["feasibility"]["reasons"],
+        })
+        group = result["groups"][0]
+        self.assertEqual(group["role"], "new")
+        assignment = group["ads"][0]["assignment"]
+        self.assertEqual(assignment["customer_group_id"], customer_id)
+        self.assertEqual(assignment["customer_group_label"], "訓練前不方便配水的人")
+        self.assertEqual(assignment["scene"], "訓練前沒有水")
+        self.assertEqual(assignment["offer_key"], "free_shipping")
+        self.assertIn("免運", assignment["offer_label"])
+        self.assertEqual(assignment["slot_id"], "slot_actual")
+        self.assertEqual(assignment["accepted_revision"], "accepted")
+        self.assertEqual(repository.get_campaign(conn, org, brand, campaign), stored)
+
+    def test_f52_removed_customer_and_unknown_offer_are_not_snapshot_labels(self):
+        conn, org, brand, campaign = self.conn, self.org, self.brand, self.campaign
+        conn.execute(
+            "UPDATE ads_ad SET customer_group_id='deleted_customer',offer_key='not_registered',"
+            "coordinates_snapshot_json=%s WHERE id=%s",
+            (db.jsonb({"customer_group": {"id": "deleted_customer", "who": "stale name"},
+                       "offer": {"key": "not_registered", "label": "stale offer"}}), self.ready),
+        )
+        conn.commit()
+        result = workspace_reads.structure(conn, org, brand, campaign)
+        assignment = result["groups"][0]["ads"][0]["assignment"]
+        self.assertEqual(assignment["customer_group_id"], "deleted_customer")
+        self.assertEqual(assignment["customer_group_label"], "已刪除或不在這個商品的顧客群")
+        self.assertEqual(assignment["offer_label"], "已失效或不在本期的優惠")
+        self.assertIsNone(assignment["accepted_revision"])
+        self.assertIsNone(result["plan"])
+
+    def test_f52_carry_resolves_scoped_source_and_retains_accepted_material_version(self):
+        conn, org, brand, campaign = self.conn, self.org, self.brand, self.campaign
+        previous = _draft(conn, org, brand, "上期")
+        old_group = repository.create_group(conn, org, brand, previous, channel_key="meta",
+                                            name="探索", role="explore", daily_budget=100)["id"]
+        source = repository.create_ad(conn, org, brand, previous, old_group, name="原版廣告",
+                                      coordinates={}, coordinates_snapshot={})["id"]
+        snapshot = {"carried_from": {"ad_id": source, "campaign_id": previous,
+                                     "placement_id": "placement", "placement_revision": 3}}
+        conn.execute("UPDATE ads_ad SET coordinates_snapshot_json=%s WHERE id=%s",
+                     (db.jsonb(snapshot), self.ready))
+        conn.commit()
+        assignment = workspace_reads.structure(conn, org, brand, campaign)["groups"][0]["ads"][0][
+            "assignment"]
+        self.assertEqual(assignment["carry_from_ad_id"], source)
+        self.assertEqual(assignment["carry_from_ad_label"], "原版廣告")
+        self.assertEqual(assignment["carry_placement_revision"], 3)
+        other_brand = _brand(conn, org, "別的品牌")
+        other = _draft(conn, org, other_brand)
+        other_group = repository.create_group(conn, org, other_brand, other, channel_key="meta",
+                                              name="他牌組", role="new", daily_budget=100)["id"]
+        foreign = repository.create_ad(conn, org, other_brand, other, other_group,
+                                       name="不應露出的原版", coordinates={},
+                                       coordinates_snapshot={})["id"]
+        conn.execute("UPDATE ads_ad SET coordinates_snapshot_json=%s WHERE id=%s",
+                     (db.jsonb({"carried_from": {"ad_id": foreign}}), self.ready))
+        conn.commit()
+        assignment = workspace_reads.structure(conn, org, brand, campaign)["groups"][0]["ads"][0][
+            "assignment"]
+        self.assertEqual(assignment["carry_from_ad_label"], "原廣告已刪除或讀不到")
+
+    def test_f52_failed_labels_remain_unknown_and_unplanned_ads_never_inherit_assignment(self):
+        conn, org, brand, campaign = self.conn, self.org, self.brand, self.campaign
+        conn.execute(
+            "UPDATE ads_ad SET customer_group_id='held',offer_key='free_shipping' WHERE id=%s",
+            (self.ready,),
+        )
+        conn.commit()
+        with mock.patch.object(bi_repo, "offer_sources", side_effect=RuntimeError("boom")), \
+                mock.patch.object(workspace_reads.customer_groups, "groups_by_id",
+                                  side_effect=RuntimeError("boom")):
+            result = workspace_reads.structure(conn, org, brand, campaign)
+            assignment = result["groups"][0]["ads"][0]["assignment"]
+        self.assertEqual(assignment["customer_group_label"], "顧客資料讀不到")
+        self.assertEqual(assignment["offer_label"], "優惠資料讀不到")
+
     def test_draft_plan_groups_with_missing_material(self):
         # A manual 就位 tick without a confirmed material binding is still missing (F30-I16).
         repository.set_ad_asset_ready(self.conn, self.org, self.brand, self.missing,
@@ -947,6 +1059,8 @@ class AppBuiltStructureTest(_WithReader):
             (self.missing, None, "缺素材", None, True),
             (None, extra, "p_new", "on_target", False),
         ])
+        self.assertIsNotNone(group["ads"][0]["assignment"])
+        self.assertIsNone(group["ads"][2]["assignment"])
 
 
 # ---------------------------------------------------------------------------
@@ -1053,7 +1167,7 @@ class RouteTest(_WithReader):
         })
         structure = client.get(f"{base}/{draft}/structure")
         self.assertEqual(structure.status_code, 200, structure.text)
-        self.assertEqual(structure.json(), {"groups": []})
+        self.assertEqual(structure.json(), {"groups": [], "plan": None})
         timeline = client.get(f"{base}/{draft}/timeline")
         self.assertEqual(timeline.status_code, 200, timeline.text)
         self.assertEqual(timeline.json(), {"rows": [], "truncated": False})

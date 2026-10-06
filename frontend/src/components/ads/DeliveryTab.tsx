@@ -1,5 +1,5 @@
 import { campaignPath } from "@/lib/adsRoutes";
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { NativeCreativeView } from "./NativeCreativeView";
 import { Plus, Folder, FileText, Layers, Wallet, Calendar } from "lucide-react";
 import { Button } from "@/components/layout/ui/button";
@@ -73,6 +73,15 @@ export function DeliveryTab({
   onChangeTab: (target: StepTarget) => void;
 }) {
   const imported = c.origin === "imported";
+  const owner = `${brandId}:${c.id}`;
+  const currentOwner = useRef(owner);
+  currentOwner.current = owner;
+  const readGeneration = useRef(0);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; readGeneration.current += 1; };
+  }, [owner]);
   const nativeEntities = c.external_view?.entities ?? [];
   const nativeCampaign = nativeEntities.find((row) => row.native_kind === "campaign");
   const nativeGroups = nativeEntities.filter((row) => row.native_kind === "adset");
@@ -157,9 +166,14 @@ export function DeliveryTab({
    * total, the capacity and the strategy's amounts are the server's, never recomputed here. A failed re-read keeps
    * the saved group in place (its numbers refresh on the next read). */
   async function reread(local: CampaignDetail) {
+    if (!mounted.current || currentOwner.current !== owner) return;
+    const generation = ++readGeneration.current;
     onCampaignChange(local);
     try {
-      onCampaignChange(await getCampaign(brandId, c.id));
+      const fresh = await getCampaign(brandId, c.id);
+      if (mounted.current && currentOwner.current === owner && readGeneration.current === generation) {
+        onCampaignChange(fresh);
+      }
     } catch {
       // The saved row already shows; the totals catch up on the next read.
     }
@@ -173,7 +187,7 @@ export function DeliveryTab({
   }
 
   function replaceAd(next: AdRow) {
-    onCampaignChange({
+    void reread({
       ...c,
       groups: c.groups.map((g) =>
         g.id === next.group_id ? { ...g, ads: g.ads.map((a) => (a.id === next.id ? next : a)) } : g,
@@ -269,7 +283,7 @@ export function DeliveryTab({
     ? c.groups.flatMap((g) => g.ads).find((a) => `ad:${a.id}` === selected) ?? null
     : null;
   // The tree re-reads when the plan behind it changes (a group or ad added, renamed, removed, re-budgeted).
-  const planKey = c.groups.map((g) => `${g.id}:${g.name}:${g.daily_budget}:${g.ads.map((a) => `${a.id}:${a.name}`).join(",")}`).join("|");
+  const planKey = JSON.stringify([c.groups, c.budget_basis_json?.strategy?.decision?.revision]);
 
   const adCount = c.groups.reduce((sum, g) => sum + g.ads.length, 0);
   // 同 `PublishPage.tsx` 的判斷：已投放過 or 已經有一筆 campaign 層級的發布動作，兩種都算「綁定過」。

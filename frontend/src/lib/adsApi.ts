@@ -126,6 +126,9 @@ export interface AdRow extends EntityBinding {
   offer_key: string | null;
   format_key: string | null;
   coordinates_snapshot_json: Record<string, unknown>;
+  /** Current stored targeting and scene; optional only for older fixtures. */
+  customer_group_id?: string | null;
+  scene?: string | null;
   product_id: string | null;
   asset_ready_source: "workbench" | "manual" | null;
   asset_ready_by: string | null;
