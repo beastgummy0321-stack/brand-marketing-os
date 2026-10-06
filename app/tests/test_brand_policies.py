@@ -16,7 +16,8 @@ class MerchantReturnPolicyTest(unittest.TestCase):
     def test_merchant_text_and_provenance_are_not_an_offer(self):
         key = "merchant_return_conditions"
         params = {"conditions": "商家要求未拆封並附原包裝。", "source_note": "商家客服提供"}
-        [row] = repo.save_brand_policies(self.conn, self.bid, [{"key": key, "params": params}], actor="test")
+        [row] = repo.save_brand_policies(
+            self.conn, self.bid, [{"key": key, "params": params}], actor="test")
         self.assertEqual((row["params"], row["sentence"], row["offer_key"]),
                          (params, params["conditions"], None))
         self.assertEqual(repo.available_offer_keys(self.conn, self.bid), set())
@@ -34,7 +35,8 @@ class MerchantReturnPolicyTest(unittest.TestCase):
         self.assertEqual(repo.offer_sources(self.conn, self.bid),
                          [{"offer_key": "bundle", "sentence": custom["sentence"]}])
         version = repo.get_brand(self.conn, self.bid)["knowledge_version"]
-        self.assertEqual(repo.save_brand_policies(self.conn, self.bid, [custom, merchant], actor="test"), saved)
+        self.assertEqual(repo.save_brand_policies(
+            self.conn, self.bid, [custom, merchant], actor="test"), saved)
         self.assertEqual(repo.get_brand(self.conn, self.bid)["knowledge_version"], version)
         self.assertEqual([p["key"] for p in repo.save_brand_policies(
             self.conn, self.bid, [custom], actor="test")], ["custom"])
@@ -43,13 +45,16 @@ class MerchantReturnPolicyTest(unittest.TestCase):
         key = "merchant_return_conditions"
         for field in ("conditions", "source_note"):
             with self.subTest(field=field):
-                self.assertEqual(vocab.normalize_policy_params(key, {field: "文" * 200}), {field: "文" * 200})
+                self.assertEqual(vocab.normalize_policy_params(key, {field: "文" * 200}),
+                                 {field: "文" * 200})
                 with self.assertRaises(ValueError):
-                    repo.save_brand_policies(self.conn, self.bid,
-                                             [{"key": key, "params": {field: "文" * 201}}], actor="test")
+                    repo.save_brand_policies(
+                        self.conn, self.bid, [{"key": key, "params": {field: "文" * 201}}],
+                        actor="test")
         with self.assertRaises(ValueError):
-            repo.save_brand_policies(self.conn, self.bid,
-                                     [{"key": key, "params": {"offer_key": "refund"}}], actor="test")
+            repo.save_brand_policies(
+                self.conn, self.bid, [{"key": key, "params": {"offer_key": "refund"}}],
+                actor="test")
         self.assertEqual(repo.list_brand_policies(self.conn, self.bid), [])
         # The merchant limit does not silently expand restrictions on existing offers.
         self.assertEqual(vocab.normalize_policy_params("first_order", {"content": "文" * 201}),

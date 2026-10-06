@@ -137,22 +137,26 @@ class MerchantReturnConditionsTest(_Base):
         self.assertEqual(self._put(bid, "/evidence", {"policies": [custom]}).status_code, 200)
         self.assertEqual(self._get(bid, "/evidence")["cooling_off"], data["cooling_off"])
         # Clearing one field does not clear the omitted other field.
-        self.assertEqual(self._save(bid, {"applies": True, "conditions": ""}, [custom]).status_code, 200)
+        self.assertEqual(self._save(
+            bid, {"applies": True, "conditions": ""}, [custom]).status_code, 200)
         cooling = self._get(bid, "/evidence")["cooling_off"]
         self.assertEqual((cooling["conditions"], cooling["source_note"]), ("", source))
-        self.assertEqual(self._save(bid, {"applies": True, "source_note": ""}, [custom]).status_code, 200)
+        self.assertEqual(self._save(
+            bid, {"applies": True, "source_note": ""}, [custom]).status_code, 200)
         cooling = self._get(bid, "/evidence")["cooling_off"]
         self.assertEqual((cooling["conditions"], cooling["source_note"]), ("", ""))
         self.assertEqual([p["key"] for p in bi_repo.list_brand_policies(web.conn, bid)], ["custom"])
 
     def test_exemption_requires_disclosure_and_keeps_unsent_conditions(self):
         bid = self._create()
-        self.assertEqual(self._save(bid, {"applies": True, "conditions": "商家自述條件"}).status_code, 200)
+        self.assertEqual(self._save(
+            bid, {"applies": True, "conditions": "商家自述條件"}).status_code, 200)
         invalid = self._save(bid, {"applies": False, "disclosure": ""})
         self.assertEqual(invalid.status_code, 400)
         self.assertTrue(self._get(bid, "/evidence")["cooling_off"]["applies"])
         disclosure = "商家提供的不適用告知文字，須由商家確認。"
-        self.assertEqual(self._save(bid, {"applies": False, "disclosure": disclosure}).status_code, 200)
+        self.assertEqual(self._save(
+            bid, {"applies": False, "disclosure": disclosure}).status_code, 200)
         cooling = self._get(bid, "/evidence")["cooling_off"]
         self.assertEqual(cooling, {"applies": False, "disclosure": disclosure,
                                    "conditions": "商家自述條件", "source_note": ""})
@@ -166,14 +170,17 @@ class MerchantReturnConditionsTest(_Base):
                 accepted = {"applies": True, field: "文" * 200}
                 self.assertEqual(self._save(bid, accepted).status_code, 200)
                 before = self._get(bid, "/evidence")
-                rejected = self._save(bid, {"applies": True, field: "文" * 201}, [{"key": "ship_all"}])
+                rejected = self._save(
+                    bid, {"applies": True, field: "文" * 201}, [{"key": "ship_all"}])
                 self.assertEqual(rejected.status_code, 400, rejected.text)
                 self.assertIn("200", rejected.text)
                 self.assertEqual(self._get(bid, "/evidence"), before)
         headers = self._other_org_headers()
-        self.assertEqual(self.client.get(self._url(bid, "/evidence"), headers=headers).status_code, 404)
-        self.assertEqual(self.client.put(self._url(bid, "/evidence"), headers=headers,
-                         json={"cooling_off": {"applies": True, "conditions": "入侵覆寫"}}).status_code, 404)
+        self.assertEqual(self.client.get(
+            self._url(bid, "/evidence"), headers=headers).status_code, 404)
+        self.assertEqual(self.client.put(
+            self._url(bid, "/evidence"), headers=headers,
+            json={"cooling_off": {"applies": True, "conditions": "入侵覆寫"}}).status_code, 404)
         self.assertEqual(self._get(bid, "/evidence"), before)
 
     def test_legacy_blank_and_special_key_is_not_a_regular_policy(self):
