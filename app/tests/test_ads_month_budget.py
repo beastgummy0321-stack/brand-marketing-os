@@ -5,6 +5,7 @@ from datetime import date
 from unittest.mock import patch
 
 from app.ads import external_repository as external
+from app.ads import external_sync
 from app.ads import month_budget as budget
 from app.brand_intelligence import repository as brands
 from app.core import db
@@ -68,6 +69,17 @@ def change(amount):
 
 
 class MonthlyCalculationTest(unittest.TestCase):
+    def test_launch_task_success_rejects_incomplete_or_contradictory_evidence(self):
+        for task, expected in [
+            ({}, False),
+            ({"status": "pending", "errors": []}, False),
+            ({"status": "failed", "errors": []}, False),
+            ({"status": "succeeded", "errors": ["partial read"]}, False),
+            ({"status": "succeeded", "errors": []}, True),
+        ]:
+            with self.subTest(task=task):
+                self.assertIs(external_sync.clean_task_success(task), expected)
+
     def test_absent_spend_evidence_is_not_zero(self):
         result = calculate(observations=[], uncertainties=["帳戶尚未完整核對"])
         self.assertIsNone(result["known_spend"])
