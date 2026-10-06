@@ -191,8 +191,9 @@ export function ExperimentPlan({ draftScope, brandId, campaignId, hasSavedCompar
   }
 
   function cancelSettings() {
-    if (!state?.settings) return;
-    startEditing(state.settings);
+    const settings = state?.settings ?? editBase;
+    if (!settings) return;
+    startEditing(settings);
     setError(null);
   }
 

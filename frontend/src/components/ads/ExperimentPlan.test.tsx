@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, expect, it, vi } from "vitest";
 import {
@@ -74,6 +74,17 @@ beforeEach(() => {
 function mount(hasSavedComparison = false, draftScope = "user:org") {
   return render(<ExperimentPlan draftScope={draftScope} brandId="brand" campaignId="c"
     hasSavedComparison={hasSavedComparison} onViewPlan={vi.fn()} />);
+}
+
+function seedRestoredDraft() {
+  sessionStorage.setItem("brand-os:ads:comparison-draft:v1:user:org:brand:c", JSON.stringify({
+    base: settings(),
+    draft: {
+      min_days: "5", min_conversions_each: "12", relative_difference: "0.2",
+      windowStart: "2026-09-01", windowEnd: "2026-09-07",
+    },
+    resetKeys: [],
+  }));
 }
 
 async function open() {
@@ -168,6 +179,91 @@ it("重新讀取不覆蓋 dirty 草稿，遠端 revision 改變時要求明確�
   await user.click(screen.getByRole("button", { name: "取消設定變更" }));
   expect((screen.getByRole("spinbutton", { name: "每則最少轉換數" }) as HTMLInputElement).value).toBe("20");
   expect(screen.getByText(/版本 4/)).toBeTruthy();
+});
+
+it.each([{ revision: "3", value: 10 }, { revision: "4", value: 20 }])(
+  "restored draft cancellation before the initial read adopts revision $revision/value $value and permits confirmation",
+  async ({ revision, value }) => {
+  seedRestoredDraft();
+  let release!: (value: ComparisonState) => void;
+  vi.mocked(readComparison).mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+  mount();
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("button", { name: "素材比較（選用）" }));
+  await user.click(screen.getByRole("button", { name: "進階判讀設定" }));
+  const conversions = screen.getByRole("spinbutton", { name: "每則最少轉換數" }) as HTMLInputElement;
+  expect(conversions.value).toBe("12");
+  expect(screen.getByText("讀取比較提案中…")).toBeTruthy();
+  const cancel = screen.getByRole("button", { name: "取消設定變更" }) as HTMLButtonElement;
+  expect(cancel.disabled).toBe(false);
+  await user.click(cancel);
+  const afterCancel = conversions.value;
+  await act(async () => release({ ...state,
+    settings: settings({ revision, effective: { ...settings().effective, min_conversions_each: value } }),
+  }));
+  await screen.findByText("只改開場");
+  await user.click(screen.getByRole("checkbox"));
+  expect({
+    afterCancel,
+    afterRead: conversions.value,
+    dirty: screen.queryByText(/請先儲存或取消進階判讀設定/) !== null,
+    confirmDisabled: (screen.getByRole("button", { name: "確認這份比較計畫" }) as HTMLButtonElement).disabled,
+    storedDraft: sessionStorage.getItem("brand-os:ads:comparison-draft:v1:user:org:brand:c") !== null,
+  }).toEqual({ afterCancel: "10", afterRead: String(value), dirty: false, confirmDisabled: false, storedDraft: false });
+  expect(screen.getByText(new RegExp(`版本 ${revision}`))).toBeTruthy();
+  expect(saveComparisonSettings).not.toHaveBeenCalled();
+  expect(confirmComparison).not.toHaveBeenCalled();
+});
+
+it("cancelled restored edits stay cancelled when the initial read fails, and an explicit retry adopts current settings", async () => {
+  seedRestoredDraft();
+  let reject!: (reason: Error) => void;
+  vi.mocked(readComparison).mockImplementationOnce(() => new Promise((_, no) => { reject = no; }));
+  mount();
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("button", { name: "素材比較（選用）" }));
+  await user.click(screen.getByRole("button", { name: "進階判讀設定" }));
+  await user.click(screen.getByRole("button", { name: "取消設定變更" }));
+  await act(async () => reject(new Error("讀取比較暫時失敗")));
+  expect((await screen.findByRole("alert")).textContent).toBe("讀取比較暫時失敗");
+  expect((screen.getByRole("spinbutton", { name: "每則最少轉換數" }) as HTMLInputElement).value).toBe("10");
+  expect(screen.queryByText(/有未儲存變更/)).toBeNull();
+  expect(screen.queryByRole("button", { name: "確認這份比較計畫" })).toBeNull();
+  expect(sessionStorage.getItem("brand-os:ads:comparison-draft:v1:user:org:brand:c")).toBeNull();
+  expect(readComparison).toHaveBeenCalledTimes(1);
+  vi.mocked(readComparison).mockResolvedValueOnce({ ...state,
+    settings: settings({ revision: "4", effective: { ...settings().effective, min_conversions_each: 20 } }),
+  });
+  await user.click(screen.getByRole("button", { name: "重新讀取比較提案" }));
+  await screen.findByText("只改開場");
+  expect((screen.getByRole("spinbutton", { name: "每則最少轉換數" }) as HTMLInputElement).value).toBe("20");
+  expect(screen.getByText(/版本 4/)).toBeTruthy();
+  expect(saveComparisonSettings).not.toHaveBeenCalled();
+  expect(confirmComparison).not.toHaveBeenCalled();
+});
+
+it("a comparison reply in the cancellation turn adopts the new revision instead of retaining the old edit base", async () => {
+  seedRestoredDraft();
+  let release!: (value: ComparisonState) => void;
+  vi.mocked(readComparison).mockImplementationOnce(() => new Promise((yes) => { release = yes; }));
+  mount();
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("button", { name: "素材比較（選用）" }));
+  await user.click(screen.getByRole("button", { name: "進階判讀設定" }));
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "取消設定變更" }));
+    release({ ...state, settings: settings({ revision: "4",
+      effective: { ...settings().effective, min_conversions_each: 20 },
+    }) });
+  });
+  await screen.findByText("只改開場");
+  expect((screen.getByRole("spinbutton", { name: "每則最少轉換數" }) as HTMLInputElement).value).toBe("20");
+  expect(screen.getByText(/版本 4/)).toBeTruthy();
+  expect(screen.queryByText(/伺服器設定已有新版本/)).toBeNull();
+  await user.click(screen.getByRole("checkbox"));
+  expect((screen.getByRole("button", { name: "確認這份比較計畫" }) as HTMLButtonElement).disabled).toBe(false);
+  expect(saveComparisonSettings).not.toHaveBeenCalled();
+  expect(confirmComparison).not.toHaveBeenCalled();
 });
 
 it("dirty 時不能確認舊設定，儲存失敗仍保留輸入", async () => {
