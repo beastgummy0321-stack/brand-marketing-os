@@ -84,7 +84,9 @@ class AssetsTestBase(unittest.TestCase):
         row = ads_repo.create_campaign(web.conn, self.org_id, self.brand_id, campaign,
                                         created_by=ACTOR)
         plan.PROVIDER = _fake(_VALID_PLAN_REPLY)
-        revision = bind_fixture(web.conn, self.org_id, self.brand_id, row["id"], json.loads(_VALID_PLAN_REPLY))
+        revision = bind_fixture(
+            web.conn, self.org_id, self.brand_id, row["id"], json.loads(_VALID_PLAN_REPLY)
+        )
         return plan.adopt_strategy(web.conn, self.org_id, self.brand_id, row["id"], actor=ACTOR,
                                   expected_revision=revision, operation_id=f"assets-{row['id']}")
 

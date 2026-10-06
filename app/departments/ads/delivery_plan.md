@@ -46,10 +46,9 @@ N，只能填列出的編號）；`pain` 要從那一群的煩惱（括號裡 `p
 （每支廣告要有自己的圖可用）。
 
 【這期可用的優惠】有列時：每一行是一個可用的 `offer` key 和它登記的那句話（價格、原價都在句子裡）。
-至少要有一支廣告的 `offer` 填列出的某個 key（已沿用的廣告用了列出的優惠也算），那支廣告的名稱和
-`scene` 要合這個優惠（句子講的是什麼好處，名稱就點出它，情境就是會在意這個好處的時刻）；其餘廣告
-可以填 `none`。全部廣告都填 `none`，整份回覆會被退回。寫「這期沒有可用的優惠」時，每支廣告的
-`offer` 都填 `none`。
+Use each accepted slot's exact offer key. An accepted `none` is legal even when offers are
+available; never replace it with an available discount. For an accepted offer, the ad name
+and scene must fit its registered benefit. If no offer is available, every offer is `none`.
 
 **你的整段回覆必須是、且只能是一個 JSON 物件：不寫任何開場白或結語、不用 ``` 或任何
 markdown fence 包起來、物件前後不留一個字。**

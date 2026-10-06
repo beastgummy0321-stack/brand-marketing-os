@@ -19,10 +19,10 @@ the strategy -- groups, offers, numbers, capacity, learnings -- are written by t
 prose only, and a reply whose prose carries a digit, `%` or `NT$` is refused.
 """
 
-import re
 import hashlib
 import json
 import math
+import re
 
 from app.ads import (
     budget,
@@ -202,6 +202,11 @@ def _check_reply(data, available: frozenset[str], names=()) -> tuple[dict | None
     prose = [data.get(key) for key in ("why", "unknowns", "learning_goals")]
     if _has_number([t for value in prose if isinstance(value, list) for t in value], names):
         return None, "number_in_prose"
+    slots = data.get("slots")
+    if isinstance(slots, list) and _has_number([
+        s.get(k) for s in slots if isinstance(s, dict) for k in ("rationale", "test_intent")
+    ], names):
+        return None, "number_in_prose"
     alternatives = data.get("alternatives", [])
     if not isinstance(alternatives, list) or not all(isinstance(a, str) for a in alternatives):
         return invalid
@@ -252,44 +257,111 @@ def decision_context(ctx: dict, campaign: dict) -> dict:
     """Stable IDs and decision facts; never hash render labels or read timestamps."""
     carried = ctx.get("carried_candidates") or []
     return {
-        "campaign_id": campaign["id"], "product_ids": ctx.get("product_ids") or [],
+        "campaign_id": campaign["id"],
+        "product_ids": ctx.get("product_ids") or [],
         "dates": [str(campaign.get(k)) for k in ("start_date", "end_date")],
-        "objective": campaign.get("objective"), "goal": campaign.get("goal_text"),
-        "budget_planned": (float(campaign["budget_planned"])
-                           if campaign.get("budget_planned") is not None else None),
+        "objective": campaign.get("objective"),
+        "goal": campaign.get("goal_text"),
+        "budget_planned": (
+            float(campaign["budget_planned"])
+            if campaign.get("budget_planned") is not None
+            else None
+        ),
         "constraints": campaign.get("constraints_json") or {},
-        "customers": [{"id": g["id"], "pain_keys": g.get("pain_keys") or []}
-                      for g in ctx["customer_groups"]],
+        "customers": [
+            {
+                k: g.get(k)
+                for k in (
+                    "id",
+                    "product_id",
+                    "position",
+                    "who",
+                    "pain_keys",
+                    "quote",
+                    "when_used",
+                    "source",
+                )
+            }
+            for g in ctx["customer_groups"]
+        ],
         "offers": [{"key": o["key"], "sentence": o["sentence"]} for o in ctx["offers"]],
         "menu": sorted((r["dimension"], r["key"]) for r in ctx["menu"]),
-        "forbidden": ctx["forbidden"], "capacity": ctx.get("capacity"),
+        "forbidden": ctx["forbidden"],
+        "capacity": ctx.get("capacity"),
         "learnings": [{"id": r["id"], "text": r.get("text")} for r in ctx["learnings"]["ads"]],
-        "ranked_ids": ctx["ranked_ids"], "calendar": ctx.get("calendar_evidence") or [],
-        "brand_facts": [{"id": r["id"], "value": r.get("value")}
-                        for r in ctx.get("brand_facts") or []],
-        "prices": [{k: r.get(k) for k in ("product_id", "price", "stale", "assumptions")}
-                   for r in ctx.get("prices") or []],
-        "product_facts": [{"id": k["id"], "facts": k["facts"]}
-                          for b in ctx.get("product_blocks") or [] for k in b["knowledge"]],
-        "results": [{**{k: r.get(k) for k in ("ad_id", "sales", "spend", "cost_per_sale",
-                                           "verdict", "flags")},
-                     "coordinates": [(v["dimension"], v["key"])
-                                     for v in r.get("coordinates") or []]}
-                    for c in ctx["learnings"]["ranked"]["campaigns"] for r in c["rows"]],
+        "ranked_ids": ctx["ranked_ids"],
+        "calendar": ctx.get("calendar_evidence") or [],
+        "brand_facts": [
+            {"id": r["id"], "value": r.get("value")} for r in ctx.get("brand_facts") or []
+        ],
+        "prices": [
+            {k: r.get(k) for k in ("product_id", "price", "stale", "assumptions")}
+            for r in ctx.get("prices") or []
+        ],
+        "product_facts": [
+            {"id": k["id"], "facts": k["facts"]}
+            for b in ctx.get("product_blocks") or []
+            for k in b["knowledge"]
+        ],
+        "results": [
+            {
+                **{
+                    k: r.get(k)
+                    for k in ("ad_id", "sales", "spend", "cost_per_sale", "verdict", "flags")
+                },
+                "coordinates": [(v["dimension"], v["key"]) for v in r.get("coordinates") or []],
+            }
+            for c in ctx["learnings"]["ranked"]["campaigns"]
+            for r in c["rows"]
+        ],
         "previous_goals": (ctx.get("previous") or {}).get("learning_goals") or [],
         "evidence_refs": (
             [{"kind": "learning", "id": r["id"]} for r in ctx["learnings"]["ads"]]
             + [{"kind": "learning", "id": i} for i in ctx["ranked_ids"]]
-            + [{"kind": "result", "id": r["ad_id"]}
-               for c in ctx["learnings"]["ranked"]["campaigns"] for r in c["rows"]]
+            + [
+                {"kind": "result", "id": r["ad_id"]}
+                for c in ctx["learnings"]["ranked"]["campaigns"]
+                for r in c["rows"]
+            ]
             + [{"kind": "brand_fact", "id": r["id"]} for r in ctx.get("brand_facts") or []]
             + [{"kind": "calendar", "id": r["id"]} for r in ctx.get("calendar_evidence") or []]
         ),
-        "carried": [{"id": i["ad"]["id"], "role": i["role"],
-                    "customer_group_id": i["ad"].get("customer_group_id"),
-                    "coordinates": {d: i["ad"].get(f"{d}_key") for d in plan._COORDINATE_DIMENSIONS},
-                    "creative": i["creative"], "eligibility": i.get("eligibility")} for i in carried],
+        "carried": [
+            {
+                "id": i["ad"]["id"],
+                "role": i["role"],
+                "customer_group_id": i["ad"].get("customer_group_id"),
+                "coordinates": {d: i["ad"].get(f"{d}_key") for d in plan._COORDINATE_DIMENSIONS},
+                "creative": i["creative"],
+                "eligibility": i.get("eligibility"),
+            }
+            for i in carried
+        ],
     }
+
+
+_BINDING_PROMPT_CAP = 24
+
+
+def decision_prompt_context(ctx: dict, campaign: dict) -> dict:
+    """Only assignment choices reach the model; full semantic snapshots remain program-owned."""
+    lists = {
+        "customers": [{"id": g["id"]} for g in ctx["customer_groups"]],
+        "offers": [{"key": o["key"]} for o in ctx["offers"]],
+        "menu": [{k: r[k] for k in ("dimension", "key", "label")} for r in ctx["menu"]],
+        "carried": [{"id": i["ad"]["id"], "role": i["role"],
+                     "customer_group_id": i["ad"].get("customer_group_id"),
+                     "coordinates": {d: i["ad"].get(f"{d}_key")
+                                     for d in plan._COORDINATE_DIMENSIONS},
+                     "creative": i["creative"] is not None,
+                     "eligibility": {"state": (i.get("eligibility") or {}).get("state")}}
+                    for i in ctx.get("carried_candidates") or []],
+        "evidence_refs": decision_context(ctx, campaign)["evidence_refs"],
+    }
+    return {**{key: rows[:_BINDING_PROMPT_CAP] for key, rows in lists.items()},
+            "capacity": ctx.get("capacity"),
+            "omitted": {key: max(0, len(rows) - _BINDING_PROMPT_CAP)
+                        for key, rows in lists.items()}}
 
 
 def executable_decision(ctx: dict, campaign: dict, payload: dict) -> dict:
@@ -310,13 +382,15 @@ def executable_decision(ctx: dict, campaign: dict, payload: dict) -> dict:
     evidence |= {("calendar", r["id"]) for r in ctx.get("calendar_evidence") or []}
     evidence |= {("brand_fact", r["id"]) for r in ctx.get("brand_facts") or []}
     seen, carry_seen, per_role, groups_per_role = set(), set(), {}, {}
+    names = planner_context.quoted_names(ctx)
     if not isinstance(slots, list) or not slots:
         refuse("slots_missing", "請重新產生策略，確認每則廣告的安排。")
         slots = []
     for slot in slots:
         if (not isinstance(slot, dict) or any(not isinstance(slot.get(k), str)
                 for k in ("id", "role", "offer_key"))
-                or any(slot.get(k) is not None and not isinstance(slot.get(k), str)
+                or any(k not in slot or (slot.get(k) is not None
+                                        and not isinstance(slot.get(k), str))
                        for k in ("customer_group_id", "carry_from_ad_id", "test_intent"))):
             refuse("slot_invalid", "廣告安排格式無效。")
             continue
@@ -337,7 +411,13 @@ def executable_decision(ctx: dict, campaign: dict, payload: dict) -> dict:
         carry_id, intent = slot.get("carry_from_ad_id"), slot.get("test_intent")
         rationale = slot.get("rationale")
         if not isinstance(rationale, str) or not rationale.strip():
-            refuse("slot_rationale_missing", "每則廣告需要說明安排理由與依據限制，請重新產生策略。", ids)
+            refuse(
+                "slot_rationale_missing",
+                "每則廣告需要說明安排理由與依據限制，請重新產生策略。",
+                ids,
+            )
+        if _has_number([rationale, intent], names):
+            refuse("number_in_prose", REFUSALS["number_in_prose"], ids)
         has_intent = isinstance(intent, str) and bool(intent.strip())
         if bool(carry_id) == has_intent:
             refuse("slot_intent_invalid", "請選擇沿用原廣告，或明確提出新測試。", ids)
@@ -369,8 +449,6 @@ def executable_decision(ctx: dict, campaign: dict, payload: dict) -> dict:
         amounts = plan._role_amounts(allocation, capacity["daily"])
         if any(amount <= 0 for amount in amounts.values()):
             refuse("allocation_too_small", "部分角色分不到正數日預算，請調整比例或預算。")
-    if ctx["offers"] and not any(s.get("offer_key") != "none" for s in slots if isinstance(s, dict)):
-        refuse("offer_unused", "這期有可用優惠，請明確安排至少一則使用它。")
     stable = {"inputs": decision_context(ctx, campaign), "slots": slots,
               "allocation": [{"role": r["role"], "pct": r["pct"]} for r in allocation]}
     revision = hashlib.sha256(json.dumps(stable, sort_keys=True, ensure_ascii=False,
@@ -379,10 +457,8 @@ def executable_decision(ctx: dict, campaign: dict, payload: dict) -> dict:
             "feasibility": {"state": "blocked" if reasons else "ready", "reasons": reasons}}
 
 
-def refresh_decision(conn, org, brand, campaign, payload):
-    """Refresh bindings after budget/allocation edits; labels never determine a binding."""
-    if not payload.get("decision"):
-        return
+def _prepared_decision_context(conn, org, brand, campaign):
+    """Share the same facts and recommended-budget fallback for reads and edits."""
     ctx = planner_context.planner_context(conn, org, brand, sell_way.of_campaign(campaign),
                                           campaign=campaign)
     if ctx["capacity"] is None and campaign.get("budget_planned") is None:
@@ -391,6 +467,14 @@ def refresh_decision(conn, org, brand, campaign, payload):
                     if r["key"] == scenarios.get("recommended")), {})
         ctx["capacity"] = planner_context.capacity_of(row.get("daily"), ctx["cap"])
     _, ctx["brand_facts"] = _brand_facts_section(conn, brand)
+    return ctx
+
+
+def refresh_decision(conn, org, brand, campaign, payload):
+    """Refresh bindings after budget/allocation edits; labels never determine a binding."""
+    if not payload.get("decision"):
+        return
+    ctx = _prepared_decision_context(conn, org, brand, campaign)
     previous = payload["decision"]
     payload["decision"] = executable_decision(ctx, campaign, payload)
     if previous.get("state") in ("adopted", "modified"):
@@ -404,15 +488,9 @@ def served_decision(conn, org, brand, campaign, groups):
     payload = (campaign.get("budget_basis_json") or {}).get("strategy") or {}
     saved = payload.get("decision")
     decision = dict(saved) if saved else None
-    ctx = planner_context.planner_context(conn, org, brand, sell_way.of_campaign(campaign),
-                                          campaign=campaign)
+    ctx = _prepared_decision_context(conn, org, brand, campaign)
     if saved and saved.get("state") == "proposed":
-        _, ctx["brand_facts"] = _brand_facts_section(conn, brand)
-        if campaign.get("budget_planned") is None:
-            scenarios = (campaign.get("budget_basis_json") or {}).get("scenarios") or {}
-            row = next((r for r in scenarios.get("scenarios", [])
-                        if r["key"] == scenarios.get("recommended")), {})
-            ctx["capacity"] = planner_context.capacity_of(row.get("daily"), ctx["cap"])
+        assert decision is not None
         current = executable_decision(ctx, campaign, payload)
         decision["feasibility"] = current["feasibility"]
         if current["revision"] != saved["revision"]:
@@ -420,11 +498,20 @@ def served_decision(conn, org, brand, campaign, groups):
                 *current["feasibility"]["reasons"], {"code": "strategy_changed",
                     "message": "安排的依據已更新，請重新產生策略並確認。", "slot_ids": []}]}
     decision = decision or {
-        "schema_version": 1, "revision": "", "state": "legacy_unbound", "slots": [],
-        "feasibility": {"state": "blocked", "reasons": [{
-            "code": "strategy_confirmation_required", "message": "舊策略尚未綁定安排，請重新產生並確認。",
-            "slot_ids": [],
-        }]},
+        "schema_version": 1,
+        "revision": "",
+        "state": "legacy_unbound",
+        "slots": [],
+        "feasibility": {
+            "state": "blocked",
+            "reasons": [
+                {
+                    "code": "strategy_confirmation_required",
+                    "message": "舊策略尚未綁定安排，請重新產生並確認。",
+                    "slot_ids": [],
+                }
+            ],
+        },
     }
     names = {g["id"]: g["who"] for g in ctx["customer_groups"]}
     proposed = [s for s in decision["slots"] if isinstance(s, dict)]
@@ -434,13 +521,22 @@ def served_decision(conn, org, brand, campaign, groups):
     actual_ids = set(a.get("customer_group_id") for a in ads) - {None}
     decision["facts"] = {
         "available": {"customer_groups": len(names), "customer_group_names": list(names.values())},
-        "proposed": {"customer_groups": len(proposed_ids), "delivery_groups": len(set(
-            s["role"] for s in proposed if isinstance(s.get("role"), str))), "ads": len(decision["slots"]),
+        "proposed": {
+            "customer_groups": len(proposed_ids),
+            "delivery_groups": len(
+                set(s["role"] for s in proposed if isinstance(s.get("role"), str))
+            ),
+            "ads": len(decision["slots"]),
             "customer_group_names": [names.get(i, "已刪除的顧客群") for i in sorted(proposed_ids)],
-            "unknown_audience_ads": sum(s.get("customer_group_id") is None for s in proposed)},
-        "actual": {"customer_groups": len(actual_ids), "delivery_groups": len(groups), "ads": len(ads),
+            "unknown_audience_ads": sum(s.get("customer_group_id") is None for s in proposed),
+        },
+        "actual": {
+            "customer_groups": len(actual_ids),
+            "delivery_groups": len(groups),
+            "ads": len(ads),
             "customer_group_names": [names.get(i, "已刪除的顧客群") for i in sorted(actual_ids)],
-            "unknown_audience_ads": sum(a.get("customer_group_id") is None for a in ads)},
+            "unknown_audience_ads": sum(a.get("customer_group_id") is None for a in ads),
+        },
     }
     return decision
 
@@ -644,7 +740,7 @@ def generate(conn, org_id: str, brand_id: str, campaign_id: str, *, actor: str) 
         + "\n\n" + facts_text
         + sections
         + "\n\n" + scenarios_text
-        + "\n\n【可綁定安排】\n" + json.dumps(decision_context(ctx, campaign),
+        + "\n\n【可綁定安排】\n" + json.dumps(decision_prompt_context(ctx, campaign),
                                                 ensure_ascii=False, default=str)
     )
 

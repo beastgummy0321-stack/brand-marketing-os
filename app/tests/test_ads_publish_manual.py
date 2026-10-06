@@ -134,7 +134,9 @@ class PublishTestBase(unittest.TestCase):
         """`draft` -> `ready`，3 個投放組各一支廣告（跟 `test_ads_plan.py` 同一份假回覆）。"""
         campaign = self._create_campaign(**kwargs)
         plan.PROVIDER = _fake(_VALID_PLAN_REPLY)
-        revision = bind_fixture(web.conn, self.org_id, self.brand_id, campaign["id"], json.loads(_VALID_PLAN_REPLY))
+        revision = bind_fixture(
+            web.conn, self.org_id, self.brand_id, campaign["id"], json.loads(_VALID_PLAN_REPLY)
+        )
         return plan.adopt_strategy(
             web.conn, self.org_id, self.brand_id, campaign["id"], actor=ACTOR,
             expected_revision=revision, operation_id=f"publish-{campaign['id']}",

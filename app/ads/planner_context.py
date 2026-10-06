@@ -15,8 +15,8 @@ import math
 
 from app import workbench
 from app.ads import (
-    calendar_tw,
     budget,
+    calendar_tw,
     coordinate_learning,
     customer_groups,
     learning_rank,
@@ -406,8 +406,6 @@ def planner_context(conn, org_id: str, brand_id: str, product_id: str | None, *,
     cap = capacity = None
     if campaign is not None:
         cap = targets.resolve(conn, org_id, brand_id, campaign)["value"]
-        allocation = ((campaign.get("budget_basis_json") or {}).get("strategy") or {}).get(
-            "allocation") or []
         daily = budget.daily_of(campaign.get("budget_planned"), _days(campaign))
         capacity = capacity_of(daily, cap)
     basis = prices_basis(blocks)

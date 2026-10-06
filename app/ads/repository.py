@@ -261,6 +261,7 @@ def update_campaign(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str
                        "product_ids", "audience_hint"}:
         _refresh_strategy_decision(conn, org_id, brand_id, row)
         row = get_campaign(conn, org_id, brand_id, campaign_id)
+        assert row is not None
     return row
 
 
@@ -1098,12 +1099,24 @@ def invalidate_strategy_decision(conn, org, brand, campaign_id):
     semantic = {"groups": [{k: g.get(k) for k in ("id", "role", "daily_budget")} for g in groups],
                 "ads": [{k: a.get(k) for k in ("id", "group_id", "customer_group_id", "offer_key")}
                         for a in ads]}
-    revision = hashlib.sha256(json.dumps(semantic, sort_keys=True, default=str).encode()).hexdigest()
-    updated = {**decision, "state": "modified", "revision": revision,
-               "feasibility": {"state": "blocked", "reasons": [{
-                   "code": "structure_modified", "message": "投放結構已修改，原策略理由與核准已失效。",
-                   "slot_ids": [],
-               }]}}
+    revision = hashlib.sha256(
+        json.dumps(semantic, sort_keys=True, default=str).encode()
+    ).hexdigest()
+    updated = {
+        **decision,
+        "state": "modified",
+        "revision": revision,
+        "feasibility": {
+            "state": "blocked",
+            "reasons": [
+                {
+                    "code": "structure_modified",
+                    "message": "投放結構已修改，原策略理由與核准已失效。",
+                    "slot_ids": [],
+                }
+            ],
+        },
+    }
     save_strategy(conn, org, brand, campaign_id,
                   budget_basis_json={**basis, "strategy": {**payload, "decision": updated,
                       "rationale_state": "stale"}})
@@ -1158,6 +1171,7 @@ def set_budget_cap(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str,
     assert row is not None
     _refresh_strategy_decision(conn, org_id, brand_id, row)
     row = get_campaign(conn, org_id, brand_id, campaign_id)
+    assert row is not None
     return row
 
 

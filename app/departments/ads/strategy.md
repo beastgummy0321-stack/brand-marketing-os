@@ -64,13 +64,18 @@ slot assignment. Keep its audience and offer with its original image/copy. Do no
 every relative winner. New tests must test a stated buying proposition. Explain percentages
 as recommendations with sample limits; do not claim a calculated optimum. Every allocated
 role needs a slot, one role targets one customer group, and the whole proposal must fit the
-served ceiling. Never promise more distinct audiences than slots. Use `none` for no offer.
+served ceiling. Never promise more distinct audiences than slots. Use `none` for no offer,
+even when offers are available; disclose that choice in its test intent and rationale.
+Every nullable field must be present, using explicit null where appropriate.
+The binding section caps each choice list and its `omitted` map discloses excluded counts;
+do not assume the visible candidates are exhaustive or reference an omitted candidate.
 Use stable descriptive slot IDs. Empty evidence is allowed only when the prepared context
 contains no relevant evidence; never invent citations. Every slot must include a nonempty
 `rationale` explaining this particular audience/role/offer/carry choice, connecting its
 `evidence_refs` to the recommendation and stating sample limits or unknowns. Allocation-level
 rationales do not replace each slot's rationale. Do not turn a small relative result into an
-optimality claim.
+optimality claim. Slot rationale and test intent follow the same no-number prose rule:
+only supplied names may retain digits; do not write CPA, currency, or percentages there.
 
 - `allocation`：一個陣列，每一項是 `{"role", "pct", "rationale"}`：
   - `role`：只能用【可用角色】列出的角色，不能自己加（英文 key 照抄，程式要拿去對照；

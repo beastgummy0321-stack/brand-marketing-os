@@ -19,8 +19,8 @@ Contract G gate is met by construction); hand edits obey the same menu and 「�
 Private to app/ads (container contract §1): only `routes.py` imports this module's functions.
 """
 
-import logging
 import json
+import logging
 import re
 from collections.abc import Set as AbstractSet
 from datetime import date
@@ -420,12 +420,8 @@ def _checked_groups(groups: list, task_id: str | None, *, vocabulary_rows: list,
     """The program's rules over a shape-valid reply (`groups`, `[]` when nothing was asked),
     in this order; the first rule broken raises its `PlannerRefused` and nothing is written."""
     _gate_reply(groups, _vocabulary_lookup(vocabulary_rows), _first_format(vocabulary_rows))
-    # F44 (outcome 1): the menu offered a real offer and no ad (carried or planned) took one ->
-    # the whole reply is refused, like the scene rule.
-    offer_keys = planner_context.menu_offer_keys(vocabulary_rows)
-    carried_offer = any(item["ad"].get("offer_key") in offer_keys for item in carried)
-    if offer_keys and not (carried_offer or _uses_an_offer(groups)):
-        raise _refused("offer_unused", task_id)
+    # Contract S permits an explicitly accepted no-offer test. _match_slots still requires
+    # each generated ad to retain the exact accepted offer, including none.
     # F48 Contract P: an ad name carrying a 「不能講」 entry is refused like the scene rule.
     if any(_forbidden_in(ad["name"], ctx["forbidden"]) for group in groups for ad in group["ads"]):
         raise _refused("name_forbidden", task_id)
@@ -628,8 +624,6 @@ def served(conn, org_id: str, brand_id: str, campaign: dict) -> dict:
         campaign.get("end_date") is not None,
     )["rows"]
     cap = (campaign.get("cap") or {}).get("value")
-    allocation = ((campaign.get("budget_basis_json") or {}).get("strategy") or {}).get(
-        "allocation") or []
     daily = budget.daily_of(campaign.get("budget_planned"),
                             _days(campaign.get("start_date"), campaign.get("end_date")))
     capacity = planner_context.capacity_of(daily, cap)
@@ -777,7 +771,9 @@ def adopt_strategy(conn, org_id: str, brand_id: str, campaign_id: str, *, actor:
     receipt = saved.get("receipt") or {}
     if (saved.get("state") == "adopted" and receipt.get("operation_id") == operation_id
             and receipt.get("revision") == expected_revision):
-        return ads_repo.campaign_detail(conn, org_id, brand_id, campaign_id)
+        detail = ads_repo.campaign_detail(conn, org_id, brand_id, campaign_id)
+        assert detail is not None
+        return detail
     decision = _checked_decision(conn, org_id, brand_id, campaign, expected_revision)
     if campaign["status"] != "draft":
         raise StrategyConflict("strategy_changed")
@@ -899,11 +895,15 @@ def adopt_strategy(conn, org_id: str, brand_id: str, campaign_id: str, *, actor:
     conn.execute("SELECT id FROM ads_campaign WHERE org_id=%s AND brand_id=%s AND id=%s "
                  "FOR UPDATE", (org_id, brand_id, campaign_id))
     current = ads_repo.get_campaign(conn, org_id, brand_id, campaign_id)
+    if current is None:
+        raise StrategyConflict("strategy_changed")
     saved = ((current.get("budget_basis_json") or {}).get("strategy") or {}).get("decision") or {}
     receipt = saved.get("receipt") or {}
     if (saved.get("state") == "adopted" and receipt.get("operation_id") == operation_id
             and receipt.get("revision") == expected_revision):
-        return ads_repo.campaign_detail(conn, org_id, brand_id, campaign_id)
+        detail = ads_repo.campaign_detail(conn, org_id, brand_id, campaign_id)
+        assert detail is not None
+        return detail
     decision = _checked_decision(conn, org_id, brand_id, current, expected_revision)
     if current["status"] != "draft":
         raise StrategyConflict("strategy_changed")

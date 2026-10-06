@@ -23,9 +23,9 @@ from app.brand_intelligence import repository as bi_repo
 from app.core import db as coredb
 from app.core import settings as coresettings
 from app.llm import gateway, providers
-from app.tests.test_ads_strategy_decision import fixture_provider, bind_fixture
 from app.meta import repository as meta_repo
 from app.tests.fixtures.ads_external import outcome_seed
+from app.tests.test_ads_strategy_decision import fixture_provider
 
 from .identity_test_helpers import mint_hs256
 
@@ -385,8 +385,10 @@ class AlreadyAdoptedTest(StrategyTestBase):
         before = ads_repo.get_campaign(web.conn, self.org_id, self.brand_id, self.campaign["id"])
         regenerated = self._generate()
         self.assertEqual(regenerated["budget_planned"], before["budget_planned"])
-        self.assertEqual(sum(a["amount"] for a in regenerated["budget_basis_json"]["strategy"]["allocation"]),
-                         float(before["budget_planned"]))
+        self.assertEqual(
+            sum(a["amount"] for a in regenerated["budget_basis_json"]["strategy"]["allocation"]),
+            float(before["budget_planned"]),
+        )
 
 
 class CustomTotalInvalidTest(StrategyTestBase):
@@ -1341,7 +1343,9 @@ class BudgetCapRoutesTest(StrategyTestBase):
         after_strategy = after["budget_basis_json"]["strategy"]
         self.assertEqual(after_strategy["allocation"], before_strategy["allocation"])
         self.assertEqual(after_strategy["decision"]["slots"], before_strategy["decision"]["slots"])
-        self.assertNotEqual(after_strategy["decision"]["revision"], before_strategy["decision"]["revision"])
+        self.assertNotEqual(
+            after_strategy["decision"]["revision"], before_strategy["decision"]["revision"]
+        )
         scenarios = after["budget_basis_json"]["scenarios"]
         row = next(r for r in scenarios["scenarios"] if r["key"] == "recommended")
         self.assertEqual(row["over_cap"], 3000)
@@ -1352,11 +1356,19 @@ class BudgetCapRoutesTest(StrategyTestBase):
         orig_plan_provider = plan.PROVIDER
         plan.PROVIDER = _fake(_VALID_PLAN_REPLY)
         try:
-            current = ads_repo.get_campaign(web.conn, self.org_id, self.brand_id, self.campaign["id"])
-            adopted = self.client.post(self._url("/plan"), headers=self.headers, json={
-                "expected_revision": current["budget_basis_json"]["strategy"]["decision"]["revision"],
-                "operation_id": "budget-cap-fixture-adopt",
-            })
+            current = ads_repo.get_campaign(
+                web.conn, self.org_id, self.brand_id, self.campaign["id"]
+            )
+            adopted = self.client.post(
+                self._url("/plan"),
+                headers=self.headers,
+                json={
+                    "expected_revision": current["budget_basis_json"]["strategy"]["decision"][
+                        "revision"
+                    ],
+                    "operation_id": "budget-cap-fixture-adopt",
+                },
+            )
         finally:
             plan.PROVIDER = orig_plan_provider
         self.assertEqual(adopted.status_code, 200, adopted.text)

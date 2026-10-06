@@ -466,7 +466,9 @@ class AdoptRoundsTheTotalPropertyTest(unittest.TestCase):
                     "budget_basis_json": {"strategy": {"allocation": _allocation(pcts)}},
                 }, created_by="測試員")
                 plan.PROVIDER = _fake(_PLAN_REPLY)
-                revision = bind_fixture(web.conn, self.org_id, self.brand_id, campaign["id"], json.loads(_PLAN_REPLY))
+                revision = bind_fixture(
+                    web.conn, self.org_id, self.brand_id, campaign["id"], json.loads(_PLAN_REPLY)
+                )
                 detail = plan.adopt_strategy(
                     web.conn, self.org_id, self.brand_id, campaign["id"], actor="測試員",
                     expected_revision=revision, operation_id=f"money-{campaign['id']}",

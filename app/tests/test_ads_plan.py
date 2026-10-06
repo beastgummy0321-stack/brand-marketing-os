@@ -20,7 +20,7 @@ from app.brand_intelligence import repository as bi_repo
 from app.core import approval as approval_mod
 from app.core import db as coredb
 from app.llm import gateway, providers
-from app.tests.test_ads_strategy_decision import fixture_provider, bind_fixture
+from app.tests.test_ads_strategy_decision import bind_fixture, fixture_provider
 
 ACTOR = "測試員"
 OFFERS_HEADER = planner_context.OFFERS_HEADER
@@ -1261,19 +1261,12 @@ class OffersInDeliveryPlanPromptTest(PlanTestBase):
         self.assertNotIn("- offer=", prompt)
         self.assertEqual(set(self._offer_keys(detail).values()), {"none"})
 
-    def test_all_none_plan_is_refused_when_the_menu_has_an_offer(self):
-        campaign = self._bundle_campaign()
+    def test_explicit_all_none_plan_is_accepted_when_the_menu_has_an_offer(self):
         # `free_shipping` is not in this menu, so `_gate_reply` turns it into `none` first.
         for reply in (_offer_reply({}), _offer_reply({"new": "free_shipping"})):
-            with self.assertRaises(plan.StrategyConflict) as ctx:
-                self._adopt_reply(campaign, reply)
-            self.assertEqual(str(ctx.exception), "strategy_infeasible")
-            self.assertIn("offer_unused", {r["code"] for r in ctx.exception.reasons})
-        self.assertEqual(web.conn.execute("SELECT id FROM llm_task WHERE brand_id=%s AND "
-            "context_scope_json->>'campaign_id'=%s", (self.brand_id, campaign["id"])).fetchall(), [])
-        reloaded = ads_repo.campaign_detail(web.conn, self.org_id, self.brand_id, campaign["id"])
-        self.assertEqual(reloaded["status"], "draft")  # nothing was written
-        self.assertEqual(reloaded["groups"], [])
+            detail, _ = self._adopt_reply(self._bundle_campaign(), reply)
+            self.assertEqual(set(self._offer_keys(detail).values()), {"none"})
+            self.assertEqual(detail["status"], "ready")
 
     def test_one_ad_using_the_offer_passes_and_the_others_keep_none(self):
         detail, _ = self._adopt_reply(self._bundle_campaign(), _offer_reply({"retarget": "bundle"}))
@@ -1281,10 +1274,12 @@ class OffersInDeliveryPlanPromptTest(PlanTestBase):
             self._offer_keys(detail), {"new": "none", "retarget": "bundle", "explore": "none"},
         )
 
-    def test_the_department_file_requires_one_ad_to_use_a_listed_offer(self):
+    def test_department_preserves_each_accepted_offer_including_none(self):
         text = plan.DEPARTMENT_PATH.read_text(encoding="utf-8")
-        self.assertIn("至少要有一支廣告的 `offer` 填列出的某個 key", text)
-        self.assertIn("寫「這期沒有可用的優惠」時，每支廣告的\n`offer` 都填 `none`", text)
+        self.assertIn("Use each accepted slot's exact offer key", text)
+        self.assertIn("An accepted `none` is legal even when offers are", text)
+        self.assertIn("never replace it with an available discount", text)
+        self.assertIn("For an accepted offer, the ad name", text)
 
 
 # -- F48-I06: Contracts K (留下 carries the creative), C (ceiling), P (one menu, 不能講) ---------
