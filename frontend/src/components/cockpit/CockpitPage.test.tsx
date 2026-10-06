@@ -29,6 +29,7 @@ vi.mock("@/lib/useAuthedImage", () => ({ useAuthedImage: () => ({ src: undefined
 import { fetchMetaSpend, type MetaSpendSummary } from "@/lib/metaApi";
 import { fetchProductsPage, type ProductsPage } from "@/lib/intakeProductApi";
 import { CockpitPage } from "./CockpitPage";
+import { defaultLayout, layoutKey, type DashboardView } from "@/lib/dashboardLayout";
 
 const hoursAgo = (h: number) => new Date(Date.now() - h * 3_600_000).toISOString();
 
@@ -200,5 +201,66 @@ describe("Cockpit currency totals", () => {
     expect(await screen.findByText("1,200 TWD")).toBeTruthy();
     expect(screen.getByText("40 USD")).toBeTruthy();
     expect(screen.queryByText(/1,240/)).toBeNull();
+  });
+});
+
+describe("Cockpit last visible block (F52-I16)", () => {
+  it.each([
+    { label: "廣告花費", metrics: ["spend"], widgets: [], other: "活動概況" },
+    { label: "活動概況", metrics: [], widgets: [{ id: "campaigns", width: "wide" }], other: "廣告花費" },
+  ] satisfies Array<Pick<DashboardView, "metrics" | "widgets"> & { label: string; other: string }>)
+  ("explains $label on keyboard focus, persists the last block and restores defaults", async ({ label, metrics, widgets, other }) => {
+    const user = userEvent.setup();
+    const key = layoutKey("user-1", "org-1", "brd_1");
+    localStorage.setItem(key, JSON.stringify({
+      version: 1, activeId: "ads",
+      views: [{ id: "ads", name: "廣告成效", metrics, widgets }],
+    }));
+    let rendered = view(spend());
+    await user.click(await screen.findByRole("button", { name: "自訂版面" }));
+    let panel = screen.getByRole("dialog", { name: "自訂看板版面" });
+    const checkbox = within(panel).getByRole("checkbox", { name: label }) as HTMLInputElement;
+    const reason = within(panel).getByText("至少保留一個區塊；先勾選其他指標或區塊，才能取消這項。");
+    const group = within(panel).getByRole("group", { name: label });
+    expect(checkbox.checked).toBe(true);
+    expect(checkbox.disabled).toBe(true);
+    expect(checkbox.getAttribute("aria-describedby")).toBe(reason.id);
+    expect(group.getAttribute("aria-describedby")).toBe(reason.id);
+    expect(group.getAttribute("aria-disabled")).toBe("true");
+    within(panel).getByRole("textbox", { name: "檢視名稱" }).focus();
+    for (let i = 0; i < 10 && document.activeElement !== group; i++) await user.tab();
+    expect(document.activeElement).toBe(group);
+    await user.keyboard(" ");
+    expect(checkbox.checked).toBe(true);
+
+    await user.click(within(panel).getByRole("button", { name: "完成" }));
+    rendered.unmount();
+    rendered = view(spend());
+    await user.click(await screen.findByRole("button", { name: "自訂版面" }));
+    panel = screen.getByRole("dialog", { name: "自訂看板版面" });
+    const restored = within(panel).getByRole("checkbox", { name: label }) as HTMLInputElement;
+    expect(restored.checked).toBe(true);
+    expect(restored.disabled).toBe(true);
+    await user.click(within(panel).getByRole("checkbox", { name: other }));
+    expect(restored.disabled).toBe(false);
+    expect(restored.hasAttribute("aria-describedby")).toBe(false);
+    expect(within(panel).queryByRole("group", { name: label })).toBeNull();
+    expect(within(panel).queryByText(reason.textContent!)).toBeNull();
+    await user.click(restored);
+    expect(restored.checked).toBe(false);
+    expect((within(panel).getByRole("checkbox", { name: other }) as HTMLInputElement).disabled).toBe(true);
+
+    await user.click(within(panel).getByRole("button", { name: "重設此檢視" }));
+    expect(within(panel).getAllByRole("checkbox").every((input) => !(input as HTMLInputElement).disabled)).toBe(true);
+    expect(within(panel).queryByText(reason.textContent!)).toBeNull();
+    const expected = defaultLayout().views[0];
+    expect(JSON.parse(localStorage.getItem(key)!).views[0]).toEqual(expected);
+    await user.click(within(panel).getByRole("button", { name: "完成" }));
+    rendered.unmount();
+    view(spend());
+    await user.click(await screen.findByRole("button", { name: "自訂版面" }));
+    panel = screen.getByRole("dialog", { name: "自訂看板版面" });
+    expect(within(panel).getAllByRole("checkbox").filter((input) => (input as HTMLInputElement).checked)).toHaveLength(9);
+    expect(within(panel).getAllByRole("checkbox").every((input) => !(input as HTMLInputElement).disabled)).toBe(true);
   });
 });
