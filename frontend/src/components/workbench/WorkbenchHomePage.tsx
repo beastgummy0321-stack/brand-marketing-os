@@ -368,36 +368,43 @@ export function WorkbenchHomePage({ brandId }: { brandId: string }) {
   );
 }
 
-/** 匯出給 F02-I10 自由創作頁「預覽將建立的工作項目」重用——同一張卡，不是第二份設計
- * （票面 Done 那句話）。預覽情境沒有真正的 pack，呼叫端自己包一層擋掉點擊即可。 */
-export function PackCardTile({
-  pack,
-  brandId,
-  onClose,
-}: {
+type PackCardTileProps = {
   pack: PackCard;
+} & ({
+  variant: "preview";
+  brandId?: never;
+  onClose?: never;
+} | {
+  variant?: "interactive";
   brandId: string;
   /** Runs after the user confirmed 「關閉任務包」 (the dialog asks once). */
   onClose: () => Promise<unknown> | void;
-}) {
+});
+
+/** Shared presentation; preview has no real pack and therefore no actions or tab stops. */
+export function PackCardTile(props: PackCardTileProps) {
+  const { pack } = props;
+  const preview = props.variant === "preview";
   const navigate = useNavigate();
   const clock = useOrgClock();
   const [confirming, setConfirming] = useState(false);
   // 相對時間（<24h）／組織時鐘的絕對時間（`formatUpdatedAt`）; "" for the free-job preview, which has no pack yet.
   const updated = formatUpdatedAt(pack.updated_at, clock.timezone);
-  const goto = () => navigate(`/brands/${brandId}/workbench/packs/${pack.id}`);
+  const goto = () => {
+    if (props.variant !== "preview") navigate(`/brands/${props.brandId}/workbench/packs/${pack.id}`);
+  };
   const next = pack.next_step;
   // drill-10 乙 #16: 下一步 opens the set and the part that needs it, not the pack overview.
   const gotoNext = () =>
-    next ? navigate(`/brands/${brandId}/workbench/packs/${pack.id}/sets/${next.set_id}?part=${next.part}`) : goto();
+    next && props.variant !== "preview" ? navigate(`/brands/${props.brandId}/workbench/packs/${pack.id}/sets/${next.set_id}?part=${next.part}`) : goto();
   const originHref = pack.origin_href;
   return (
     <div className="surface flex flex-col gap-3 p-4">
       <div className="flex items-center justify-between">
         <Badge variant="outline">{pack.source_label}</Badge>
         <div className="flex items-center gap-1">
-          <PackStatusBadge pack={pack} />
-          {(originHref || !pack.closed) && (
+          {preview ? <Badge variant="outline">預覽</Badge> : <PackStatusBadge pack={pack} />}
+          {!preview && (originHref || !pack.closed) && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <button type="button" aria-label="更多操作" className="rounded-md p-1 hover:bg-accent">
@@ -414,10 +421,17 @@ export function PackCardTile({
         </div>
       </div>
 
-      <button type="button" onClick={goto} className="text-left">
-        <h3 className="text-base font-semibold text-foreground">{pack.name}</h3>
-        {pack.subtitle && <p className="mt-0.5 text-sm text-muted-foreground">{pack.subtitle}</p>}
-      </button>
+      {preview ? (
+        <div className="text-left">
+          <h3 className="text-base font-semibold text-foreground">{pack.name}</h3>
+          {pack.subtitle && <p className="mt-0.5 text-sm text-muted-foreground">{pack.subtitle}</p>}
+        </div>
+      ) : (
+        <button type="button" onClick={goto} className="text-left">
+          <h3 className="text-base font-semibold text-foreground">{pack.name}</h3>
+          {pack.subtitle && <p className="mt-0.5 text-sm text-muted-foreground">{pack.subtitle}</p>}
+        </button>
+      )}
 
       <div className="flex flex-col gap-1">
         <div className="flex items-center justify-between text-sm">
@@ -432,7 +446,7 @@ export function PackCardTile({
         </div>
       </div>
 
-      {pack.next_step && (
+      {!preview && pack.next_step && (
         <button
           type="button"
           onClick={gotoNext}
@@ -464,21 +478,21 @@ export function PackCardTile({
         ))}
       </div>
 
-      <div className="flex items-center justify-between pt-1">
+      {!preview && <div className="flex items-center justify-between pt-1">
         <span className="text-xs text-muted-foreground">{updated ? `更新於 ${updated}` : ""}</span>
         <Button size="sm" onClick={goto}>
           繼續 →
         </Button>
-      </div>
-      <ClosePackDialog
+      </div>}
+      {props.variant !== "preview" && <ClosePackDialog
         name={pack.name}
         open={confirming}
         onCancel={() => setConfirming(false)}
         onConfirm={async () => {
-          await onClose();
+          await props.onClose();
           setConfirming(false);
         }}
-      />
+      />}
     </div>
   );
 }

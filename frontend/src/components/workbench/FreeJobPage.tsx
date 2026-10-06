@@ -548,8 +548,8 @@ export function FreeJobPage({ brandId }: { brandId: string }) {
         <p className="text-xs text-muted-foreground">
           送出後，系統會建立一個自由工作，你可以在素材工作檯中追蹤進度。
         </p>
-        <div className="pointer-events-none max-w-sm opacity-90">
-          <PackCardTile pack={previewPack} brandId={brandId} onClose={() => {}} />
+        <div className="max-w-sm opacity-90">
+          <PackCardTile pack={previewPack} variant="preview" />
         </div>
       </div>
     </div>
