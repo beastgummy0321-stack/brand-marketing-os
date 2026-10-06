@@ -18,8 +18,9 @@ a proven common stop-condition blocker under `../README.md`; any such repair req
 - F51 retains the active-AI-queue W14 exception, user confirmed 2026-10-06; backend outcome redesign is outside this run.
 - F48–F51 remain open until the user sees combined screenshots and drill results and explicitly accepts them. No push.
 
-Status: all3 B periods closed, exports frozen and independent blind judging completed. Strategy/copy/learning are5/5/5,
-so overall acceptance has not passed. Controls and faults continue on spare objects. Original money defect I15 was repaired
-at d46b3c75; control-phase save-race blocker I17 was repaired at2f3570c0 and restarted15:49 on2026-10-06 after all agents
-paused. Ordinary I16 offline-reason repair remains isolated until the drill ends. Original and repaired observations remain
-separate in raw reports. Full integration and combined human acceptance remain pending; see F51 Handoff and operator notes.
+Status: execution ended with explicit coverage limits. All3 B periods closed and frozen; blind strategy/copy/learning
+are5/5/5, so overall acceptance failed. I15/I17/I18 blockers repaired during controlled pauses; ordinary I16 merged only
+after the drill at54bae15c. Native live outage/retry verification passed without reset. Clock advanced to11/3 for cleanup;
+ended spare cleanup was inapplicable and isolated legacy no-spend close completed. See report.md, controls.md and faults.md
+for original scores, retained ordinary defects and unverified cases. Fresh integration receipt is recorded in the report;
+F48-F51 remain open for explicit combined human acceptance. No push.
