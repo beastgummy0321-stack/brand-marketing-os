@@ -86,7 +86,7 @@ def _fresh(value):
     return now_utc() - stamp < timedelta(hours=24)
 
 
-def pending_days(item, *, start, today) -> int:
+def _pending_window(item, *, start, today):
     """How many days of month `start` a pending budget or launch item still reserves: from the
     later of the item's start and the first future day (today or the month's first day) to the
     earlier of its end and the month's last day, both inclusive; 0 when it misses the month."""
@@ -97,7 +97,50 @@ def pending_days(item, *, start, today) -> int:
     begin = max(
         first_future, _date(after.get("start_date") or target.get("start_date")) or first_future
     )
+    return begin, stop
+
+
+def pending_days(item, *, start, today) -> int:
+    begin, stop = _pending_window(item, start=start, today=today)
     return max((stop - begin).days + 1, 0)
+
+
+def _launch_hold(item, owners, by_id, *, start, today):
+    """Credit only ongoing owners whose scoped ancestry belongs to this internal campaign.
+
+    A launch names an internal campaign, whereas an ongoing owner names a platform entity.
+    Apply credit per day so a partial read or shorter running period never releases the rest.
+    Today's spent credit already entered known_spend, so use the full observed daily amount.
+    """
+    campaign_id = item.get("target_id") or (item.get("target") or {}).get("id")
+    native = {
+        (e.get("org_id"), e.get("brand_id"), e["platform"], e["source_account"],
+         e["native_kind"], e["native_id"]): e for e in by_id.values()
+    }
+    eligible = []
+    for entity_id, owner in owners.items():
+        entity = by_id[entity_id]
+        scope = tuple(entity.get(k) for k in ("org_id", "brand_id", "platform", "source_account"))
+        node, seen = entity, set()
+        while node and node.get("campaign_id") == campaign_id and node["id"] not in seen:
+            if (not campaign_id or lifecycle.ad_running(node) is not True
+                    or node.get("sync_status") != "success"
+                    or node.get("launch_read_verified") is not True):
+                break
+            seen.add(node["id"])
+            if not node.get("parent_native_id"):
+                eligible.append(owner)
+                break
+            node = native.get((*scope, node.get("parent_native_kind"), node["parent_native_id"]))
+    begin, stop = _pending_window(item, start=start, today=today)
+    daily = money((item.get("after") or {}).get("daily_amount", 0))
+    result = Decimal(0)
+    for offset in range(max((stop - begin).days + 1, 0)):
+        day = begin + timedelta(days=offset)
+        represented = sum(
+            (o["daily"] for o in eligible if o["begin"] <= day <= o["stop"]), Decimal(0))
+        result += max(daily - represented, Decimal(0))
+    return result
 
 
 def calculate(*, amount, currency, start, today, entities, observations, pending, uncertainties):
@@ -197,7 +240,7 @@ def calculate(*, amount, currency, start, today, entities, observations, pending
         begin = max(first_future, _date(entity.get("start_date")) or first_future)
         if stop < begin:
             continue
-        if entity.get("native_status") is None:
+        if lifecycle.ad_running(entity) is None:
             issues.append("部分活動是否持續投放尚不明，請讀回平台設定。")
         if entity.get("currency") != currency or entity.get("budget_amount") is None:
             issues.append("持續投放的預算金額、單位或幣別未核實。")
@@ -215,6 +258,7 @@ def calculate(*, amount, currency, start, today, entities, observations, pending
         ongoing += commitment
         owners[entity["id"]] = {
             "daily": value, "days": days, "commitment": commitment, "name": entity.get("name"),
+            "begin": begin, "stop": stop,
         }
 
     # Multiple not-yet-read-back edits of one budget cannot compound the original
@@ -234,7 +278,10 @@ def calculate(*, amount, currency, start, today, entities, observations, pending
         old_daily = base["daily"] if base else money(before.get("daily_amount") or 0)
         days = pending_days(item, start=start, today=today)
         # Even a 'confirmed' action continues to reserve against a stale snapshot.
-        delta = max(new_daily - old_daily, Decimal(0)) * days
+        delta = (
+            _launch_hold(item, owners, by_id, start=start, today=today)
+            if kind == "launch" else max(new_daily - old_daily, Decimal(0)) * days
+        )
         holds[target_id] = max(holds.get(target_id, Decimal(0)), delta)
     reserved = sum(holds.values(), Decimal(0))
     issues = list(dict.fromkeys(issues))
@@ -286,6 +333,7 @@ def _inventory(conn, org, brand, start, today):
     ]
     issues = []
     accounts = []
+    structure_reads = {}
     for channel in channels.CHANNELS:
         reader = channels.external_reader(channel["key"])
         if reader:
@@ -315,6 +363,9 @@ def _inventory(conn, org, brand, start, today):
             "AND platform=%s AND source_account=%s",
             (org, brand, platform, account_id),
         ).fetchone()
+        for task in ((job["tasks"] if job else {}) or {}).values():
+            if task.get("section") == "structure" and task.get("campaign_id"):
+                structure_reads[(platform, account_id, task["campaign_id"])] = task
         monthly = ((job["tasks"] if job else {}) or {}).get(
             "monthly:" + start.strftime("%Y-%m"), {}
         )
@@ -354,6 +405,30 @@ def _inventory(conn, org, brand, start, today):
     for campaign in conn.execute(
         "SELECT * FROM ads_campaign WHERE org_id=%s AND brand_id=%s", (org, brand)
     ).fetchall():
+        # Only a complete, clean structure read proves budget fields. A status-only
+        # verification can refresh entity bookkeeping while retaining an old budget.
+        structure = ((campaign.get("context_json") or {}).get("external_sync") or {}).get(
+            "structure", {})
+        verified = (structure.get("status") == "success"
+                    and not structure.get("error")
+                    and _fresh(structure.get("last_success_at")))
+        for entity in entities:
+            if entity.get("campaign_id") == campaign["id"]:
+                task = structure_reads.get(
+                    (entity["platform"], entity["source_account"], campaign["id"]), {})
+                # A complete read may omit an old owner retained in the cache. Its own
+                # timestamp must belong to this read, not a later status-only refresh.
+                stamps = [task.get("started_at"), entity.get("last_success_at"),
+                          task.get("completed_at")]
+                times = [datetime.fromisoformat(str(s).replace("Z", "+00:00"))
+                         if s else None for s in stamps]
+                first, observed, last = [
+                    t if t is None or t.tzinfo else t.replace(tzinfo=UTC) for t in times]
+                entity["launch_read_verified"] = bool(
+                    verified and task.get("status") == "succeeded"
+                    and not task.get("errors") and _fresh(task.get("completed_at"))
+                    and first is not None and observed is not None and last is not None
+                    and first <= observed <= last)
         if campaign["origin"] == "imported":
             campaign_accounts = {
                 (e["platform"], e["source_account"])
