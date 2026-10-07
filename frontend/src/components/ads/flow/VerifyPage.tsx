@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Badge } from "@/components/layout/ui/badge";
 import { Button } from "@/components/layout/ui/button";
@@ -18,7 +18,7 @@ import { ActionBar, CampaignChip, Chip, FlowHeader, LearnCard, ReadFailed, Resul
 import { reviewRoundPath } from "../review/reviewFlow";
 import { AbLearnedCard, useAbContext } from "./AbEvidence";
 import { cleanupSteps } from "./CleanupProposal";
-import { CleanupVerifyRows, readbackMessage } from "./CleanupVerifyRows";
+import { CleanupVerifyRows, ReadbackProof, materialProofText, readbackMessage } from "./CleanupVerifyRows";
 import { formatDay, formatInstant, useOrgClock } from "@/lib/orgClock";
 import { NextOrHome } from "./confirmParts";
 import {
@@ -47,11 +47,11 @@ function statusWord(item: ChangeItem, side: "after" | "observed"): string {
 }
 /** `evidence_json.message` only exists on some read-backs (`app/ads/change_control_verify.py`). */
 const messageOf = readbackMessage;
-/** 「讀回於」＝`evidence_json.observed_at` on the org clock (F50 Contract K)；沒有就是「尚未讀到」
- * （feature Decisions「Verify」）。 */
+/** Only the served successful observation supplies read time; missing time is not a failed read. */
 function observedAtText(item: ChangeItem, timezone: string): string {
   const value = item.evidence_json.observed_at;
-  return (typeof value === "string" && formatInstant(value, timezone, "md_hm")) || "尚未讀到";
+  const formatted = typeof value === "string" && formatInstant(value, timezone, "md_hm");
+  return formatted ? `讀回於 ${formatted}` : "讀回時間未提供";
 }
 
 const CONFIRMED_TITLE: Record<Kind, (item: ChangeItem) => string> = {
@@ -60,7 +60,7 @@ const CONFIRMED_TITLE: Record<Kind, (item: ChangeItem) => string> = {
   budget: (item) => `平台上的每日預算已經是 ${formatTargetAmount(item.after.daily_amount ?? null)}`,
   // F27-I15: a `new_ad` item's own readback is the ManualHandoffPanel/`ads_handoff_item` aggregate
   // (`app/ads/handoff_check.py::_finish`), never a settings diff like the other three kinds.
-  new_ad: () => "平台上這則新廣告已經核對完成",
+  new_ad: () => "平台上的新廣告設定已核對相符",
 };
 const DEVIATED_TITLE: Record<Kind, string> = {
   copy: "平台上的內文和核准的不一樣",
@@ -217,16 +217,22 @@ export function VerifyPage({ brandId, campaignId, setId }: {
 
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const actionOwner = useRef<object | null>(null);
 
   useEffect(() => {
     let cancelled = false;
+    // Loading another owner (or unmounting) expires its pending action promises too.
+    const owner = {};
+    actionOwner.current = owner;
+    setBusy(false);
+    setActionError(null);
     setLoading(true);
     setLoadError(null);
     getChangeControl(brandId, campaignId)
       .then((data) => { if (!cancelled) setChangeSet(data.change_sets.find((s) => s.id === setId) ?? null); })
       .catch((err) => { if (!cancelled) setLoadError(err instanceof Error ? err.message : "讀取這份變更清單失敗，請稍後再試。"); })
       .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
+    return () => { cancelled = true; if (actionOwner.current === owner) actionOwner.current = null; };
   }, [brandId, campaignId, setId, reloadKey]);
 
   const triageItem = useMemo(() => findFlowTriageItem(queue, changeSet), [queue, changeSet]);
@@ -249,15 +255,17 @@ export function VerifyPage({ brandId, campaignId, setId }: {
 
   async function handleCheck(item: ChangeItem) {
     if (busy || !changeSet) return;
+    const owner = actionOwner.current;
     setBusy(true);
     setActionError(null);
     try {
       const updated = await actOnChangeItem(brandId, campaignId, changeSet.id, item.id, "check");
+      if (actionOwner.current !== owner) return;
       setChangeSet(updated);
     } catch (err) {
-      setActionError(errorMessage(err));
+      if (actionOwner.current === owner) setActionError(errorMessage(err));
     } finally {
-      setBusy(false);
+      if (actionOwner.current === owner) setBusy(false);
     }
   }
 
@@ -267,18 +275,21 @@ export function VerifyPage({ brandId, campaignId, setId }: {
    * 進度，不整批重來。 */
   async function handleCheckAll() {
     if (busy || !changeSet) return;
+    const owner = actionOwner.current;
     setBusy(true);
     setActionError(null);
     try {
       let current = changeSet;
       for (const row of current.items) {
+        if (actionOwner.current !== owner) return;
         current = await actOnChangeItem(brandId, campaignId, current.id, row.id, "check");
+        if (actionOwner.current !== owner) return;
         setChangeSet(current);
       }
     } catch (err) {
-      setActionError(errorMessage(err));
+      if (actionOwner.current === owner) setActionError(errorMessage(err));
     } finally {
-      setBusy(false);
+      if (actionOwner.current === owner) setBusy(false);
     }
   }
 
@@ -429,11 +440,14 @@ export function VerifyPage({ brandId, campaignId, setId }: {
   let bar: ReactNode;
 
   if (state === "confirmed") {
-    hero = <ResultHero tone="ok" title={CONFIRMED_TITLE[kind](item)} note={`讀回於 ${observedAtText(item, timezone)}`} />;
+    hero = <ResultHero tone="ok" title={CONFIRMED_TITLE[kind](item)} note={observedAtText(item, timezone)} />;
     const timeline = timelineRailCells(item, kind);
     const cells: RailCell[] = [
       ...(item.evidence_json.setting_matches === true
         ? [{ title: "設定相符", note: confirmedRailNote(item, kind), ok: true }]
+        : []),
+      ...(kind === "new_ad" && (item.evidence_json.peers?.length ?? 0) <= 1
+        ? [{ title: "素材核對", note: materialProofText(item.evidence_json.peers?.[0]?.material_evidence) }]
         : []),
       // An A/B pause has no angle: its notebook line is the card below, not the angle cell.
       ...(abSet ? timeline.slice(0, 1) : timeline),
@@ -451,7 +465,7 @@ export function VerifyPage({ brandId, campaignId, setId }: {
       </ActionBar>
     );
   } else if (state === "deviated") {
-    hero = <ResultHero tone="warn" title={DEVIATED_TITLE[kind]} note={messageOf(item) ?? `讀回於 ${observedAtText(item, timezone)}`} />;
+    hero = <ResultHero tone="warn" title={DEVIATED_TITLE[kind]} note={messageOf(item) ?? observedAtText(item, timezone)} />;
     // F27-I15: `DeviatedCompare`'s before/after table only makes sense for a plain settings diff
     // (copy/pause/budget) — a `new_ad` item's evidence is the handoff aggregate, no `observed`/
     // `expected` settings pair to line up (`messageOf(item)` in the hero note is the only signal
@@ -515,6 +529,7 @@ export function VerifyPage({ brandId, campaignId, setId }: {
       {rail}
       {learnCard}
       {compare}
+      {kind === "new_ad" && <ReadbackProof item={item} showObserved={state !== "confirmed"} showTarget />}
 
       {/* Contract E / F27-I05: only ever set on a `new_ad` set's own `follow_up` once that item
           reads back confirmed and no pause set for the old ad already exists — a plain read, no
