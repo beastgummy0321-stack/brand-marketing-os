@@ -721,6 +721,7 @@ def delete_ad(request: Request, brand_id: str, ad_id: str):
 _PACK_ERRORS = {
     "campaign_unknown": (404, CAMPAIGN_UNKNOWN_MESSAGE),
     "pack_already_exists": (400, assets.PACK_ALREADY_EXISTS_MESSAGE),
+    "campaign_changed": (409, "配置已變更，請重新載入後再交棒。"),
 }
 
 

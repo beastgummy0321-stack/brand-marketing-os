@@ -11,6 +11,8 @@ Readiness is read through the workbench's **existing** public entries only
 workbench public entry for per-set counts (§0 "Workbench handoff", feature-3 fidelity).
 """
 
+import hashlib
+import json
 from datetime import date
 
 from app import workbench
@@ -21,6 +23,7 @@ from app.ads import (
     customer_groups,
     handoff_assignment,
     plan,
+    planner_context,
     sell_way,
 )
 from app.ads import repository as ads_repo
@@ -36,6 +39,115 @@ _COORDINATE_DIMENSIONS = ("audience", "pain", "angle", "hook", "proof", "offer",
 _CHANNEL_LABELS = {c["key"]: c["label"] for c in channels.CHANNELS}
 
 PACK_ALREADY_EXISTS_MESSAGE = "這個 Campaign 已經交棒過素材任務包了。"
+
+
+def creative_brief(ad: dict, group: dict, campaign: dict, basis: dict) -> dict:
+    """Current assignments and historical acceptance are separate, ID-bound facts."""
+    decision = ((campaign.get("budget_basis_json") or {}).get("strategy") or {}).get(
+        "decision"
+    ) or {}
+    snapshot = ad.get("coordinates_snapshot_json") or {}
+    stored_slot = snapshot.get("strategy_slot") or {}
+    receipt = decision.get("receipt") or {}
+    slot_id = stored_slot.get("slot_id")
+    accepted = next(
+        (
+            r
+            for r in receipt.get("slots") or []
+            if r.get("ad_id") == ad["id"]
+            and r.get("group_id") == group["id"]
+            and r.get("slot_id") == slot_id
+        ),
+        None,
+    )
+    slot = next((s for s in decision.get("slots") or [] if s.get("id") == slot_id), None)
+    current = (
+        decision.get("state") == "adopted"
+        and accepted is not None
+        and slot is not None
+        and stored_slot.get("revision") == receipt.get("revision") == decision.get("revision")
+        and slot.get("role") == group.get("role")
+        and slot.get("customer_group_id") == ad.get("customer_group_id")
+        and slot.get("offer_key") == (ad.get("offer_key") or "none")
+        and slot.get("carry_from_ad_id") == (snapshot.get("carried_from") or {}).get("ad_id")
+    )
+    state = decision.get("state") or "legacy_unbound"
+    active_slot = slot if current and slot is not None else {}
+    window = planner_context.calendar_window(campaign, group)
+    start, end = (plan._parse_date(value) for value in window)
+    eligible = []
+    if start is not None and end is not None:
+        for event in basis.get("calendar") or []:
+            event_start, event_end = (
+                plan._parse_date(event.get("start")),
+                plan._parse_date(event.get("end")),
+            )
+            if (
+                event_start is not None
+                and event_end is not None
+                and event_start <= end
+                and event_end >= start
+            ):
+                eligible.append(event)
+    comparison = planner_context.creative_projection(
+        {**basis, "calendar": eligible}, ad.get("offer_key")
+    )
+    comparison["omitted"]["calendar_outside_window"] = len(basis.get("calendar") or []) - len(
+        eligible
+    )
+    comparison["calendar_window"] = {"start": start, "end": end}
+    return json.loads(
+        json.dumps(
+            {
+                "provenance": {
+                    "state": state,
+                    "current_revision": decision.get("revision"),
+                    "accepted_revision": receipt.get("revision"),
+                    "operation_id": receipt.get("operation_id"),
+                    "slot_id": slot_id,
+                    "accepted_receipt": receipt or None,
+                },
+                "assignment": {
+                    "ad_id": ad["id"],
+                    "group_id": group["id"],
+                    "role": group.get("role"),
+                    "customer_group_id": ad.get("customer_group_id"),
+                    "offer_key": ad.get("offer_key") or "none",
+                    "scene": ad.get("scene"),
+                    "coordinates": {dim: ad.get(f"{dim}_key") for dim in _COORDINATE_DIMENSIONS},
+                    "slot_id": slot_id,
+                    "carry_from_ad_id": (snapshot.get("carried_from") or {}).get("ad_id"),
+                },
+                "test_intent": active_slot.get("test_intent"),
+                "buyer": {
+                    "situation": ad.get("scene"),
+                    "customer_group": next(
+                        (
+                            g
+                            for g in basis.get("customer_groups") or []
+                            if g.get("id") == ad.get("customer_group_id")
+                        ),
+                        None,
+                    ),
+                },
+                "evidence_refs": active_slot.get("evidence_refs") or [],
+                "rationale": active_slot.get("rationale"),
+                "expired_reason": None
+                if current
+                else (
+                    "投放安排已修改，原策略理由與測試意圖已失效；請依目前明確安排創作並揭露缺少新意圖。"
+                    if state == "modified"
+                    else "沒有可核對的已接受安排；目前欄位可用，策略理由與新測試意圖未知。"
+                ),
+                "comparison": comparison,
+                "input_hash": hashlib.sha256(
+                    json.dumps(basis, sort_keys=True, ensure_ascii=False, default=str).encode()
+                ).hexdigest(),
+            },
+            ensure_ascii=False,
+            default=str,
+        )
+    )
 
 
 def _pack_source_ref(campaign_id: str) -> dict:
@@ -99,6 +211,7 @@ def _origin(brand_id: str, brand_name: str, campaign: dict, groups: list) -> dic
 def _ad_set(
     ad: dict, group: dict, campaign: dict, campaign_id: str, media: str | None = None,
     customer_groups_by_id: dict | None = None,
+    creative_basis: dict | None = None,
 ) -> dict:
     # 一則廣告只打一個商品（ARCHITECTURE §5.4）；用同一個 product_id 決定 set 欄位與
     # request.product_ids，不各算一次——否則工作檯 (jobs.py:49-68) 會替 Campaign 裡的每個
@@ -111,6 +224,8 @@ def _ad_set(
         "use_brand_knowledge": True,
         "product_ids": [product_id] if product_id else [],
     }
+    if creative_basis is not None:
+        request["creative_brief"] = creative_brief(ad, group, campaign, creative_basis)
     if format_key == "video":
         required_outputs = {"copy": 1, "video_script": 1}
         request["video_script_count"] = 3
@@ -146,9 +261,7 @@ def _ad_set(
     customer_group = (customer_groups_by_id or {}).get(ad.get("customer_group_id") or "")
     if customer_group is not None:
         request["customer_group"] = customer_groups.brief_text(customer_group)
-    window = (group.get("start_date"), group.get("end_date"))
-    if window[0] is None or window[1] is None:  # same fallback as `_variant_count`
-        window = (campaign.get("start_date"), campaign.get("end_date"))
+    window = planner_context.calendar_window(campaign, group)
     start: date | None = plan._parse_date(window[0])
     end: date | None = plan._parse_date(window[1])
     if start is not None and end is not None:
@@ -182,14 +295,11 @@ def dispatch_pack(conn, org_id: str, brand_id: str, campaign_id: str) -> str | N
     原樣往上丟，這裡不重新包一次。F48 Contract K：每一則都是素材已就緒的沿用廣告時沒有
     東西要做——不建任務包、回 `None`（「不用準備」，不是錯誤）。"""
     ads_repo.require_internal_campaign(conn, org_id, brand_id, campaign_id)
-    campaign = ads_repo.get_campaign(conn, org_id, brand_id, campaign_id)
-    if campaign is None:
-        raise ValueError("campaign_unknown")
+    detail = ads_repo.dispatch_snapshot(conn, org_id, brand_id, campaign_id)
+    campaign = detail["campaign"]
     if pack_id(conn, org_id, brand_id, campaign_id) is not None:
         raise ValueError("pack_already_exists")
 
-    detail = ads_repo.campaign_detail(conn, org_id, brand_id, campaign_id)
-    assert detail is not None
     groups = detail["groups"]
 
     brand = bi_repo.get_brand(conn, brand_id)
@@ -206,6 +316,16 @@ def dispatch_pack(conn, org_id: str, brand_id: str, campaign_id: str) -> str | N
         ad["id"] for group in groups for ad in group["ads"]
         if ad.get("carried_label") and _material_ready(conn, org_id, brand_id, campaign_id, ad)
     }
+    comparison_by_product = {}
+    for group in groups:
+        for ad in group["ads"]:
+            if ad["id"] in carried_ready:
+                continue
+            product_id = sell_way.of_ad(ad, campaign)
+            if product_id not in comparison_by_product:
+                ctx = planner_context.planner_context(conn, org_id, brand_id, product_id,
+                                                       campaign=campaign, calendar_groups=groups)
+                comparison_by_product[product_id] = planner_context.creative_basis(ctx)
 
     summary: dict = {"情境": campaign["goal_text"]}
     if context_json.get("audience_hint"):
@@ -221,7 +341,7 @@ def dispatch_pack(conn, org_id: str, brand_id: str, campaign_id: str) -> str | N
         "context": _origin(brand_id, brand_name, campaign, groups),
         "sets": [
             _ad_set(ad, group, campaign, campaign_id, (brand or {}).get("media_capability"),
-                    groups_by_id)
+                    groups_by_id, comparison_by_product[sell_way.of_ad(ad, campaign)])
             for group in groups for ad in group["ads"] if ad["id"] not in carried_ready
         ],
     }

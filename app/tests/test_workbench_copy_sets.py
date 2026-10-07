@@ -9,9 +9,15 @@ takes data + vocabulary + copy_length as plain arguments. `workbench.may_depend_
 ARCHITECTURE.md §2).
 """
 
+import json
 import unittest
+from unittest.mock import patch
 
-from app.workbench import validate
+from app import workbench
+from app.brand_intelligence import repository as brands
+from app.core import db
+from app.llm import gateway, providers
+from app.workbench import jobs, repository, validate
 
 ACTOR = "測試員"
 
@@ -78,6 +84,122 @@ class CheckCopySetsShapeTest(unittest.TestCase):
         self.assertFalse(by_path["sets[1].headline"]["ok"])
         self.assertTrue(by_path["sets[1].body"]["ok"])
         self.assertTrue(by_path["sets[1].description"]["ok"])
+
+
+class CreativeGatewayContractTest(unittest.TestCase):
+    def test_stored_brief_reaches_one_gateway_call_and_keeps_five_candidates(self):
+        conn = db.current()
+        brand = brands.create_brand(
+            conn, org_id=db.DEV_ORG_ID, name="Fixture shop", actor="test", client_name=None
+        )["id"]
+        workbench.register_tasks()
+        creative = {
+            "provenance": {
+                "state": "adopted",
+                "current_revision": "revision",
+                "accepted_revision": "revision",
+                "operation_id": "operation",
+                "slot_id": "slot",
+            },
+            "assignment": {
+                "ad_id": "actual-ad",
+                "group_id": "actual-group",
+                "role": "explore",
+                "customer_group_id": "actual-customer",
+                "scene": "buyer-situation",
+                "offer_key": "none",
+            },
+            "test_intent": "Test a different buyer situation, not a headline substitution",
+            "evidence_refs": [{"kind": "result", "id": "prior-ad"}],
+            "comparison": {
+                "controls": [
+                    {
+                        "creative": {
+                            "asset_id": "original-image",
+                            "placement_revision": 4,
+                            "copy_fields": {"body": "exact original control"},
+                        }
+                    }
+                ],
+                "results": [{"ad_id": "prior-ad", "flags": ["small sample"]}],
+                "calendar": [{"id": "known-event", "name": "known period event"}],
+                "selected_offer": {"key": "none", "sentence": None},
+                "omitted": {"results": 18},
+            },
+            "input_hash": "full-comparison-hash",
+        }
+        workbench.submit_pack(
+            conn,
+            db.DEV_ORG_ID,
+            brand,
+            {
+                "source_kind": "schedule_node",
+                "source_ref": {"fixture": "creative"},
+                "sets": [
+                    {
+                        "name": "Creative test",
+                        "source_ref": {"fixture": "creative", "ad": "actual-ad"},
+                        "required_outputs": {"copy": 1},
+                        "request": {"copy_length": "short", "creative_brief": creative},
+                    }
+                ],
+            },
+        )
+        brief = workbench.briefs_for_source(
+            conn, db.DEV_ORG_ID, brand, "schedule_node", {"fixture": "creative"}
+        )[0]
+        output = {
+            "coordinates": {},
+            "sets": [_set() for _ in range(5)],
+            "visual_tone": None,
+            "visual_concept": "Fixture concept",
+            "warnings": ["Fixture response; semantic quality is unverified"],
+        }
+        raw = json.dumps(output, ensure_ascii=False)
+        fake = providers.FakeProvider(
+            response=providers.ProviderResponse(
+                output_text=raw,
+                structured=output,
+                usage=providers.Usage(input_tokens=100, output_tokens=100),
+                stop_reason="end_turn",
+            )
+        )
+        with patch.object(jobs, "PROVIDER", fake):
+            jobs._run(conn, db.DEV_ORG_ID, brand, brief["id"], "copy", None)
+        self.assertEqual(len(fake.calls), 1)
+        prompt = fake.calls[0]["messages"][0]["content"]
+        for expected in (
+            "actual-ad",
+            "actual-customer",
+            "buyer-situation",
+            "original-image",
+            "exact original control",
+            "small sample",
+            "known period event",
+            creative["test_intent"],
+        ):
+            self.assertIn(expected, prompt)
+        self.assertEqual(prompt.count("exact original control"), 1)
+        self.assertNotIn("full-comparison-hash", prompt)
+        tasks = gateway.find_tasks_for_scope(
+            conn,
+            org_id=db.DEV_ORG_ID,
+            brand_id=brand,
+            task_type="workbench_copy",
+            context_scope={"brief_id": brief["id"]},
+        )
+        self.assertEqual(tasks[0]["rendered_output"], raw)
+        self.assertEqual(
+            tasks[0]["context_scope_json"]["creative_input_hash"], "full-comparison-hash"
+        )
+        self.assertEqual(
+            tasks[0]["context_scope_json"]["strategy_provenance"], creative["provenance"]
+        )
+        detail = repository.set_detail(conn, db.DEV_ORG_ID, brand, brief["id"])
+        self.assertEqual(len(detail["products"]["copy"]["versions"]), 5)
+        self.assertEqual(
+            detail["products"]["copy"]["versions"][0]["body"]["body"], output["sets"][0]["body"]
+        )
 
 
 if __name__ == "__main__":

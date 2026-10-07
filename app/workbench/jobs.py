@@ -758,7 +758,10 @@ def _run(conn, org_id: str, brand_id: str, brief_id: str, part: str, count) -> N
         )
 
     context = gateway.TaskContext(
-        context_scope={"brand_id": brand_id, "brief_id": brief_id, "part": part},
+        context_scope={"brand_id": brand_id, "brief_id": brief_id, "part": part,
+                       **({"creative_input_hash": request["creative_brief"].get("input_hash"),
+                           "strategy_provenance": request["creative_brief"].get("provenance")}
+                          if isinstance(request.get("creative_brief"), dict) else {})},
         knowledge_item_ids=knowledge_item_ids, brand_version=brand_version, product_version=None,
     )
     task_row = gateway.run_task(

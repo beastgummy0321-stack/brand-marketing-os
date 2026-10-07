@@ -32,6 +32,66 @@ IMAGE_COORDINATE_LABELS = {
 _LIMITED_TIME = {"limited_time", "限時限量"}
 
 
+def creative_text(creative: dict) -> str:
+    """Render only the bounded creative projection, never full hash-only inputs."""
+    provenance = creative.get("provenance") or {}
+    identity = {
+        k: provenance.get(k)
+        for k in (
+            "state",
+            "current_revision",
+            "accepted_revision",
+            "operation_id",
+            "slot_id",
+        )
+    }
+    lines = [
+        "## 這則廣告的創作依據",
+        "策略與接受身分：" + json.dumps(identity, ensure_ascii=False),
+        "目前明確安排：" + json.dumps(creative.get("assignment") or {}, ensure_ascii=False),
+    ]
+    if creative.get("buyer"):
+        lines.append("本則買家的情境與顧客群：" + json.dumps(creative["buyer"], ensure_ascii=False))
+    if creative.get("expired_reason"):
+        lines.append("策略理由狀態：" + creative["expired_reason"])
+    intent = creative.get("test_intent")
+    if intent:
+        lines.append("新測試意圖：" + intent)
+        lines.append(
+            "此意圖引用的依據："
+            + json.dumps(creative.get("evidence_refs") or [], ensure_ascii=False)
+        )
+        if creative.get("rationale"):
+            lines.append("已接受理由：" + creative["rationale"])
+    else:
+        lines.append("新測試意圖：未確認；依目前安排提出命題，不能宣稱已接受或已證明新意。")
+    comparison = creative.get("comparison") or {}
+    labels = {
+        "facts": "已確認的商品事實",
+        "controls": "保留的對照素材（原文與素材版本，不是待重寫稿）",
+        "results": "過往排名與樣本限制",
+        "learnings": "過往學習",
+        "calendar": "已知可用檔期",
+        "calendar_window": "本則檔期範圍（日期未知時不推定適用）",
+        "previous_goals": "上一期想學的",
+        "selected_offer": "本則選定的已登記優惠",
+        "omitted": "未列出的項目數",
+    }
+    for key, label in labels.items():
+        lines.append(
+            label + "：" + json.dumps(comparison.get(key), ensure_ascii=False, default=str)
+        )
+    lines.append(
+        "先決定買家此刻為何在意、產品為何適合、下一步是什麼，再寫文案。"
+        "新測試必須說明相對保留對照的實質受眾／情境／命題差異及引用依據；"
+        "僅換標題或近義詞不算新測試。排名是既有資料整理，樣本少或相對最好不等於已達標。"
+        "已知檔期可採用，也可在 warnings 說明不採用原因；沒有資料就如實說未知，不造節日或急迫性。"
+        "本則優惠為 none 時不寫優惠；有已登記優惠時保留其條件並放進消費者可見欄位，"
+        "缺少來源時在 warnings 說明，不以其他優惠取代。保留對照原圖文不可改寫。"
+    )
+    return "\n".join(lines)
+
+
 def brief_text(brief: dict, product_name: str | None) -> str:
     """組『這張工單』段——比照 `scripts/workbench_probe.py::_worksheet_text`，改吃
     `workbench_brief` 列（工作檯的來源是一張工單，不是活動樹節點）。長度／變體數／字數帶
@@ -84,6 +144,9 @@ def brief_text(brief: dict, product_name: str | None) -> str:
     free_text = request.get("free_text")
     if free_text:
         lines.append(f"自由指示：{free_text}")
+    creative = request.get("creative_brief")
+    if isinstance(creative, dict):
+        lines.append(creative_text(creative))
     return "\n".join(lines)
 
 

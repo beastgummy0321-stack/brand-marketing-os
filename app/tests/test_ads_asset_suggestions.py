@@ -3,6 +3,7 @@
 import json
 import unittest
 from concurrent.futures import ThreadPoolExecutor
+from datetime import date
 from unittest.mock import patch
 
 import psycopg
@@ -11,8 +12,8 @@ from app import background, workbench
 from app.ads import asset_suggestion_policy as policy
 from app.ads import asset_suggestions as suggestions
 from app.ads import external_repository as external
+from app.ads import plan, slots
 from app.ads import repository as campaigns
-from app.ads import slots
 from app.ads import user_assets_repository as assets
 from app.brand_intelligence import repository as brands
 from app.core import db, settings
@@ -102,6 +103,287 @@ class SuggestionsTest(unittest.TestCase):
     def run_batch(self, batch):
         suggestions.run(self.org, self.brand, self.campaign, batch["id"])
         return suggestions.get_batch(self.conn, self.org, self.brand, self.campaign, batch["id"])
+
+    def test_dated_group_supplies_calendar_without_complete_campaign_dates(self):
+        for start, end in ((None, "2026-10-14"), ("2026-10-01", None), (None, None)):
+            with self.subTest(start=start, end=end):
+                self.campaign = campaigns.create_campaign(
+                    self.conn,
+                    self.org,
+                    self.brand,
+                    {
+                        "name": "Group calendar",
+                        "goal_text": "Buyer moment",
+                        "objective": "awareness",
+                        "start_date": start,
+                        "end_date": end,
+                    },
+                    created_by="test",
+                )["id"]
+                group = campaigns.create_group(
+                    self.conn,
+                    self.org,
+                    self.brand,
+                    self.campaign,
+                    channel_key="meta",
+                    name="Dated group",
+                    role="new",
+                    daily_budget=100,
+                )
+                plan.update_group(
+                    self.conn,
+                    self.org,
+                    self.brand,
+                    group["id"],
+                    {"start_date": "2026-10-09", "end_date": "2026-10-11"},
+                    actor="test",
+                )
+                ad = campaigns.create_ad(
+                    self.conn,
+                    self.org,
+                    self.brand,
+                    self.campaign,
+                    group["id"],
+                    name="Bound ad",
+                    coordinates={"offer": "none"},
+                    coordinates_snapshot={},
+                )
+                row = self.placement(ad_id=ad["id"])
+                snapshot = suggestions.snapshot(
+                    self.conn,
+                    self.org,
+                    self.brand,
+                    self.campaign,
+                    [{"id": row["id"], "revision": row["revision"]}],
+                    "",
+                )
+                comparison = snapshot["placements"][0]["creative_brief"]["comparison"]
+                self.assertEqual(
+                    comparison["calendar_window"], {"start": "2026-10-09", "end": "2026-10-11"}
+                )
+                self.assertEqual([e["name"] for e in comparison["calendar"]], ["國慶日"])
+                basis = next(
+                    item["basis"]
+                    for item in snapshot["creative_input_basis"]
+                    if item["product_id"] is None
+                )
+                self.assertEqual([e["name"] for e in basis["calendar"]], ["國慶日"])
+                self.assertIn(
+                    {
+                        "group_id": group["id"],
+                        "start": date(2026, 10, 9),
+                        "end": date(2026, 10, 11),
+                    },
+                    basis["calendar_windows"],
+                )
+
+    def test_unknown_group_window_stays_unknown_and_full_window_source_invalidates_batch(self):
+        self.campaign = campaigns.create_campaign(
+            self.conn,
+            self.org,
+            self.brand,
+            {
+                "name": "Calendar source",
+                "goal_text": "Buyer moment",
+                "objective": "awareness",
+                "start_date": None,
+                "end_date": None,
+            },
+            created_by="test",
+        )["id"]
+        rows = []
+        groups = []
+        for start, end in (("2026-10-09", "2026-10-11"), ("2026-10-20", None)):
+            group = campaigns.create_group(
+                self.conn,
+                self.org,
+                self.brand,
+                self.campaign,
+                channel_key="meta",
+                name="Calendar group",
+                role="new",
+                daily_budget=100,
+            )
+            plan.update_group(
+                self.conn,
+                self.org,
+                self.brand,
+                group["id"],
+                {"start_date": start, "end_date": end},
+                actor="test",
+            )
+            ad = campaigns.create_ad(
+                self.conn,
+                self.org,
+                self.brand,
+                self.campaign,
+                group["id"],
+                name="Bound ad",
+                coordinates={"offer": "none"},
+                coordinates_snapshot={},
+            )
+            groups.append(group)
+            rows.append(self.placement(ad_id=ad["id"]))
+        unknown = suggestions.snapshot(
+            self.conn,
+            self.org,
+            self.brand,
+            self.campaign,
+            [{"id": rows[1]["id"], "revision": rows[1]["revision"]}],
+            "",
+        )
+        comparison = unknown["placements"][0]["creative_brief"]["comparison"]
+        self.assertEqual(comparison["calendar_window"], {"start": "2026-10-20", "end": None})
+        self.assertEqual(comparison["calendar"], [])
+        self.assertEqual(comparison["omitted"]["calendar_outside_window"], 1)
+        self.reply([rows[0]])
+        batch = self.run_batch(self.request([rows[0]], key="calendar-source"))
+        self.assertEqual(batch["status"], "succeeded", batch["error"])
+        requested = [{"id": rows[0]["id"], "revision": rows[0]["revision"]}]
+        before = suggestions.snapshot(self.conn, self.org, self.brand, self.campaign, requested, "")
+        plan.update_group(
+            self.conn,
+            self.org,
+            self.brand,
+            groups[1]["id"],
+            {"start_date": "2026-10-21"},
+            actor="test",
+        )
+        self.conn.commit()
+        after = suggestions.snapshot(self.conn, self.org, self.brand, self.campaign, requested, "")
+        self.assertEqual(suggestions._messages(before), suggestions._messages(after))
+        self.assertNotEqual(suggestions.fingerprint(before), suggestions.fingerprint(after))
+        self.assertNotEqual(before["creative_input_basis"], after["creative_input_basis"])
+        self.assertTrue(
+            suggestions.get_batch(self.conn, self.org, self.brand, self.campaign, batch["id"])[
+                "stale"
+            ]
+        )
+
+    def test_complete_comparison_hash_invalidates_changes_outside_prompt(self):
+        self.campaign = campaigns.create_campaign(
+            self.conn,
+            self.org,
+            self.brand,
+            {
+                "name": "Creative comparison",
+                "goal_text": "Buyer proposition",
+                "objective": "awareness",
+                "start_date": "2026-10-01",
+                "end_date": "2026-10-14",
+            },
+            created_by="test",
+        )["id"]
+        group = campaigns.create_group(
+            self.conn,
+            self.org,
+            self.brand,
+            self.campaign,
+            channel_key="meta",
+            name="Bound group",
+            role="explore",
+            daily_budget=100,
+        )
+        ad = campaigns.create_ad(
+            self.conn,
+            self.org,
+            self.brand,
+            self.campaign,
+            group["id"],
+            name="Bound ad",
+            coordinates={"offer": "none"},
+            scene="A buyer moment",
+            coordinates_snapshot={"strategy_slot": {"slot_id": "slot", "revision": "accepted"}},
+        )
+        receipt = {
+            "revision": "accepted",
+            "operation_id": "operation",
+            "slots": [
+                {
+                    "slot_id": "slot",
+                    "group_id": group["id"],
+                    "ad_id": ad["id"],
+                    "carry_from_ad_id": None,
+                }
+            ],
+        }
+        campaigns.save_strategy(
+            self.conn,
+            self.org,
+            self.brand,
+            self.campaign,
+            budget_basis_json={
+                "strategy": {
+                    "decision": {
+                        "schema_version": 1,
+                        "state": "adopted",
+                        "revision": "accepted",
+                        "receipt": receipt,
+                        "slots": [
+                            {
+                                "id": "slot",
+                                "role": "explore",
+                                "customer_group_id": None,
+                                "offer_key": "none",
+                                "carry_from_ad_id": None,
+                                "test_intent": "Test the buyer moment",
+                                "evidence_refs": [],
+                            }
+                        ],
+                    }
+                }
+            },
+        )
+        row = self.placement(ad_id=ad["id"])
+        ctx = {
+            "product": None,
+            "learnings": {
+                "ads": [],
+                "ranked": {
+                    "campaigns": [
+                        {
+                            "campaign_id": "prior",
+                            "sell_way_id": None,
+                            "rows": [
+                                {"ad_id": f"prior-{n}", "sales": n, "flags": ["small sample"]}
+                                for n in range(30)
+                            ],
+                        }
+                    ]
+                },
+            },
+            "offers": [],
+            "calendar_evidence": [],
+            "carried_candidates": [],
+            "previous": None,
+        }
+        basis = suggestions.planner_context.creative_basis(ctx)
+        with patch.object(suggestions.planner_context, "creative_basis", return_value=basis):
+            self.reply([row])
+            batch = self.run_batch(self.request([row]))
+            self.assertEqual(batch["status"], "succeeded", batch["error"])
+            data = batch["input_json"]
+            creative = data["placements"][0]["creative_brief"]
+            self.assertEqual(creative["provenance"]["accepted_receipt"], receipt)
+            self.assertEqual(creative["assignment"]["ad_id"], ad["id"])
+            self.assertEqual(creative["test_intent"], "Test the buyer moment")
+            self.assertEqual(creative["comparison"]["omitted"]["results"], 18)
+            before = suggestions.snapshot(
+                self.conn, self.org, self.brand, self.campaign, data["requested"], data["summary"]
+            )
+            messages = suggestions._messages(before)
+            self.assertNotIn("prior-29", messages[0]["content"])
+            self.assertNotIn("creative_input_basis", messages[0]["content"])
+            basis["results"][-1]["sales"] = 999
+            changed = suggestions.snapshot(
+                self.conn, self.org, self.brand, self.campaign, data["requested"], data["summary"]
+            )
+            self.assertEqual(messages, suggestions._messages(changed))
+            self.assertTrue(
+                suggestions.get_batch(self.conn, self.org, self.brand, self.campaign, batch["id"])[
+                    "stale"
+                ]
+            )
 
     def test_original_preserved_unknown_budget_allowed_and_success_reused(self):
         # F34 Contract S: a `food_tw` brand gets the 食安法 note in `notes` only (ruling 2B).

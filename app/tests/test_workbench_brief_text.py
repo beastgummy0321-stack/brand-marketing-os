@@ -44,6 +44,36 @@ BASELINE = "\n".join([
 ])
 
 
+class CreativeBriefTest(unittest.TestCase):
+    def test_comparison_and_current_assignment_reach_brief_once(self):
+        creative = {
+            "provenance": {
+                "state": "modified",
+                "current_revision": "current",
+                "accepted_revision": "accepted",
+                "operation_id": "operation",
+            },
+            "assignment": {"scene": "night bus", "role": "explore"},
+            "expired_reason": "old rationale expired",
+            "test_intent": None,
+            "comparison": {
+                "controls": [{"creative": {"copy_fields": {"body": "exact-control-body"}}}],
+                "results": [{"flags": ["small sample"]}],
+                "calendar": [{"name": "exam week"}],
+                "selected_offer": {"key": "discount", "sentence": "registered-discount-sentence"},
+                "omitted": {"results": 20},
+            },
+        }
+        text = prompts.brief_text(_brief(creative_brief=creative), "product")
+        self.assertIn("old rationale expired", text)
+        self.assertIn("current", text)
+        self.assertEqual(text.count("exact-control-body"), 1)
+        self.assertIn("registered-discount-sentence", text)
+        self.assertIn("small sample", text)
+        self.assertIn("exam week", text)
+        self.assertNotIn("creative_input_basis", text)
+
+
 class BriefTextSceneTest(unittest.TestCase):
     def test_scene_line_when_handed_over(self):
         text = prompts.brief_text(_brief(scene=SCENE), "測試產品")

@@ -12,6 +12,7 @@ wording (`customer_groups.HEADER`, `coordinate_learning.HEADER`, 【這期可用
 """
 
 import math
+from copy import deepcopy
 
 from app import workbench
 from app.ads import (
@@ -43,6 +44,7 @@ KIND_LABELS = {"base": "單品", "composed": "組合"}
 _MAX_SELL_WAYS = 8  # sell-ways printed per knowledge product
 _MAX_LEARNINGS = 10
 _LEARNING_SCAN = 200  # rows read to pick the newest verdict per sell-way
+_CREATIVE_CAPS = {"results": 12, "controls": 6, "learnings": 10, "calendar": 12, "facts": 12}
 # Event learnings (pause confirmation, A/B, month settle) carry this scope prefix: each is its own
 # finding; every other `ads` row is a period verdict sentence (`learning.write_learning`).
 _EVENT_SCOPE_PREFIX = "ads;"
@@ -385,8 +387,34 @@ def _days(campaign: dict) -> int:
 # -- the context --------------------------------------------------------------------------------
 
 
+def calendar_window(campaign: dict, group: dict | None = None) -> tuple:
+    """Effective delivery dates: each missing group side falls back independently."""
+    group = group or {}
+    return (
+        group.get("start_date") or campaign.get("start_date"),
+        group.get("end_date") or campaign.get("end_date"),
+    )
+
+
+def _calendar_source(campaign: dict, groups: list[dict] | None) -> tuple[list, list]:
+    """Full known windows and their event union; an unknown side supplies no invented range."""
+    windows = []
+    events = {}
+    # Retain the full known campaign comparison range, adding child windows when it is unbound.
+    for group in [None, *(groups or [])]:
+        start, end = calendar_window(campaign, group)
+        windows.append({"group_id": (group or {}).get("id"), "start": start, "end": end})
+        if start is None or end is None:
+            continue
+        for row in calendar_tw.events_between(start, end):
+            events[(row["start"], row["end"], row["name"])] = row
+    windows.sort(key=lambda row: str(row["group_id"] or ""))
+    return windows, sorted(events.values(), key=lambda row: (row["start"], row["end"], row["name"]))
+
+
 def planner_context(conn, org_id: str, brand_id: str, product_id: str | None, *,
-                    campaign: dict | None = None) -> dict:
+                    campaign: dict | None = None,
+                    calendar_groups: list[dict] | None = None) -> dict:
     """Contract P for one sell-way (`product_id`; `None` = brand level). With `campaign`, its
     product list, customer-group pick, end date, cap and adopted budget are used; without one,
     the sell-way alone (the brief, before a campaign exists)."""
@@ -427,9 +455,7 @@ def planner_context(conn, org_id: str, brand_id: str, product_id: str | None, *,
         else:
             reasons.append("原圖或原文案無法沿用")
         item["eligibility"] = {"state": "blocked" if reasons else "ready", "reasons": reasons}
-    calendar = []
-    if campaign and campaign.get("start_date") and campaign.get("end_date"):
-        calendar = calendar_tw.events_between(campaign["start_date"], campaign["end_date"])
+    calendar_windows, calendar = _calendar_source(campaign or {}, calendar_groups)
     return {
         "product": product,
         "product_ids": product_ids,
@@ -447,6 +473,7 @@ def planner_context(conn, org_id: str, brand_id: str, product_id: str | None, *,
         "cap": cap,
         "capacity": capacity,
         "carried_candidates": carried,
+        "calendar_windows": calendar_windows,
         "calendar_evidence": [{**row, "id": f"{row['start']}:{row['end']}:{row['name']}"}
                               for row in calendar],
         "knowledge_item_ids": (
@@ -454,6 +481,79 @@ def planner_context(conn, org_id: str, brand_id: str, product_id: str | None, *,
             + [row["id"] for row in rows] + ranked_ids
         ),
     }
+
+
+def creative_basis(ctx: dict) -> dict:
+    """Full comparison inputs, detached from the prepared context and scoped to its sell-way.
+
+    Storage/fingerprints use this full value. Only creative_projection reaches a prompt;
+    a changed result beyond the prompt cap must still invalidate a suggestion batch.
+    """
+    product_id = (ctx.get("product") or {}).get("id")
+    results = []
+    for campaign in ctx["learnings"]["ranked"].get("campaigns") or []:
+        if campaign.get("sell_way_id") != product_id:
+            continue
+        period = {
+            k: campaign.get(k)
+            for k in (
+                "campaign_id",
+                "sell_way_id",
+                "currency",
+                "start_date",
+                "end_date",
+                "cap",
+            )
+        }
+        results.extend({**period, **row} for row in campaign.get("rows") or [])
+    controls = [
+        {
+            "ad_id": item["ad"]["id"],
+            "role": item.get("role"),
+            "customer_group_id": item["ad"].get("customer_group_id"),
+            "coordinates": {d: item["ad"].get(f"{d}_key") for d in learning_rank.DIMENSIONS},
+            "scene": item["ad"].get("scene"),
+            "creative": item.get("creative"),
+            "result": item.get("row"),
+            "eligibility": item.get("eligibility"),
+        }
+        for item in ctx.get("carried_candidates") or []
+    ]
+    return deepcopy(
+        {
+            "results": results,
+            "controls": controls,
+            "learnings": learnings_basis(ctx["learnings"]["ads"]),
+            "calendar": ctx.get("calendar_evidence") or [],
+            "calendar_windows": ctx.get("calendar_windows") or [],
+            "offers": ctx.get("offers") or [],
+            "facts": (ctx.get("product") or {}).get("knowledge") or [],
+            "customer_groups": ctx.get("customer_groups") or [],
+            "previous_goals": (ctx.get("previous") or {}).get("learning_goals") or [],
+        }
+    )
+
+
+def creative_projection(basis: dict, offer_key: str | None) -> dict:
+    """Bounded ranked comparisons; preserve original copy/version and sample caveats verbatim."""
+    key = offer_key or "none"
+    offers = [o for o in basis["offers"] if o["key"] == key] if key != "none" else []
+    return deepcopy(
+        {
+            **{name: basis[name][:cap] for name, cap in _CREATIVE_CAPS.items()},
+            "previous_goals": basis["previous_goals"][:6],
+            "selected_offer": {
+                "key": key,
+                "sentence": offers[0]["sentence"] if offers else None,
+                "sentences": [o["sentence"] for o in offers],
+                "state": "none" if key == "none" else "registered" if offers else "unavailable",
+            },
+            "omitted": {
+                **{name: max(len(basis[name]) - cap, 0) for name, cap in _CREATIVE_CAPS.items()},
+                "previous_goals": max(len(basis["previous_goals"]) - 6, 0),
+            },
+        }
+    )
 
 
 def quoted_names(ctx: dict) -> list[str]:
