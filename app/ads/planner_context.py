@@ -17,6 +17,8 @@ from copy import deepcopy
 from app import workbench
 from app.ads import (
     ads_learnings as learning_service,
+)
+from app.ads import (
     budget,
     calendar_tw,
     coordinate_learning,
@@ -272,7 +274,8 @@ def newest_per_product(rows: list[dict]) -> list[dict]:
     seen: set = set()
     kept = []
     for row in rows:
-        if not workbench.base_learning_scope(row.get("applicability_scope")).startswith(_EVENT_SCOPE_PREFIX):
+        scope = workbench.base_learning_scope(row.get("applicability_scope"))
+        if not scope.startswith(_EVENT_SCOPE_PREFIX):
             if row.get("product_id") in seen:
                 continue
             seen.add(row.get("product_id"))

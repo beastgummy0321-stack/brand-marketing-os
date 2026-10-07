@@ -26,8 +26,8 @@ from app import workbench
 from app.ads import repository as ads_repo
 from app.ads import sell_way
 from app.brand_intelligence import repository as bi_repo
-from app.core.db import Conn, ConnProxy
 from app.core import settings as coresettings
+from app.core.db import Conn, ConnProxy
 
 _AnyConn = Conn | ConnProxy
 
@@ -49,7 +49,8 @@ def evidence_context(conn: _AnyConn, org: str, brand: str, product_id: str | Non
         "org_day": coresettings.today_for_org(conn, org_id=org).isoformat(),
         "audience_keys": [], "customer_group_ids": [], "result_kind": None,
         "currency": None, "attribution": None, "mode": "real",
-        "conditions": {"price_version": None, "offers": [], "materials": [], "target_version": None},
+        "conditions": {"price_version": None, "offers": [], "materials": [],
+                       "target_version": None},
     }
     if rows is None:
         rows = bi_repo.list_learnings(cast(Conn, conn), brand, limit=_SCAN_LIMIT)

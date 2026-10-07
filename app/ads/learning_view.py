@@ -216,7 +216,8 @@ def learnings_view(conn: _AnyConn, org_id: str, brand_id: str, *, campaign_id: s
         for row in stored.get(campaign["campaign_id"], []):
             evidence_rows[row["learning_id"]] = row["ledger_row"]
     all_context = ads_learnings.evidence_context(
-        conn, org_id, brand_id, next_sell_way, rows=list(evidence_rows.values()), cap=len(evidence_rows),
+        conn, org_id, brand_id, next_sell_way,
+        rows=list(evidence_rows.values()), cap=len(evidence_rows),
     )
     context = {**all_context, "items": all_context["items"][:30],
                "omitted": max(len(all_context["items"]) - 30, 0)}

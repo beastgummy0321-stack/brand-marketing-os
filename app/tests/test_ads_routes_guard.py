@@ -409,7 +409,8 @@ class AdsRoutesShapeStaysConsistentTest(unittest.TestCase):
             headers=self.headers,
         )
         self._assert_shape(regenerated)
-        revision = regenerated.json()["campaign"]["budget_basis_json"]["strategy"]["decision"]["revision"]
+        decision = regenerated.json()["campaign"]["budget_basis_json"]["strategy"]["decision"]
+        revision = decision["revision"]
         adopt = self.client.post(
             f"/api/ads/brands/{self.brand_id}/campaigns/{campaign_id}/plan",
             json={"expected_revision": revision, "operation_id": "route-shape-adopt"},
