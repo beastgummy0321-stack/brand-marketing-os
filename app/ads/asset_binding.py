@@ -96,6 +96,7 @@ def _validate_chain(proof, leaf, root):
 def verify(
     conn, org, brand, campaign, placement_id, revision, entity_id, actor, *, user_verified=False,
     before_persist: Callable[[], None] | None = None,
+    commit_success: bool = True,
 ):
     if not isinstance(user_verified, bool):
         raise ValueError("請明確選擇是否已人工核對素材。")
@@ -283,7 +284,8 @@ def verify(
         # same filter as handoff_check: a reader's extra keys (launch_settings) are not stored
         node = {k: v for k, v in node.items() if k in ExternalEntity.model_fields}
         external.upsert_entity(conn, org, brand, campaign, node)
-    conn.commit()
+    if commit_success:
+        conn.commit()
     return next(
         b
         for b in repo.list_bindings(conn, org, brand, campaign, placement_id, revision)

@@ -830,9 +830,10 @@ def check(conn, org, brand, campaign, item_id, payload, actor):
                 actor,
                 user_verified=payload.get("user_verified", False),
                 before_persist=before_material_persist,
+                commit_success=False,
             )
             material = binding["evidence_level"]
-            # The verifier commits its source proof. Keep the action premise locked to finish.
+            # Retain the verifier's source/native locks through the action's _finish commit.
             _guard_read(conn, org, brand, campaign, item, attempt, parent, payload,
                         source_ids, None, entity_id=entity_id)
             node = bindings.entity(conn, org, brand, campaign, entity_id)

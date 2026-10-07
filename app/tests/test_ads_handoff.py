@@ -2,6 +2,7 @@
 
 import copy
 import threading
+import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
@@ -1610,6 +1611,121 @@ class HandoffTest(unittest.TestCase):
             (self.org, self.brand, self.campaign, self.account, writer_kind, writer_id),
         ).fetchone()
         self.assertEqual(parent["creative"]["fields"]["body"], "parent sync")
+
+    def test_public_material_proof_and_action_commit_before_later_native_sync(self):
+        from app.ads import asset_binding, asset_binding_repository
+        from app.ads.adapters.external import SourcePage
+
+        approved, item = self.approve(self.new_ad())
+        original_read = self.reader.verify_native
+        original_verify = asset_binding.verify
+        original_lock = asset_binding_repository.lock_native
+        started = threading.Event()
+        writer_threads, pending, pids, blocked, acquired, proof_return = [], [], {}, [], [], []
+        creative = copy.deepcopy(self.native_ad["creative"])
+        creative["fields"]["image_hash"] = "later-native-image-after-action-commit"
+
+        def media_proof(conn, *args, **kwargs):
+            proof = original_read(conn, *args, **kwargs)
+            original = kwargs.get("original")
+            if original:
+                proof["media_equivalence"] = {
+                    "asset_sha256": original["sha256"], "copy_hash": original["copy_hash"],
+                    "creative_hash": asset_binding_repository.creative_hash(
+                        proof["entity"]["creative"]
+                    ),
+                    "basis": "explicit local fixture source media equivalence",
+                }
+            return proof
+
+        def trace_native(conn, row, **kwargs):
+            result = original_lock(conn, row, **kwargs)
+            if threading.get_ident() in writer_threads:
+                # This lease may become available only once the same observation is committed.
+                current = change_control_data.get(
+                    conn, self.org, self.brand, self.campaign, approved["id"]
+                )["items"][0]
+                acquired.append(copy.deepcopy(current))
+            return result
+
+        def writer():
+            writer_threads.append(threading.get_ident())
+            with db.connection() as conn:
+                pids["writer"] = conn.execute("SELECT pg_backend_pid() AS pid").fetchone()["pid"]
+                started.set()
+                errors = external_sync._save_page(
+                    conn, {"org_id": self.org, "brand_id": self.brand, "platform": "fixture",
+                           "source_account": self.account},
+                    {"campaign_id": self.campaign, "section": "creatives"},
+                    SourcePage([{"platform": "fixture", "source_account": self.account,
+                                 "native_kind": "ad", "native_id": "B2", "creative": creative}]),
+                )
+                self.assertEqual(errors, [])
+                conn.commit()
+
+        def verify_then_start_writer(conn, *args, **kwargs):
+            result = original_verify(conn, *args, **kwargs)
+            proof_return.append(copy.deepcopy(result))
+            pids["handoff"] = conn.execute("SELECT pg_backend_pid() AS pid").fetchone()["pid"]
+            pending.append(pool.submit(writer))
+            self.assertTrue(started.wait(8))
+            # Observe blocking, never wait for the writer to finish while holding its lease.
+            deadline = time.monotonic() + 8
+            while time.monotonic() < deadline and not pending[0].done():
+                owners = self.conn.execute(
+                    "SELECT pg_blocking_pids(%s) AS owners", (pids["writer"],)
+                ).fetchone()["owners"]
+                if pids["handoff"] in owners:
+                    blocked.append(True)
+                    break
+                time.sleep(0.01)
+            return result
+
+        with patch.object(self.reader, "verify_native", side_effect=media_proof):
+            first = self.check(item, "ad", "B2")
+            self.assertEqual(first["evidence_json"]["material_evidence"], "media_verified")
+            self.conn.commit()
+            client, base = self._client()
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                with patch.object(
+                    asset_binding_repository, "lock_native", side_effect=trace_native
+                ):
+                    with patch.object(
+                        asset_binding, "verify", side_effect=verify_then_start_writer
+                    ):
+                        response = client.post(
+                            f"{base}/change-sets/{approved['id']}/items/{approved['items'][0]['id']}/check"
+                        )
+                    # The action request has finished; a later sync is now free to commit.
+                    pending[0].result(timeout=8)
+        self.assertEqual(response.status_code, 200, response.text)
+        action = response.json()["change_set"]["items"][0]
+        peer = action["evidence_json"]["peers"][0]
+        self.assertNotEqual(pids["handoff"], pids["writer"])
+        self.assertEqual(blocked, [True], "Native lease was released before action commit")
+        self.assertEqual(action["verification_state"], "confirmed")
+        self.assertEqual(peer["material_evidence"], "media_verified")
+        self.assertNotEqual(peer["attempt_id"], first["attempt_id"])
+        self.assertEqual(acquired[0]["evidence_json"]["peers"][0]["attempt_id"], peer["attempt_id"])
+        self.assertEqual(acquired[0]["evidence_json"]["observed_at"],
+                         action["evidence_json"]["observed_at"])
+        cached = asset_binding_repository.entity(
+            self.conn, self.org, self.brand, self.campaign, first["entity_id"]
+        )
+        self.assertEqual(cached["creative"]["fields"]["body"],
+                         self.native_ad["creative"]["fields"]["body"])
+        self.assertEqual(cached["creative"]["fields"]["image_hash"],
+                         creative["fields"]["image_hash"])
+        bindings = asset_binding_repository.list_bindings(
+            self.conn, self.org, self.brand, self.campaign, item["placement_id"], 1
+        )
+        self.assertTrue(bindings)
+        for binding in bindings:
+            self.assertIsNotNone(binding["valid_to"])
+            self.assertGreater(binding["valid_to"].isoformat(), peer["observed_at"])
+            self.assertEqual(binding["evidence_level"], "media_verified")
+            self.assertEqual(binding["creative_snapshot"], proof_return[0]["creative_snapshot"])
+            self.assertEqual(binding["last_verified_at"], proof_return[0]["last_verified_at"])
 
     def test_material_copy_rejects_different_after_text(self):
         from app.ads import handoff_material, material_tasks
