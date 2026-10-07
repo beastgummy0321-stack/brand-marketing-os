@@ -20,7 +20,9 @@ function proofTime(value: unknown, timezone: string): string | null {
 }
 
 /** Current observation, attempted read and earlier proof retain their own served identities. */
-export function ReadbackProof({ item, showObserved = true }: { item: ChangeItem; showObserved?: boolean }) {
+export function ReadbackProof({ item, showObserved = true, showTarget = false }: {
+  item: ChangeItem; showObserved?: boolean; showTarget?: boolean;
+}) {
   const { timezone } = useOrgClock();
   const evidence = item.evidence_json;
   const observed = proofTime(evidence.observed_at, timezone);
@@ -34,7 +36,8 @@ export function ReadbackProof({ item, showObserved = true }: { item: ChangeItem;
       {peers.length > 0 && (
         <details className="mt-2 rounded-lg border border-border px-3 py-2">
           <summary className="cursor-pointer font-medium text-foreground focus-visible:outline-2 focus-visible:outline-ring">
-            核對資料
+            <span>核對資料</span>
+            {showTarget && item.target.name && <span className="ml-2 break-words font-normal text-muted-foreground">{item.target.name}</span>}
           </summary>
           <div className="mt-2 space-y-3">
             {peers.map((peer, index) => {
@@ -44,7 +47,7 @@ export function ReadbackProof({ item, showObserved = true }: { item: ChangeItem;
               const previousTime = proofTime(previous?.observed_at, timezone);
               return (
                 <div key={peer.handoff_item_id}>
-                  {peers.length > 1 && <p className="font-medium text-foreground">
+                  {(typeof peer.native_id === "string" || peers.length > 1) && <p className="font-medium text-foreground">
                     {typeof peer.native_id === "string" ? `平台廣告 ${peer.native_id}` : `核對項目 ${index + 1}`}
                   </p>}
                   {typeof peer.setting_matches === "boolean" && <p>

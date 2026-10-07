@@ -221,6 +221,7 @@ export function VerifyPage({ brandId, campaignId, setId }: {
 
   useEffect(() => {
     let cancelled = false;
+    // Loading another owner (or unmounting) expires its pending action promises too.
     const owner = {};
     actionOwner.current = owner;
     setBusy(false);
@@ -280,6 +281,7 @@ export function VerifyPage({ brandId, campaignId, setId }: {
     try {
       let current = changeSet;
       for (const row of current.items) {
+        if (actionOwner.current !== owner) return;
         current = await actOnChangeItem(brandId, campaignId, current.id, row.id, "check");
         if (actionOwner.current !== owner) return;
         setChangeSet(current);
@@ -527,7 +529,7 @@ export function VerifyPage({ brandId, campaignId, setId }: {
       {rail}
       {learnCard}
       {compare}
-      {(kind === "new_ad" || state !== "confirmed") && <ReadbackProof item={item} showObserved={state !== "confirmed"} />}
+      {kind === "new_ad" && <ReadbackProof item={item} showObserved={state !== "confirmed"} showTarget />}
 
       {/* Contract E / F27-I05: only ever set on a `new_ad` set's own `follow_up` once that item
           reads back confirmed and no pause set for the old ad already exists — a plain read, no
