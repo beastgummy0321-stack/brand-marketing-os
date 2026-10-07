@@ -64,6 +64,7 @@ function facts(screenSelector) {
     if (e.closest(".rl, .sc, [data-slot=target-ruler], [data-slot=scenario-bars]") && !e.matches(".chip, [data-slot=chip]")) continue; // ruler dots and scenario rows are part of their piece
     const c = e.classList;
     let piece = null;
+    if (e.closest(".filters, [data-slot=segmented]")) continue;
     if (e.dataset.slot === "button") piece = `Button ${e.dataset.variant}`;
     else if (e.dataset.slot === "chip") piece = `Chip ${e.dataset.tone}`;
     else if (e.dataset.slot === "badge") piece = `Badge ${e.dataset.variant}`;
@@ -75,7 +76,7 @@ function facts(screenSelector) {
     if (piece) out.push(`${piece} | ${e.innerText.replace(/\s+/g, " ").slice(0, 50)}`);
   }
   // Non-control pieces (components/ads/patterns/FlowPieces): prototype class -> piece, built side by data-slot.
-  const BLOCKS = { "evidence-mini": "LearningEvidenceCard", camp: "CampaignChip", tag: "TagToggle", learn: "LearnCard", rec: "RecoverSteps", tiles: "ThumbTiles", days: "DayTiles", ev: "EvidenceRow", ladder: "Ladder", opt: "OptionCard", old: "CopyBlock", new: "CopyBlock", dots: "FlowHeader", kind: "KindMark", meter: "Meter", todo: "TodoRow", hero: "ResultHero", rail: "StageRail", seg: "Segmented", sheet: "DecisionSheet" };
+  const BLOCKS = { "evidence-mini": "LearningEvidenceCard", "learning-row": "LearningEvidenceCard", filters: "Segmented", camp: "CampaignChip", tag: "TagToggle", learn: "LearnCard", rec: "RecoverSteps", tiles: "ThumbTiles", days: "DayTiles", ev: "EvidenceRow", ladder: "Ladder", opt: "OptionCard", old: "CopyBlock", new: "CopyBlock", dots: "FlowHeader", kind: "KindMark", meter: "Meter", todo: "TodoRow", hero: "ResultHero", rail: "StageRail", seg: "Segmented", sheet: "DecisionSheet" };
   const SLOTS = { "campaign-chip": "CampaignChip", "tag-toggle": "TagToggle", "learn-card": "LearnCard", "recover-steps": "RecoverSteps", "thumb-tiles": "ThumbTiles", "day-tiles": "DayTiles", "evidence-row": "EvidenceRow", ladder: "Ladder", "option-card": "OptionCard", "copy-block": "CopyBlock", "flow-header": "FlowHeader", "kind-mark": "KindMark", meter: "Meter", "todo-row": "TodoRow", "result-hero": "ResultHero", "status-rail": "StatusRail", "stage-rail": "StageRail", segmented: "Segmented", "decision-sheet": "DecisionSheet",
     "target-ruler": "TargetRuler", "grade-band": "GradeBand", "money-meter": "MoneyMeter", "pace-chart": "PaceChart", "next-up-strip": "NextUpStrip", "scenario-bars": "ScenarioBars", "allocation-bar": "AllocationBar", "confirm-sheet": "ConfirmSheet", "diff-row": "DiffRow", "cap-dots": "CapDots", "progress-segments": "ProgressSegments",
     // v10 kit (F29-I09)

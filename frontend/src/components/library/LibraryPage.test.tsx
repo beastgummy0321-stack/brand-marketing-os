@@ -18,7 +18,7 @@ const evidenceContext: LearningEvidenceContext = {
   schema_version: 1, revision: "context-fixture", scope_product_id: null, scope_label: null,
   eligible_count: 0, items: [], omitted: 0,
 };
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -30,6 +30,7 @@ vi.mock("@/lib/adsLearningsApi", async () => {
   const actual = await vi.importActual<typeof import("@/lib/adsLearningsApi")>("@/lib/adsLearningsApi");
   return { ...actual, getCoordinateLearnings: vi.fn() };
 });
+vi.mock("@/lib/adsWizardApi", () => ({getWizardOptions: vi.fn(async () => ({products: [], objectives: [], default_objective: null, default_platform: null}))}));
 vi.mock("@/components/layout/WorkspaceContext", () => ({ useWorkspace: () => ({ refreshBrands: vi.fn() }) }));
 vi.mock("./tabs/FactsTab", () => ({ FactsTab: () => <p>品牌事實內容</p> }));
 vi.mock("./tabs/RulesTab", () => ({ RulesTab: () => <p>限制規則內容</p> }));
@@ -46,6 +47,8 @@ vi.mock("./tabs/CoordinatesTab", () => ({ CoordinatesTab: () => <p>創意座標�
 import { fetchLibrary, type LibraryData } from "@/lib/libraryApi";
 import { getCoordinateLearnings, type CoordinateLearnings } from "@/lib/adsLearningsApi";
 import { LibraryPage } from "./LibraryPage";
+import {getWizardOptions} from "@/lib/adsWizardApi";
+import {libraryEvidenceFixture, libraryOptionsFixture} from "../ads/learnings/learningEvidence.fixtures";
 
 const mockFetchLibrary = vi.mocked(fetchLibrary);
 const mockLearnings = vi.mocked(getCoordinateLearnings);
@@ -126,6 +129,7 @@ describe("LibraryPage 投放學到的（F46-I06）", () => {
     expect(await screen.findByRole("button", { name: /^投放學到的\s*2$/ })).toBeTruthy();
     expect(screen.getByRole("button", { name: /投放學到的/ }).getAttribute("aria-pressed")).toBe("false");
     fireEvent.click(screen.getByRole("button", { name: /投放學到的/ }));
+    fireEvent.click(await screen.findByRole("button", {name: "每期廣告排名"}));
     expect(await screen.findByRole("region", { name: "三盒組・第一期" })).toBeTruthy();
     expect(screen.getByRole("button", { name: /投放學到的/ }).getAttribute("aria-pressed")).toBe("true");
     expect(screen.queryByText("品牌事實內容")).toBeNull();
@@ -159,4 +163,35 @@ it("explains why brand editing is unavailable after a failed read", async () => 
   const button=screen.getByRole("button",{name:"品牌資料"});
   expect(button).toHaveProperty("disabled",true);
   expect(button.getAttribute("aria-describedby")).toBe(reason.id);
+});
+
+it("scoped qualification never replaces global nav counts or the complete campaign ranks", async () => {
+  vi.mocked(getWizardOptions).mockResolvedValue({...libraryOptionsFixture, products: [{...libraryOptionsFixture.products[0], id: "prd_box"}]});
+  const scoped = libraryEvidenceFixture();
+  scoped.evidence_context.scope_product_id = "prd_box";
+  scoped.campaigns = [];
+  scoped.next = {sell_way_id: "prd_box", new_campaign_href: "/brands/brand-1/ads/new?sell_way=prd_box"};
+  mockLearnings.mockImplementation(async (_brand, filter) => filter?.sellWayId ? scoped : LEARNED);
+  view("/brands/brand-1/library?tab=ads-learnings");
+  expect(await screen.findByRole("button", {name: /^投放學到的\s*2$/})).toBeTruthy();
+  expect(await screen.findByRole("link", {name: "用可參考資料規劃下一期 →"})).toBeTruthy();
+  expect(screen.getByText("2 條可參考 · 其餘資料保留在歷史")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", {name: "每期廣告排名"}));
+  expect(screen.getByRole("table", {name: "三盒組・第一期 每則廣告排名"})).toBeTruthy();
+  expect(screen.getByText("花 2,580・成交 4・每筆 645")).toBeTruthy();
+});
+
+it("late library and global learning responses cannot replace the current brand", async () => {
+  let oldLibrary!: (data: LibraryData) => void;
+  let oldLearning!: (data: CoordinateLearnings) => void;
+  mockFetchLibrary.mockImplementation(id => id === "brand-1" ? new Promise(resolve => {oldLibrary = resolve;}) : Promise.resolve({...DATA, brand: {...DATA.brand, id: "brand-2", name: "目前品牌"}}));
+  mockLearnings.mockImplementation(id => id === "brand-1" ? new Promise(resolve => {oldLearning = resolve;}) : Promise.resolve({...LEARNED, campaigns: [], next: null}));
+  const page = render(<MemoryRouter><LibraryPage brandId="brand-1"/></MemoryRouter>);
+  page.rerender(<MemoryRouter><LibraryPage brandId="brand-2"/></MemoryRouter>);
+  expect(await screen.findByText(/目前品牌 · 品牌事實/)).toBeTruthy();
+  expect(await screen.findByRole("button", {name: /^投放學到的\s*0$/})).toBeTruthy();
+  await act(async () => {oldLibrary(DATA); oldLearning(LEARNED);});
+  expect(screen.getByText(/目前品牌 · 品牌事實/)).toBeTruthy();
+  expect(screen.getByRole("button", {name: /^投放學到的\s*0$/})).toBeTruthy();
+  expect(screen.queryByText(/測試品牌 · 品牌事實/)).toBeNull();
 });

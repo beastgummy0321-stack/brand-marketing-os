@@ -46,4 +46,4 @@ export { CHANGE_STATE_LABEL, CHANGE_STATE_TONE, ChangeTimeline, type ChangeRow, 
 export { PickCard, PickGroup } from "./PickCard";
 export { MoneyInput } from "./MoneyInput";
 export { campaignWord, closedWord } from "./campaignWords";
-export { LearningEvidenceCard, LearningEvidenceSource } from "./LearningEvidence";
+export { LearningEvidenceCard, LearningEvidenceSource, LearningEvidenceState, LearningEvidenceOrigin } from "./LearningEvidence";

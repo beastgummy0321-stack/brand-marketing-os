@@ -26,19 +26,29 @@ function SourceField({ label, value }: { label: string; value: string | null }) 
 }
 
 /** Presentation only: support, eligibility and counts are the server's qualification. */
-export function LearningEvidenceCard({ evidence, onSource }: {
-  evidence: LearningEvidence; onSource?: (evidence: LearningEvidence) => void;
+export function LearningEvidenceCard({ evidence, onSource, compact = false, scopeLabel }: {
+  evidence: LearningEvidence; onSource?: (evidence: LearningEvidence) => void; compact?: boolean; scopeLabel?: string;
 }) {
   const tone: ChipTone = evidence.use_state === "usable" ? "ok" : evidence.use_state === "revalidation" ? "warn" : "neutral";
-  return <article data-slot="learning-evidence" className="min-w-0 border-t border-border py-4 first:border-t-0">
-    <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
+  return <article data-slot="learning-evidence" className={compact ? "min-w-0" : "min-w-0 border-t border-border py-4 first:border-t-0"}>
+    {!compact && <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
       <Chip tone={tone}>{USE_LABEL[evidence.use_state]}</Chip>
       <span className="text-xs text-muted-foreground [overflow-wrap:anywhere]">{evidence.support_label}</span>
-    </div>
-    <p className="text-[13px] leading-7 [overflow-wrap:anywhere]">{evidence.display_text}</p>
-    {evidence.reason_labels.map((reason, i) => <p key={i} className="mt-1 text-xs text-muted-foreground [overflow-wrap:anywhere]">{reason}</p>)}
+    </div>}
+    <p className={compact ? "text-[13px] font-semibold leading-6 [overflow-wrap:anywhere]" : "text-[13px] leading-7 [overflow-wrap:anywhere]"}>{evidence.display_text}</p>
+    {compact && scopeLabel && <p className="mt-1 text-xs text-muted-foreground [overflow-wrap:anywhere]">{scopeLabel}</p>}
+    {compact && <p className="mt-1 text-xs text-muted-foreground [overflow-wrap:anywhere]">{evidence.support_label}</p>}
+    {Array.from(new Set(evidence.reason_labels)).filter(reason => !compact || reason !== evidence.support_label).map((reason, i) => <p key={i} className="mt-1 text-xs text-muted-foreground [overflow-wrap:anywhere]">{reason}</p>)}
     {onSource && <Button variant="ghost" size="sm" className="mt-2" onClick={() => onSource(evidence)}>查看來源與限制 →</Button>}
   </article>;
+}
+
+export function LearningEvidenceState({ evidence }: {evidence: LearningEvidence}) {
+  return <Chip tone={evidence.use_state === "usable" ? "ok" : evidence.use_state === "revalidation" ? "warn" : "neutral"}>{USE_LABEL[evidence.use_state]}</Chip>;
+}
+
+export function LearningEvidenceOrigin({ evidence }: {evidence: LearningEvidence}) {
+  return <Chip tone={evidence.provenance === "simulation" ? "accent" : "neutral"}>{ORIGIN_LABEL[evidence.provenance]}</Chip>;
 }
 
 /** Shared source drilldown for strategy, Library and revalidation; null stays unknown. */

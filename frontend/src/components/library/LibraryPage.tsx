@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useWorkspace } from "@/components/layout/WorkspaceContext";
 import { PageHeader } from "@/components/layout/PageHeader";
@@ -54,20 +54,26 @@ export function LibraryPage({ brandId }: { brandId: string }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const [profileOpen, setProfileOpen] = useState(false);
   const learnings = useCoordinateLearnings(brandId);
+  const readGeneration = useRef(0);
+  const [owner, setOwner] = useState(brandId);
 
-  function load() {
+  const load = useCallback(() => {
+    const generation = ++readGeneration.current;
+    setOwner(brandId);
     setState({ status: "loading" });
     fetchLibrary(brandId)
-      .then((data) => setState({ status: "ready", data }))
-      .catch((err: unknown) =>
+      .then((data) => { if (readGeneration.current === generation) setState({ status: "ready", data }); })
+      .catch((err: unknown) => {
+        if (readGeneration.current !== generation) return;
         setState({
           status: "error",
           message: err instanceof Error ? err.message : "讀取失敗，請稍後再試。",
-        }),
-      );
-  }
+        });
+      });
+    return () => { if (readGeneration.current === generation) readGeneration.current++; };
+  }, [brandId]);
 
-  useEffect(load, [brandId]);
+  useEffect(load, [load]);
 
   const requestedTab = searchParams.get("tab");
   // The closeout's 「看學到什麼 →」 lands with `?campaign=<id>`; without a tab it means the learnings tab.
@@ -89,7 +95,7 @@ export function LibraryPage({ brandId }: { brandId: string }) {
   }
 
   let content: ReactNode;
-  if (state.status === "loading") {
+  if (state.status === "loading" || owner !== brandId) {
     content = (
       <div className="flex flex-col gap-4">
         <div className="flex gap-2">
@@ -165,7 +171,7 @@ export function LibraryPage({ brandId }: { brandId: string }) {
               </div>
             </details>
         </nav>
-        <div className="workspace-content surface p-5">
+        <div className={activeTab === LEARNINGS_TAB ? "workspace-content min-w-0" : "workspace-content surface p-5"}>
 
         {activeTab === "facts" && <FactsTab brandId={brandId} facts={data.facts} onChanged={load} />}
         {activeTab === "rules" && (
@@ -186,6 +192,7 @@ export function LibraryPage({ brandId }: { brandId: string }) {
         {activeTab === "coordinates" && <CoordinatesTab brandId={brandId} />}
         {activeTab === LEARNINGS_TAB && (
           <LearningsTab
+            key={brandId}
             brandId={brandId}
             state={learnings.state}
             onRetry={learnings.reload}
@@ -215,7 +222,7 @@ export function LibraryPage({ brandId }: { brandId: string }) {
 
   return (
     <div className="flex flex-col gap-4">
-      <PageHeader title="品牌智庫" description={state.status === "ready" ? `${state.data.brand.name} · 品牌事實、素材與累積的經營知識` : "管理品牌知識與素材"} actions={
+      <PageHeader title="品牌智庫" description={state.status === "ready" && owner === brandId ? `${state.data.brand.name} · 品牌事實、素材與累積的經營知識` : "管理品牌知識與素材"} actions={
         <>
           {/* The brand onboarding (F42), same label as the 經營概況 title-row link (F42-I12); distinct from
               the 品牌資料 button next to it, which edits the brand profile. */}
