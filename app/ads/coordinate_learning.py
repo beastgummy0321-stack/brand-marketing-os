@@ -186,6 +186,12 @@ def write_coordinate_learnings(conn: _AnyConn, org_id: str, brand_id: str, campa
             sample_size="低" if row["few"] or row["cost_per_sale"] is None else "高",
             source_cycle_id=cycle_id, source_track=SOURCE_TRACK,
             needs_revalidation=needs_revalidation,
+            evidence=ads_learnings.source_evidence(
+                conn, org_id, brand_id, detail, kind="coordinate", window=window, ad=ad,
+                observations=by_ad.get(ad["id"], []), claim_key=ads_learnings.message_claim(ad),
+                direction=("support" if row["cost_per_sale"] is not None and row["cap"] is not None
+                           and row["cost_per_sale"] <= row["cap"] else "contrary"),
+            ),
         ))
         existing.add(cycle_id)
     return written

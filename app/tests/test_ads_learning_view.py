@@ -15,12 +15,15 @@ no one cap).
 import unittest
 from datetime import UTC, date, datetime
 
+from fastapi.testclient import TestClient
+
 from app.ads import external_repository, learning_view, outcome, plan
 from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi_repo
 from app.core import db as coredb
 from app.shared import web
 from app.tests.fixtures.ads_external import outcome_seed
+from app.workbench import encode_learning_scope
 
 ACTOR = "測試員"
 
@@ -111,6 +114,39 @@ class LearningViewTestBase(unittest.TestCase):
 
 
 class ViewShapeTest(LearningViewTestBase):
+    def test_retired_visual_is_served_as_history_without_changing_original_rank(self):
+        from app.main import app
+
+        campaign = self._closed("Original period", datetime(2026, 9, 19, tzinfo=UTC))
+        self._ranked(campaign, "Original ranking", verdict="keep", rank=1, of=1,
+                     sales=10, spend=2000, group=self.groups[0]["id"])
+        source = {"schema_version": 1, "source_kind": "visual",
+                  "source_ref": {"campaign_id": campaign["id"], "trial_id": campaign["id"]},
+                  "source_version": "retained-original", "provenance": "platform_observation",
+                  "period": {"start": "2026-09-01", "end": "2026-09-07"},
+                  "scope": {"product_id": self.product["id"], "audience_key": "cold",
+                            "claim_key": "visual:look:phone", "claim_family": "performance"},
+                  "sample": {"result_events": 10}, "direction": "support"}
+        old = bi_repo.record_learning(
+            self.conn, self.brand_id, actor=ACTOR, learning_text="Original visual observation",
+            applicability_scope=encode_learning_scope("visual；audience=cold；look=phone", source),
+            confidence="likely", sample_size="10", product_id=self.product["id"],
+            source_cycle_id=campaign["id"], source_track="visual",
+        )
+        bi_repo.expire_learning(self.conn, self.brand_id, old["id"], actor=ACTOR)
+        view = self._view()
+        original = view["campaigns"][0]["rows"][0]
+        self.assertEqual((original["rank"], original["sales"], original["spend"]), (1, 10, 2000))
+        item = next(i for i in view["evidence_context"]["items"] if i["id"] == old["id"])
+        self.assertEqual(item["use_state"], "history")
+        self.assertIn("superseded", item["reason_codes"])
+        self.assertEqual(item["allowed_uses"], [])
+        response = TestClient(app).get(f"/api/ads/brands/{self.brand_id}/coordinate-learnings")
+        self.assertEqual(response.status_code, 200, response.text)
+        served = next(i for i in response.json()["evidence_context"]["items"]
+                      if i["id"] == old["id"])
+        self.assertEqual(served["use_state"], "history")
+        self.assertEqual(served["allowed_uses"], [])
     def test_ranked_row_keeps_its_evidence_when_newer_other_tracks_fill_the_scan(self):
         campaign = self._closed("Retained period", datetime(2026, 9, 19, tzinfo=UTC))
         self._ranked(campaign, "Retained original", verdict="keep", rank=1, of=1,

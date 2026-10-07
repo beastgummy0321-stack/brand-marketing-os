@@ -15,6 +15,7 @@ from datetime import UTC, date, datetime, timedelta
 from unittest.mock import patch
 
 from app.ads import (
+    ads_learnings,
     angles,
     channels,
     learning_rank,
@@ -28,6 +29,7 @@ from app.ads import external_repository as external
 from app.brand_intelligence import repository as brands
 from app.core import db, interrupts
 from app.core import settings as coresettings
+from app.workbench import base_learning_scope
 
 ACCOUNT_TZ = "Asia/Taipei"
 MONTH = "2026-08"
@@ -406,19 +408,29 @@ class SettleWriteTest(SettleFixture):
         p1 = rows[f"settle:{MONTH}:{self.ads['p1']}"]
         # F48-I02: the scope names the customer group the ad spoke to (none when unbound).
         self.assertEqual(
-            {k: p1[k] for k in ("learning_text", "applicability_scope", "sample_size",
+            {k: base_learning_scope(p1[k]) if k == "applicability_scope" else p1[k]
+             for k in ("learning_text", "applicability_scope", "sample_size",
                                 "confidence", "source_track", "created_by")},
-            {"learning_text": "「保溫到公司」對這群受眾有效",
-             "applicability_scope": f"ads;campaign={self.daily};group=pcg_morning",
+            {"learning_text": "「保溫到公司」本期每筆成本未超過宣告上限；僅表示相關",
+             "applicability_scope": f"ads;campaign={self.daily};group=pcg_morning"
+                                    ";settle_fate=effective",
              "sample_size": "26", "confidence": "observed", "source_track": "ads",
              "created_by": "user_1"},
         )
         p2 = rows[f"settle:{MONTH}:{self.ads['p2']}"]
-        self.assertEqual(p2["learning_text"], "「桌面質感」對這群受眾無效")  # 偏貴, ranked 換掉
-        self.assertEqual(p2["applicability_scope"], f"ads;campaign={self.daily};group=none")
+        self.assertEqual(p2["learning_text"], "「桌面質感」本期每筆成本超過宣告上限；僅表示相關")
+        self.assertEqual(base_learning_scope(p2["applicability_scope"]),
+                         f"ads;campaign={self.daily};group=none;settle_fate=ineffective")
         i3 = rows[f"settle:{MONTH}:{self.ads['i3']}"]
-        self.assertEqual(i3["learning_text"], "「多種用法」對這群受眾無效")
-        self.assertEqual(i3["applicability_scope"], f"ads;campaign={self.imp};group=none")
+        source = ads_learnings.stored_evidence(i3)
+        self.assertEqual(source["source_kind"], "settle")
+        self.assertEqual(source["source_ref"]["entity_id"], self.ads["i3"])
+        self.assertEqual(source["scope"]["claim_key"], "message_text:多種用法")
+        self.assertEqual(source["direction"], "inconclusive")
+        self.assertEqual(i3["learning_text"],
+                         "「多種用法」本期無法計算每筆成本與上限的差距；成效原因未知")
+        self.assertEqual(base_learning_scope(i3["applicability_scope"]),
+                         f"ads;campaign={self.imp};group=none;settle_fate=ineffective")
         self.assertEqual(i3["sample_size"], "0")
         # no numbers in any text (identical conclusions promote confidence)
         self.assertFalse(any(ch.isdigit() for row in rows.values()
@@ -455,7 +467,7 @@ class SettleWriteTest(SettleFixture):
             {self.ads[k]: (product["id"] if k.startswith("p") else None) for k in LEARNABLE},
         )
 
-    def test_confidence_promotes_on_identical_texts(self):
+    def test_identical_text_and_overlapping_periods_do_not_promote_unknown_conditions(self):
         brands.record_learning(
             self.conn, self.brand, actor="system", learning_text="「保冷」對這群受眾無效",
             applicability_scope="ads;campaign=x", confidence="observed", sample_size="1",
@@ -466,9 +478,9 @@ class SettleWriteTest(SettleFixture):
         self.write(picks)
         by_entity = {row["source_cycle_id"].rsplit(":", 1)[1]: row for row in self.learnings()}
         effective = sorted(by_entity[self.ads[k]]["confidence"] for k in ("p1", "i1"))
-        self.assertEqual(effective, ["likely", "observed"])
+        self.assertEqual(effective, ["observed", "observed"])
         ineffective = sorted(by_entity[self.ads[k]]["confidence"] for k in replaced)
-        self.assertEqual(ineffective, ["likely"] + ["validated"] * 4)
+        self.assertEqual(ineffective, ["observed"] * 5)
 
     def test_missing_or_too_long_pick_writes_nothing(self):
         with self.assertRaises(settle.SettleError) as caught:
@@ -484,8 +496,8 @@ class SettleWriteTest(SettleFixture):
     def test_strategy_reads_the_written_learnings(self):
         self.write(self.picks(*LEARNABLE, angle="保溫到公司"))
         text, basis = strategy._learnings_section(self.conn, self.brand)
-        self.assertIn("「保溫到公司」對這群受眾有效", text)
-        self.assertIn("「保溫到公司」對這群受眾無效", text)
+        self.assertIn("「保溫到公司」本期每筆成本未超過宣告上限；僅表示相關", text)
+        self.assertIn("「保溫到公司」本期每筆成本超過宣告上限；僅表示相關", text)
         self.assertEqual(len(basis), len(LEARNABLE))
 
 

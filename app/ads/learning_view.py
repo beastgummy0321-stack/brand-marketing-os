@@ -210,7 +210,7 @@ def learnings_view(conn: _AnyConn, org_id: str, brand_id: str, *, campaign_id: s
     # The all-track cap can omit older coordinate rows still represented by the ranked view.
     # Qualify every represented row from its retained ledger record, without dropping ranks.
     evidence_rows = {row["id"]: row for row in bi_repo.list_learnings(
-        cast(Conn, conn), brand_id, limit=SCAN_LIMIT,
+        cast(Conn, conn), brand_id, limit=SCAN_LIMIT, include_expired=True,
     )}
     for campaign in campaigns:
         for row in stored.get(campaign["campaign_id"], []):

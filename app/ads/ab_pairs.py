@@ -18,6 +18,7 @@ campaigns have no coordinates, so no pairs.
 from datetime import timedelta
 
 from app.ads import (
+    ads_learnings,
     change_control,
     coverage,
     experiments,
@@ -297,6 +298,36 @@ def pause_loser(conn, org, brand, campaign_id, pid, operation_id, actor) -> dict
         "pair_id": pid, "dimension_label": pair["dimension_label"], "winner": _ab_side(win),
         "loser": _ab_side(lose), "window": pair["window"],
     }
+    detail = repository.campaign_detail(conn, org, brand, campaign_id)
+    if detail is None:
+        raise PairUnknown("找不到這組 A/B 比較的活動。")
+    detail = live_creative.with_learning_coordinates(conn, org, brand, detail)
+    members = [ad for group in detail["groups"] for ad in group["ads"]
+               if ad["id"] in {win["ad_id"], lose["ad_id"]}]
+    observations = outcome.select_period(outcome.rows(conn, org, brand, campaign_id, "ad"),
+                                         pair["window"])
+    observations = [r for r in observations if r["entity_id"] in {a["id"] for a in members}]
+    variable = f"{pair['dimension']}_key"
+    values = sorted(a.get(variable) for a in members)
+    comparison = ads_learnings.semantic_version({
+        "dimension": pair["dimension"], "values": values,
+        "background": sorted(ads_learnings.semantic_version({
+            d: a.get(f"{d}_key") for d in experiments.DIMENSIONS if d != pair["dimension"]
+        }) for a in members),
+    })
+    winner = next(a.get(variable) for a in members if a["id"] == win["ad_id"])
+    # Both sides are retained: a pause receipt cannot certify the market comparison.
+    ab["evidence"] = ads_learnings.source_evidence(
+        conn, org, brand, detail, kind="ab", window=pair["window"], members=members,
+        observations=observations,
+        claim_key=f"comparison:{comparison}:first={values[0]}:second={values[1]}",
+        direction="support" if winner == values[0] else "contrary", trial_id=campaign_id,
+    )
+    sides = [[r.get("result_count") for r in observations if r["entity_id"] == a["id"]]
+             for a in members]
+    ab["evidence"]["sample"]["result_events"] = min(
+        (sum(float(v) for v in side) for side in sides), default=None,
+    ) if sides and all(side and all(v is not None for v in side) for side in sides) else None
     month = settings.today_for_org(conn, org_id=org).strftime("%Y-%m")
     payload = {
         "operation_id": operation_id,

@@ -14,12 +14,21 @@ import unittest
 from datetime import UTC, date, datetime, timedelta
 from unittest.mock import patch
 
-from app.ads import channels, closeout, coordinate_learning, coverage, external_repository, plan
+from app.ads import (
+    ads_learnings,
+    channels,
+    closeout,
+    coordinate_learning,
+    coverage,
+    external_repository,
+    plan,
+)
 from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi_repo
 from app.core import db as coredb
 from app.shared import web
 from app.tests.fixtures.ads_external import outcome_seed
+from app.workbench import base_learning_scope
 
 ACTOR = "測試員"
 CAP = 450.0
@@ -248,8 +257,12 @@ class CloseWritesRankedRowsTest(CoordinateLearningTestBase):
         rows = {row["source_cycle_id"]: row for row in self._coordinate_rows()}
         self.assertEqual(set(rows), {f"{campaign['id']}:{ad['id']}" for ad in ads.values()})
         box = rows[f"{campaign['id']}:{ads['box']['id']}"]
+        source = ads_learnings.stored_evidence(box)
+        self.assertEqual(source["source_kind"], "coordinate")
+        self.assertEqual(source["source_ref"]["ad_id"], ads["box"]["id"])
+        self.assertEqual(source["scope"]["product_id"], self.product_id)
         self.assertEqual(
-            box["applicability_scope"],
+            base_learning_scope(box["applicability_scope"]),
             f"coord；v=2；verdict=keep_relative；rank=1；of=4；sales=6；spend=3330；cpr=555"
             f"；cap=450；few=0；group={self.groups[0]['id']}；audience=cold；pain=effort；angle=box"
             "；hook=h1；proof=pr1；offer=none；format=f1；cur=TWD",

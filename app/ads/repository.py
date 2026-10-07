@@ -795,7 +795,9 @@ def performance_rows(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: st
     `NULL` -- nothing here coerces them."""
     rows = conn.execute(
         "SELECT n.id AS entity_id, d.day, d.spend, d.impressions, d.clicks, d.purchases,"
-        " d.revenue, d.currency, d.attribution_key, d.source, d.observed_at"
+        " d.revenue, d.currency, d.attribution_key, d.source, d.observed_at,"
+        " d.id AS observation_id,"
+        " d.result_kind, d.result_count, d.result_attribution, d.result_action"
         + _perf_join(kind)
         + " AND d.org_id = %s AND d.brand_id = %s AND d.campaign_id = %s"
         " ORDER BY d.day, n.id",
