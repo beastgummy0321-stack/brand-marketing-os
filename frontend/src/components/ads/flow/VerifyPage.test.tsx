@@ -18,7 +18,7 @@ function learningEvidence(id = "learning-fixture"): LearningEvidence {
  * `@/lib/adsChangeApi`／`@/lib/adsTriageApi`，不打真的 API。覆蓋 Done 3：confirmed／deviated／
  * stale／pending(reported_at 已寫)／reported+unknown 五種畫面、「重新核對」呼叫 check、
  * 「下一件」找佇列裡下一個還沒完成的項目、走錯步驟自動導正、多項變更清單連去既有變更與核對。 */
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation, useParams } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -27,6 +27,7 @@ import type { ChangeItem, ChangeSet } from "@/lib/adsChangeApi";
 import * as triageApi from "@/lib/adsTriageApi";
 import type { QueueItem, QueuePayload, QueueScale, QueueRefresh, TriageItem } from "@/lib/adsTriageApi";
 import { VerifyPage } from "./VerifyPage";
+import {pauseEvidenceFixture} from "../patterns/LearningReceipt.fixtures";
 // F50 Contract K: the org clock reads the workspace org zone; dates assert Asia/Taipei output, never the runner's.
 vi.mock("@/components/layout/WorkspaceContext", () => ({ useWorkspace: () => ({ scope: "user:org", identity: { user: { id: "u", email: "a@example.com" }, org: { id: "o", name: "測試", kind: "personal", role: "owner", timezone: "Asia/Taipei", today: "2026-10-01" }, orgs: [] } }) }));
 
@@ -144,12 +145,11 @@ describe("VerifyPage（F22-I04）confirmed", () => {
     expect(screen.getByText("✓ 設定相符")).toBeTruthy();
     // F49 Contract L: the served status word, never a local map of platform statuses.
     expect(screen.getByText("狀態：已暫停")).toBeTruthy();
-    // F27-I16 Contract H/D：沒有 `timeline`／`learning`（既有 factory 沒帶這兩個欄位）當作
-    // 「還不知道」，跟「明天確認」／「沒標主打，未記入」畫同一格，不是省略整格。
+    // Missing timeline and ledger evidence stay unknown, rather than inferring an angle or market result.
     expect(screen.getByText("花費停止")).toBeTruthy();
     expect(screen.getByText("明天確認")).toBeTruthy();
     expect(screen.getByText("品牌學習")).toBeTruthy();
-    expect(screen.getByText("沒標主打，未記入")).toBeTruthy();
+    expect(screen.getByText("本次操作尚未留紀錄")).toBeTruthy();
     expect(screen.getByRole("button", { name: "⟳ 重新核對" })).toBeTruthy();
     const home = screen.getByRole("link", { name: "← 回投放中心" }) as HTMLAnchorElement;
     expect(home.getAttribute("href")).toBe("/brands/brd_1/ads");
@@ -159,7 +159,7 @@ describe("VerifyPage（F22-I04）confirmed", () => {
     vi.mocked(changeApi.getChangeControl).mockResolvedValue({
       targets: [], change_sets: [changeSet({ items: [changeItem({
         timeline: { spend_stopped: true, delivery_started: null, next_review_at: null },
-        learning: { recorded: true, evidence: learningEvidence(), confidence: "observed", count: 1 },
+        learning: { recorded: true, evidence: pauseEvidenceFixture(), confidence: "observed", count: 0 },
         angle: "日常出發情境",
       } as Partial<ChangeItem> & { angle: string })] })],
     });
@@ -168,13 +168,14 @@ describe("VerifyPage（F22-I04）confirmed", () => {
     expect(screen.getByText("✓ 花費停止")).toBeTruthy();
     expect(screen.getByText("已確認停止")).toBeTruthy();
     expect(screen.getByText("✓ 已記入品牌學習")).toBeTruthy();
-    expect(screen.getByText("第 1 次觀察")).toBeTruthy();
-    expect(screen.getByText("「日常出發情境」對這群受眾無效")).toBeTruthy();
-    expect(screen.getByText("觀察到")).toBeTruthy();
-    expect(screen.getByText(/再出現 1 次同方向結果會升為「可能成立」/)).toBeTruthy();
+    expect(screen.getAllByText("本次操作已留紀錄")).toHaveLength(2);
+    expect(screen.getByText("暫停反光訊息 · 下班後夜跑者")).toBeTruthy();
+    expect(screen.getByText("獨立觀察 0 次 · 連續同向 0 次 · 反向 0 次")).toBeTruthy();
+    expect(screen.queryByText(/第 \d+ 次觀察|再出現|對這群受眾無效/)).toBeNull();
+    expect(screen.getByRole("link", {name: "查看品牌學習 →"}).getAttribute("href")).toBe("/brands/brd_1/library?tab=ads-learnings");
   });
 
-  it("pause：已成立（count 3）不再顯示升級提示", async () => {
+  it("legacy validated/count 3 cannot override the served unknown qualification", async () => {
     vi.mocked(changeApi.getChangeControl).mockResolvedValue({
       targets: [], change_sets: [changeSet({ items: [changeItem({
         learning: { recorded: true, evidence: learningEvidence(), confidence: "validated", count: 3 },
@@ -183,9 +184,99 @@ describe("VerifyPage（F22-I04）confirmed", () => {
     });
     renderAt(verifyPath());
     await screen.findByText("平台上這則廣告已經關閉");
-    expect(screen.getByText("成立")).toBeTruthy();
-    expect(screen.getByText("下次規劃素材時會避開")).toBeTruthy();
+    expect(screen.getAllByText("來源尚未核實")).toHaveLength(2);
+    expect(screen.getByText("歷史紀錄")).toBeTruthy();
+    expect(screen.queryByText("成立")).toBeNull();
+    expect(screen.queryByText("下次規劃素材時會避開")).toBeNull();
     expect(screen.queryByText(/再出現/)).toBeNull();
+  });
+
+  it("recorded operation with no evidence stays unknown, without local angle or count inference", async () => {
+    vi.mocked(changeApi.getChangeControl).mockResolvedValue({targets: [], change_sets: [changeSet({items: [changeItem({
+      learning: {recorded: true, evidence: null, confidence: "validated", count: 9},
+    })]})]});
+    renderAt(verifyPath());
+    await screen.findByText("已記錄這次暫停觀察");
+    expect(screen.getByText("本次操作已留紀錄；來源與適用性尚未核實")).toBeTruthy();
+    expect(screen.getByRole("button", {name: "查看來源與限制 →"}).hasAttribute("disabled")).toBe(true);
+    expect(screen.queryByText(/獨立觀察|成立|下次規劃素材時會避開/)).toBeNull();
+  });
+
+  it("source keeps zero/null, period, operation limit and returns focus on Escape or explicit close", async () => {
+    const user = userEvent.setup();
+    vi.mocked(changeApi.getChangeControl).mockResolvedValue({targets: [], change_sets: [changeSet({items: [changeItem({
+      learning: {recorded: true, evidence: pauseEvidenceFixture(), confidence: "observed", count: 0},
+    })]})]});
+    renderAt(verifyPath());
+    const trigger = await screen.findByRole("button", {name: "查看來源與限制 →"});
+    await user.click(trigger);
+    const panel = await screen.findByRole("dialog", {name: "暫停觀察的來源與限制"});
+    expect(within(panel).getByText("樣本尚未完整核實")).toBeTruthy();
+    expect(within(panel).getByText("來源未提供，尚未核實")).toBeTruthy();
+    expect(within(panel).getAllByText("0 次")).toHaveLength(3);
+    await user.click(within(panel).getByRole("button", {name: "完整來源與限制"}));
+    expect(within(panel).getByText("aci_f53_ui")).toBeTruthy();
+    expect(within(panel).getByText("不使用優惠")).toBeTruthy();
+    expect(within(panel).getByText("僅證明操作已核對")).toBeTruthy();
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(document.activeElement).toBe(trigger);
+    await user.click(trigger);
+    await user.click(await screen.findByRole("button", {name: "返回核對結果"}));
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
+  });
+
+  it("actual label-null receipt preserves known scope/source identities without guessing names", async () => {
+    const user = userEvent.setup();
+    const base = pauseEvidenceFixture();
+    const evidence = {...base, scope: {...base.scope, product_label: null}, sources: base.sources.map(source => ({...source, label: null}))};
+    vi.mocked(changeApi.getChangeControl).mockResolvedValue({targets: [], change_sets: [changeSet({items: [changeItem({
+      learning: {recorded: true, evidence, confidence: "observed", count: 0},
+    })]})]});
+    renderAt(verifyPath());
+    await screen.findByText("商品名稱尚未提供");
+    expect(screen.queryByText("商品範圍尚未核實")).toBeNull();
+    await user.click(screen.getByRole("button", {name: "查看來源與限制 →"}));
+    const panel = await screen.findByRole("dialog");
+    expect(within(panel).getByText("來源名稱尚未提供")).toBeTruthy();
+    expect(within(panel).getByText("受眾名稱尚未提供")).toBeTruthy();
+    await user.click(within(panel).getByRole("button", {name: "完整來源與限制"}));
+    expect(within(panel).getByText("prd_fixture")).toBeTruthy();
+    expect(within(panel).getByText("pcg_run")).toBeTruthy();
+    expect(within(panel).getByText("aci_f53_ui")).toBeTruthy();
+    expect(within(panel).getByText("pause-source-v1")).toBeTruthy();
+  });
+
+  it("failed reread retains the last receipt and retry uses the existing exact item operation", async () => {
+    const user = userEvent.setup();
+    const stored = changeSet({items: [changeItem({learning: {recorded: true, evidence: pauseEvidenceFixture(), confidence: "observed", count: 0}})]});
+    vi.mocked(changeApi.getChangeControl).mockResolvedValue({targets: [], change_sets: [stored]});
+    vi.mocked(changeApi.actOnChangeItem).mockRejectedValueOnce(new Error("Readback temporarily unavailable")).mockResolvedValueOnce(stored);
+    renderAt(verifyPath());
+    await user.click(await screen.findByRole("button", {name: "⟳ 重新核對"}));
+    expect(await screen.findByRole("alert")).toHaveProperty("textContent", "Readback temporarily unavailable");
+    expect(screen.getByText("暫停反光訊息 · 下班後夜跑者")).toBeTruthy();
+    await user.click(screen.getByRole("button", {name: "查看來源與限制 →"}));
+    expect(await screen.findByRole("dialog")).toBeTruthy();
+    await user.keyboard("{Escape}");
+    await user.click(screen.getByRole("button", {name: "⟳ 重新核對"}));
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+    expect(changeApi.actOnChangeItem).toHaveBeenNthCalledWith(2, "brd_1", "cmp_1", "acs_1", "item_1", "check");
+    expect(screen.getByText("獨立觀察 0 次 · 連續同向 0 次 · 反向 0 次")).toBeTruthy();
+  });
+
+  it("open source from a preceding brand cannot survive the next owner's read", async () => {
+    const user = userEvent.setup();
+    const stored = changeSet({items: [changeItem({learning: {recorded: true, evidence: pauseEvidenceFixture(), confidence: "observed", count: 0}})]});
+    vi.mocked(changeApi.getChangeControl).mockResolvedValueOnce({targets: [], change_sets: [stored]}).mockResolvedValueOnce({targets: [], change_sets: [changeSet({id: "acs_2", campaign_id: "cmp_2"})]});
+    const view = (second: boolean) => <MemoryRouter><VerifyPage brandId={second ? "brd_2" : "brd_1"} campaignId={second ? "cmp_2" : "cmp_1"} setId={second ? "acs_2" : "acs_1"}/></MemoryRouter>;
+    const rendered = render(view(false));
+    await user.click(await screen.findByRole("button", {name: "查看來源與限制 →"}));
+    await screen.findByRole("dialog");
+    rendered.rerender(view(true));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(await screen.findByText("本次操作尚未留紀錄")).toBeTruthy();
+    expect(screen.queryByText("暫停反光訊息 · 下班後夜跑者")).toBeNull();
   });
 
   it("budget（F48-I11）：「下次檢查 M/D」讀 timeline.next_review_at，不再印固定的「學習期 3–5 天」", async () => {

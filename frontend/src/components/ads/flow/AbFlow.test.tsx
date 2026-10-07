@@ -32,6 +32,7 @@ import type { CampaignTriage, QueuePayload, TriageItem } from "@/lib/adsTriageAp
 import { ConfirmPage } from "./ConfirmPage";
 import { HandoffPage } from "./HandoffPage";
 import { VerifyPage } from "./VerifyPage";
+import {comparativeEvidenceFixture, pauseEvidenceFixture} from "../patterns/LearningReceipt.fixtures";
 import { seedAdsRules } from "../patterns/rules";
 import { RULES_FIXTURE } from "../patterns/rulesFixture";
 
@@ -234,22 +235,61 @@ describe("A/B 關掉輸家（F29-I14）到平台完成與核對", () => {
     expect(await screen.findByText("日常商品推廣・轉換")).toBeTruthy();
   });
 
-  it("核對相符：寫進筆記本的那句（已寫進）", async () => {
+  it("confirmed comparison reads served qualification while preserving both frozen side amounts", async () => {
     vi.mocked(changeApi.getChangeControl).mockResolvedValue({
       targets: [], change_sets: [approved({
         verification_state: "confirmed", reported_at: "2026-09-23T02:10:00Z", verified_at: "2026-09-23T02:13:00Z",
         evidence_json: { observed_at: "2026-09-23T02:13:00Z", setting_matches: true },
-        learning: { recorded: true, evidence: learningEvidence(), confidence: "observed", count: 1 },
+        learning: { recorded: true, evidence: comparativeEvidenceFixture(), confidence: "observed", count: 3 },
         timeline: { spend_stopped: null, delivery_started: null, next_review_at: null },
       })],
     });
     renderAt(`${base}/verify`);
     expect(await screen.findByText("平台上這則廣告已經關閉")).toBeTruthy();
-    const learned = document.querySelector("[data-slot=learn-line]") as Element;
-    expect(seen(learned)).toBe("✎已寫進筆記本「開場」用「出門情境」比「開箱畫面」划算每筆 45 vs 56");
-    // The angle cell of a plain pause (「沒標主打，未記入」) does not apply to an A/B pause.
-    expect(screen.queryByText("沒標主打，未記入")).toBeNull();
+    expect(screen.getByText("已保留這次比較紀錄")).toBeTruthy();
+    expect(screen.getByText("這兩個開場版本的相對比較")).toBeTruthy();
+    expect(screen.getByText("多次同向觀察 · 僅能比較兩個版本")).toBeTruthy();
+    expect(screen.getByText("獨立觀察 3 次 · 連續同向 3 次 · 反向 0 次")).toBeTruthy();
+    expect(screen.getByText(LOSER)).toBeTruthy();
+    expect(screen.getByText(WINNER)).toBeTruthy();
+    expect(screen.getByText("56 元")).toBeTruthy();
+    expect(screen.getByText("45 元")).toBeTruthy();
+    expect(screen.queryByText("「開場」用「出門情境」比「開箱畫面」划算")).toBeNull();
     expect(screen.getByText("花費停止")).toBeTruthy();
+  });
+
+  it("confirmed readback without recorded learning cannot claim a saved comparison; frozen numbers remain", async () => {
+    vi.mocked(changeApi.getChangeControl).mockResolvedValue({targets: [], change_sets: [approved({
+      verification_state: "confirmed", learning: {recorded: false, evidence: null, confidence: null, count: 0},
+      evidence_json: {setting_matches: true, observed_at: "2026-09-23T02:13:00Z"},
+    })]});
+    renderAt(`${base}/verify`);
+    await screen.findByText("比較紀錄尚未核實");
+    expect(screen.getByText("本次操作尚未留紀錄；來源與適用性尚未核實")).toBeTruthy();
+    expect(screen.queryByText("已保留這次比較紀錄")).toBeNull();
+    expect(screen.queryByText("已記錄操作")).toBeNull();
+    expect(screen.getByText("56 元")).toBeTruthy();
+    expect(screen.getByText("45 元")).toBeTruthy();
+    expect(screen.getByRole("button", {name: "查看來源與限制 →"}).hasAttribute("disabled")).toBe(true);
+  });
+
+  it.each([
+    comparativeEvidenceFixture({use_state: "revalidation", support_label: "新結果相反 · 需重新核對", contrary_count: 1, same_direction_count: 1,
+      reason_labels: ["新一期結果與過去不同，需重新核對。"], allowed_uses: ["test"]}),
+    pauseEvidenceFixture(),
+    learningEvidence(),
+  ])("legacy confidence cannot promote a contrary, pause-only or unknown comparison", async (evidence) => {
+    vi.mocked(changeApi.getChangeControl).mockResolvedValue({targets: [], change_sets: [approved({
+      verification_state: "confirmed", learning: {recorded: true, evidence, confidence: "validated", count: 99},
+      evidence_json: {setting_matches: true},
+    })]});
+    renderAt(`${base}/verify`);
+    await screen.findByText("已保留這次比較紀錄");
+    expect(screen.getAllByText(evidence.support_label).length).toBeGreaterThan(0);
+    expect(screen.getByText(evidence.display_text)).toBeTruthy();
+    expect(screen.queryByText("成立")).toBeNull();
+    expect(screen.queryByText(/第 99 次|再出現|對這群受眾無效/)).toBeNull();
+    expect(screen.getByText("56 元")).toBeTruthy();
   });
 
   it("核對不符：沒有筆記本那句，回平台改", async () => {
