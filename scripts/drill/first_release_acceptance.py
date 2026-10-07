@@ -1234,9 +1234,11 @@ def run_provider(context_path):
 
     started = now()
     import psycopg
+    from psycopg.rows import dict_row
 
     with provider_schema(directory) as (dsn, brand):
-        with psycopg.connect(dsn) as raw_conn:
+        # The default connect generic is TupleRow; app Conn's runtime contract is dict rows.
+        with psycopg.connect(dsn, row_factory=cast(Any, dict_row)) as raw_conn:
             conn = db.Conn(raw_conn)
             task = gateway.run_task(
                 conn,
@@ -3030,6 +3032,7 @@ def auth_probe(context_path, auth_port, web_port):
     import psycopg
     from psycopg import sql
     from psycopg.conninfo import conninfo_to_dict
+    from psycopg.rows import dict_row
 
     from scripts import verify_existing_campaigns_assets as lifecycle
     from scripts.drill import recovery_probe
@@ -3228,7 +3231,10 @@ def auth_probe(context_path, auth_port, web_port):
         # This independent DB has no global Storage bucket. Auth-only admission is separate below.
         from app.core import db
 
-        with psycopg.connect(scoped, connect_timeout=5) as raw_conn:
+        # Keep native inventory connections tuple-based; only application Conn needs dict rows.
+        with psycopg.connect(
+            scoped, connect_timeout=5, row_factory=cast(Any, dict_row)
+        ) as raw_conn:
             setup = fixture_setup(db.Conn(raw_conn), {"org_id": org, "brand_id": brand})
         dist = directory / "frontend-dist"
         environment = {
@@ -3422,18 +3428,41 @@ def record_operations(context_path):
     value = context_at(context_path)
     directory = Path(value["directory"])
     paths = [directory / "auth-receipt.json", directory / "restore-receipt.json"]
-    if not all(p.exists() for p in paths):
+    limitations = []
+    cleanup = {}
+    for mode, path, verify in zip(
+        ("auth", "restore"), paths, (verify_auth_receipt, verify_restore_receipt), strict=True
+    ):
+        if not path.exists():
+            limitations.append(mode + " receipt missing")
+            cleanup[mode + ".receipt_available"] = False
+            continue
+        try:
+            receipt = read(path)
+            mode_cleanup = receipt.get("cleanup") or {}
+            if not mode_cleanup:
+                cleanup[mode + ".cleanup_proved"] = False
+            for key, done in mode_cleanup.items():
+                cleanup[mode + "." + key] = done is True
+            if receipt.get("status") != "pass":
+                limitations.append(
+                    mode + " receipt remains " + str(receipt.get("status", "missing"))
+                )
+                continue
+            verify(receipt)
+        except (ReceiptError, KeyError, TypeError, ValueError, AttributeError, OSError) as exc:
+            if not any(key.startswith(mode + ".") for key in cleanup):
+                cleanup[mode + ".cleanup_proved"] = False
+            limitations.append(mode + " receipt incomplete or invalid (" + type(exc).__name__ + ")")
+    if limitations:
         return save_gate(
             context_path,
             "G7",
             [p for p in paths if p.exists()],
             status="unverified",
-            limitations=["Both Auth and restore proof required"],
-            cleanup={"completed_mode_returned": True},
+            limitations=limitations,
+            cleanup=cleanup,
         )
-    auth, restore = [read(p) for p in paths]
-    verify_auth_receipt(auth)
-    verify_restore_receipt(restore)
     return save_gate(
         context_path,
         "G7",

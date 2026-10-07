@@ -4,11 +4,141 @@ import hashlib
 import json
 import subprocess
 from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 
 from scripts.drill import first_release_acceptance as runner
 from scripts.drill import first_release_cases as cases
+
+
+@pytest.mark.parametrize(
+    "caller,dsn_name", [(runner.run_provider, "dsn"), (runner.auth_probe, "scoped")]
+)
+def test_operational_app_connection_seams_supply_real_dict_row(caller, dsn_name):
+    """Evaluate each actual connect expression with a strict in-memory psycopg boundary."""
+    import ast
+    import inspect
+
+    from psycopg.pq import ExecStatus
+    from psycopg.rows import dict_row
+
+    from app.brand_intelligence import repository
+    from app.core import db
+
+    class Cursor:
+        description = ("id", "name")
+        rowcount = 1
+        _encoding = "utf-8"
+        pgresult = SimpleNamespace(
+            nfields=2, status=ExecStatus.TUPLES_OK, fname=lambda index: (b"id", b"name")[index]
+        )
+
+        def __init__(self, factory):
+            self.make_row = factory(self) if factory else tuple
+
+        def fetchall(self):
+            return [self.make_row(("brd_synthetic", "Owned brand"))]
+
+    class Connection:
+        def __init__(self, **kwargs):
+            self.factory = kwargs.get("row_factory")
+
+        def execute(self, query, parameters=()):
+            return Cursor(self.factory)
+
+    calls = []
+
+    def connect(*args, **kwargs):
+        calls.append(kwargs)
+        return Connection(**kwargs)
+
+    tree = ast.parse(inspect.getsource(caller))
+    expression = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "connect"
+        and node.args
+        and isinstance(node.args[0], ast.Name)
+        and node.args[0].id == dsn_name
+    )
+    scope = {
+        "psycopg": SimpleNamespace(connect=connect),
+        dsn_name: "synthetic-dsn",
+        "dict_row": dict_row,
+        "cast": cast,
+        "Any": Any,
+    }
+    raw = eval(compile(ast.Expression(expression), "<actual-connect-seam>", "eval"), scope)
+    assert calls[-1]["row_factory"] is dict_row
+    assert repository.get_brand(db.Conn(cast(Any, raw)), "brd_synthetic") == {
+        "id": "brd_synthetic",
+        "name": "Owned brand",
+    }
+    # Default tuples reproduce the actual pre-browser failure through the same public read.
+    with pytest.raises(ValueError):
+        repository.get_brand(db.Conn(cast(Any, Connection())), "brd_synthetic")
+
+
+@pytest.mark.parametrize("auth_status", ["unverified", "pass"])
+def test_operational_incomplete_auth_and_pass_restore_remain_unverified(
+    tmp_path, monkeypatch, auth_status
+):
+    context = {
+        "directory": str(tmp_path),
+        "hashes": {"probe": "synthetic"},
+        "run_id": "synthetic-run",
+        "gates": {},
+    }
+    monkeypatch.setattr(runner, "context_at", lambda path: context)
+    monkeypatch.setattr(
+        runner, "command", lambda *a, **kw: pytest.fail("No actual operation allowed")
+    )
+    restored = []
+    monkeypatch.setattr(runner, "verify_restore_receipt", lambda receipt: restored.append(receipt))
+    auth = {"status": auth_status, "cleanup": {"database": True, "browser": False}}
+    restore = {"status": "pass", "cleanup": {"storage": True, "target_database": True}}
+    runner.write(tmp_path / "auth-receipt.json", auth)
+    runner.write(tmp_path / "restore-receipt.json", restore)
+    original_bytes = [
+        (tmp_path / name).read_bytes() for name in ("auth-receipt.json", "restore-receipt.json")
+    ]
+    record = runner.record_operations(tmp_path / "context.json")
+    assert record["status"] == "unverified"
+    assert restored == [restore]
+    assert record["cleanup"] == {
+        "auth.database": True,
+        "auth.browser": False,
+        "restore.storage": True,
+        "restore.target_database": True,
+    }
+    assert len(record["evidence"]) == 2
+    assert [runner.dereference(ref) for ref in record["evidence"]] == original_bytes
+    with pytest.raises(runner.ReceiptError, match="remains unverified"):
+        runner.validate_gate("G7", record, context["hashes"])
+
+
+@pytest.mark.parametrize("bad_mode", ["auth", "restore"])
+def test_operational_either_failed_mode_cannot_be_substituted_by_other_pass(
+    tmp_path, monkeypatch, bad_mode
+):
+    context = {"directory": str(tmp_path), "hashes": {}, "run_id": "mock", "gates": {}}
+    monkeypatch.setattr(runner, "context_at", lambda path: context)
+    called = []
+    monkeypatch.setattr(runner, "verify_auth_receipt", lambda receipt: called.append("auth"))
+    monkeypatch.setattr(runner, "verify_restore_receipt", lambda receipt: called.append("restore"))
+    for mode in ("auth", "restore"):
+        runner.write(
+            tmp_path / (mode + "-receipt.json"),
+            {"status": "unverified" if mode == bad_mode else "pass", "cleanup": {"owned": True}},
+        )
+    record = runner.record_operations(tmp_path / "context.json")
+    assert record["status"] == "unverified"
+    assert called == ["restore" if bad_mode == "auth" else "auth"]
+    assert record["cleanup"] == {"auth.owned": True, "restore.owned": True}
+    assert len(record["evidence"]) == 2
 
 
 def test_frozen_input_bytes_and_complete_qualification_counterexamples():

@@ -1,24 +1,57 @@
 {
   "schema_version": 1,
   "feature": "F53",
-  "status": "tooling-only-no-actual-probes",
+  "status": "historical-operations-unverified-corrected-final-pending",
   "cases_sha256": "48ada4e752fa4c2e5848b7b986e3af7146c9ede0aa712b7a72460b5d53505339",
   "gates": {
-    "G1": {"status": "unverified"},
-    "G2": {"status": "unverified"},
-    "G3": {"status": "unverified"},
-    "G4": {"status": "unverified"},
-    "G5": {"status": "unverified"},
-    "G6": {"status": "unverified"},
-    "G7": {"status": "unverified"}
+    "G1": {
+      "status": "unverified"
+    },
+    "G2": {
+      "status": "unverified"
+    },
+    "G3": {
+      "status": "unverified"
+    },
+    "G4": {
+      "status": "unverified"
+    },
+    "G5": {
+      "status": "unverified"
+    },
+    "G6": {
+      "status": "unverified"
+    },
+    "G7": {
+      "status": "unverified",
+      "operational_receipt": "operational-receipt.json",
+      "auth": "unverified",
+      "restore": "historical-pass",
+      "aggregation": "failed",
+      "corrected_final_acceptance": "pending lead-owned new nonce after reviewed repair merge"
+    }
   },
-  "G8": {"status": "pending", "sidecar": ".harness/scratch/F53/final"},
+  "G8": {
+    "status": "pending",
+    "sidecar": ".harness/scratch/F53/final"
+  },
   "human_acceptance": "pending",
   "release_eligible": false,
   "disposition": {
     "fixed": [],
-    "remaining": ["F48-F52 remain open; original F52 drill remains paused"],
-    "unverified": ["G1", "G2", "G3", "G4", "G5", "G6", "G7", "G8"]
+    "remaining": [
+      "F48-F52 remain open; original F52 drill remains paused"
+    ],
+    "unverified": [
+      "G1",
+      "G2",
+      "G3",
+      "G4",
+      "G5",
+      "G6",
+      "G7",
+      "G8"
+    ]
   },
-  "provenance": "I07 tests are synthetic/mocked tooling contracts. No provider/Auth/restore probe or combined fixed cycle has run."
+  "provenance": "I09 ran real owned Auth and isolated PG/Storage modes once on original frozen runner. Real issuer refresh succeeded but pre-browser fixture failed; restore passed and cleaned up. Aggregation failed. Original raw evidence is historical; corrected final G7 remains pending. No provider generation, fixed cycle, or final integration acceptance has run."
 }
