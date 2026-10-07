@@ -1,7 +1,10 @@
 """Manual handoffs preserve plan/native identities and distinguish existence from settings."""
 
 import copy
+import threading
+import time
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from unittest.mock import patch
 
@@ -1036,6 +1039,693 @@ class HandoffTest(unittest.TestCase):
         with patch.object(self.reader, "verify_native", side_effect=ValueError("unavailable")):
             failed_again = self.check(item, "ad", "B2")
         self.assertEqual(failed_again["observed_at"], observed["observed_at"])
+
+    def test_change_check_new_ad_uses_bound_handoff_owner_without_payload(self):
+        draft = self.new_ad()
+        approved, item = self.approve(draft)
+        first = self.check(item, "ad", "B2")
+        client, base = self._client()
+        action_id = approved["items"][0]["id"]
+        self.assertEqual(approved["items"][0]["target_id"], item["placement_id"])
+        response = client.post(f"{base}/change-sets/{approved['id']}/items/{action_id}/check")
+        self.assertEqual(response.status_code, 200, response.text)
+        action = response.json()["change_set"]["items"][0]
+        evidence = action["evidence_json"]
+        self.assertEqual(action["verification_state"], "confirmed", evidence)
+        self.assertEqual(evidence["handoff_item_id"], item["id"])
+        self.assertIsNotNone(evidence["observed_at"])
+        self.assertIsNotNone(evidence["attempted_at"])
+        self.assertEqual(evidence["peers"][0]["entity_id"], first["entity_id"])
+        self.assertEqual(evidence["peers"][0]["material_evidence"], "unknown")
+        self.assertFalse(evidence["delivery_confirmed"])
+
+    def test_change_check_unbound_new_ad_does_not_guess_cached_ad(self):
+        draft = self.new_ad()
+        approved, item = self.approve(draft)
+        external_repository.upsert_entity(
+            self.conn, self.org, self.brand, self.campaign, self.native_ad
+        )
+        self.conn.commit()
+        client, base = self._client()
+        action_id = approved["items"][0]["id"]
+        with patch.object(self.reader, "verify_native", wraps=self.reader.verify_native) as read:
+            response = client.post(f"{base}/change-sets/{approved['id']}/items/{action_id}/check")
+        self.assertEqual(response.status_code, 200, response.text)
+        action = response.json()["change_set"]["items"][0]
+        self.assertEqual(action["verification_state"], "unknown")
+        self.assertEqual(action["evidence_json"]["peers"][0]["reason_code"], "identity_unselected")
+        self.assertEqual(action["verification_label"], "本次核對未完成")
+        self.assertEqual(response.json()["change_set"]["verification_label"], "本次核對未完成")
+        self.assertIsNone(action["evidence_json"]["observed_at"])
+        self.assertIsNotNone(action["evidence_json"]["attempted_at"])
+        self.assertIsNone(handoff_data.get(self.conn, self.org, self.brand, self.campaign,
+                                         item["id"])["entity_id"])
+        read.assert_not_called()
+
+    def test_new_ad_public_failed_source_label_does_not_claim_a_successful_read(self):
+        approved, item = self.approve(self.new_ad())
+        self.check(item, "ad", "B2")
+        client, base = self._client()
+        action_id = approved["items"][0]["id"]
+        with patch.object(self.reader, "verify_native", side_effect=ValueError("unavailable")):
+            response = client.post(f"{base}/change-sets/{approved['id']}/items/{action_id}/check")
+        self.assertEqual(response.status_code, 200, response.text)
+        change_set = response.json()["change_set"]
+        action = change_set["items"][0]
+        self.assertEqual(action["verification_state"], "unknown")
+        self.assertIsNone(action["evidence_json"]["observed_at"])
+        self.assertEqual(action["verification_label"], "本次核對未完成")
+        self.assertEqual(change_set["verification_label"], "本次核對未完成")
+
+    def test_failed_handoff_read_retains_previous_successful_proof_separately(self):
+        draft = self.new_ad()
+        _, item = self.approve(draft)
+        good = self.check(item, "ad", "B2", user_verified=True)
+        with patch.object(self.reader, "verify_native", side_effect=ValueError("unavailable")):
+            failed = self.check(item, "ad", "B2")
+        evidence = failed["evidence_json"]
+        self.assertEqual(failed["status"], "unknown")
+        self.assertEqual(failed["observed_at"], good["observed_at"])
+        self.assertIsNone(evidence.get("observed_at"))
+        previous = evidence["previous_observation"]
+        self.assertEqual(previous["observed_at"], good["observed_at"].isoformat())
+        self.assertEqual(previous["evidence"]["material_evidence"], "user_verified")
+        self.assertEqual(previous["evidence"]["matched_fields"],
+                         good["evidence_json"]["matched_fields"])
+
+    def _action_check(self, approved):
+        from app.ads import change_control_verify
+
+        return change_control_verify.check(
+            self.conn, self.org, self.brand, self.campaign, approved["id"],
+            approved["items"][0]["id"], "human"
+        )["items"][0]
+
+    def test_new_ad_reread_keeps_only_its_approved_peers_and_failure_history(self):
+        approved, item = self.approve(self.new_ad())
+        good = self.check(item, "ad", "B2")
+        unrelated, unrelated_item = self.approve(self.new_ad())
+        self.conn.execute("UPDATE ads_handoff_item SET status='deviated' WHERE id=%s",
+                          (unrelated_item["id"],))
+        self.conn.commit()
+        matched = self._action_check(approved)
+        self.assertEqual(matched["verification_state"], "confirmed")
+        self.assertEqual([p["handoff_item_id"] for p in matched["evidence_json"]["peers"]],
+                         [item["id"]])
+        with patch.object(self.reader, "verify_native", side_effect=ValueError("unavailable")):
+            failed = self._action_check(approved)
+            repeated = self._action_check(approved)
+        self.assertEqual(failed["verification_state"], "unknown")
+        self.assertIsNone(failed["evidence_json"]["observed_at"])
+        self.assertIn("保留前次", failed["evidence_json"]["message"])
+        previous = repeated["evidence_json"]["peers"][0]["previous_observation"]
+        self.assertNotIn("previous_observation", previous["evidence"])
+        self.assertEqual(previous, failed["evidence_json"]["peers"][0]["previous_observation"])
+        self.assertIsNotNone(good["observed_at"])
+        self.assertEqual(change_control_data.get(self.conn, self.org, self.brand, self.campaign,
+                                                unrelated["id"])["items"][0]["verification_state"],
+                         "pending")
+
+    def test_new_ad_reread_uses_unique_current_binding_and_refuses_ambiguity(self):
+        from app.ads import asset_binding
+
+        approved, item = self.approve(self.new_ad())
+        entity = external_repository.upsert_entity(
+            self.conn, self.org, self.brand, self.campaign, self.native_ad
+        )
+        self.conn.commit()
+        asset_binding.verify(self.conn, self.org, self.brand, self.campaign,
+                             item["placement_id"], 1, entity["id"], "human")
+        action = self._action_check(approved)
+        self.assertEqual(action["verification_state"], "confirmed", action["evidence_json"])
+        self.assertEqual(action["evidence_json"]["peers"][0]["entity_id"], entity["id"])
+        other = external_repository.upsert_entity(
+            self.conn, self.org, self.brand, self.campaign, dict(self.native_ad, native_id="B3")
+        )
+        self.conn.commit()
+        with patch.dict(self.native_ad, {"native_id": "B3"}):
+            asset_binding.verify(self.conn, self.org, self.brand, self.campaign,
+                                 item["placement_id"], 1, other["id"], "human")
+        self.conn.execute("UPDATE ads_handoff_item SET entity_id=NULL WHERE id=%s", (item["id"],))
+        self.conn.commit()
+        with patch.object(self.reader, "verify_native", wraps=self.reader.verify_native) as read:
+            action = self._action_check(approved)
+        self.assertEqual(action["verification_state"], "unknown")
+        self.assertEqual(action["evidence_json"]["peers"][0]["reason_code"], "identity_ambiguous")
+        read.assert_not_called()
+
+    def test_new_ad_reread_rejects_revised_placement_before_native_read(self):
+        approved, item = self.approve(self.new_ad())
+        self.check(item, "ad", "B2")
+        assets.revise(self.conn, self.org, self.brand, self.campaign, item["placement_id"],
+                      1, {"copy_fields": {"headline": "改版", "body": "改過的文案"}}, "human")
+        self.conn.commit()
+        with patch.object(self.reader, "verify_native", wraps=self.reader.verify_native) as read:
+            action = self._action_check(approved)
+        self.assertEqual(action["verification_state"], "stale", action["evidence_json"])
+        self.assertEqual(action["evidence_json"]["peers"][0]["reason_code"], "plan_changed")
+        read.assert_not_called()
+
+    def test_new_ad_two_connections_late_match_cannot_clear_newer_mismatch(self):
+        from app.ads import change_control_verify
+
+        approved, item = self.approve(self.new_ad())
+        self.check(item, "ad", "B2")
+        self.conn.commit()
+        started, release = threading.Event(), threading.Event()
+        main_thread = threading.get_ident()
+        original = self.reader.verify_native
+        old_pids = []
+
+        def delayed(conn, *args, **kwargs):
+            proof = original(conn, *args, **kwargs)
+            if threading.get_ident() != main_thread:
+                old_pids.append(conn.execute("SELECT pg_backend_pid() AS pid").fetchone()["pid"])
+                conn.commit()
+                started.set()
+                if not release.wait(8):
+                    raise AssertionError("Old native response was not released")
+            else:
+                proof["entity"]["creative"]["fields"]["body"] = "較新的不同文案"
+            return proof
+
+        def old_check():
+            with db.connection() as conn:
+                return change_control_verify.check(
+                    conn, self.org, self.brand, self.campaign, approved["id"],
+                    approved["items"][0]["id"], "human"
+                )
+
+        with patch.object(self.reader, "verify_native", side_effect=delayed):
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                pending = pool.submit(old_check)
+                try:
+                    self.assertTrue(started.wait(8))
+                    main_pid = self.conn.execute("SELECT pg_backend_pid() AS pid").fetchone()["pid"]
+                    self.conn.commit()
+                    newer = self._action_check(approved)
+                    self.assertEqual(newer["verification_state"], "deviated",
+                                     newer["evidence_json"])
+                finally:
+                    release.set()
+                older = pending.result(timeout=8)["items"][0]
+        self.assertNotEqual(old_pids[0], main_pid)
+        self.assertEqual(older["verification_state"], "deviated")
+        self.assertEqual(older["evidence_json"], newer["evidence_json"])
+        current = handoff_data.get(self.conn, self.org, self.brand, self.campaign, item["id"])
+        self.assertEqual(current["status"], "deviated")
+
+    def test_new_ad_late_second_read_cannot_overwrite_newer_native_and_binding_proof(self):
+        self._assert_late_second_read_preserves_newer_proof()
+
+    def test_new_ad_late_second_read_failure_cannot_stale_newer_binding_proof(self):
+        self._assert_late_second_read_preserves_newer_proof(failed=True)
+
+    def _assert_late_second_read_preserves_newer_proof(self, *, failed=False):
+        from app.ads import asset_binding_repository, change_control_verify
+        from app.ads.adapters.external import SourceReadError
+
+        approved, item = self.approve(self.new_ad())
+        bound = self.check(item, "ad", "B2")
+        self.conn.commit()
+        started, release = threading.Event(), threading.Event()
+        main_thread = threading.get_ident()
+        original = self.reader.verify_native
+        old_pids = []
+
+        def delayed(conn, *args, **kwargs):
+            proof = original(conn, *args, **kwargs)
+            if threading.get_ident() != main_thread and kwargs.get("original"):
+                old_pids.append(conn.execute("SELECT pg_backend_pid() AS pid").fetchone()["pid"])
+                conn.commit()
+                started.set()
+                if not release.wait(8):
+                    raise AssertionError("Old material response was not released")
+                if failed:
+                    raise SourceReadError("Delayed old failure", "permission_denied")
+            elif threading.get_ident() == main_thread:
+                proof["entity"]["creative"]["fields"]["body"] = "較新的不同文案"
+            return proof
+
+        def old_check():
+            with db.connection() as conn:
+                return change_control_verify.check(
+                    conn, self.org, self.brand, self.campaign, approved["id"],
+                    approved["items"][0]["id"], "human"
+                )
+
+        with patch.object(self.reader, "verify_native", side_effect=delayed):
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                pending = pool.submit(old_check)
+                try:
+                    self.assertTrue(started.wait(8), "Second provider read never started")
+                    main_pid = self.conn.execute("SELECT pg_backend_pid() AS pid").fetchone()["pid"]
+                    self.conn.commit()
+                    newer = self._action_check(approved)
+                    self.assertEqual(newer["verification_state"], "deviated",
+                                     newer["evidence_json"])
+                    newer_bindings = asset_binding_repository.list_bindings(
+                        self.conn, self.org, self.brand, self.campaign, item["placement_id"], 1
+                    )
+                    self.conn.commit()
+                finally:
+                    release.set()
+                older = pending.result(timeout=8)["items"][0]
+        self.assertNotEqual(old_pids[0], main_pid)
+        self.assertEqual(older["verification_state"], "deviated")
+        self.assertEqual(older["evidence_json"], newer["evidence_json"])
+        current = handoff_data.get(self.conn, self.org, self.brand, self.campaign, item["id"])
+        self.assertEqual(current["status"], "deviated")
+        cached = asset_binding_repository.entity(
+            self.conn, self.org, self.brand, self.campaign, bound["entity_id"]
+        )
+        bindings = asset_binding_repository.list_bindings(
+            self.conn, self.org, self.brand, self.campaign, item["placement_id"], 1
+        )
+        active = [row for row in bindings if row["valid_to"] is None]
+        self.assertEqual(len(active), 1)
+        with self.subTest(proof="native cache"):
+            self.assertEqual(cached["creative"]["fields"]["body"], "較新的不同文案")
+        with self.subTest(proof="current binding"):
+            self.assertEqual(active[0]["creative_snapshot"]["fields"]["body"], "較新的不同文案")
+            self.assertIsNone(active[0]["stale_reason"])
+        with self.subTest(proof="all binding attempt history"):
+            keys = ("last_attempt_at", "stale_reason", "valid_to", "creative_hash")
+            self.assertEqual(
+                {row["id"]: tuple(row[key] for key in keys) for row in bindings},
+                {row["id"]: tuple(row[key] for key in keys) for row in newer_bindings},
+            )
+
+    def test_launch_edit_during_second_read_preserves_native_and_binding_proof(self):
+        self._assert_second_read_rejects_changed_basis()
+
+    def test_source_parent_edit_during_second_read_preserves_native_and_binding_proof(self):
+        self._assert_second_read_rejects_changed_basis(source_changed=True)
+
+    def _assert_second_read_rejects_changed_basis(self, *, source_changed=False):
+        from app.ads import asset_binding_repository, manual_settings, plan
+
+        _, nodes = self.launch()
+        self.check(nodes["campaign"], "campaign", "root")
+        self.check(nodes["group"], "adset", "group")
+        bound = self.check(nodes["ad"], "ad", "B2")
+        item = nodes["ad"]
+        original = self.reader.verify_native
+        main_thread = threading.get_ident()
+        started, release = threading.Event(), threading.Event()
+        old_pids = []
+        before = asset_binding_repository.list_bindings(
+            self.conn, self.org, self.brand, self.campaign, item["placement_id"], 1
+        )
+        self.conn.commit()
+
+        def delayed(conn, *args, **kwargs):
+            proof = original(conn, *args, **kwargs)
+            if threading.get_ident() != main_thread and kwargs.get("original"):
+                proof["entity"]["creative"]["fields"]["body"] = "obsolete second response"
+                old_pids.append(conn.execute("SELECT pg_backend_pid() AS pid").fetchone()["pid"])
+                conn.commit()
+                started.set()
+                if not release.wait(8):
+                    raise AssertionError("Old material response was not released")
+            return proof
+
+        def old_check():
+            with db.connection() as conn:
+                return handoff_check.check(
+                    conn, self.org, self.brand, self.campaign, item["id"],
+                    {"platform": "fixture", "source_account": self.account,
+                     "native_kind": "ad", "native_id": "B2"}, "human"
+                )
+
+        with patch.object(self.reader, "verify_native", side_effect=delayed):
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                pending = pool.submit(old_check)
+                try:
+                    self.assertTrue(started.wait(8), "Second provider read never started")
+                    main_pid = self.conn.execute("SELECT pg_backend_pid() AS pid").fetchone()["pid"]
+                    if source_changed:
+                        external_repository.upsert_entity(
+                            self.conn, self.org, self.brand, self.campaign,
+                            dict(self.native_group, budget_amount=200)
+                        )
+                    else:
+                        plan.update_ad(self.conn, self.org, self.brand, self.ad,
+                                       {"name": "Revised during material read"}, actor="human")
+                        manual_settings.save(
+                            self.conn, self.org, self.brand, self.campaign, self.group,
+                            {"landing_url": "https://shop.example.com/new"}, actor="human"
+                        )
+                    self.conn.commit()
+                finally:
+                    release.set()
+                older = pending.result(timeout=8)
+        self.assertNotEqual(old_pids[0], main_pid)
+        with self.subTest(proof="handoff state"):
+            self.assertEqual(older["status"], "unknown" if source_changed else "stale",
+                             older["evidence_json"])
+            self.assertEqual(older["evidence_json"]["reason_code"],
+                             "source_changed" if source_changed else "plan_changed")
+        cached = asset_binding_repository.entity(
+            self.conn, self.org, self.brand, self.campaign, bound["entity_id"]
+        )
+        with self.subTest(proof="native cache"):
+            self.assertEqual(cached["creative"]["fields"]["body"], "文案")
+        active = [row for row in asset_binding_repository.list_bindings(
+            self.conn, self.org, self.brand, self.campaign, item["placement_id"], 1
+        ) if row["valid_to"] is None]
+        with self.subTest(proof="current binding"):
+            self.assertEqual([row["id"] for row in active],
+                             [row["id"] for row in before if row["valid_to"] is None])
+            self.assertEqual(active[0]["creative_snapshot"]["fields"]["body"], "文案")
+
+    def test_second_read_waiting_for_sync_native_lease_preserves_newer_source_proof(self):
+        self._assert_sync_writer_during_second_read()
+
+    def test_second_read_refuses_uncommitted_structure_parent_without_native_lease(self):
+        self._assert_sync_writer_during_second_read(structure=True)
+
+    def test_second_read_refuses_uncommitted_parent_creative_writer_with_native_lease(self):
+        self._assert_sync_writer_during_second_read(structure=True, parent_creative=True)
+
+    def _assert_sync_writer_during_second_read(self, *, structure=False, parent_creative=False):
+        from app.ads import asset_binding_repository, change_control_verify
+        from app.ads.adapters.external import SourcePage
+
+        approved, item = self.approve(self.new_ad())
+        bound = self.check(item, "ad", "B2")
+        self.conn.commit()
+        reading, writer_ready, waiting_for_native = (threading.Event() for _ in range(3))
+        main_thread = threading.get_ident()
+        original_reader = self.reader.verify_native
+        original_lock = asset_binding_repository.lock_native
+
+        def delayed(conn, *args, **kwargs):
+            proof = original_reader(conn, *args, **kwargs)
+            if threading.get_ident() != main_thread and kwargs.get("original"):
+                reading.set()
+                if not writer_ready.wait(8):
+                    raise AssertionError("Sync writer was not prepared")
+            return proof
+
+        def traced_lock(conn, row, **kwargs):
+            if threading.get_ident() != main_thread and writer_ready.is_set():
+                waiting_for_native.set()
+            return original_lock(conn, row, **kwargs)
+
+        def old_check():
+            with db.connection() as conn:
+                return change_control_verify.check(
+                    conn, self.org, self.brand, self.campaign, approved["id"],
+                    approved["items"][0]["id"], "human"
+                )
+
+        with (patch.object(self.reader, "verify_native", side_effect=delayed),
+              patch.object(asset_binding_repository, "lock_native", side_effect=traced_lock)):
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                pending = pool.submit(old_check)
+                try:
+                    self.assertTrue(reading.wait(8))
+                    changed = copy.deepcopy(self.native_ad["creative"])
+                    changed["fields"]["body"] = "newer sync creative"
+                    node = {"platform": "fixture", "source_account": self.account,
+                            "native_kind": "ad", "native_id": "B2", "creative": changed}
+                    if structure:
+                        node = {"platform": "fixture", "source_account": self.account,
+                                "native_kind": "adset", "native_id": "group",
+                                "parent_native_kind": "campaign", "parent_native_id": "root",
+                                "budget_amount": 200}
+                        if parent_creative:
+                            node["creative"] = {"kind": "image", "fields": {"body": "parent sync"}}
+                    external_sync._save_page(
+                        self.conn,
+                        {"org_id": self.org, "brand_id": self.brand, "platform": "fixture",
+                         "source_account": self.account},
+                        {"campaign_id": self.campaign,
+                         "section": "structure" if structure else "creatives"},
+                        SourcePage([node]),
+                    )
+                    writer_bindings = asset_binding_repository.list_bindings(
+                        self.conn, self.org, self.brand, self.campaign, item["placement_id"], 1
+                    )
+                    writer_ready.set()
+                    self.assertTrue(waiting_for_native.wait(8),
+                                    "Old read did not reach native lease")
+                    if structure:
+                        # A row-only writer stays uncommitted; NOWAIT must reject, not deadlock.
+                        pending.result(timeout=8)
+                finally:
+                    writer_ready.set()
+                    self.conn.commit()
+                older = pending.result(timeout=8)["items"][0]
+        with self.subTest(proof="action state"):
+            self.assertEqual(older["verification_state"], "unknown", older["evidence_json"])
+            self.assertEqual(older["evidence_json"]["peers"][0]["reason_code"], "source_changed")
+        cached = asset_binding_repository.entity(
+            self.conn, self.org, self.brand, self.campaign, bound["entity_id"]
+        )
+        with self.subTest(proof="native cache"):
+            self.assertEqual(cached["creative"]["fields"]["body"],
+                             "文案" if structure else "newer sync creative")
+            parent = asset_binding_repository.entity(
+                self.conn, self.org, self.brand, self.campaign,
+                item["expected_json"]["destination_entity_id"]
+            )
+            self.assertEqual(parent["budget_amount"], 200 if structure else 100)
+            if parent_creative:
+                self.assertEqual(parent["creative"]["fields"]["body"], "parent sync")
+        with self.subTest(proof="binding history"):
+            actual = asset_binding_repository.list_bindings(
+                self.conn, self.org, self.brand, self.campaign, item["placement_id"], 1
+            )
+            keys = ("last_attempt_at", "stale_reason", "valid_to", "creative_hash")
+            self.assertEqual(
+                {row["id"]: tuple(row[key] for key in keys) for row in actual},
+                {row["id"]: tuple(row[key] for key in keys) for row in writer_bindings},
+            )
+
+    def test_parent_native_lease_before_sync_row_write_never_deadlocks_handoff(self):
+        self._assert_parent_native_before_sync_row_write()
+
+    def test_deep_parent_native_lease_before_sync_row_write_never_deadlocks_handoff(self):
+        self._assert_parent_native_before_sync_row_write(deep=True)
+
+    def _assert_parent_native_before_sync_row_write(self, *, deep=False):
+        from app.ads import asset_binding_repository, change_control_verify
+        from app.ads.adapters.external import SourcePage
+
+        writer_kind, writer_id = "adset", "group"
+        if deep:
+            middle = self.node("middle", "tier", parent_native_kind="campaign",
+                               parent_native_id="root")
+            external_repository.upsert_entity(
+                self.conn, self.org, self.brand, self.campaign, middle
+            )
+            self.native_group.update(parent_native_kind="tier", parent_native_id="middle")
+            original_read = self.reader.verify_native
+
+            def complete_chain(*args, **kwargs):
+                proof = original_read(*args, **kwargs)
+                if kwargs["native_kind"] in {"ad", "adset"}:
+                    proof["parents"].append(copy.deepcopy(middle))
+                return proof
+
+            patch.object(self.reader, "verify_native", side_effect=complete_chain).start()
+            writer_kind, writer_id = "tier", "middle"
+        approved, _ = self.approve(self.new_ad())
+        item = handoff_data.approved_peers(self.conn, self.org, self.brand, self.campaign,
+                                           approved["id"], approved["items"][0]["id"])[0]
+        self.check(item, "ad", "B2")
+        self.assertIsNone(asset_binding_repository.lock_native(
+            self.conn, {"org_id": self.org, **self.native_ad}
+        ))
+        self.conn.commit()
+        parent_held, release_write = threading.Event(), threading.Event()
+        writer_thread, pids = [], []
+        original_lock = asset_binding_repository.lock_native
+
+        def traced_lock(conn, row, **kwargs):
+            if (row.get("native_kind"), row.get("native_id")) == (writer_kind, writer_id):
+                if threading.get_ident() in writer_thread:
+                    result = original_lock(conn, row, **kwargs)
+                    parent_held.set()
+                    if not release_write.wait(8):
+                        raise AssertionError("Parent writer row write was not released")
+                    return result
+                if parent_held.is_set():
+                    release_write.set()
+            return original_lock(conn, row, **kwargs)
+
+        def writer():
+            writer_thread.append(threading.get_ident())
+            with db.connection() as conn:
+                pids.append(conn.execute("SELECT pg_backend_pid() AS pid").fetchone()["pid"])
+                external_sync._save_page(
+                    conn, {"org_id": self.org, "brand_id": self.brand, "platform": "fixture",
+                           "source_account": self.account},
+                    {"campaign_id": self.campaign, "section": "structure"},
+                    SourcePage([{"platform": "fixture", "source_account": self.account,
+                                 "native_kind": writer_kind, "native_id": writer_id,
+                                 "parent_native_kind": "campaign", "parent_native_id": "root",
+                                 "creative": {"kind": "image", "fields": {"body": "parent sync"}},
+                                 }]),
+                )
+                conn.commit()
+
+        def old_check():
+            with db.connection() as conn:
+                pids.append(conn.execute("SELECT pg_backend_pid() AS pid").fetchone()["pid"])
+                conn.commit()
+                return change_control_verify.check(
+                    conn, self.org, self.brand, self.campaign, approved["id"],
+                    approved["items"][0]["id"], "human"
+                )
+
+        with patch.object(asset_binding_repository, "lock_native", side_effect=traced_lock):
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                writing = pool.submit(writer)
+                self.assertTrue(parent_held.wait(8))
+                checking = pool.submit(old_check)
+                errors, result = [], None
+                try:
+                    for pending, name in ((checking, "handoff"), (writing, "sync")):
+                        try:
+                            value = pending.result(timeout=8)
+                            if name == "handoff":
+                                result = value
+                        except Exception as exc:
+                            errors.append((name, type(exc).__name__, str(exc)))
+                finally:
+                    release_write.set()
+        self.assertEqual(len(set(pids)), 2)
+        self.assertEqual(errors, [], errors)
+        self.assertIsNotNone(result)
+        assert result is not None
+        action = result["items"][0]
+        self.assertEqual(action["verification_state"], "unknown", action["evidence_json"])
+        self.assertEqual(action["evidence_json"]["peers"][0]["reason_code"], "source_changed")
+        parent = self.conn.execute(
+            "SELECT creative FROM ads_external_entity WHERE org_id=%s AND brand_id=%s "
+            "AND campaign_id=%s AND platform='fixture' AND source_account=%s "
+            "AND native_kind=%s AND native_id=%s",
+            (self.org, self.brand, self.campaign, self.account, writer_kind, writer_id),
+        ).fetchone()
+        self.assertEqual(parent["creative"]["fields"]["body"], "parent sync")
+
+    def test_public_material_proof_and_action_commit_before_later_native_sync(self):
+        from app.ads import asset_binding, asset_binding_repository
+        from app.ads.adapters.external import SourcePage
+
+        approved, item = self.approve(self.new_ad())
+        original_read = self.reader.verify_native
+        original_verify = asset_binding.verify
+        original_lock = asset_binding_repository.lock_native
+        started = threading.Event()
+        writer_threads, pending, pids, blocked, acquired, proof_return = [], [], {}, [], [], []
+        creative = copy.deepcopy(self.native_ad["creative"])
+        creative["fields"]["image_hash"] = "later-native-image-after-action-commit"
+
+        def media_proof(conn, *args, **kwargs):
+            proof = original_read(conn, *args, **kwargs)
+            original = kwargs.get("original")
+            if original:
+                proof["media_equivalence"] = {
+                    "asset_sha256": original["sha256"], "copy_hash": original["copy_hash"],
+                    "creative_hash": asset_binding_repository.creative_hash(
+                        proof["entity"]["creative"]
+                    ),
+                    "basis": "explicit local fixture source media equivalence",
+                }
+            return proof
+
+        def trace_native(conn, row, **kwargs):
+            result = original_lock(conn, row, **kwargs)
+            if threading.get_ident() in writer_threads:
+                # This lease may become available only once the same observation is committed.
+                current = change_control_data.get(
+                    conn, self.org, self.brand, self.campaign, approved["id"]
+                )["items"][0]
+                acquired.append(copy.deepcopy(current))
+            return result
+
+        def writer():
+            writer_threads.append(threading.get_ident())
+            with db.connection() as conn:
+                pids["writer"] = conn.execute("SELECT pg_backend_pid() AS pid").fetchone()["pid"]
+                started.set()
+                errors = external_sync._save_page(
+                    conn, {"org_id": self.org, "brand_id": self.brand, "platform": "fixture",
+                           "source_account": self.account},
+                    {"campaign_id": self.campaign, "section": "creatives"},
+                    SourcePage([{"platform": "fixture", "source_account": self.account,
+                                 "native_kind": "ad", "native_id": "B2", "creative": creative}]),
+                )
+                self.assertEqual(errors, [])
+                conn.commit()
+
+        def verify_then_start_writer(conn, *args, **kwargs):
+            result = original_verify(conn, *args, **kwargs)
+            proof_return.append(copy.deepcopy(result))
+            pids["handoff"] = conn.execute("SELECT pg_backend_pid() AS pid").fetchone()["pid"]
+            pending.append(pool.submit(writer))
+            self.assertTrue(started.wait(8))
+            # Observe blocking, never wait for the writer to finish while holding its lease.
+            deadline = time.monotonic() + 8
+            while time.monotonic() < deadline and not pending[0].done():
+                owners = self.conn.execute(
+                    "SELECT pg_blocking_pids(%s) AS owners", (pids["writer"],)
+                ).fetchone()["owners"]
+                if pids["handoff"] in owners:
+                    blocked.append(True)
+                    break
+                time.sleep(0.01)
+            return result
+
+        with patch.object(self.reader, "verify_native", side_effect=media_proof):
+            first = self.check(item, "ad", "B2")
+            self.assertEqual(first["evidence_json"]["material_evidence"], "media_verified")
+            self.conn.commit()
+            client, base = self._client()
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                with patch.object(
+                    asset_binding_repository, "lock_native", side_effect=trace_native
+                ):
+                    with patch.object(
+                        asset_binding, "verify", side_effect=verify_then_start_writer
+                    ):
+                        response = client.post(
+                            f"{base}/change-sets/{approved['id']}/items/{approved['items'][0]['id']}/check"
+                        )
+                    # The action request has finished; a later sync is now free to commit.
+                    pending[0].result(timeout=8)
+        self.assertEqual(response.status_code, 200, response.text)
+        action = response.json()["change_set"]["items"][0]
+        peer = action["evidence_json"]["peers"][0]
+        self.assertNotEqual(pids["handoff"], pids["writer"])
+        self.assertEqual(blocked, [True], "Native lease was released before action commit")
+        self.assertEqual(action["verification_state"], "confirmed")
+        self.assertEqual(peer["material_evidence"], "media_verified")
+        self.assertNotEqual(peer["attempt_id"], first["attempt_id"])
+        self.assertEqual(acquired[0]["evidence_json"]["peers"][0]["attempt_id"], peer["attempt_id"])
+        self.assertEqual(acquired[0]["evidence_json"]["observed_at"],
+                         action["evidence_json"]["observed_at"])
+        cached = asset_binding_repository.entity(
+            self.conn, self.org, self.brand, self.campaign, first["entity_id"]
+        )
+        self.assertEqual(cached["creative"]["fields"]["body"],
+                         self.native_ad["creative"]["fields"]["body"])
+        self.assertEqual(cached["creative"]["fields"]["image_hash"],
+                         creative["fields"]["image_hash"])
+        bindings = asset_binding_repository.list_bindings(
+            self.conn, self.org, self.brand, self.campaign, item["placement_id"], 1
+        )
+        self.assertTrue(bindings)
+        for binding in bindings:
+            self.assertIsNotNone(binding["valid_to"])
+            self.assertGreater(binding["valid_to"].isoformat(), peer["observed_at"])
+            self.assertEqual(binding["evidence_level"], "media_verified")
+            self.assertEqual(binding["creative_snapshot"], proof_return[0]["creative_snapshot"])
+            self.assertEqual(binding["last_verified_at"], proof_return[0]["last_verified_at"])
 
     def test_material_copy_rejects_different_after_text(self):
         from app.ads import handoff_material, material_tasks

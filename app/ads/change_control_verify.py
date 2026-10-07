@@ -66,6 +66,8 @@ def check(conn, org, brand, campaign, set_id, action_id, actor):
     if action["verification_state"] == "stale" or action["evidence_json"].get("superseded_by"):
         conn.commit()
         return current
+    if action["kind"] == "new_ad":
+        return handoff_check.check_action(conn, org, brand, campaign, set_id, action_id, actor)
     leaf = bindings.entity(conn, org, brand, campaign, action["target_id"])
     snapshots = _snapshot_chain(conn, org, brand, campaign, leaf)
     root = snapshots[-1]

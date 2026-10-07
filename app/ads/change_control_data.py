@@ -450,10 +450,19 @@ def get(conn, org, brand, campaign_id, set_id):
                 "message": "執行月份已改變，新增花費需重新核對月預算與核准。",
             }
         view["verification_label"] = verification_label(view["verification_state"])
+        if (view["kind"] == "new_ad" and view["verification_state"] == "unknown"
+                and view["evidence_json"].get("peers")
+                and not any(peer.get("observed_at")
+                            for peer in view["evidence_json"]["peers"])):
+            view["verification_label"] = "本次核對未完成"
         result["items"].append(view)
     # F49 Contract B: the set's one state is the worst of its items' (read-time only).
     result["verification_state"] = worst_state(i["verification_state"] for i in result["items"])
     result["verification_label"] = verification_label(result["verification_state"])
+    if result["verification_state"] == "unknown" and any(
+        item["verification_label"] == "本次核對未完成" for item in result["items"]
+    ):
+        result["verification_label"] = "本次核對未完成"
     # Contract H / correction 1: read-time only, nothing written or scheduled here -- lazy import,
     # same seam as `adapters` above (`change_timeline` -> `triage` -> `review_evidence` -> this
     # module would be an import-time cycle if this were a module-level import).

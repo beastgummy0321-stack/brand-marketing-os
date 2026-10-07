@@ -512,6 +512,26 @@ describe("VerifyPage（F27-I15）new_ad kind", () => {
       ...overrides,
     });
   }
+  it("rereads the placement action without a payload and displays the retained-proof reason", async () => {
+    const initial = newAdItem();
+    const message = "本次讀回未完成；保留前次核對證據供查看，請稍後重試。";
+    const failed = newAdItem({
+      ...served("unknown"),
+      evidence_json: { observed_at: null, attempted_at: "2026-09-22T05:00:00Z", message,
+        peers: [{ handoff_item_id: "ahi_1", entity_id: "aex_1", status: "unknown",
+          material_evidence: "unknown", previous_observation: {
+            observed_at: "2026-09-22T02:13:00Z", evidence: { material_evidence: "user_verified" },
+          } }],
+      },
+    });
+    vi.mocked(changeApi.getChangeControl).mockResolvedValue({ targets: [], change_sets: [changeSet({ items: [initial] })] });
+    vi.mocked(changeApi.actOnChangeItem).mockResolvedValueOnce(changeSet({ items: [failed] }));
+    renderAt(verifyPath());
+    await userEvent.click(await screen.findByRole("button", { name: "⟳ 重新核對" }));
+    await waitFor(() => expect(changeApi.actOnChangeItem).toHaveBeenCalledWith("brd_1", "cmp_1", "acs_1", "item_new", "check"));
+    expect(await screen.findByText(message)).toBeTruthy();
+    expect(screen.queryByText("平台上這則新廣告已經核對完成")).toBeNull();
+  });
   it("已核對：平台上這則新廣告已經核對完成，rail 顯示已對應廣告物件", async () => {
     vi.mocked(changeApi.getChangeControl).mockResolvedValue({ targets: [], change_sets: [changeSet({ items: [newAdItem()] })] });
     renderAt(verifyPath());

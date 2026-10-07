@@ -1,5 +1,6 @@
 """Manual handoff, fresh source verification and conservative version attribution."""
 
+from collections.abc import Callable
 from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -93,7 +94,9 @@ def _validate_chain(proof, leaf, root):
 
 
 def verify(
-    conn, org, brand, campaign, placement_id, revision, entity_id, actor, *, user_verified=False
+    conn, org, brand, campaign, placement_id, revision, entity_id, actor, *, user_verified=False,
+    before_persist: Callable[[], None] | None = None,
+    commit_success: bool = True,
 ):
     if not isinstance(user_verified, bool):
         raise ValueError("請明確選擇是否已人工核對素材。")
@@ -124,6 +127,8 @@ def verify(
         # F49 Contract B: a refusal only (a code bug propagates), re-raised with its reason code
         # -- the source read's own, else the chain's.
         conn.rollback()
+        if before_persist is not None:
+            before_persist()
         repo.record_failure(conn, org, brand, campaign, placement_id, revision, leaf)
         conn.commit()
         raise SourceReadError(
@@ -132,6 +137,9 @@ def verify(
         ) from None
     # Facades may commit. Re-read connection/account/placement after all HTTP has finished.
     external_sync.account_reader(conn, org, brand, leaf["platform"], leaf["source_account"])
+    # A caller may own a stricter attempt/revision boundary; acquire its lock before placement.
+    if before_persist is not None:
+        before_persist()
     current, asset = repo.confirmed(conn, org, brand, campaign, placement_id, revision, write=True)
     fresh_leaf = repo.entity(conn, org, brand, campaign, entity_id)
     fresh_root = repo.root(conn, org, brand, campaign, fresh_leaf)
@@ -276,7 +284,8 @@ def verify(
         # same filter as handoff_check: a reader's extra keys (launch_settings) are not stored
         node = {k: v for k, v in node.items() if k in ExternalEntity.model_fields}
         external.upsert_entity(conn, org, brand, campaign, node)
-    conn.commit()
+    if commit_success:
+        conn.commit()
     return next(
         b
         for b in repo.list_bindings(conn, org, brand, campaign, placement_id, revision)

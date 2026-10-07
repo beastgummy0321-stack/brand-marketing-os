@@ -236,6 +236,21 @@ def get(conn, org, brand, campaign, item_id):
     return result
 
 
+def approved_peers(conn, org, brand, campaign, set_id, action_id):
+    """Only the approved action's handoff nodes can answer its readback."""
+    change_set = changes.get(conn, org, brand, campaign, set_id)
+    if change_set["status"] != "approved" or not any(
+        item["id"] == action_id for item in change_set["items"]
+    ):
+        raise ValueError("找不到已核准的操作。")
+    rows = conn.execute(
+        "SELECT id FROM ads_handoff_item WHERE org_id=%s AND brand_id=%s AND campaign_id=%s "
+        "AND change_set_id=%s AND action_id=%s ORDER BY created_at,id",
+        (org, brand, campaign, set_id, action_id),
+    ).fetchall()
+    return [get(conn, org, brand, campaign, row["id"]) for row in rows]
+
+
 def _destination_by_ad(conn, org, brand, campaign):
     """F49 Contract D: `{ad entity id: its parent (ad set) entity id}` for the campaign's platform
     ads -- read from the campaign's own platform objects, whatever its origin."""
