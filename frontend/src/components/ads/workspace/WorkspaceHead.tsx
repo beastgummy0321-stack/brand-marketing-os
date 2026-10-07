@@ -70,9 +70,9 @@ export function isDraftCampaign(c: CampaignDetail, ws: CampaignWorkspace | null)
   return c.origin !== "imported" && (c.status === "draft" || c.status === "ready");
 }
 
-/** 「在投 N 則」 from the served `running`, with 「（MM/DD HH:MM 讀取）」 when the count rests on a stale read and the
- * unknown ads apart; null before the workspace answers. */
-export function runningText(ws: CampaignWorkspace | null, timezone: string, closed = false): string | null {
+/** Only a complete current read can claim current delivery. Other counts retain their
+ * observation time, or disclose an unknown read time; legacy absence never erases a count. */
+export function runningText(ws: Pick<CampaignWorkspace, "running"> | null, timezone: string, closed = false): string | null {
   if (!ws) return null;
   const r = ws.running;
   if (!r) return "平台投放狀態待確認";
@@ -80,7 +80,8 @@ export function runningText(ws: CampaignWorkspace | null, timezone: string, clos
   const unknown = r.unknown > 0 ? `・${r.unknown} 則狀態不明` : "";
   if (known) return closed ? r.count > 0 ? `平台上還開著 ${r.count} 則${unknown}` : `${r.label ?? "平台未在投放"}${unknown}`
     : `${r.state === "running" ? "" : `${r.label ?? "平台未在投放"}・`}在投 ${r.count} 則${unknown}`;
-  const observed = r.read_at ? `・上次讀取${closed ? "平台開著" : "在投"} ${r.count} 則（${formatInstant(r.read_at, timezone, "md_hm")} 讀取）` : "・還沒讀到平台";
+  const observed = r.read_at ? `・上次讀取${closed ? "平台開著" : "在投"} ${r.count} 則（${formatInstant(r.read_at, timezone, "md_hm")} 讀取）`
+    : `・紀錄中 ${r.count} 則標示${closed ? "開著" : "在投"}（完整讀取時間未知，還沒完整讀到平台）`;
   return `${r.label ?? "平台投放狀態待確認"}${observed}${unknown}`;
 }
 

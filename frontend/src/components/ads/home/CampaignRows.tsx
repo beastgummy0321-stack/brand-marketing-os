@@ -1,4 +1,4 @@
-import { campaignPath } from "@/lib/adsRoutes";
+import { campaignFlowPath, campaignPath } from "@/lib/adsRoutes";
 import { Link } from "react-router-dom";
 import { Button } from "@/components/layout/ui/button";
 import { Skeleton } from "@/components/layout/Skeleton";
@@ -6,7 +6,8 @@ import type { HomeCampaign, HomeCap, HomeHandoff, HomeOverview } from "@/lib/ads
 import type { CampaignDataState } from "@/lib/adsTriageApi";
 import { Chip, MoneyMeter, MoneyTag, formatAmount } from "../patterns";
 import { cn } from "@/lib/utils";
-import { formatInstant, useOrgClock } from "@/lib/orgClock";
+import { useOrgClock } from "@/lib/orgClock";
+import { runningText } from "../workspace/WorkspaceHead";
 import { wholeYuan } from "./MonthMoney";
 import { monthDay } from "./NextDates";
 
@@ -60,25 +61,10 @@ function HandoffChip({ brandId, campaignId, handoff }: { brandId: string; campai
   );
 }
 
-/** 「10/3 14:20」 on the org clock (a structure read's time; F50 Contract K). */
-function readTime(iso: string, timezone: string): string {
-  return `${formatInstant(iso, timezone, "md")} ${formatInstant(iso, timezone, "hm")}`;
-}
-
 /** The campaign's served lifecycle word as a chip (nothing while a read predates it). */
 function LifecycleChip({ c }: { c: HomeCampaign }) {
   if (!c.lifecycle) return null;
   return <Chip tone={c.lifecycle.state === "ended" ? "warn" : "neutral"} data-state={c.lifecycle.state}>{c.lifecycle.label}</Chip>;
-}
-
-/** 「在投 N 則」 from the served `running` (drill-11 E5: a count read before the user's last report says when it was
- * read; ads whose platform status is unknown are said apart, never folded into 0). */
-function runningText(c: HomeCampaign, timezone: string): string {
-  const running = c.running ?? { count: c.active_ads, unknown: 0, read_at: null, stale: false };
-  const parts = [`在投 ${running.count} 則`];
-  if (running.unknown > 0) parts.push(`另有 ${running.unknown} 則狀態不明`);
-  if (running.stale) parts.push(running.read_at ? `上次讀取 ${readTime(running.read_at, timezone)}` : "還沒讀到平台上的廣告");
-  return parts.join("・");
 }
 
 /** The month's empty rows: no campaign in progress; the ones closed this month are named, never 「還沒有活動」. */
@@ -141,7 +127,11 @@ function LiveRow({ brandId, c, spent }: { brandId: string; c: HomeCampaign; spen
   const cap = c.cap && c.cap.basis ? { value: c.cap.value, basis: c.cap.basis } : null;
   // An ended campaign's next step is its closeout (the same link as its queue row), not another look at the numbers.
   const closeout = c.lifecycle?.state === "ended" && c.lifecycle.can_close;
-  const running = c.running?.count ?? c.active_ads;
+  const observed = { running: c.running ?? { count: c.active_ads, unknown: 0, read_at: null, stale: false } };
+  const next = c.next_action;
+  const nextHref = next ? next.target.kind === "campaign"
+    ? campaignPath(brandId, c.campaign_id, { tab: next.target.tab })
+    : campaignFlowPath(brandId, c.campaign_id, next.target.parts) : null;
   return (
     <div className={cn(GRID, "border-t border-border py-3.5")}>
       <div className="min-w-0">
@@ -151,13 +141,11 @@ function LiveRow({ brandId, c, spent }: { brandId: string; c: HomeCampaign; spen
           <HandoffChip brandId={brandId} campaignId={c.campaign_id} handoff={c.handoff} />
           {NOTED.has(status.state) && <Chip tone="warn" data-state={status.state}>{dataChipText(status)}</Chip>}
         </div>
-        {c.lifecycle && c.lifecycle.state !== "live" ? (
-          running > 0 && <div className="numeric text-sm text-muted-foreground">平台上還開著 {running} 則</div>
-        ) : (
-          <div className="numeric text-sm text-muted-foreground">
-            {runningText(c, timezone)}・每日 {c.daily_budget === null ? "未知" : formatAmount(c.daily_budget)}
-          </div>
-        )}
+        <div className="numeric text-sm text-muted-foreground">
+          {runningText(observed, timezone, c.lifecycle?.state === "ended" || c.lifecycle?.state === "closed")}
+          {c.lifecycle?.state !== "ended" && <>・每日 {c.daily_budget === null ? "未知" : formatAmount(c.daily_budget)}</>}
+        </div>
+        {c.running?.reason && <p className="text-xs text-muted-foreground">{c.running.reason}</p>}
       </div>
       <div>
         <MoneyMeter value={c.month_spend} max={spent} tone="primary" />
@@ -181,7 +169,9 @@ function LiveRow({ brandId, c, spent }: { brandId: string; c: HomeCampaign; spen
       <div className="numeric font-semibold">{c.purchases === null ? "—" : formatAmount(c.purchases)}</div>
       <div className="text-right">
         <Button asChild variant="link" className="h-auto p-0">
-          {closeout
+          {nextHref && next
+            ? <Link to={nextHref}>{next.label} →</Link>
+            : closeout
             ? <Link to={campaignPath(brandId, c.campaign_id, {tab:"perf",close:1})}>結案這一期 →</Link>
             : reconnect
             ? <Link to={`/brands/${brandId}/ads/connections`}>重新連線 →</Link>

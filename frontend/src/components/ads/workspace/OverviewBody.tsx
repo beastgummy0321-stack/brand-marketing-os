@@ -73,7 +73,7 @@ export function rulerAds(structure: CampaignStructure): RulerAd[] {
     .map((a) => ({
       id: a.entity_id as string, name: a.name, grade: a.grade!, gradeLabel: a.grade_label,
       costPerResult: a.cost_per_result, spend: a.spend, thumbnailUrl: a.thumbnail_url,
-      currency: a.currency ?? null, comparisonReason: a.cap_comparison?.reason ?? (a.cap_comparison ? null : "cap_currency_unknown"),
+      currency: a.currency ?? null, comparisonReason: a.cap_comparison?.reason,
       comparisonMessage: a.cap_comparison?.message,
     }));
 }

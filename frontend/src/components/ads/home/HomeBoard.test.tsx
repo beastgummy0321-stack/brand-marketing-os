@@ -36,6 +36,7 @@ function campaign(overrides: Partial<HomeCampaign> = {}): HomeCampaign {
     campaign_id: "cmp_daily", name: "日常商品推廣・轉換", origin: "internal", status: "live", month_spend: 15767.4, purchases: 121,
     cost_per_purchase: 130.31, cap: { value: 450, basis: "own", break_even: 520 }, active_ads: 8, daily_budget: 1200, missing_days: [], sync_state: "ok",
     data_status: { state: "ready", label: "資料已讀齊。", missing_days: [], last_success_at: "2026-09-23T00:40:00Z" }, handoff: null, draft: null,
+    running: { count: 8, unknown: 0, read_at: "2026-09-23T00:40:00Z", stale: false, state: "running", freshness: "read" },
     ...overrides,
   };
 }
@@ -163,6 +164,26 @@ describe("QualityBand", () => {
 });
 
 describe("CampaignRows", () => {
+  it("failed public running facts remain a past observation with the served retry destination", () => {
+    // Real local public GET shape from the isolated I14 failed-source capture.
+    const c = campaign({ lifecycle: { state: "live", label: "本期進行中", can_close: false }, active_ads: 1,
+      running: { count: 1, unknown: 0, not_running: 0, off: 0, scheduled: 0,
+        read_at: "2026-09-20T14:00:00+08:00", stale: false, freshness: "failed", state: "unknown",
+        label: "平台投放狀態待確認", reason: "本次平台結構讀取失敗；保留上次成功讀取時間與已知廣告數量。" },
+      data_status: { state: "failed", label: "上次讀取平台資料失敗。", missing_days: [], last_success_at: "2026-09-20T14:00:00+08:00" },
+      next_action: { id: "read_platform", label: "查看平台讀取狀態", target: { kind: "campaign", tab: "perf" },
+        reason: "本次平台結構讀取失敗；保留上次成功讀取時間與已知廣告數量。" } });
+    wrap(<CampaignRows brandId="b" state={ready(home({ campaigns: [c] }))} onRetry={vi.fn()} />);
+    expect(screen.getByText(/上次讀取在投 1 則/)).toBeTruthy();
+    expect(screen.getByText(/本次平台結構讀取失敗/)).toBeTruthy();
+    expect(screen.getByRole("link", { name: "查看平台讀取狀態 →" }).getAttribute("href"))
+      .toBe("/brands/b/ads/campaigns/cmp_daily?tab=perf");
+  });
+  it("legacy missing running evidence preserves its recorded count as unknown", () => {
+    wrap(<CampaignRows brandId="b" state={ready(home({ campaigns: [campaign({ running: undefined, active_ads: 6 })] }))} onRetry={vi.fn()} />);
+    expect(screen.getByText(/紀錄中 6 則標示在投/)).toBeTruthy();
+    expect(screen.getByText(/完整讀取時間未知/)).toBeTruthy();
+  });
   it("live, imported-with-gap and draft rows: names open the workspace; each row has its one next step", () => {
     const h = home({ campaigns: [
       campaign(),
@@ -267,24 +288,22 @@ describe("CampaignRows", () => {
     expect(within(grid).getByText("已結束・待結案").getAttribute("data-state")).toBe("ended");
     expect(within(grid).getByText("已結束")).toBeTruthy();
     expect(grid.textContent).not.toMatch(/在投/);
-    expect(within(grid).getByText("平台上還開著 2 則")).toBeTruthy();
+    expect(within(grid).getByText(/平台投放狀態待確認・上次讀取平台開著 2 則（10\/10 10:00 讀取）/)).toBeTruthy();
     expect(within(grid).getByRole("link", { name: "結案這一期 →" }).getAttribute("href")).toBe("/brands/b/ads/campaigns/cmp_end?tab=perf&close=1");
     // An imported campaign has no closeout here: it opens as before.
     expect(within(grid).getByRole("link", { name: "打開 →" }).getAttribute("href")).toBe("/brands/b/ads/campaigns/cmp_imp");
   });
 
-  it("a live row prints 投放中 and the served running count; a count read before the last report says when it was read", () => {
+  it("legacy live-period rows retain observations without asserting current delivery", () => {
     const readAt = "2026-10-03T06:20:00Z";
-    const d = new Date(readAt);
-    const at = `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
     wrap(<CampaignRows brandId="b" state={ready(home({ campaigns: [
       campaign({ lifecycle: { state: "live", label: "本期進行中", can_close: true }, active_ads: 0, daily_budget: null,
         running: { count: 0, unknown: 1, read_at: readAt, stale: true } }),
       campaign({ campaign_id: "cmp_2", name: "第二個活動", lifecycle: { state: "live", label: "本期進行中", can_close: true }, active_ads: 3,
         running: { count: 3, unknown: 0, read_at: readAt, stale: false } }),
     ] }))} onRetry={vi.fn()} />);
-    expect(screen.getByText(`在投 0 則・另有 1 則狀態不明・上次讀取 ${at}・每日 未知`)).toBeTruthy();
-    expect(screen.getByText("在投 3 則・每日 1,200")).toBeTruthy();
+    expect(screen.getByText(/平台投放狀態待確認・上次讀取在投 0 則（10\/03 14:20 讀取）・1 則狀態不明・每日 未知/)).toBeTruthy();
+    expect(screen.getByText(/平台投放狀態待確認・上次讀取在投 3 則（10\/03 14:20 讀取）・每日 1,200/)).toBeTruthy();
     expect(screen.getAllByText("本期進行中")).toHaveLength(2);
   });
 
@@ -292,7 +311,7 @@ describe("CampaignRows", () => {
     wrap(<CampaignRows brandId="b" state={ready(home({ campaigns: [
       campaign({ lifecycle: { state: "live", label: "本期進行中", can_close: true }, active_ads: 0, running: { count: 0, unknown: 0, read_at: null, stale: true } }),
     ] }))} onRetry={vi.fn()} />);
-    expect(screen.getByText("在投 0 則・還沒讀到平台上的廣告・每日 1,200")).toBeTruthy();
+    expect(screen.getByText(/平台投放狀態待確認・紀錄中 0 則標示在投（完整讀取時間未知，還沒完整讀到平台）・每日 1,200/)).toBeTruthy();
   });
 
   it("a draft row's chip is the served label", () => {
