@@ -387,8 +387,34 @@ def _days(campaign: dict) -> int:
 # -- the context --------------------------------------------------------------------------------
 
 
+def calendar_window(campaign: dict, group: dict | None = None) -> tuple:
+    """Effective delivery dates: each missing group side falls back independently."""
+    group = group or {}
+    return (
+        group.get("start_date") or campaign.get("start_date"),
+        group.get("end_date") or campaign.get("end_date"),
+    )
+
+
+def _calendar_source(campaign: dict, groups: list[dict] | None) -> tuple[list, list]:
+    """Full known windows and their event union; an unknown side supplies no invented range."""
+    windows = []
+    events = {}
+    # Retain the full known campaign comparison range, adding child windows when it is unbound.
+    for group in [None, *(groups or [])]:
+        start, end = calendar_window(campaign, group)
+        windows.append({"group_id": (group or {}).get("id"), "start": start, "end": end})
+        if start is None or end is None:
+            continue
+        for row in calendar_tw.events_between(start, end):
+            events[(row["start"], row["end"], row["name"])] = row
+    windows.sort(key=lambda row: str(row["group_id"] or ""))
+    return windows, sorted(events.values(), key=lambda row: (row["start"], row["end"], row["name"]))
+
+
 def planner_context(conn, org_id: str, brand_id: str, product_id: str | None, *,
-                    campaign: dict | None = None) -> dict:
+                    campaign: dict | None = None,
+                    calendar_groups: list[dict] | None = None) -> dict:
     """Contract P for one sell-way (`product_id`; `None` = brand level). With `campaign`, its
     product list, customer-group pick, end date, cap and adopted budget are used; without one,
     the sell-way alone (the brief, before a campaign exists)."""
@@ -429,9 +455,7 @@ def planner_context(conn, org_id: str, brand_id: str, product_id: str | None, *,
         else:
             reasons.append("原圖或原文案無法沿用")
         item["eligibility"] = {"state": "blocked" if reasons else "ready", "reasons": reasons}
-    calendar = []
-    if campaign and campaign.get("start_date") and campaign.get("end_date"):
-        calendar = calendar_tw.events_between(campaign["start_date"], campaign["end_date"])
+    calendar_windows, calendar = _calendar_source(campaign or {}, calendar_groups)
     return {
         "product": product,
         "product_ids": product_ids,
@@ -449,6 +473,7 @@ def planner_context(conn, org_id: str, brand_id: str, product_id: str | None, *,
         "cap": cap,
         "capacity": capacity,
         "carried_candidates": carried,
+        "calendar_windows": calendar_windows,
         "calendar_evidence": [{**row, "id": f"{row['start']}:{row['end']}:{row['name']}"}
                               for row in calendar],
         "knowledge_item_ids": (
@@ -500,6 +525,7 @@ def creative_basis(ctx: dict) -> dict:
             "controls": controls,
             "learnings": learnings_basis(ctx["learnings"]["ads"]),
             "calendar": ctx.get("calendar_evidence") or [],
+            "calendar_windows": ctx.get("calendar_windows") or [],
             "offers": ctx.get("offers") or [],
             "facts": (ctx.get("product") or {}).get("knowledge") or [],
             "customer_groups": ctx.get("customer_groups") or [],

@@ -310,6 +310,48 @@ class CreativeBriefContractTest(AssetsTestBase):
                 self.assertNotIn(excluded, request["calendar_note"])
                 self.assertEqual(len(request["calendar_note"].splitlines()), 1)
 
+    def test_public_dispatch_uses_dated_group_calendar_when_campaign_dates_are_missing(self):
+        for campaign_start, campaign_end in (
+            (None, "2026-10-14"),
+            ("2026-10-01", None),
+            (None, None),
+        ):
+            with self.subTest(campaign_start=campaign_start, campaign_end=campaign_end):
+                campaign, group, ad = self._direct_campaign(
+                    campaign_start=campaign_start,
+                    campaign_end=campaign_end,
+                )
+                plan.update_group(
+                    web.conn,
+                    self.org_id,
+                    self.brand_id,
+                    group["id"],
+                    {"start_date": "2026-10-09", "end_date": "2026-10-11"},
+                    actor=ACTOR,
+                )
+                web.conn.commit()
+                response = self.client.post(
+                    f"/api/ads/brands/{self.brand_id}/campaigns/{campaign['id']}/pack"
+                )
+                self.assertEqual(response.status_code, 200, response.text)
+                briefs = workbench.briefs_for_source(
+                    web.conn,
+                    self.org_id,
+                    self.brand_id,
+                    assets.PACK_SOURCE_KIND,
+                    {"ads_campaign_id": campaign["id"]},
+                )
+                request = next(
+                    b["request_json"] for b in briefs if b["source_ref"]["ads_ad_id"] == ad["id"]
+                )
+                self.assertIn("國慶日", request["calendar_note"])
+                comparison = request["creative_brief"]["comparison"]
+                self.assertEqual(
+                    comparison["calendar_window"], {"start": "2026-10-09", "end": "2026-10-11"}
+                )
+                self.assertEqual([e["name"] for e in comparison["calendar"]], ["國慶日"])
+                self.assertEqual(comparison["omitted"]["calendar_outside_window"], 0)
+
     def _wait_for_blocked_writer(self, pid):
         until = time.monotonic() + 5
         while time.monotonic() < until:

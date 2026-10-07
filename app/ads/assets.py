@@ -73,10 +73,7 @@ def creative_brief(ad: dict, group: dict, campaign: dict, basis: dict) -> dict:
     )
     state = decision.get("state") or "legacy_unbound"
     active_slot = slot if current and slot is not None else {}
-    window = (
-        group.get("start_date") or campaign.get("start_date"),
-        group.get("end_date") or campaign.get("end_date"),
-    )
+    window = planner_context.calendar_window(campaign, group)
     start, end = (plan._parse_date(value) for value in window)
     eligible = []
     if start is not None and end is not None:
@@ -264,10 +261,7 @@ def _ad_set(
     customer_group = (customer_groups_by_id or {}).get(ad.get("customer_group_id") or "")
     if customer_group is not None:
         request["customer_group"] = customer_groups.brief_text(customer_group)
-    window = (
-        group.get("start_date") or campaign.get("start_date"),
-        group.get("end_date") or campaign.get("end_date"),
-    )
+    window = planner_context.calendar_window(campaign, group)
     start: date | None = plan._parse_date(window[0])
     end: date | None = plan._parse_date(window[1])
     if start is not None and end is not None:
@@ -330,7 +324,7 @@ def dispatch_pack(conn, org_id: str, brand_id: str, campaign_id: str) -> str | N
             product_id = sell_way.of_ad(ad, campaign)
             if product_id not in comparison_by_product:
                 ctx = planner_context.planner_context(conn, org_id, brand_id, product_id,
-                                                       campaign=campaign)
+                                                       campaign=campaign, calendar_groups=groups)
                 comparison_by_product[product_id] = planner_context.creative_basis(ctx)
 
     summary: dict = {"情境": campaign["goal_text"]}

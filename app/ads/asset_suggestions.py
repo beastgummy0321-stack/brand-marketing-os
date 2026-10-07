@@ -176,7 +176,8 @@ def _snapshot(conn, org, brand, campaign_id, requested, summary):
             product_id = sell_way.of_ad(ad, campaign)
             if product_id not in creative_inputs:
                 ctx = planner_context.planner_context(conn, org, brand, product_id,
-                                                       campaign=campaign)
+                                                       campaign=campaign,
+                                                       calendar_groups=detail["groups"])
                 creative_inputs[product_id] = planner_context.creative_basis(ctx)
             placements[-1]["creative_brief"] = dispatch_assets.creative_brief(
                 ad, group, campaign, creative_inputs[product_id])
