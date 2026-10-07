@@ -92,7 +92,9 @@ test("一個上限：選商品、沒有成本、暫用打平、自己的上限�
   await page.reload();
   await expect(page.getByText("520 TWD", { exact: true })).toBeVisible();
   await expect(page.getByText("暫用打平", { exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "就用 520", exact: true })).toBeVisible();
+  const sameUnitFill = page.getByRole("button", { name: "就用 520 TWD", exact: true });
+  await expect(sameUnitFill).toBeVisible();
+  await expect(sameUnitFill).toBeEnabled();
 
   // --- 設定自己的上限 120，存檔（PUT target，own，帶版本號）--------------------------------------------
   await page.getByRole("button", { name: "設定自己的上限", exact: true }).click();
