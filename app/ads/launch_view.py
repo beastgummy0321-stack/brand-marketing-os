@@ -402,8 +402,10 @@ def view(conn, org, brand, campaign_id):
     readback. F41-I03: the list step also carries `month_budget` (`launch.month_fit`, the same
     numbers approve's month preflight uses) for the first-launch list page's 「本月預算放得下」
     card; approved steps carry `None`."""
-    campaign = changes.campaign(conn, org, brand, campaign_id)
     launch_settings.initialize(conn, org, brand, campaign_id)
+    # The platform read may have allowed a local edit to finish; summary metadata must
+    # come from the same side of that wait as the displayed list and approval revision.
+    campaign = changes.campaign(conn, org, brand, campaign_id)
     deferred: list = []
     current = launch.snapshot(conn, org, brand, campaign_id, deferred=deferred)
     # Contract V: the hint is read from the plan as it is now (the snapshot carries only

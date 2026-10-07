@@ -19,6 +19,7 @@ from app.ads import (
     handoff_check,
     handoff_data,
     launch_settings,
+    routes,
 )
 from app.ads import repository as campaigns
 from app.ads import user_assets_repository as assets
@@ -151,7 +152,7 @@ class LaunchSettingsTest(unittest.TestCase):
                 values[key] = value
         return self.client.put(self.base + "/launch-settings", json=values)
 
-    def material(self):
+    def material(self, body="文案"):
         """A confirmed material on the planned ad: only such an ad is in a launch batch (F30)."""
         asset = db.new_id("aua")
         self.conn.execute(
@@ -161,7 +162,7 @@ class LaunchSettingsTest(unittest.TestCase):
             (asset, self.org, self.brand, asset, f"{self.org}/{asset}"),
         )
         placement = assets.attach(
-            self.conn, self.org, self.brand, self.campaign, asset, {"body": "文案"}, "human"
+            self.conn, self.org, self.brand, self.campaign, asset, {"body": body}, "human"
         )
         self.conn.execute(
             "UPDATE ads_asset_placement SET confirmed_at=now(),confirmed_by='human' WHERE id=%s",
@@ -171,6 +172,7 @@ class LaunchSettingsTest(unittest.TestCase):
         handoff_assignment.assign(
             self.conn, self.org, self.brand, self.campaign, self.ad, placement["id"], 1
         )
+        return placement
 
     def launch(self):
         ad = campaigns.get_ad(self.conn, self.org, self.brand, self.ad)
@@ -290,6 +292,140 @@ class LaunchSettingsTest(unittest.TestCase):
         self.assertEqual(read["values"], values)
         stored = campaigns.get_campaign(self.conn, self.org, self.brand, self.campaign)
         self.assertEqual(stored["context_json"]["launch_settings"]["values"], values)
+
+    def test_f52_publish_describes_edits_completed_during_initial_pixel_read(self):
+        self.material()
+        changed_start = (self.today + timedelta(days=1)).isoformat()
+
+        def delayed_read(*args):
+            response = self.client.patch(
+                f"/api/ads/brands/{self.brand}/groups/{self.group}",
+                json={"daily_budget": 600, "start_date": changed_start},
+            )
+            self.assertEqual(response.status_code, 200, response.text)
+            return self.pixels, None
+
+        with patch.object(launch_settings, "read_pixels", side_effect=delayed_read):
+            response = self.client.get(self.base + "/publish?adapter=manual")
+        self.assertEqual(response.status_code, 200, response.text)
+        described = response.json()["describe"]
+        fields = next(n["fields"] for n in described["checklist"] if n["id"] == self.group)
+        displayed = {f["label"]: f["value"] for f in fields}
+        current = change_control_launch.snapshot(self.conn, self.org, self.brand, self.campaign)
+        self.assertEqual(described["content_hash"], change_control_data.digest(current))
+        self.assertEqual(float(displayed["每日預算"]), float(current["groups"][0]["daily_budget"]),
+                         f"displayed={displayed}; hashed group={current['groups'][0]}")
+        self.assertEqual(displayed["開始日期"], changed_start)
+        with patch.object(change_control_launch.month_budget, "preflight",
+                          return_value={"can_increase": True}):
+            approved = self.client.post(self.base + "/publish", json={
+                "adapter": "manual", "operation_id": db.new_id("op"),
+                "content_hash": described["content_hash"],
+            })
+        self.assertEqual(approved.status_code, 200, approved.text)
+        frozen = change_control_launch.launch_set(
+            self.conn, self.org, self.brand, self.campaign)["plan_json"]["launch_snapshot"]
+        self.assertEqual(float(frozen["groups"][0]["daily_budget"]), float(displayed["每日預算"]))
+
+    def test_f52_launch_metadata_refreshes_after_initial_pixel_read(self):
+        self.material()
+
+        def delayed_read(*args):
+            response = self.client.put(self.base + "/target", json={
+                "basis": "own", "value": 40, "expected_revision": 0,
+            })
+            self.assertEqual(response.status_code, 200, response.text)
+            response = self.client.patch(self.base, json={"name": "已修改的活動名稱"})
+            self.assertEqual(response.status_code, 200, response.text)
+            return self.pixels, None
+
+        with patch.object(launch_settings, "read_pixels", side_effect=delayed_read):
+            response = self.client.get(self.base + "/launch")
+        self.assertEqual(response.status_code, 200, response.text)
+        view = response.json()
+        current = change_control_launch.snapshot(self.conn, self.org, self.brand, self.campaign)
+        self.assertEqual(view["content_hash"], change_control_data.digest(current))
+        self.assertEqual(view["summary"]["cap"], 40)
+        name = next(f["value"] for f in view["items"][0]["fields"] if f["key"] == "name")
+        self.assertEqual(name, current["name"])
+
+    def test_f52_publish_checklist_uses_the_hashed_revision_after_enrichment(self):
+        first = self.material()
+        second = self.material("已選定的新素材文案")
+        assigned = self.client.put(self.base + f"/launch-materials/{self.ad}", json={
+            "placement_id": first["id"], "revision": 1,
+        })
+        self.assertEqual(assigned.status_code, 200, assigned.text)
+        original = routes._enriched_campaign
+
+        def interleaved(*args):
+            enriched = original(*args)
+            edited = self.client.patch(f"/api/ads/brands/{self.brand}/groups/{self.group}",
+                                      json={"name": "已修改的投放組", "daily_budget": 600,
+                                            "start_date": (self.today + timedelta(days=1))
+                                                .isoformat()})
+            self.assertEqual(edited.status_code, 200, edited.text)
+            edited = self.client.patch(self.base, json={"name": "已修改的活動"})
+            self.assertEqual(edited.status_code, 200, edited.text)
+            edited = self.client.put(self.base + f"/groups/{self.group}/manual-settings", json={
+                "values": {"landing_url": "https://example.com/chosen",
+                           "audience_source": "已選定的受眾"},
+            })
+            self.assertEqual(edited.status_code, 200, edited.text)
+            edited = self.client.put(self.base + f"/launch-materials/{self.ad}", json={
+                "placement_id": second["id"], "revision": 1,
+            })
+            self.assertEqual(edited.status_code, 200, edited.text)
+            return enriched
+
+        with patch.object(routes, "_enriched_campaign", side_effect=interleaved):
+            response = self.client.get(self.base + "/publish?adapter=manual")
+        self.assertEqual(response.status_code, 200, response.text)
+        described = response.json()["describe"]
+        content = change_control_launch.snapshot(self.conn, self.org, self.brand, self.campaign)
+        self.assertEqual(described["content_hash"], change_control_data.digest(content))
+        nodes = {n["id"]: n for n in described["checklist"]}
+        self.assertEqual(nodes[self.campaign]["name"], content["name"])
+        group = content["groups"][0]
+        self.assertEqual(nodes[self.group]["name"], group["name"])
+        fields = {f["label"]: f["value"] for f in nodes[self.group]["fields"]}
+        self.assertEqual(float(fields["每日預算"]), float(group["daily_budget"]))
+        self.assertEqual(fields["開始日期"], group["start_date"].isoformat())
+        self.assertEqual(fields["落地頁網址"],
+                         content["manual_settings"][0]["values"]["landing_url"])
+        self.assertEqual(fields["受眾來源與納入條件"], "已選定的受眾")
+        ad_fields = {f["label"]: f["value"] for f in nodes[self.ad]["fields"]}
+        self.assertEqual(ad_fields["文案"],
+                         group["ads"][0]["material_assignment"]["copy_fields"]["body"])
+
+    def test_f52_edit_after_snapshot_keeps_displayed_revision_and_requires_new_approval(self):
+        self.material()
+        original = change_control_launch.snapshot
+
+        def interleaved(*args, **kwargs):
+            content = original(*args, **kwargs)
+            changed = self.client.patch(f"/api/ads/brands/{self.brand}/groups/{self.group}",
+                                        json={"daily_budget": 600})
+            self.assertEqual(changed.status_code, 200, changed.text)
+            return content
+
+        with patch.object(change_control_launch, "snapshot", side_effect=interleaved):
+            response = self.client.get(self.base + "/publish?adapter=manual")
+        self.assertEqual(response.status_code, 200, response.text)
+        described = response.json()["describe"]
+        fields = next(n["fields"] for n in described["checklist"] if n["id"] == self.group)
+        displayed = next(f["value"] for f in fields if f["label"] == "每日預算")
+        self.assertEqual(float(displayed), 300)
+        refused = self.client.post(self.base + "/publish", json={
+            "adapter": "manual", "operation_id": db.new_id("op"),
+            "content_hash": described["content_hash"],
+        })
+        self.assertEqual(refused.status_code, 409, refused.text)
+        self.assertIsNone(change_control_launch.launch_set(
+            self.conn, self.org, self.brand, self.campaign))
+        fresh = self.client.get(self.base + "/publish?adapter=manual")
+        self.assertEqual(fresh.status_code, 200, fresh.text)
+        self.assertNotEqual(fresh.json()["describe"]["content_hash"], described["content_hash"])
 
     def test_f52_conditional_initialization_cannot_overwrite_a_saved_put(self):
         stale = campaigns.campaign_detail(self.conn, self.org, self.brand, self.campaign)

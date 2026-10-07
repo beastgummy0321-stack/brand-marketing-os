@@ -31,6 +31,7 @@ from app.ads import (
     handoff_assignment,
     judgment,
     learning,
+    manual_settings,
     manual_settings_routes,
     materials_in_hand,
     month_budget,
@@ -847,14 +848,51 @@ _PUBLISH_ERRORS = {
 
 
 def _drop_deferred(conn, org_id: str, brand_id: str, campaign_id: str, enriched: dict) -> dict:
-    """F30: the manual checklist lists exactly the ads the launch snapshot carries -- an ad
-    deferred until its material is ready goes out with a later version, so it is left out here
-    too. Returns that snapshot."""
-    deferred: list = []
-    content = change_control_launch.snapshot(conn, org_id, brand_id, campaign_id, deferred=deferred)
-    skip = {d["ad_id"] for d in deferred}
-    for group in enriched["groups"]:
-        group["ads"] = [ad for ad in group["ads"] if ad["id"] not in skip]
+    """Project every approvable checklist field from the one hashed launch snapshot.
+
+    Enrichment supplies view-time hints and post-build notes, not another approval revision.
+    The snapshot also selects the ready batch, so deferred ads never appear in the checklist.
+    """
+    content = change_control_launch.snapshot(conn, org_id, brand_id, campaign_id)
+    enriched.update({key: value for key, value in content.items()
+                     if key not in {"groups", "manual_settings"}})
+    groups = {group["id"]: group for group in enriched["groups"]}
+    projected = []
+    for node in content["groups"] or []:
+        previous = groups.get(node["id"], {})
+        ads = {ad["id"]: ad for ad in previous.get("ads") or []}
+        group = {**previous, **node}
+        group["ads"] = []
+        for ad in node["ads"]:
+            assignment = ad["strategy_assignment"]
+            group["ads"].append({
+                **ads.get(ad["id"], {}), **ad,
+                "customer_group_id": assignment["customer_group_id"],
+                **{f"{dimension}_key": value
+                   for dimension, value in assignment["coordinates"].items()},
+            })
+        # The hint needs the actual plan role, which is retained in each ad's assignment.
+        if node["ads"]:
+            group["role"] = node["ads"][0]["strategy_assignment"]["role"]
+        projected.append(group)
+    enriched["groups"] = projected
+    context = dict(enriched.get("context_json") or {})
+    records = context.get("manual_delivery") or {}
+    plan_keys = {field["key"] for field in manual_settings.FIELDS
+                 if field["section"] != "上架紀錄"}
+    context["manual_delivery"] = {
+        record["id"]: {
+            **(records.get(record["id"]) or {}),
+            "values": {
+                **{key: value for key, value in ((records.get(record["id"]) or {}).get(
+                    "values") or {}).items() if key not in plan_keys},
+                **record["values"],
+            },
+        } for record in content["manual_settings"] or []
+    }
+    # The snapshot has already resolved campaign landing-URL defaults into group values.
+    context["landing_url"] = None
+    enriched["context_json"] = context
     return content
 
 
@@ -863,8 +901,7 @@ def get_publish(request: Request, brand_id: str, campaign_id: str, adapter: str 
     """F03-I09：發布方式清單 + 選定那個 adapter 的 `describe`。"""
     actor = web.require_actor(request)
     web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
-    enriched = _enriched_campaign(web.conn, actor.org_id, brand_id, campaign_id)
-    if enriched is None:
+    if repository.get_campaign(web.conn, actor.org_id, brand_id, campaign_id) is None:
         raise web.ApiError(404, "campaign_unknown", CAMPAIGN_UNKNOWN_MESSAGE)
     chosen = adapters.get_adapter(adapter)
     if chosen is None:
@@ -873,7 +910,13 @@ def get_publish(request: Request, brand_id: str, campaign_id: str, adapter: str 
     if adapter == "manual":
         from app.ads import launch_settings
 
+        # Initialization can wait for a platform read. Read displayed content afterwards,
+        # so edits completed during that wait are also in the checklist, not only its hash.
         launch_settings.initialize(web.conn, actor.org_id, brand_id, campaign_id)
+    enriched = _enriched_campaign(web.conn, actor.org_id, brand_id, campaign_id)
+    if enriched is None:
+        raise web.ApiError(404, "campaign_unknown", CAMPAIGN_UNKNOWN_MESSAGE)
+    if adapter == "manual":
         content = _drop_deferred(web.conn, actor.org_id, brand_id, campaign_id, enriched)
     description = chosen.describe(enriched)
     if content is not None:
