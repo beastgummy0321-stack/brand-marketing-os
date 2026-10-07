@@ -506,7 +506,12 @@ def _run_image_prompt(conn, org_id: str, brand_id: str, brief_id: str, brief: di
     ctx = _image_task_context(conn, org_id, brand_id, brand, brief)
     identity = identity_mod.ensure_identity(conn, org_id, brand_id, PROVIDER)
     today = now_utc()
-    learn = looks_mod.visual_learnings(conn, brand_id, ctx["learnings_audience_key"], today=today)
+    comparison = ((request.get("creative_brief") or {}).get("comparison") or {})
+    current = looks_mod.current_conditions(conn, org_id, brand_id, product_id,
+                                           supplied=comparison.get("learning_current"))
+    learn = looks_mod.visual_learnings(conn, brand_id, ctx["learnings_audience_key"], today=today,
+                                      product_id=product_id, current=current,
+                                      min_result_events=comparison.get("learning_min_result_events"))
     history = repository.look_history(conn, org_id, brand_id, ctx["round_audience_key"])
     alloc = looks_mod.allocate(
         n, fit_looks=identity["fit_looks"],
@@ -552,6 +557,9 @@ def _run_image_prompt(conn, org_id: str, brand_id: str, brief_id: str, brief: di
         quotable_lines=quotable_lines, situation=situation, key_messages=key_messages,
         free_text=request.get("free_text"), prior_titles=prior_titles,
         learning_lines=learn["lines"], learning_omitted=learn["omitted"],
+    )
+    worksheet += "\n\n學習來源與本期適用範圍（歷史／待核對不能作市場支持）：\n" + json.dumps(
+        learn.get("evidence_context") or {}, ensure_ascii=False, default=str,
     )
     prompt = "\n\n".join(
         filter(None, [department_text, methodology_text, worksheet, brand_context])
@@ -614,6 +622,7 @@ def _run_image_prompt(conn, org_id: str, brand_id: str, brief_id: str, brief: di
         "recommended_index": recommended_index,
         "recommended_slot": plan[recommended_index - 1][1] if plan else None,
         "learning_ids": learn["ids"],
+        "learning_context": learn.get("evidence_context"),
     }
     validation_lines = [
         ("✅ " if r["ok"] else "❌ ") + f"{r['path']}：{r['message']}" for r in results
@@ -692,6 +701,11 @@ def _run(conn, org_id: str, brand_id: str, brief_id: str, part: str, count) -> N
     product_id = brief.get("product_id")
     product = bi_repo.get_product(conn, brand_id, product_id) if product_id else None
     request = brief.get("request_json") or {}
+    if isinstance(request.get("creative_brief"), dict):
+        request = {**request, "creative_brief": looks_mod.qualified_creative(
+            conn, org_id, brand_id, product_id, request["creative_brief"],
+        )}
+        brief = {**brief, "request_json": request}
 
     product_ids = request.get("product_ids") or ([product_id] if product_id else [])
     if request.get("use_brand_knowledge") and product_ids:

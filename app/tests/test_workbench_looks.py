@@ -7,11 +7,13 @@ plan (`looks.allocate`/`looks.recommend`/`looks.plan_text`), the learnings read
 import random
 import unittest
 import uuid
+from copy import deepcopy
 from datetime import UTC, date, datetime, timedelta
+from unittest.mock import patch
 
 from app.brand_intelligence import repository as bi_repo
 from app.core import db
-from app.workbench import looks
+from app.workbench import encode_learning_scope, looks
 from app.workbench import repository as workbench_repo
 
 ACTOR = "測試員"
@@ -168,14 +170,91 @@ class VisualLearningsTest(unittest.TestCase):
             self.conn, name="視覺學習測試品牌", client_name=None, actor=ACTOR,
             org_id=db.DEV_ORG_ID,
         )["id"]
+        self.product = bi_repo.create_product(self.conn, self.brand_id, name="Product", actor=ACTOR)
+        self.current = {"org_id": db.DEV_ORG_ID, "brand_id": self.brand_id,
+                        "product_id": self.product["id"], "org_day": date.today().isoformat(),
+                        "result_kind": "purchase", "currency": "TWD", "attribution": "7d",
+                        "mode": "real", "audience_keys": ["warm_engaged", "cold_unaware"],
+                        "customer_group_ids": [], "conditions": {
+                            "price_version": "price", "target_version": "target",
+                            "offers": [], "materials": [],
+                        }}
 
-    def _learning(self, *, text, scope, confidence, days_ago=0, source_track="visual"):
-        return bi_repo.record_learning(
-            self.conn, self.brand_id, actor=ACTOR, learning_text=text,
-            applicability_scope=scope, confidence=confidence, sample_size="3",
-            source_track=source_track,
-            learned_at=datetime.now(UTC) - timedelta(days=days_ago),
-        )
+    def _view(self, audience, *, today):
+        return looks.visual_learnings(self.conn, self.brand_id, audience, today=today,
+                                      product_id=self.product["id"], current=self.current,
+                                      min_result_events=10)
+
+    def _learning(self, *, text, scope, confidence, days_ago=0, source_track="visual",
+                  result_events=10):
+        end = date.today() - timedelta(days=days_ago)
+        evidence = {"schema_version": 1, "source_kind": "visual",
+                    "provenance": "platform_observation",
+                    "source_version": "retained", "direction": "support",
+                    "scope": {"product_id": self.product["id"], "audience_key": scope.split("；")[1]
+                              .removeprefix("audience=") if "；" in scope else None,
+                              "claim_key": scope, "claim_family": "performance",
+                              "objective_family": "sales", "result_kind": "purchase",
+                              "currency": "TWD", "attribution": "7d"},
+                    "conditions": {"price_version": "price", "target_version": "target",
+                                   "offer_key": "none"}, "sample": {"result_events": result_events}}
+
+        def write(day):
+            return bi_repo.record_learning(
+                self.conn, self.brand_id, actor=ACTOR, learning_text=text,
+                product_id=self.product["id"],
+                applicability_scope=encode_learning_scope(scope, {**evidence,
+                    "source_ref": {"trial_id": str(uuid.uuid4())},
+                    "period": {"start": day.isoformat(), "end": day.isoformat()}}),
+                confidence=confidence, sample_size="3", source_track=source_track,
+                learned_at=datetime.now(UTC) - timedelta(days=(date.today() - day).days),
+            )
+
+        if confidence in ("likely", "validated"):
+            write(end - timedelta(days=1))
+        return write(end)
+
+    def test_request_threshold_never_promotes_one_event_or_changes_the_policy(self):
+        self._learning(text="One event per trial", confidence="validated", result_events=1,
+                       scope="visual；audience=warm_engaged；look=soft_lifestyle")
+        for value in (1, None, "invalid"):
+            with self.subTest(requested=value):
+                result = looks.visual_learnings(
+                    self.conn, self.brand_id, "warm_engaged", today=date.today(),
+                    product_id=self.product["id"], current=self.current, min_result_events=value,
+                )
+                self.assertEqual(result["winners"], [])
+                self.assertTrue(all("market_support" not in row["allowed_uses"]
+                                    for row in result["evidence_context"]["items"]))
+
+    def test_queued_ads_snapshot_is_historical_and_product_mismatch_is_excluded(self):
+        row = self._learning(text="Retained old winner", confidence="validated",
+                             scope="visual；audience=warm_engaged；look=soft_lifestyle")
+        creative = {"input_hash": "accepted-original", "assignment": {"offer_key": "none"},
+                    "comparison": {"learning_current": self.current,
+                                   "learning_min_result_events": 1,
+                                   "learnings": [{"id": row["id"], "text": "Retained old winner"}],
+                                   "controls": [{"creative": {"copy_fields": {"body": "Exact"}}}]}}
+        original = deepcopy(creative)
+        with patch.object(looks.settings, "today_for_org", return_value=date.today()):
+            current = looks.current_conditions(self.conn, db.DEV_ORG_ID, self.brand_id,
+                                               self.product["id"], supplied=self.current)
+            self.assertIsNone(current["conditions"]["target_version"])
+            self.assertEqual(current["conditions"]["materials"], [])
+            self.assertIsNone(current["result_kind"])
+            result = looks.qualified_creative(self.conn, db.DEV_ORG_ID, self.brand_id,
+                                              self.product["id"], creative)
+            other = bi_repo.create_product(self.conn, self.brand_id, name="Other", actor=ACTOR)
+            mismatch = looks.qualified_creative(self.conn, db.DEV_ORG_ID, self.brand_id,
+                                                other["id"], creative)
+        for output in (result, mismatch):
+            self.assertEqual(output["input_hash"], "accepted-original")
+            self.assertEqual(output["comparison"]["controls"], original["comparison"]["controls"])
+            self.assertNotIn("market_support", output["comparison"]["learnings"][0][
+                "evidence"]["allowed_uses"])
+        self.assertEqual(mismatch["comparison"]["learnings"][0]["evidence"]["use_state"],
+                         "excluded")
+        self.assertEqual(creative, original)
 
     def test_matches_filtered_by_confidence_scope_age_and_track(self):
         today = date.today()
@@ -208,8 +287,9 @@ class VisualLearningsTest(unittest.TestCase):
             confidence="likely", source_track="ads",
         )
 
-        result = looks.visual_learnings(self.conn, self.brand_id, "warm_engaged", today=today)
-        self.assertEqual(set(result["lines"]), {"likely 命中", "validated 命中"})
+        result = self._view("warm_engaged", today=today)
+        self.assertEqual({line.split("（")[0] for line in result["lines"]},
+                         {"likely 命中", "validated 命中"})
         self.assertEqual(result["omitted"], 0)
         self.assertEqual(result["winners"], ["soft_lifestyle"])
         self.assertIn(r_likely["id"], result["ids"])
@@ -222,7 +302,7 @@ class VisualLearningsTest(unittest.TestCase):
                 text=f"命中第{i}條", scope=f"visual；audience=warm_engaged；device=d{i}",
                 confidence="likely",
             )
-        result = looks.visual_learnings(self.conn, self.brand_id, "warm_engaged", today=today)
+        result = self._view("warm_engaged", today=today)
         self.assertEqual(len(result["lines"]), 5)
         self.assertEqual(result["omitted"], 1)
 
@@ -241,7 +321,7 @@ class VisualLearningsTest(unittest.TestCase):
             confidence="likely",
         )
         bi_repo.expire_learning(self.conn, self.brand_id, row["id"], actor=ACTOR)
-        result = looks.visual_learnings(self.conn, self.brand_id, "warm_engaged", today=today)
+        result = self._view("warm_engaged", today=today)
         self.assertNotIn(row["learning_text"], result["lines"])
         self.assertNotIn(row["id"], result["ids"])
 
@@ -255,9 +335,10 @@ class VisualLearningsTest(unittest.TestCase):
             text="documentary 較新", scope="visual；audience=warm_engaged；look=documentary",
             confidence="likely", days_ago=1,
         )
-        result = looks.visual_learnings(self.conn, self.brand_id, "warm_engaged", today=today)
+        result = self._view("warm_engaged", today=today)
         self.assertEqual(result["winners"], ["documentary", "cinematic"])
-        self.assertEqual(result["lines"], ["documentary 較新", "cinematic 較舊"])
+        self.assertEqual([line.split("（")[0] for line in result["lines"]],
+                         ["documentary 較新", "cinematic 較舊"])
 
     def test_malformed_scopes_skipped_without_error(self):
         today = date.today()
@@ -271,7 +352,7 @@ class VisualLearningsTest(unittest.TestCase):
             text="維度段格式錯", scope="visual；audience=warm_engaged；broken",
             confidence="likely",
         )
-        result = looks.visual_learnings(self.conn, self.brand_id, "warm_engaged", today=today)
+        result = self._view("warm_engaged", today=today)
         self.assertEqual(result["lines"], [])
 
     def test_winner_id_beyond_the_five_lines_still_collected(self):
@@ -286,7 +367,7 @@ class VisualLearningsTest(unittest.TestCase):
                 text=f"命中第{i}條", scope=f"visual；audience=warm_engaged；device=d{i}",
                 confidence="likely", days_ago=i,
             )
-        result = looks.visual_learnings(self.conn, self.brand_id, "warm_engaged", today=today)
+        result = self._view("warm_engaged", today=today)
         self.assertNotIn(oldest["learning_text"], result["lines"])
         self.assertIn("dark_luxury", result["winners"])
         self.assertIn(oldest["id"], result["ids"])

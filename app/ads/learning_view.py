@@ -190,7 +190,9 @@ def _groups(campaigns: list[dict]) -> list[dict]:
 
 
 def learnings_view(conn: _AnyConn, org_id: str, brand_id: str, *, campaign_id: str | None = None,
-                   sell_way_id: str | None = None, limit: int = 12) -> dict:
+                   sell_way_id: str | None = None, limit: int = 12,
+                   current: dict | None = None, additional_rows: list[dict] | None = None,
+                   context_cap: int | None = 30) -> dict:
     """Contract L: `{campaigns, groups, next}` over the brand's closed internal campaigns, newest
     closed first (≤ `limit`), optionally one campaign or one sell-way. Each row also carries its
     `learning_id` and each coordinate its `key` (the planners' prompt and gate read them)."""
@@ -212,15 +214,18 @@ def learnings_view(conn: _AnyConn, org_id: str, brand_id: str, *, campaign_id: s
     evidence_rows = {row["id"]: row for row in bi_repo.list_learnings(
         cast(Conn, conn), brand_id, limit=SCAN_LIMIT, include_expired=True,
     )}
+    evidence_rows.update({row["id"]: row for row in additional_rows or []})
     for campaign in campaigns:
         for row in stored.get(campaign["campaign_id"], []):
             evidence_rows[row["learning_id"]] = row["ledger_row"]
     all_context = ads_learnings.evidence_context(
         conn, org_id, brand_id, next_sell_way,
         rows=list(evidence_rows.values()), cap=len(evidence_rows),
+        current=current,
     )
-    context = {**all_context, "items": all_context["items"][:30],
-               "omitted": max(len(all_context["items"]) - 30, 0)}
+    context_cap = len(all_context["items"]) if context_cap is None else context_cap
+    context = {**all_context, "items": all_context["items"][:context_cap],
+               "omitted": max(len(all_context["items"]) - context_cap, 0)}
     by_id = {item["id"]: item for item in all_context["items"]}
     for campaign in campaigns:
         for row in campaign["rows"]:
@@ -234,6 +239,13 @@ def learnings_view(conn: _AnyConn, org_id: str, brand_id: str, *, campaign_id: s
             "new_campaign_href": f"/brands/{brand_id}/ads/new?sell_way={next_sell_way}",
         },
     }
+
+
+def scoped_view(view: dict, product_id: str | None) -> dict:
+    """Scope decision input, retaining the original ranking and monetary fields of its product."""
+    campaigns = [c for c in view["campaigns"] if product_id and c["sell_way_id"] == product_id]
+    return {**view, "campaigns": campaigns, "groups": _groups(campaigns),
+            "next": view["next"] if campaigns else None}
 
 
 def learning_ids(view: dict) -> list[str]:

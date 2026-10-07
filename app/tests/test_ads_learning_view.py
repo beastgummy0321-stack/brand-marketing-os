@@ -14,6 +14,7 @@ no one cap).
 
 import unittest
 from datetime import UTC, date, datetime
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -114,6 +115,35 @@ class LearningViewTestBase(unittest.TestCase):
 
 
 class ViewShapeTest(LearningViewTestBase):
+    def test_internal_union_over_1200_preserves_all_tracks_and_actual_rank(self):
+        campaign = self._closed("Retained period", datetime(2026, 9, 19, tzinfo=UTC))
+        self._ranked(campaign, "Retained rank", verdict="keep", rank=1, of=1,
+                     sales=10, spend=2000, group=self.groups[0]["id"])
+        original = bi_repo.list_learnings(self.conn, self.brand_id, source_track="coordinate")[0]
+
+        def rows(track):
+            return [{**original, "id": f"{track}-{n}", "source_track": track,
+                     "source_cycle_id": None, "applicability_scope": track,
+                     "learning_text": f"Retained {track} {n}"} for n in range(500)]
+
+        coordinate, visual, ads = rows("coordinate"), rows("visual"), rows("ads")
+        for n, row in enumerate(coordinate):
+            row["applicability_scope"] = original["applicability_scope"]
+            row["source_cycle_id"] = f"{campaign['id']}:retained-{n}"
+        coordinate[0] = original
+        with patch.object(bi_repo, "list_learnings", side_effect=lambda *a, **kw:
+                          coordinate if kw.get("source_track") == "coordinate" else visual):
+            full = self._view(additional_rows=ads, context_cap=None)
+            public = self._view(additional_rows=ads)
+        self.assertEqual(len(full["evidence_context"]["items"]), 1500)
+        self.assertEqual(full["evidence_context"]["omitted"], 0)
+        self.assertIn("ads-499", {r["id"] for r in full["evidence_context"]["items"]})
+        rank = full["campaigns"][0]["rows"][0]
+        self.assertEqual((rank["rank"], rank["spend"], rank["sales"]), (1, 2000, 10))
+        self.assertEqual(rank["evidence"]["id"], original["id"])
+        self.assertEqual(len(public["evidence_context"]["items"]), 30)
+        self.assertEqual(public["evidence_context"]["omitted"], 1470)
+
     def test_retired_visual_is_served_as_history_without_changing_original_rank(self):
         from app.main import app
 

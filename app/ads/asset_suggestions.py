@@ -330,7 +330,7 @@ def _messages(data):
     return [
         {
             "role": "user",
-            "content": policy.encode(
+            "content": policy.encode(policy.bounded_learning_input(
                 {
                     "brand_context": data["context"],
                     "confirmed_sources": data["sources"],
@@ -339,8 +339,9 @@ def _messages(data):
                     "placements": placements,
                     "unverified_user_summary": data["summary"],
                     "media_analysis": "not_analyzed",
-                }
-            ),
+                }, policy.INPUT_CHARS - len(PROMPT.read_text(encoding="utf-8"))
+                - (32 if data.get("provider") == "codex_cli" else 0),
+            )),
         }
     ]
 
