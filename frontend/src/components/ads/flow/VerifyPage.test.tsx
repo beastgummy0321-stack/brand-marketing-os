@@ -2,7 +2,7 @@
  * `@/lib/adsChangeApi`／`@/lib/adsTriageApi`，不打真的 API。覆蓋 Done 3：confirmed／deviated／
  * stale／pending(reported_at 已寫)／reported+unknown 五種畫面、「重新核對」呼叫 check、
  * 「下一件」找佇列裡下一個還沒完成的項目、走錯步驟自動導正、多項變更清單連去既有變更與核對。 */
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation, useParams } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -512,6 +512,28 @@ describe("VerifyPage（F27-I15）new_ad kind", () => {
       ...overrides,
     });
   }
+  it("keeps a missing observed timestamp missing without contradicting served confirmation", async () => {
+    vi.mocked(changeApi.getChangeControl).mockResolvedValue({ targets: [], change_sets: [changeSet({
+      items: [newAdItem({ evidence_json: { setting_matches: true, observed_at: null,
+        attempted_at: "2026-09-22T05:00:00Z" }, verified_at: "2026-09-22T06:00:00Z" })],
+    })] });
+    renderAt(verifyPath());
+    expect(await screen.findByText("讀回時間未提供")).toBeTruthy();
+    expect(screen.queryByText(/尚未讀到/)).toBeNull();
+    expect(screen.queryByText(/讀回於.*(13:00|14:00)/)).toBeNull();
+  });
+  it("shows matching settings separately from unreadable media and retains the exit", async () => {
+    vi.mocked(changeApi.getChangeControl).mockResolvedValue({ targets: [], change_sets: [changeSet({
+      items: [newAdItem({ evidence_json: { setting_matches: true, observed_at: "2026-09-22T02:13:00Z",
+        peers: [{ handoff_item_id: "ahi_1", entity_id: "aex_1", status: "confirmed",
+          material_evidence: "unknown", observed_at: "2026-09-22T02:13:00Z" }] } })],
+    })] });
+    renderAt(verifyPath());
+    expect((await screen.findAllByText("素材尚未確認")).length).toBeGreaterThan(0);
+    expect(screen.getByText("已對應平台上的廣告物件")).toBeTruthy();
+    expect(screen.queryByText("平台素材已核對")).toBeNull();
+    expect(screen.getByRole("link", { name: /下一件 →|← 回投放中心/ })).toBeTruthy();
+  });
   it("rereads the placement action without a payload and displays the retained-proof reason", async () => {
     const initial = newAdItem();
     const message = "本次讀回未完成；保留前次核對證據供查看，請稍後重試。";
@@ -530,12 +552,12 @@ describe("VerifyPage（F27-I15）new_ad kind", () => {
     await userEvent.click(await screen.findByRole("button", { name: "⟳ 重新核對" }));
     await waitFor(() => expect(changeApi.actOnChangeItem).toHaveBeenCalledWith("brd_1", "cmp_1", "acs_1", "item_new", "check"));
     expect(await screen.findByText(message)).toBeTruthy();
-    expect(screen.queryByText("平台上這則新廣告已經核對完成")).toBeNull();
+    expect(screen.queryByText("平台上的新廣告設定已核對相符")).toBeNull();
   });
-  it("已核對：平台上這則新廣告已經核對完成，rail 顯示已對應廣告物件", async () => {
+  it("已核對：設定相符與素材證據分開，rail 顯示已對應廣告物件", async () => {
     vi.mocked(changeApi.getChangeControl).mockResolvedValue({ targets: [], change_sets: [changeSet({ items: [newAdItem()] })] });
     renderAt(verifyPath());
-    expect(await screen.findByText("平台上這則新廣告已經核對完成")).toBeTruthy();
+    expect(await screen.findByText("平台上的新廣告設定已核對相符")).toBeTruthy();
     expect(screen.getByText("已對應平台上的廣告物件")).toBeTruthy();
   });
 
@@ -561,6 +583,89 @@ describe("VerifyPage（F27-I15）new_ad kind", () => {
     renderAt(verifyPath());
     expect(await screen.findByText("平台上這則新廣告和核准的內容不一樣")).toBeTruthy();
     expect(screen.queryByText("你核准的")).toBeNull();
+  });
+});
+
+describe("VerifyPage action ownership", () => {
+  it.each(["success", "failure"])("ignores late %s from the preceding owner", async (outcome) => {
+    let resolve!: (value: ChangeSet) => void;
+    let reject!: (reason: Error) => void;
+    const pending = new Promise<ChangeSet>((yes, no) => { resolve = yes; reject = no; });
+    vi.mocked(changeApi.actOnChangeItem).mockReturnValueOnce(pending);
+    const view = (owner: "first" | "second") => <MemoryRouter><VerifyPage
+      brandId={owner === "first" ? "brd_1" : "brd_2"}
+      campaignId={owner === "first" ? "cmp_1" : "cmp_2"}
+      setId={owner === "first" ? "acs_1" : "acs_2"}
+    /></MemoryRouter>;
+    const rendered = render(view("first"));
+    await userEvent.click(await screen.findByRole("button", { name: "⟳ 重新核對" }));
+    vi.mocked(changeApi.getChangeControl).mockResolvedValue({ targets: [], change_sets: [changeSet({
+      id: "acs_2", campaign_id: "cmp_2", items: [changeItem({ kind: "copy" })],
+    })] });
+    rendered.rerender(view("second"));
+    expect(await screen.findByText("平台上的文案和你核准的一樣")).toBeTruthy();
+    await act(async () => {
+      if (outcome === "success") resolve(changeSet());
+      else reject(new Error("Old owner request failed"));
+      await pending.catch(() => {});
+    });
+    expect(screen.getByText("平台上的文案和你核准的一樣")).toBeTruthy();
+    expect(screen.queryByText("Old owner request failed")).toBeNull();
+    expect(screen.getByRole("button", { name: "⟳ 重新核對" }).hasAttribute("disabled")).toBe(false);
+  });
+
+  it("stops an obsolete sequential recheck before its next item", async () => {
+    let resolve!: (value: ChangeSet) => void;
+    const pending = new Promise<ChangeSet>((yes) => { resolve = yes; });
+    const cleanup = changeSet({ source: "cleanup", items: [changeItem(), changeItem({ id: "item_2" })] });
+    vi.mocked(changeApi.getChangeControl).mockResolvedValue({ targets: [], change_sets: [cleanup] });
+    vi.mocked(changeApi.actOnChangeItem).mockReturnValueOnce(pending).mockResolvedValue(cleanup);
+    const view = (setId: string) => <MemoryRouter><VerifyPage brandId="brd_1" campaignId="cmp_1" setId={setId} /></MemoryRouter>;
+    const rendered = render(view("acs_1"));
+    await userEvent.click(await screen.findByRole("button", { name: "⟳ 全部重新核對" }));
+    vi.mocked(changeApi.getChangeControl).mockResolvedValue({ targets: [], change_sets: [changeSet({
+      id: "acs_2", items: [changeItem({ kind: "copy" })],
+    })] });
+    rendered.rerender(view("acs_2"));
+    expect(await screen.findByText("平台上的文案和你核准的一樣")).toBeTruthy();
+    await act(async () => { resolve(cleanup); await pending; });
+    expect(changeApi.actOnChangeItem).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("平台上的文案和你核准的一樣")).toBeTruthy();
+  });
+
+  it("keeps a new owner's request busy when the old request finally returns", async () => {
+    let oldDone!: (value: ChangeSet) => void;
+    let currentDone!: (value: ChangeSet) => void;
+    const old = new Promise<ChangeSet>((yes) => { oldDone = yes; });
+    const current = new Promise<ChangeSet>((yes) => { currentDone = yes; });
+    vi.mocked(changeApi.actOnChangeItem).mockReturnValueOnce(old).mockReturnValueOnce(current);
+    const view = (setId: string) => <MemoryRouter><VerifyPage brandId="brd_1" campaignId="cmp_1" setId={setId} /></MemoryRouter>;
+    const rendered = render(view("acs_1"));
+    await userEvent.click(await screen.findByRole("button", { name: "⟳ 重新核對" }));
+    const next = changeSet({ id: "acs_2", items: [changeItem({ kind: "copy" })] });
+    vi.mocked(changeApi.getChangeControl).mockResolvedValue({ targets: [], change_sets: [next] });
+    rendered.rerender(view("acs_2"));
+    await userEvent.click(await screen.findByRole("button", { name: "⟳ 重新核對" }));
+    await act(async () => { oldDone(changeSet()); await old; });
+    expect(screen.getByRole("button", { name: "核對中…" }).hasAttribute("disabled")).toBe(true);
+    expect(screen.getByText("平台上的文案和你核准的一樣")).toBeTruthy();
+    await act(async () => { currentDone(next); await current; });
+    expect(screen.getByRole("button", { name: "⟳ 重新核對" }).hasAttribute("disabled")).toBe(false);
+  });
+
+  it("preserves completed progress when the next sequential item fails", async () => {
+    const first = changeItem({ ...served("unknown") });
+    const second = changeItem({ id: "item_2", ...served("unknown") });
+    const cleanup = changeSet({ source: "cleanup", ...served("unknown"), items: [first, second] });
+    vi.mocked(changeApi.getChangeControl).mockResolvedValue({ targets: [], change_sets: [cleanup] });
+    vi.mocked(changeApi.actOnChangeItem)
+      .mockResolvedValueOnce({ ...cleanup, items: [changeItem(), second] })
+      .mockRejectedValueOnce(new Error("Second scoped read unavailable"));
+    renderAt(verifyPath());
+    await userEvent.click(await screen.findByRole("button", { name: "⟳ 全部重新核對" }));
+    expect(await screen.findByText("Second scoped read unavailable")).toBeTruthy();
+    expect(screen.getAllByText("已核對相符")).toHaveLength(1);
+    expect(changeApi.actOnChangeItem).toHaveBeenNthCalledWith(2, "brd_1", "cmp_1", "acs_1", "item_2", "check");
   });
 });
 
