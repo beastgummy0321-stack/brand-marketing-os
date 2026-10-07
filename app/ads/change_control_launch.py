@@ -55,6 +55,10 @@ def snapshot(conn, org, brand, campaign_id, *, validate_material=False, deferred
     campaign = campaigns.campaign_detail(conn, org, brand, campaign_id)
     if campaign is None:
         raise ValueError("campaign_unknown")
+    # campaign_detail contains a served decision; only stored identities belong in the hash.
+    stored = campaigns.get_campaign(conn, org, brand, campaign_id) or {}
+    decision = ((stored.get("budget_basis_json") or {}).get("strategy") or {}).get("decision") or {}
+    receipt = decision.get("receipt") or {}
     launched = _launched_ads(conn, org, brand, campaign_id)
     fields = (
         "id",
@@ -68,6 +72,18 @@ def snapshot(conn, org, brand, campaign_id, *, validate_material=False, deferred
         "external_id",
     )
     result = {key: campaign.get(key) for key in fields}
+    result["strategy_provenance"] = {
+        "state": decision.get("state", "legacy_unbound"),
+        "current_revision": decision.get("revision"),
+        "accepted_revision": receipt.get("revision"),
+        "operation_id": receipt.get("operation_id"),
+        "accepted_receipt": {
+            "revision": receipt.get("revision"), "operation_id": receipt.get("operation_id"),
+            "slots": [{key: slot.get(key) for key in (
+                "slot_id", "group_id", "ad_id", "carry_from_ad_id"
+            )} for slot in receipt.get("slots") or []],
+        } if receipt else None,
+    }
     result["month"] = settings.today_for_org(conn, org_id=org).strftime("%Y-%m")
     result["groups"] = []
     for group in campaign["groups"]:
@@ -98,6 +114,20 @@ def snapshot(conn, org, brand, campaign_id, *, validate_material=False, deferred
                         )
                     },
                     "material_assignment": material,
+                    "strategy_assignment": {
+                        "ad_id": ad["id"], "group_id": group["id"],
+                        "role": group.get("role"),
+                        "customer_group_id": ad.get("customer_group_id"),
+                        "offer_key": ad.get("offer_key"), "scene": ad.get("scene"),
+                        # Planned format remains a view-time hint (F46 Contract F). Actual
+                        # material is protected by the material snapshot and placement revision.
+                        "coordinates": {dim: ad.get(f"{dim}_key")
+                                        for dim in plan._COORDINATE_DIMENSIONS if dim != "format"},
+                        "slot_id": ((ad.get("coordinates_snapshot_json") or {}).get(
+                            "strategy_slot") or {}).get("slot_id"),
+                        "carry_from_ad_id": ((ad.get("coordinates_snapshot_json") or {}).get(
+                            "carried_from") or {}).get("ad_id"),
+                    },
                 }
             )
         result["groups"].append(
@@ -451,6 +481,9 @@ def _rows(original, current):
         )
 
     name = current.get("name") or original.get("name")
+    if original.get("strategy_provenance") != current.get("strategy_provenance"):
+        add("campaign", original.get("id"), name, "strategy_provenance", "策略版本",
+            "核准時的策略版本與採用紀錄", "策略版本或採用紀錄已修改，需重新核准")
     for key, label in _CAMPAIGN_FIELDS:
         if original.get(key) != current.get(key):
             add(
@@ -536,6 +569,18 @@ def _rows(original, current):
                 )
                 continue
             ad_name = ad_after.get("name")
+            if ad_before.get("strategy_assignment") != ad_after.get("strategy_assignment"):
+                assignment_before = ad_before.get("strategy_assignment") or {}
+                assignment_after = ad_after.get("strategy_assignment") or {}
+                labels = {"ad_id": "廣告", "group_id": "投放組", "role": "投放組角色",
+                          "customer_group_id": "顧客群", "offer_key": "優惠",
+                          "scene": "讀者情境", "coordinates": "訊息設定",
+                          "slot_id": "策略位置", "carry_from_ad_id": "沿用廣告"}
+                changed = [label for key, label in labels.items()
+                           if assignment_before.get(key) != assignment_after.get(key)]
+                add("ad", ad_id, ad_name, "strategy_assignment",
+                    "策略指派（" + "、".join(changed) + "）", "核准時的指派",
+                    "指派已修改，需重新核准")
             text_changed = False
             for key, label in _AD_FIELDS:
                 if ad_before.get(key) != ad_after.get(key):
@@ -657,6 +702,15 @@ def _comparable(original, current):
     if isinstance(original, dict) and isinstance(current, dict):
         if "launch_settings" not in original:
             current.pop("launch_settings", None)
+        if "strategy_provenance" not in original:
+            current.pop("strategy_provenance", None)
+        old_ads = {ad["id"]: ad for group in original.get("groups") or []
+                   for ad in group.get("ads") or []}
+        for group in current.get("groups") or []:
+            for ad in group.get("ads") or []:
+                previous = old_ads.get(ad["id"])
+                if previous is not None and "strategy_assignment" not in previous:
+                    ad.pop("strategy_assignment", None)
     return original, current
 
 

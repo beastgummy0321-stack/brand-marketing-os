@@ -1,3 +1,5 @@
+import type { LaunchSettingsValues } from "./adsLaunchSettingsApi";
+
 export type AdapterKey = "manual" | "auto_meta" | "simulated";
 
 export interface AdapterOption {
@@ -25,6 +27,8 @@ export interface PublishDescribe {
   message: string | null;
   checklist: PublishChecklistNode[];
   content_hash?: string;
+  /** Effective values from the same snapshot as content_hash. */
+  launch_settings?: LaunchSettingsValues;
 }
 
 export interface PublishGetResponse {

@@ -3,7 +3,7 @@
 import { apiFetch, readJson } from "./http";
 import { BASE } from "./adsApi";
 import type { MonthlyBudget } from "./adsChangeApi";
-import type { SettingsReadback } from "./adsLaunchSettingsApi";
+import type { LaunchSettingsValues, SettingsReadback } from "./adsLaunchSettingsApi";
 
 /** F05-I04：可投放檢查表——`app/ads/readiness.py::launch_readiness()` 的回傳形狀，瀏覽器逐字印
  * 每一列的 `reason`，不重拼句子。三色沒有第四種狀態、`items` 固定三列固定順序。 */
@@ -143,6 +143,9 @@ export interface LaunchMonthBudget extends MonthlyBudget {
 export interface DeferredAd { ad_id: string; name: string; group_name: string }
 
 export interface LaunchView {
+  /** Effective settings and hash from one initialized approval snapshot. */
+  content_hash?: string;
+  launch_settings?: LaunchSettingsValues;
   step: LaunchStep;
   version: number | null;
   approved_at: string | null;

@@ -195,12 +195,55 @@ def recommended(conn, brand_id: str, campaign: dict, pixels: list[dict] | None) 
 
 
 def effective(conn, org_id: str, brand_id: str, campaign: dict) -> dict:
-    """The values the launch uses now: the saved ones, else the recommendation over the cached
-    pixel list. Never reads a platform (the launch snapshot calls this)."""
+    """The saved values, else the initialized recommendation, else a local recommendation.
+    Never reads a platform (the launch snapshot calls this).
+    """
     saved = _record(campaign).get("values")
     if isinstance(saved, dict):
         return saved
+    initialized = _record(campaign).get("initialized_values")
+    if isinstance(initialized, dict):
+        return initialized
     return recommended(conn, brand_id, campaign, cached_pixels(campaign))
+
+
+def initialize(conn, org_id: str, brand_id: str, campaign_id: str):
+    """Finish recommendation initialization before exposing an approvable revision."""
+    from app.ads import repository
+
+    campaign = repository.get_campaign(conn, org_id, brand_id, campaign_id)
+    if campaign is None:
+        raise ValueError("campaign_unknown")
+    if campaign.get("origin") == "imported":
+        return
+    record = _record(campaign)
+    if not isinstance(record.get("values"), dict) and not isinstance(
+        record.get("initialized_values"), dict
+    ):
+        view(conn, org_id, brand_id, campaign_id)
+
+
+def _initialize_values(conn, org_id, brand_id, campaign):
+    """The first successful initializer wins; a saved PUT always wins over initialization.
+
+    Keep this separate from saved values: reading a recommendation is not human acceptance.
+    The predicate is evaluated on the latest locked row, not a pre-HTTP campaign read.
+    """
+    record = _record(campaign)
+    if isinstance(record.get("values"), dict) or isinstance(record.get("initialized_values"), dict):
+        return
+    conn.execute(
+        "UPDATE ads_campaign SET context_json = context_json || jsonb_build_object("
+        "'launch_settings', COALESCE(context_json->'launch_settings','{}'::jsonb) || %s::jsonb) "
+        "WHERE org_id=%s AND brand_id=%s AND id=%s "
+        "AND COALESCE(jsonb_typeof(context_json->'launch_settings'->'values'),'null') <> 'object' "
+        "AND COALESCE(jsonb_typeof(context_json->'launch_settings'->'initialized_values'),"
+        "'null') <> 'object'",
+        (db.jsonb({"initialized_values": recommended(
+            conn, brand_id, campaign, cached_pixels(campaign)
+        )}), org_id, brand_id, campaign["id"]),
+    )
+    conn.commit()
 
 
 # -- validation ------------------------------------------------------------------------------------
@@ -382,7 +425,10 @@ def view(conn, org_id: str, brand_id: str, campaign_id: str, *, read: bool = Tru
                 touch=False,
             )
             conn.commit()
-            campaign = _campaign(conn, org_id, brand_id, campaign_id)
+        # A PUT may finish while the platform read runs, even if its cache is unchanged.
+        campaign = _campaign(conn, org_id, brand_id, campaign_id)
+        _initialize_values(conn, org_id, brand_id, campaign)
+        campaign = _campaign(conn, org_id, brand_id, campaign_id)
     pixels = cached_pixels(campaign) if pixels_error is None else None
     suggested = recommended(conn, brand_id, campaign, cached_pixels(campaign))
     values = effective(conn, org_id, brand_id, campaign)

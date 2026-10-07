@@ -13,6 +13,7 @@ from app.ads import (
     external_sync,
     handoff_check,
     handoff_data,
+    launch_settings,
     manual_settings,
     targets,
 )
@@ -402,6 +403,7 @@ def view(conn, org, brand, campaign_id):
     numbers approve's month preflight uses) for the first-launch list page's 「本月預算放得下」
     card; approved steps carry `None`."""
     campaign = changes.campaign(conn, org, brand, campaign_id)
+    launch_settings.initialize(conn, org, brand, campaign_id)
     deferred: list = []
     current = launch.snapshot(conn, org, brand, campaign_id, deferred=deferred)
     # Contract V: the hint is read from the plan as it is now (the snapshot carries only
@@ -412,6 +414,8 @@ def view(conn, org, brand, campaign_id):
     if change_set is None:
         return {
             "step": "list",
+            "content_hash": changes.digest(current),
+            "launch_settings": current["launch_settings"],
             "version": None,
             "approved_at": None,
             "summary": _summary(current, campaign, current, deferred),
@@ -447,6 +451,8 @@ def view(conn, org, brand, campaign_id):
     read_at = _read_at(rows)
     return {
         "step": "stale" if stale else "verify" if read_at is not None else "platform",
+        "content_hash": changes.digest(current),
+        "launch_settings": current["launch_settings"],
         "version": int(change_set["plan_json"].get("version") or 1),
         "approved_at": change_set["approved_at"],
         "summary": _summary(frozen, campaign, current, deferred),

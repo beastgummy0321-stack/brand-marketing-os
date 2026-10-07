@@ -871,10 +871,14 @@ def get_publish(request: Request, brand_id: str, campaign_id: str, adapter: str 
         raise web.ApiError(400, "adapter_unknown", "找不到這個發布方式。")
     content = None
     if adapter == "manual":
+        from app.ads import launch_settings
+
+        launch_settings.initialize(web.conn, actor.org_id, brand_id, campaign_id)
         content = _drop_deferred(web.conn, actor.org_id, brand_id, campaign_id, enriched)
     description = chosen.describe(enriched)
     if content is not None:
         description["content_hash"] = change_control_data.digest(content)
+        description["launch_settings"] = content["launch_settings"]
     return {"adapters": adapters.ADAPTERS, "adapter": adapter, "describe": description}
 
 

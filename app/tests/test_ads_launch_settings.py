@@ -226,6 +226,96 @@ class LaunchSettingsTest(unittest.TestCase):
 
     # -- choices and recommendation --------------------------------------------------------------
 
+    def test_f52_no_edit_settings_get_cannot_move_the_displayed_approval_hash(self):
+        self.material()
+        first = self.client.get(self.base + "/publish?adapter=manual")
+        self.assertEqual(first.status_code, 200, first.text)
+        before = change_control_launch.snapshot(self.conn, self.org, self.brand, self.campaign)
+        settings_view = self.view()
+        after = change_control_launch.snapshot(self.conn, self.org, self.brand, self.campaign)
+        self.assertEqual(before["launch_settings"], after["launch_settings"],
+                         f"no-edit snapshot component: {before['launch_settings']} -> "
+                         f"{after['launch_settings']}; "
+                         f"displayed settings={settings_view['values']}")
+        self.assertEqual(first.json()["describe"]["content_hash"],
+                         change_control_data.digest(after))
+        self.assertEqual(after["launch_settings"]["pixel_id"], "px1")
+        described = first.json()["describe"]
+        self.assertEqual(described["launch_settings"], settings_view["values"])
+        operation = db.new_id("op")
+        body = {"adapter": "manual", "operation_id": operation,
+                "content_hash": described["content_hash"]}
+        with patch.object(change_control_launch.month_budget, "preflight",
+                          return_value={"can_increase": True}) as preflight:
+            approved = self.client.post(self.base + "/publish", json=body)
+            repeated = self.client.post(self.base + "/publish", json=body)
+        self.assertEqual(approved.status_code, 200, approved.text)
+        self.assertEqual(repeated.status_code, 200, repeated.text)
+        self.assertEqual(preflight.call_count, 1)
+        rows = self.conn.execute(
+            "SELECT id FROM ads_change_set WHERE campaign_id=%s AND operation_id=%s",
+            (self.campaign, operation),
+        ).fetchall()
+        self.assertEqual(len(rows), 1)
+
+    def test_f52_reversed_reads_and_later_pixel_cache_do_not_change_effective_values(self):
+        self.material()
+        initial = self.view()["values"]
+        first = self.client.get(self.base + "/publish?adapter=manual").json()["describe"]
+        self.pixels = [{"id": "px2", "name": "另一個像素"}]
+        later = self.view()
+        self.assertEqual(later["options"]["pixels"], self.pixels)
+        self.assertEqual(later["values"], initial)
+        self.assertEqual(first["content_hash"], change_control_data.digest(
+            change_control_launch.snapshot(self.conn, self.org, self.brand, self.campaign)))
+        self.assertEqual(later["errors"][0]["code"], "pixel_unknown")
+
+    def test_f52_initial_pixel_read_preserves_a_successful_interleaved_put(self):
+        values = launch_settings.recommended(self.conn, self.brand,
+                    campaigns.campaign_detail(self.conn, self.org, self.brand, self.campaign), None)
+        values["utm"] = "utm_source=manual&utm_medium=paid&utm_campaign=chosen"
+        entered = False
+
+        def delayed_read(*args):
+            nonlocal entered
+            if not entered:
+                entered = True
+                response = self.client.put(self.base + "/launch-settings", json=values)
+                self.assertEqual(response.status_code, 200, response.text)
+            return self.pixels, None
+
+        with patch.object(launch_settings, "read_pixels", side_effect=delayed_read):
+            read = self.view()
+        self.assertTrue(entered)
+        self.assertEqual(read["values"], values)
+        stored = campaigns.get_campaign(self.conn, self.org, self.brand, self.campaign)
+        self.assertEqual(stored["context_json"]["launch_settings"]["values"], values)
+
+    def test_f52_conditional_initialization_cannot_overwrite_a_saved_put(self):
+        stale = campaigns.campaign_detail(self.conn, self.org, self.brand, self.campaign)
+        values = launch_settings.recommended(self.conn, self.brand, stale, None)
+        values["utm"] = "utm_source=chosen&utm_campaign=keep"
+        response = self.client.put(self.base + "/launch-settings", json=values)
+        self.assertEqual(response.status_code, 200, response.text)
+        launch_settings._initialize_values(self.conn, self.org, self.brand, stale)
+        fresh = campaigns.get_campaign(self.conn, self.org, self.brand, self.campaign)
+        self.assertEqual(fresh["context_json"]["launch_settings"]["values"], values)
+        self.assertNotIn("initialized_values", fresh["context_json"]["launch_settings"])
+
+    def test_f52_failed_pixel_read_keeps_unknown_and_later_cache_requires_explicit_choice(self):
+        self.pixel_error = "permission_denied"
+        first = self.view()
+        self.assertIsNone(first["options"]["pixels"])
+        self.assertIsNotNone(first["options"]["pixels_error"])
+        self.assertIsNone(first["values"]["pixel_id"])
+        self.pixel_error = None
+        later = self.view()
+        self.assertEqual(later["recommended"]["pixel_id"], "px1")
+        self.assertIsNone(later["values"]["pixel_id"])
+        reset = self.client.put(self.base + "/launch-settings", json=later["recommended"])
+        self.assertEqual(reset.status_code, 200, reset.text)
+        self.assertEqual(reset.json()["values"], later["recommended"])
+
     def test_recommended_values_are_program_rules_and_preselected(self):
         view = self.view()
         self.assertEqual(
