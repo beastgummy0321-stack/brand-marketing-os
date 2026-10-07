@@ -18,6 +18,21 @@ export type ChangeKind = "copy" | "budget" | "pause";
 // of `body`/`title`; both are optional so plain single-copy callers/factories need no change.
 export type SettingValues = { body?: string; title?: string; titles?: string[]; bodies?: string[]; daily_amount?: number; status?: string };
 export interface ChangeInput { kind: ChangeKind; target_id: string; after: SettingValues; reason: string }
+/** Handoff proof preserves a failed attempt separately from the last successful observation. */
+export interface HandoffPeerProof extends Record<string, unknown> {
+  handoff_item_id: string;
+  entity_id: string | null;
+  status: string;
+  observed_at?: string | null;
+  attempted_at?: string | null;
+  material_evidence?: string;
+  previous_observation?: { observed_at: string; evidence: Record<string, unknown> };
+}
+export interface ChangeReadbackEvidence extends Record<string, unknown> {
+  observed_at?: string | null;
+  attempted_at?: string | null;
+  peers?: HandoffPeerProof[];
+}
 export interface ChangeItem extends Omit<ChangeInput, "kind"> {
   kind: ChangeKind | "new_ad" | "launch";
   handoff_snapshot?: { filename: string; revision: number; copy: Record<string, string>; destination: { native_id: string; name?: string }; budget_owner: { budget_amount: number; currency: string } };
@@ -27,7 +42,7 @@ export interface ChangeItem extends Omit<ChangeInput, "kind"> {
   /** F49 Contract B: the one word for `verification_state` (`change_control_data.VERIFICATION_LABELS`). Optional:
    * absent from test literals. */
   verification_label?: string;
-  evidence_json: Record<string, unknown>; reported_at: string | null;
+  evidence_json: ChangeReadbackEvidence; reported_at: string | null;
   first_observed_at: string | null; verified_at: string | null; stale_reason?: string | null;
   // F22-I01: read time only (`app/ads/adapters::platform_url`, keyed by `target.platform`) --
   // never persisted, never part of any hash. `null` when the platform/native kind has no direct

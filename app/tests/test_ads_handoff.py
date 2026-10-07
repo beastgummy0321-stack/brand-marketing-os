@@ -1,7 +1,9 @@
 """Manual handoffs preserve plan/native identities and distinguish existence from settings."""
 
 import copy
+import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from unittest.mock import patch
 
@@ -1036,6 +1038,201 @@ class HandoffTest(unittest.TestCase):
         with patch.object(self.reader, "verify_native", side_effect=ValueError("unavailable")):
             failed_again = self.check(item, "ad", "B2")
         self.assertEqual(failed_again["observed_at"], observed["observed_at"])
+
+    def test_change_check_new_ad_uses_bound_handoff_owner_without_payload(self):
+        draft = self.new_ad()
+        approved, item = self.approve(draft)
+        first = self.check(item, "ad", "B2")
+        client, base = self._client()
+        action_id = approved["items"][0]["id"]
+        self.assertEqual(approved["items"][0]["target_id"], item["placement_id"])
+        response = client.post(f"{base}/change-sets/{approved['id']}/items/{action_id}/check")
+        self.assertEqual(response.status_code, 200, response.text)
+        action = response.json()["change_set"]["items"][0]
+        evidence = action["evidence_json"]
+        self.assertEqual(action["verification_state"], "confirmed", evidence)
+        self.assertEqual(evidence["handoff_item_id"], item["id"])
+        self.assertIsNotNone(evidence["observed_at"])
+        self.assertIsNotNone(evidence["attempted_at"])
+        self.assertEqual(evidence["peers"][0]["entity_id"], first["entity_id"])
+        self.assertEqual(evidence["peers"][0]["material_evidence"], "unknown")
+        self.assertFalse(evidence["delivery_confirmed"])
+
+    def test_change_check_unbound_new_ad_does_not_guess_cached_ad(self):
+        draft = self.new_ad()
+        approved, item = self.approve(draft)
+        external_repository.upsert_entity(
+            self.conn, self.org, self.brand, self.campaign, self.native_ad
+        )
+        self.conn.commit()
+        client, base = self._client()
+        action_id = approved["items"][0]["id"]
+        with patch.object(self.reader, "verify_native", wraps=self.reader.verify_native) as read:
+            response = client.post(f"{base}/change-sets/{approved['id']}/items/{action_id}/check")
+        self.assertEqual(response.status_code, 200, response.text)
+        action = response.json()["change_set"]["items"][0]
+        self.assertEqual(action["verification_state"], "unknown")
+        self.assertEqual(action["evidence_json"]["peers"][0]["reason_code"], "identity_unselected")
+        self.assertEqual(action["verification_label"], "本次核對未完成")
+        self.assertEqual(response.json()["change_set"]["verification_label"], "本次核對未完成")
+        self.assertIsNone(action["evidence_json"]["observed_at"])
+        self.assertIsNotNone(action["evidence_json"]["attempted_at"])
+        self.assertIsNone(handoff_data.get(self.conn, self.org, self.brand, self.campaign,
+                                         item["id"])["entity_id"])
+        read.assert_not_called()
+
+    def test_new_ad_public_failed_source_label_does_not_claim_a_successful_read(self):
+        approved, item = self.approve(self.new_ad())
+        self.check(item, "ad", "B2")
+        client, base = self._client()
+        action_id = approved["items"][0]["id"]
+        with patch.object(self.reader, "verify_native", side_effect=ValueError("unavailable")):
+            response = client.post(f"{base}/change-sets/{approved['id']}/items/{action_id}/check")
+        self.assertEqual(response.status_code, 200, response.text)
+        change_set = response.json()["change_set"]
+        action = change_set["items"][0]
+        self.assertEqual(action["verification_state"], "unknown")
+        self.assertIsNone(action["evidence_json"]["observed_at"])
+        self.assertEqual(action["verification_label"], "本次核對未完成")
+        self.assertEqual(change_set["verification_label"], "本次核對未完成")
+
+    def test_failed_handoff_read_retains_previous_successful_proof_separately(self):
+        draft = self.new_ad()
+        _, item = self.approve(draft)
+        good = self.check(item, "ad", "B2", user_verified=True)
+        with patch.object(self.reader, "verify_native", side_effect=ValueError("unavailable")):
+            failed = self.check(item, "ad", "B2")
+        evidence = failed["evidence_json"]
+        self.assertEqual(failed["status"], "unknown")
+        self.assertEqual(failed["observed_at"], good["observed_at"])
+        self.assertIsNone(evidence.get("observed_at"))
+        previous = evidence["previous_observation"]
+        self.assertEqual(previous["observed_at"], good["observed_at"].isoformat())
+        self.assertEqual(previous["evidence"]["material_evidence"], "user_verified")
+        self.assertEqual(previous["evidence"]["matched_fields"],
+                         good["evidence_json"]["matched_fields"])
+
+    def _action_check(self, approved):
+        from app.ads import change_control_verify
+
+        return change_control_verify.check(
+            self.conn, self.org, self.brand, self.campaign, approved["id"],
+            approved["items"][0]["id"], "human"
+        )["items"][0]
+
+    def test_new_ad_reread_keeps_only_its_approved_peers_and_failure_history(self):
+        approved, item = self.approve(self.new_ad())
+        good = self.check(item, "ad", "B2")
+        unrelated, unrelated_item = self.approve(self.new_ad())
+        self.conn.execute("UPDATE ads_handoff_item SET status='deviated' WHERE id=%s",
+                          (unrelated_item["id"],))
+        self.conn.commit()
+        matched = self._action_check(approved)
+        self.assertEqual(matched["verification_state"], "confirmed")
+        self.assertEqual([p["handoff_item_id"] for p in matched["evidence_json"]["peers"]],
+                         [item["id"]])
+        with patch.object(self.reader, "verify_native", side_effect=ValueError("unavailable")):
+            failed = self._action_check(approved)
+            repeated = self._action_check(approved)
+        self.assertEqual(failed["verification_state"], "unknown")
+        self.assertIsNone(failed["evidence_json"]["observed_at"])
+        self.assertIn("保留前次", failed["evidence_json"]["message"])
+        previous = repeated["evidence_json"]["peers"][0]["previous_observation"]
+        self.assertNotIn("previous_observation", previous["evidence"])
+        self.assertEqual(previous, failed["evidence_json"]["peers"][0]["previous_observation"])
+        self.assertIsNotNone(good["observed_at"])
+        self.assertEqual(change_control_data.get(self.conn, self.org, self.brand, self.campaign,
+                                                unrelated["id"])["items"][0]["verification_state"],
+                         "pending")
+
+    def test_new_ad_reread_uses_unique_current_binding_and_refuses_ambiguity(self):
+        from app.ads import asset_binding
+
+        approved, item = self.approve(self.new_ad())
+        entity = external_repository.upsert_entity(
+            self.conn, self.org, self.brand, self.campaign, self.native_ad
+        )
+        self.conn.commit()
+        asset_binding.verify(self.conn, self.org, self.brand, self.campaign,
+                             item["placement_id"], 1, entity["id"], "human")
+        action = self._action_check(approved)
+        self.assertEqual(action["verification_state"], "confirmed", action["evidence_json"])
+        self.assertEqual(action["evidence_json"]["peers"][0]["entity_id"], entity["id"])
+        other = external_repository.upsert_entity(
+            self.conn, self.org, self.brand, self.campaign, dict(self.native_ad, native_id="B3")
+        )
+        self.conn.commit()
+        with patch.dict(self.native_ad, {"native_id": "B3"}):
+            asset_binding.verify(self.conn, self.org, self.brand, self.campaign,
+                                 item["placement_id"], 1, other["id"], "human")
+        self.conn.execute("UPDATE ads_handoff_item SET entity_id=NULL WHERE id=%s", (item["id"],))
+        self.conn.commit()
+        with patch.object(self.reader, "verify_native", wraps=self.reader.verify_native) as read:
+            action = self._action_check(approved)
+        self.assertEqual(action["verification_state"], "unknown")
+        self.assertEqual(action["evidence_json"]["peers"][0]["reason_code"], "identity_ambiguous")
+        read.assert_not_called()
+
+    def test_new_ad_reread_rejects_revised_placement_before_native_read(self):
+        approved, item = self.approve(self.new_ad())
+        self.check(item, "ad", "B2")
+        assets.revise(self.conn, self.org, self.brand, self.campaign, item["placement_id"],
+                      1, {"copy_fields": {"headline": "改版", "body": "改過的文案"}}, "human")
+        self.conn.commit()
+        with patch.object(self.reader, "verify_native", wraps=self.reader.verify_native) as read:
+            action = self._action_check(approved)
+        self.assertEqual(action["verification_state"], "stale", action["evidence_json"])
+        self.assertEqual(action["evidence_json"]["peers"][0]["reason_code"], "plan_changed")
+        read.assert_not_called()
+
+    def test_new_ad_two_connections_late_match_cannot_clear_newer_mismatch(self):
+        from app.ads import change_control_verify
+
+        approved, item = self.approve(self.new_ad())
+        self.check(item, "ad", "B2")
+        self.conn.commit()
+        started, release = threading.Event(), threading.Event()
+        main_thread = threading.get_ident()
+        original = self.reader.verify_native
+        old_pids = []
+
+        def delayed(conn, *args, **kwargs):
+            proof = original(conn, *args, **kwargs)
+            if threading.get_ident() != main_thread:
+                old_pids.append(conn.execute("SELECT pg_backend_pid() AS pid").fetchone()["pid"])
+                conn.commit()
+                started.set()
+                if not release.wait(8):
+                    raise AssertionError("Old native response was not released")
+            else:
+                proof["entity"]["creative"]["fields"]["body"] = "較新的不同文案"
+            return proof
+
+        def old_check():
+            with db.connection() as conn:
+                return change_control_verify.check(
+                    conn, self.org, self.brand, self.campaign, approved["id"],
+                    approved["items"][0]["id"], "human"
+                )
+
+        with patch.object(self.reader, "verify_native", side_effect=delayed):
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                pending = pool.submit(old_check)
+                try:
+                    self.assertTrue(started.wait(8))
+                    main_pid = self.conn.execute("SELECT pg_backend_pid() AS pid").fetchone()["pid"]
+                    self.conn.commit()
+                    newer = self._action_check(approved)
+                    self.assertEqual(newer["verification_state"], "deviated",
+                                     newer["evidence_json"])
+                finally:
+                    release.set()
+                older = pending.result(timeout=8)["items"][0]
+        self.assertNotEqual(old_pids[0], main_pid)
+        self.assertEqual(older["verification_state"], "deviated")
+        self.assertEqual(older["evidence_json"], newer["evidence_json"])
+        current = handoff_data.get(self.conn, self.org, self.brand, self.campaign, item["id"])
+        self.assertEqual(current["status"], "deviated")
 
     def test_material_copy_rejects_different_after_text(self):
         from app.ads import handoff_material, material_tasks

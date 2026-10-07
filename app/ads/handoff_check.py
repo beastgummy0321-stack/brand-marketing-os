@@ -45,6 +45,8 @@ READBACK_REASONS = {
     "audience_unread": "這次讀回沒讀到廣告組的受眾設定，請稍後再讀回一次。",
     "chain_mismatch": "平台回讀的上下層跟選的物件對不起來，請重新選擇後再讀回。",
     "material_unverified": "素材對應沒能核對（素材版本或對應已改變），請重新讀回。",
+    "identity_unselected": "尚未選定這則新廣告的平台身分，請在交接清單選擇後再讀回。",
+    "identity_ambiguous": "這個素材安排有多個平台對應，請在交接清單確認唯一身分後再讀回。",
     # The batch readback's name match (`launch_view._match`).
     "not_found": "平台上找不到名稱是「{name}」的{kind}；名稱要一字不差。",
     "ambiguous": (
@@ -382,31 +384,57 @@ def _resolve(status, evidence):
 
 def _aggregate(conn, org, action_id, item_id, message, observed):
     """Write the action's state from its items (the one aggregate) and return it."""
-    peers = conn.execute(
-        "SELECT status FROM ads_handoff_item WHERE org_id=%s AND action_id=%s", (org, action_id)
-    ).fetchall()
+    item = conn.execute(
+        "SELECT brand_id,campaign_id,change_set_id FROM ads_handoff_item "
+        "WHERE org_id=%s AND action_id=%s AND id=%s", (org, action_id, item_id)
+    ).fetchone()
+    if item is None:
+        raise ValueError("找不到此操作的交接項目。")
+    peers = handoff_data.approved_peers(
+        conn, org, item["brand_id"], item["campaign_id"], item["change_set_id"], action_id
+    )
     # F49 Contract B: the one aggregate -- a deviated item makes its action deviated.
     aggregate = changes.worst_state(r["status"] for r in peers)
+    proofs = [{
+        "handoff_item_id": peer["id"], "entity_id": peer["entity_id"],
+        "status": peer["status"], **peer["evidence_json"],
+    } for peer in peers]
+    observed_at = max((p["observed_at"] for p in proofs if p.get("observed_at")), default=None)
+    attempted_at = max((p["attempted_at"] for p in proofs if p.get("attempted_at")), default=None)
+    first = min((p["observed_at"] for p in peers if p["observed_at"]), default=None)
+    prior = any(p.get("previous_observation") for p in proofs)
+    message = ("本次讀回未完成；保留前次核對證據供查看，請稍後重試。 " + message
+               if prior else message)
     conn.execute(
         "UPDATE ads_action SET verification_state=%s,evidence_json=%s,"
-        "first_observed_at=CASE WHEN %s THEN COALESCE(first_observed_at,now()) "
-        "ELSE first_observed_at END,"
-        "verified_at=CASE WHEN %s='confirmed' THEN now() ELSE NULL END "
-        "WHERE org_id=%s AND id=%s",
+        "first_observed_at=COALESCE(first_observed_at,%s),verified_at=%s "
+        "WHERE org_id=%s AND brand_id=%s AND campaign_id=%s AND change_set_id=%s AND id=%s",
         (
             aggregate,
             db.jsonb(
                 {
                     "handoff_item_id": item_id,
-                    "setting_matches": aggregate == "confirmed",
+                    "setting_matches": True if aggregate == "confirmed" else
+                    False if aggregate == "deviated" else None,
                     "delivery_confirmed": False,
+                    "platform_written": False,
                     "message": message,
+                    "observed_at": observed_at,
+                    "attempted_at": attempted_at,
+                    "peers": proofs,
+                    "settings": [{"handoff_item_id": p["handoff_item_id"],
+                                  **{key: p.get(key) for key in (
+                                      "matched_fields", "mismatches", "unreadable", "confirmed",
+                                      "confirmed_at_approval", "launch_settings")}}
+                                 for p in proofs],
+                    "material": [{"handoff_item_id": p["handoff_item_id"],
+                                  "evidence_level": p.get("material_evidence", "unknown")}
+                                 for p in proofs],
                 }
             ),
-            observed,
-            aggregate,
-            org,
-            action_id,
+            first,
+            observed_at if aggregate == "confirmed" else None,
+            org, item["brand_id"], item["campaign_id"], item["change_set_id"], action_id,
         ),
     )
     return aggregate
@@ -423,20 +451,40 @@ def _resolve_queue_row(conn, org, brand, action_id, state):
 
 
 def _finish(conn, org, brand, campaign, item_id, attempt, status, evidence, entity_id=None):
+    changes.lock(conn, org, brand)
+    current = handoff_data.get(conn, org, brand, campaign, item_id)
+    if current["attempt_id"] != attempt:
+        conn.commit()
+        return current
+    change_set = changes.get(conn, org, brand, campaign, current["change_set_id"])
+    if change_set["status"] != "approved":
+        conn.commit()
+        return current
     observed = evidence.get("entity_exists") is True
+    evidence["attempted_at"] = db.now_utc().isoformat()
     if not observed:
-        evidence["attempted_at"] = db.now_utc().isoformat()
+        prior_evidence = current["evidence_json"]
+        previous = prior_evidence.get("previous_observation")
+        if prior_evidence.get("observed_at") and current["observed_at"]:
+            previous = {
+                "observed_at": current["observed_at"].isoformat(),
+                "evidence": {key: value for key, value in prior_evidence.items()
+                             if key != "previous_observation"},
+            }
+        if previous:
+            evidence["previous_observation"] = previous
     # Per-field confirmations outlive a fresh read, as `settings_confirmed` does.
-    prior = handoff_data.get(conn, org, brand, campaign, item_id)["evidence_json"].get("confirmed")
+    prior = current["evidence_json"].get("confirmed")
     if prior and "confirmed" not in evidence:
         evidence["confirmed"] = prior
     status, evidence = _resolve(status, evidence)
     conn.execute(
         "UPDATE ads_handoff_item SET status=%s,evidence_json=%s,entity_id=COALESCE(%s,entity_id),"
-        "observed_at=CASE WHEN %s THEN now() ELSE observed_at END,updated_at=now() "
+        "observed_at=COALESCE(%s::timestamptz,observed_at),updated_at=now() "
         "WHERE org_id=%s AND brand_id=%s AND campaign_id=%s "
         "AND id=%s AND attempt_id=%s",
-        (status, db.jsonb(evidence), entity_id, observed, org, brand, campaign, item_id, attempt),
+        (status, db.jsonb(evidence), entity_id, evidence.get("observed_at"),
+         org, brand, campaign, item_id, attempt),
     )
     current = handoff_data.get(conn, org, brand, campaign, item_id)
     aggregate = None
@@ -500,6 +548,64 @@ def confirm_field(conn, org, brand, campaign, item_id, key, actor):
     return handoff_data.get(conn, org, brand, campaign, item_id)
 
 
+def _selected_identity(conn, org, brand, campaign, item):
+    """Reuse an explicit handoff identity or a unique current placement binding, never names."""
+    if item["entity_id"]:
+        return bindings.entity(conn, org, brand, campaign, item["entity_id"])
+    candidates = bindings.list_bindings(
+        conn, org, brand, campaign, item["placement_id"], item["placement_revision"]
+    )
+    current = {row["entity_id"] for row in candidates
+               if row["entity_id"] and row["valid_to"] is None}
+    if len(candidates) >= 100 or len(current) > 1:
+        raise Refused("identity_ambiguous")
+    if not current:
+        raise Refused("identity_unselected")
+    return bindings.entity(conn, org, brand, campaign, current.pop())
+
+
+def _material_current(conn, org, brand, campaign, item):
+    if item["placement_id"]:
+        _coded("plan_changed", bindings.confirmed, conn, org, brand, campaign,
+               item["placement_id"], item["placement_revision"], write=True)
+
+
+def check_action(conn, org, brand, campaign, set_id, action_id, actor):
+    """Payload-free change-item rereads reuse the approved handoff comparator."""
+    changes.lock(conn, org, brand)
+    peers = handoff_data.approved_peers(conn, org, brand, campaign, set_id, action_id)
+    if not peers:
+        conn.rollback()
+        raise ValueError("此操作沒有已核准的交接項目，請重新載入交接清單。")
+    for peer in peers:
+        changes.lock(conn, org, brand)
+        action_set = changes.get(conn, org, brand, campaign, set_id)
+        action = next(row for row in action_set["items"] if row["id"] == action_id)
+        if action_set["status"] != "approved" or action["verification_state"] == "stale":
+            conn.commit()
+            return action_set
+        peer = handoff_data.get(conn, org, brand, campaign, peer["id"])
+        try:
+            _material_current(conn, org, brand, campaign, peer)
+            identity = _selected_identity(conn, org, brand, campaign, peer)
+        except ValueError as exc:
+            attempt = db.new_id("ahc")
+            conn.execute("UPDATE ads_handoff_item SET attempt_id=%s WHERE id=%s",
+                         (attempt, peer["id"]))
+            code, text = refusal(exc)
+            _finish(conn, org, brand, campaign, peer["id"], attempt,
+                    "stale" if code == "plan_changed" else "unknown", {
+                        "message": text, "reason_code": code, "entity_exists": False,
+                        "setting_matches": None, "material_evidence": "unknown",
+                        "delivery_confirmed": False, "attempt_id": attempt,
+                    })
+            continue
+        payload = {key: identity[key]
+                   for key in ("platform", "source_account", "native_kind", "native_id")}
+        check(conn, org, brand, campaign, peer["id"], payload, actor)
+    return changes.get(conn, org, brand, campaign, set_id)
+
+
 def check(conn, org, brand, campaign, item_id, payload, actor):
     changes.lock(conn, org, brand)
     item = handoff_data.get(conn, org, brand, campaign, item_id)
@@ -554,6 +660,11 @@ def check(conn, org, brand, campaign, item_id, payload, actor):
     conn.commit()
     proof = None
     try:
+        action = next(row for row in change_set["items"] if row["id"] == item["action_id"])
+        if action["kind"] == "new_ad" and action["verification_state"] == "stale":
+            raise Refused("plan_changed")
+        _material_current(conn, org, brand, campaign, item)
+        conn.commit()
         proof = reader.verify_native(
             conn,
             org,
@@ -583,6 +694,18 @@ def check(conn, org, brand, campaign, item_id, payload, actor):
         if latest["attempt_id"] != attempt:
             conn.commit()
             return latest
+        current_set = changes.get(conn, org, brand, campaign, item["change_set_id"])
+        if current_set["status"] != "approved":
+            conn.commit()
+            return latest
+        _material_current(conn, org, brand, campaign, latest)
+        if (latest["expected_json"], latest["placement_revision"]) != (
+            item["expected_json"], item["placement_revision"]
+        ):
+            raise Refused("plan_changed")
+        latest_parent = _parent(conn, org, brand, campaign, latest)
+        if (latest_parent or {}).get("id") != (parent or {}).get("id"):
+            raise Refused("parent_mismatch")
         if source_versions != _source_versions(
             conn, org, payload["platform"], payload["source_account"], source_ids
         ):
@@ -693,7 +816,7 @@ def check(conn, org, brand, campaign, item_id, payload, actor):
             campaign,
             item_id,
             attempt,
-            "unknown",
+            "stale" if code == "plan_changed" else "unknown",
             {
                 "message": text,
                 "reason_code": code,
