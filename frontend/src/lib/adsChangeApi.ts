@@ -1,6 +1,7 @@
 import { apiFetch, readJson } from "./http";
 import { BASE } from "./adsApi";
 import type { NativeEntity } from "./adsExternalApi";
+import type { LearningEvidence } from "./adsLearningEvidence";
 
 /** F40-I01 (`app/ads/month_budget.py::preflight` `ongoing_owners`): one budget owner still running this month --
  * `days` left × `daily` = `commitment`, the share of `ongoing_estimate` it holds. Largest commitment first. */
@@ -54,7 +55,7 @@ export interface ChangeItem extends Omit<ChangeInput, "kind"> {
   status_labels?: { before: string | null; after: string | null; observed: string | null } | null;
   // Contract D (F27-I04): read time only, only ever set for a `pause` item that carries an
   // `angle` -- optional so existing test factories need no change.
-  learning?: { recorded: boolean; confidence: "observed" | "likely" | "validated" | null; count: number };
+  learning: { recorded: boolean; confidence: "observed" | "likely" | "validated" | null; count: number; evidence: LearningEvidence | null };
   // Contract H / correction 1 (F27-I08): read time only, nothing scheduled at approve -- optional
   // so existing test factories need no change. `spend_stopped` only for `pause`, `delivery_started`
   // only for `copy`/`new_ad`; `next_review_at` null for `pause`, null until verified for

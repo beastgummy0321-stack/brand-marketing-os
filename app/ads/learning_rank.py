@@ -191,7 +191,9 @@ def _parse_num(value: str | None):
 
 def parse_scope(text: str | None) -> dict | None:
     """Inverse of `scope`; `None` for anything that is not a `v=2` row (old grade rows included)."""
-    parts = (text or "").split("；")
+    from app.workbench import base_learning_scope
+
+    parts = base_learning_scope(text).split("；")
     if not parts or parts[0] != SCOPE_PREFIX:
         return None
     fields = {}

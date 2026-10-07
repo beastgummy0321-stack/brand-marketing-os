@@ -1,3 +1,23 @@
+import type { LearningEvidence, LearningEvidenceContext } from "@/lib/adsLearningEvidence";
+
+function learningEvidence(id = "learning-fixture"): LearningEvidence {
+  return {
+    schema_version: 1, id, meaning_revision: "meaning-fixture", display_text: "歷史紀錄",
+    support_label: "來源尚未核實", provenance: "unknown",
+    sources: [{kind: null, id: null, version: null, period: {start: null, end: null}, label: null}],
+    scope: {product_id: null, product_label: null, audience_key: null, customer_group_id: null,
+      claim_key: null, claim_family: null, objective_family: null, result_kind: null, currency: null, attribution: null},
+    conditions: {price_version: null, offer_key: null, offer_version: null, material_version: null,
+      target_version: null, valid_until: null},
+    sample: {result_events: null, sufficient: null}, independent_count: 0, same_direction_count: 0,
+    contrary_count: 0, use_state: "history", reason_codes: ["unknown_source"],
+    reason_labels: ["來源尚未核實，保留為歷史"], allowed_uses: [], limits: ["conditions_unknown"],
+  };
+}
+const evidenceContext: LearningEvidenceContext = {
+  schema_version: 1, revision: "context-fixture", scope_product_id: null, scope_label: null,
+  eligible_count: 0, items: [], omitted: 0,
+};
 vi.mock("@/lib/figures", async (actual) => ({ ...await actual<typeof import("@/lib/figures")>(), useFigureBases: () => ({roas_at_cap: {label: "花到上限時", formula: "售價 ÷ 每筆上限", unit: "ratio"}, roas_all_spend: {label: "保守", formula: "營收 ÷ 全部花費", unit: "ratio"}, roas_tracked_spend: {label: "樂觀", formula: "營收 ÷ 有追到營收的那部分花費", unit: "ratio"}}) }));
 /** frontend/src/components/ads/StrategyTab.test.tsx — F28-I09: the strategy tab is 一個上限 → 這一期的總預算 → 預算怎麼分
  * → two folds, with one bottom bar. These tests pin the bar's order of precedence (open over-cap sheet > unsaved pick >
@@ -78,7 +98,7 @@ function campaign(overrides: Partial<CampaignDetail> = {}): CampaignDetail {
         why: ["新客比例高：通勤情境近 30 天在新客的每筆成本最低"], unknowns: ["新受眾的實際轉換率仍需驗證"], alternatives: [], learning_goals: [],
       },
       scenarios: { mode: "cold_start", scenarios: ROWS, recommended: "cap", basis: {}, budget_cap: 30000 },
-      basis: { knowledge_item_ids: [], llm_task_id: "t", input_context_hash: "h", brand_facts: [], prices: [], learnings: [], estimated_fields: [] },
+      basis: { evidence_context: evidenceContext, knowledge_item_ids: [], llm_task_id: "t", input_context_hash: "h", brand_facts: [], prices: [], learnings: [], estimated_fields: [] },
     },
     budget_total: null, context_json: {}, constraints_json: { budget: 30000 }, verdict: null, verdict_json: {}, closed_at: null,
     created_by: null, created_at: "2026-09-01T00:00:00Z", groups: [], actions: [], outcome: { spend: 0, purchases: 0, revenue: 0 },
@@ -420,7 +440,7 @@ describe("StrategyTab (F28-I09)", () => {
         coordinates: [{ dimension: "format", dimension_label: "格式", label: "輪播" }],
       },
     ];
-    const VERDICT = { id: "lrn_1", text: "綜合維他命軟糖：新客在通勤情境划算", level: "product", needs_revalidation: false };
+    const VERDICT = { id: "lrn_1", text: "綜合維他命軟糖：新客在通勤情境划算", level: "product", evidence: learningEvidence(), needs_revalidation: false };
 
     it("each role row prints its percent, amount and the planner's reason; a null reason leaves no empty line", async () => {
       renderTab(withReasons());
@@ -534,7 +554,7 @@ describe("StrategyTab (F28-I09)", () => {
     // F46-I07 (prototype f46-learnings `#/strategy`): a strategy made since F46 stores the Contract L view it was
     // prompted with as `basis.ranked_learnings`; the panel and the why fold show that ranking, not the F41 rows.
     const RANKED: CoordinateLearnings = {
-      campaigns: [{
+      evidence_context: evidenceContext, campaigns: [{
         campaign_id: "adc_B", campaign_name: "三盒組・09/19～10/01", sell_way_id: "prd_box",
         start_date: "2026-09-19", end_date: "2026-10-01", closed_on: "2026-10-02", cap: 450, currency: "TWD",
         spend: 9781, sales: 13, cost_per_sale: 752.4, counts: { keep: 2, replace: 1 },
@@ -542,11 +562,11 @@ describe("StrategyTab (F28-I09)", () => {
         rows: [
           { rank: 1, of: 3, ad_id: "ada_b1", ad_name: "考前一週・書包一盒", customer_group: { id: "pcg_study", who: "學生備考" },
             coordinates: [{ dimension: "angle", dimension_label: "角度", key: "box", label: "書包裡放一盒就好" }],
-            spend: 2775, sales: 5, cost_per_sale: 555, verdict: "keep_relative", verdict_label: "留下", flags: ["相對最好，仍高於上限"], learning_id: "lrn_b1" },
+            spend: 2775, sales: 5, cost_per_sale: 555, verdict: "keep_relative", verdict_label: "留下", flags: ["相對最好，仍高於上限"], evidence: learningEvidence(), learning_id: "lrn_b1" },
           { rank: 2, of: 3, ad_id: "ada_b2", ad_name: "通勤族・地鐵十分鐘", customer_group: { id: "pcg_commute", who: "通勤上班族" },
-            coordinates: [], spend: 3720, sales: 6, cost_per_sale: 620, verdict: "keep_relative", verdict_label: "留下", flags: ["相對最好，仍高於上限"], learning_id: "lrn_b2" },
+            coordinates: [], spend: 3720, sales: 6, cost_per_sale: 620, verdict: "keep_relative", verdict_label: "留下", flags: ["相對最好，仍高於上限"], evidence: learningEvidence(), learning_id: "lrn_b2" },
           { rank: 3, of: 3, ad_id: "ada_b3", ad_name: "通勤族・下班後加班", customer_group: { id: "pcg_commute", who: "通勤上班族" },
-            coordinates: [], spend: 3286, sales: 2, cost_per_sale: 1643, verdict: "replace", verdict_label: "換掉", flags: ["樣本少"], learning_id: "lrn_b3" },
+            coordinates: [], spend: 3286, sales: 2, cost_per_sale: 1643, verdict: "replace", verdict_label: "換掉", flags: ["樣本少"], evidence: learningEvidence(), learning_id: "lrn_b3" },
         ],
       }, {
         campaign_id: "adc_A", campaign_name: "三盒組・09/05～09/18", sell_way_id: "prd_box",
@@ -555,7 +575,7 @@ describe("StrategyTab (F28-I09)", () => {
         rule_text: "1 則每筆低於上限 450 → 留下；其餘換掉", empty_reason: null,
         rows: [
           { rank: 1, of: 1, ad_id: "ada_a1", ad_name: "備考生・讀到深夜", customer_group: { id: "pcg_study", who: "學生備考" },
-            coordinates: [], spend: 1160, sales: 4, cost_per_sale: 290, verdict: "keep", verdict_label: "留下", flags: ["樣本少"], learning_id: "lrn_a1" },
+            coordinates: [], spend: 1160, sales: 4, cost_per_sale: 290, verdict: "keep", verdict_label: "留下", flags: ["樣本少"], evidence: learningEvidence(), learning_id: "lrn_a1" },
         ],
       }],
       groups: [
@@ -600,7 +620,7 @@ describe("StrategyTab (F28-I09)", () => {
 
     it("an empty ranked view (nothing closed yet) shows no learnings section and the panel's empty line", async () => {
       const user = userEvent.setup();
-      renderTab(withReasons({ ranked_learnings: { campaigns: [], groups: [], next: null } }));
+      renderTab(withReasons({ ranked_learnings: { evidence_context: evidenceContext, campaigns: [], groups: [], next: null } }));
       await user.click(await screen.findByRole("button", { name: "為什麼這樣建議" }));
       expect(screen.queryByRole("heading", { name: "用到的學習" })).toBeNull();
       await user.click(screen.getByRole("button", { name: /查看策略依據/ }));

@@ -1,3 +1,19 @@
+import type { LearningEvidence } from "@/lib/adsLearningEvidence";
+
+function learningEvidence(id = "learning-fixture"): LearningEvidence {
+  return {
+    schema_version: 1, id, meaning_revision: "meaning-fixture", display_text: "歷史紀錄",
+    support_label: "來源尚未核實", provenance: "unknown",
+    sources: [{kind: null, id: null, version: null, period: {start: null, end: null}, label: null}],
+    scope: {product_id: null, product_label: null, audience_key: null, customer_group_id: null,
+      claim_key: null, claim_family: null, objective_family: null, result_kind: null, currency: null, attribution: null},
+    conditions: {price_version: null, offer_key: null, offer_version: null, material_version: null,
+      target_version: null, valid_until: null},
+    sample: {result_events: null, sufficient: null}, independent_count: 0, same_direction_count: 0,
+    contrary_count: 0, use_state: "history", reason_codes: ["unknown_source"],
+    reason_labels: ["來源尚未核實，保留為歷史"], allowed_uses: [], limits: ["conditions_unknown"],
+  };
+}
 /** frontend/src/components/ads/flow/VerifyPage.test.tsx — F22-I04：`vi.mock` 掉
  * `@/lib/adsChangeApi`／`@/lib/adsTriageApi`，不打真的 API。覆蓋 Done 3：confirmed／deviated／
  * stale／pending(reported_at 已寫)／reported+unknown 五種畫面、「重新核對」呼叫 check、
@@ -73,7 +89,7 @@ function changeItem(overrides: Partial<ChangeItem> = {}): ChangeItem {
     // F49 Contract L: the served words of the platform status on each side (`change_control_data.status_labels`).
     status_labels: { before: "已暫停", after: "已暫停", observed: "已暫停" },
     reported_at: "2026-09-22T02:00:00Z", first_observed_at: "2026-09-22T02:13:00Z", verified_at: "2026-09-22T02:13:00Z",
-    platform_url: "https://adsmanager.facebook.com/adsmanager/manage/ads?act=1&selected_ad_ids=native_1",
+    learning: {recorded: false, confidence: null, count: 0, evidence: null}, platform_url: "https://adsmanager.facebook.com/adsmanager/manage/ads?act=1&selected_ad_ids=native_1",
     ...overrides,
   };
 }
@@ -143,7 +159,7 @@ describe("VerifyPage（F22-I04）confirmed", () => {
     vi.mocked(changeApi.getChangeControl).mockResolvedValue({
       targets: [], change_sets: [changeSet({ items: [changeItem({
         timeline: { spend_stopped: true, delivery_started: null, next_review_at: null },
-        learning: { recorded: true, confidence: "observed", count: 1 },
+        learning: { recorded: true, evidence: learningEvidence(), confidence: "observed", count: 1 },
         angle: "日常出發情境",
       } as Partial<ChangeItem> & { angle: string })] })],
     });
@@ -161,7 +177,7 @@ describe("VerifyPage（F22-I04）confirmed", () => {
   it("pause：已成立（count 3）不再顯示升級提示", async () => {
     vi.mocked(changeApi.getChangeControl).mockResolvedValue({
       targets: [], change_sets: [changeSet({ items: [changeItem({
-        learning: { recorded: true, confidence: "validated", count: 3 },
+        learning: { recorded: true, evidence: learningEvidence(), confidence: "validated", count: 3 },
         angle: "日常出發情境",
       } as Partial<ChangeItem> & { angle: string })] })],
     });

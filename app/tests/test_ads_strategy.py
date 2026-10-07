@@ -1083,7 +1083,14 @@ class RankedLearningsInStrategyPromptTest(StrategyTestBase):
         self.assertNotIn(_RANKED_HEADER, prompt)
         basis = detail["budget_basis_json"]["basis"]
         self.assertEqual(basis["coordinate_scoreboard"], [])
-        self.assertEqual(basis["ranked_learnings"], {"campaigns": [], "groups": [], "next": None})
+        ranked = basis["ranked_learnings"]
+        self.assertEqual({key: ranked[key] for key in ("campaigns", "groups", "next")},
+                         {"campaigns": [], "groups": [], "next": None})
+        self.assertEqual(ranked["evidence_context"]["schema_version"], 1)
+        self.assertEqual(ranked["evidence_context"]["items"], [])
+        self.assertEqual(ranked["evidence_context"]["eligible_count"], 0)
+        self.assertEqual(basis["evidence_context"]["schema_version"], 1)
+        self.assertEqual(basis["evidence_context"]["items"], [])
         self.assertNotIn("coordinate_learnings", basis)
 
     def test_the_department_file_builds_on_kept_ads_by_name(self):

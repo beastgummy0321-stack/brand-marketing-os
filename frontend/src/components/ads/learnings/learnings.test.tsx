@@ -1,3 +1,23 @@
+import type { LearningEvidence, LearningEvidenceContext } from "@/lib/adsLearningEvidence";
+
+function learningEvidence(id = "learning-fixture"): LearningEvidence {
+  return {
+    schema_version: 1, id, meaning_revision: "meaning-fixture", display_text: "歷史紀錄",
+    support_label: "來源尚未核實", provenance: "unknown",
+    sources: [{kind: null, id: null, version: null, period: {start: null, end: null}, label: null}],
+    scope: {product_id: null, product_label: null, audience_key: null, customer_group_id: null,
+      claim_key: null, claim_family: null, objective_family: null, result_kind: null, currency: null, attribution: null},
+    conditions: {price_version: null, offer_key: null, offer_version: null, material_version: null,
+      target_version: null, valid_until: null},
+    sample: {result_events: null, sufficient: null}, independent_count: 0, same_direction_count: 0,
+    contrary_count: 0, use_state: "history", reason_codes: ["unknown_source"],
+    reason_labels: ["來源尚未核實，保留為歷史"], allowed_uses: [], limits: ["conditions_unknown"],
+  };
+}
+const evidenceContext: LearningEvidenceContext = {
+  schema_version: 1, revision: "context-fixture", scope_product_id: null, scope_label: null,
+  eligible_count: 0, items: [], omitted: 0,
+};
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
@@ -22,7 +42,7 @@ const coords = (pain: string, angle: string, format = "單張圖") => [
 let n = 0;
 const row = (o: Partial<LearningRow> & Pick<LearningRow, "rank" | "of" | "ad_name">): LearningRow => ({
   ad_id: `ada_${++n}`, customer_group: G_STUDY, coordinates: coords("考前熬夜讀不完", "書包裡放一盒就好"),
-  spend: 0, sales: 0, cost_per_sale: null, verdict: "replace", verdict_label: "換掉", flags: [], learning_id: `lrn_${n}`,
+  spend: 0, sales: 0, cost_per_sale: null, verdict: "replace", verdict_label: "換掉", flags: [], evidence: learningEvidence(), learning_id: `lrn_${n}`,
   ...o,
 });
 
@@ -58,7 +78,7 @@ const GAP: LearningCampaign = {
   rule_text: "", empty_reason: "資料缺天，這期沒有記學習", rows: [],
 };
 const DATA: CoordinateLearnings = {
-  campaigns: [B, A, GAP],
+  evidence_context: evidenceContext, campaigns: [B, A, GAP],
   groups: [
     { customer_group_id: "pcg_study", who: "學生備考", ads: 3, spend: 6035, sales: 12, cap: 450, cost_per_sale: 502.9 },
     { customer_group_id: "pcg_gone", who: "已刪除的顧客群", ads: 1, spend: 3000, sales: 4, cap: 450, cost_per_sale: 750 },
@@ -156,7 +176,7 @@ describe("LearningsTab 投放學到的", () => {
   });
 
   it("empty state: 還沒有結案的活動 with 到投放中心, no next link", () => {
-    tab({ status: "ready", data: { campaigns: [], groups: [], next: null } });
+    tab({ status: "ready", data: { evidence_context: evidenceContext, campaigns: [], groups: [], next: null } });
     expect(screen.getByText("還沒有結案的活動")).toBeTruthy();
     expect(screen.getByRole("link", { name: "到投放中心" }).getAttribute("href")).toBe("/brands/brd_1/ads");
     expect(screen.queryByRole("link", { name: "用這些學習排下一期 →" })).toBeNull();

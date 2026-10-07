@@ -22,9 +22,11 @@ precedent as `app/ads/visual_learning.py`'s own promotion scan.
 
 from typing import cast
 
+from app import workbench
 from app.ads import repository as ads_repo
 from app.ads import sell_way
 from app.brand_intelligence import repository as bi_repo
+from app.core import settings as coresettings
 from app.core.db import Conn, ConnProxy
 
 _AnyConn = Conn | ConnProxy
@@ -33,6 +35,32 @@ _AnyConn = Conn | ConnProxy
 # `visual_learning.py`'s `limit=500`; this module's own list endpoint stays at the contract's
 # `<=50` (see `list_for_brand`).
 _SCAN_LIMIT = 500
+
+
+def evidence_context(conn: _AnyConn, org: str, brand: str, product_id: str | None,
+                     *, rows: list[dict] | None = None, cap: int = 30) -> dict:
+    """Conservative read projection; missing retained source conditions stay explicit unknowns."""
+    from app.ads.triage import MIN_RESULT_EVENTS
+
+    product = bi_repo.get_product(cast(Conn, conn), brand, product_id) if product_id else None
+    selected = product_id if product else None
+    current = {
+        "org_id": org, "brand_id": brand, "product_id": selected,
+        "org_day": coresettings.today_for_org(conn, org_id=org).isoformat(),
+        "audience_keys": [], "customer_group_ids": [], "result_kind": None,
+        "currency": None, "attribution": None, "mode": "real",
+        "conditions": {"price_version": None, "offers": [], "materials": [],
+                       "target_version": None},
+    }
+    if rows is None:
+        rows = bi_repo.list_learnings(cast(Conn, conn), brand, limit=_SCAN_LIMIT)
+    projected = workbench.qualify_learning_evidence(
+        rows, current, min_result_events=MIN_RESULT_EVENTS, max_age_days=180,
+    )
+    return {"schema_version": 1, "revision": projected["revision"],
+            "scope_product_id": selected, "scope_label": product["name"] if product else None,
+            "eligible_count": projected["eligible_count"], "items": projected["items"][:cap],
+            "omitted": max(len(projected["items"]) - cap, 0)}
 
 
 def write(conn: _AnyConn, org_id: str, brand_id: str, *, product_id: str | None, text: str,
@@ -68,19 +96,23 @@ def _ads_rows(conn: _AnyConn, brand: str) -> list[dict]:
     return bi_repo.list_learnings(cast(Conn, conn), brand, source_track="ads", limit=_SCAN_LIMIT)
 
 
-def view_for_item(conn: _AnyConn, brand: str, item_id: str) -> dict:
+def view_for_item(conn: _AnyConn, brand: str, item_id: str,
+                  *, product_id: str | None = None) -> dict:
     """Contract D: the set item view's `learning` field. Read-time lookup (never stored on the
     item itself) so a later promotion of another item's identical text never has to reach back
     and rewrite this one."""
     rows = _ads_rows(conn, brand)
     mine = next((row for row in rows if row["source_cycle_id"] == item_id), None)
     if mine is None:
-        return {"recorded": False, "confidence": None, "count": 0}
+        return {"recorded": False, "confidence": None, "count": 0, "evidence": None}
     count = sum(
         1 for row in rows
         if row["learning_text"] == mine["learning_text"] and row["learned_at"] <= mine["learned_at"]
     )
-    return {"recorded": True, "confidence": mine["confidence"], "count": count}
+    context = evidence_context(conn, mine["org_id"], brand, product_id, rows=rows, cap=_SCAN_LIMIT)
+    evidence = next(item for item in context["items"] if item["id"] == mine["id"])
+    return {"recorded": True, "confidence": mine["confidence"], "count": count,
+            "evidence": evidence}
 
 
 def record_for_item(conn: _AnyConn, org: str, brand: str, campaign: str, set_id: str,
@@ -162,7 +194,7 @@ def _campaign_of_source(conn: _AnyConn, org: str, brand: str, source_cycle_id: s
     return row["campaign_id"] if row else None
 
 
-def list_for_brand(conn: _AnyConn, brand: str) -> list[dict]:
+def list_for_brand(conn: _AnyConn, brand: str, *, product_id: str | None = None) -> list[dict]:
     """Contract D: `GET .../learnings` -- ads-track rows only, newest first, <=50 (the ledger's
     own default). Each row's `campaign_id`/`campaign_name` is looked up through this module's own
     `ads_action` table (keyed by `source_cycle_id` = the change item id) -- `learning_ledger`
@@ -171,6 +203,9 @@ def list_for_brand(conn: _AnyConn, brand: str) -> list[dict]:
     when the campaign itself is unknown/deleted, never a frontend-side guess off the raw
     objective string."""
     rows = _ads_rows(conn, brand)
+    evidence = {item["id"]: item for item in evidence_context(
+        conn, rows[0]["org_id"], brand, product_id, rows=rows, cap=_SCAN_LIMIT,
+    )["items"]} if rows else {}
     result = []
     for row in rows[:50]:
         campaign_id = _campaign_of_source(conn, row["org_id"], brand, row["source_cycle_id"])
@@ -200,5 +235,6 @@ def list_for_brand(conn: _AnyConn, brand: str) -> list[dict]:
             "campaign_name": campaign_name,
             "campaign_objective": campaign_objective,
             "learned_at": row["learned_at"],
+            "evidence": evidence[row["id"]],
         })
     return result

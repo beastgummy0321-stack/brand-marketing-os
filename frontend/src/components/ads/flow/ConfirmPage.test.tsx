@@ -136,7 +136,7 @@ function changeItem(overrides: Partial<ChangeItem> = {}): ChangeItem {
     id: "item_1", kind: "pause", target_id: "aex_1",
     target: { id: "aex_1", name: "1150706 健身情境單圖", platform: "meta", source_account: "acc_1", native_kind: "ad", native_id: "native_1" },
     before: { status: "PAUSED" }, after: { status: "PAUSED" }, reason: "花費超過停損線（目標 × 3）仍未達成目標",
-    verification_state: "pending", evidence_json: {}, reported_at: null, first_observed_at: null, verified_at: null, platform_url: null,
+    verification_state: "pending", evidence_json: {}, reported_at: null, first_observed_at: null, verified_at: null, learning: {recorded: false, confidence: null, count: 0, evidence: null}, platform_url: null,
     ...overrides,
   };
 }

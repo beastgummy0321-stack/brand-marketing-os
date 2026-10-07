@@ -99,7 +99,13 @@ class CoordinateLearningsRouteTest(unittest.TestCase):
         ))
         self.assertEqual([c["campaign_name"] for c in body["campaigns"]],
                          ["單盒・第一期", "三盒組・第一期"])
-        self.assertEqual(set(body), {"campaigns", "groups", "next"})
+        self.assertEqual(set(body), {"campaigns", "groups", "next", "evidence_context"})
+        self.assertEqual(body["evidence_context"]["scope_product_id"], self.single["id"])
+        self.assertEqual(body["evidence_context"]["eligible_count"], 0)
+        for campaign in body["campaigns"]:
+            for row in campaign["rows"]:
+                self.assertEqual(row["evidence"]["id"], row["learning_id"])
+                self.assertEqual(row["evidence"]["provenance"], "unknown")
 
     def test_campaign_filter(self):
         body = self._get(f"?campaign_id={self.first['id']}")

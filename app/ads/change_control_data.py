@@ -6,7 +6,7 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from app.ads import ads_learnings, lifecycle
+from app.ads import ads_learnings, lifecycle, sell_way
 from app.ads import asset_binding_repository as bindings
 from app.ads import repository as campaigns
 from app.core import db, input_rules, settings
@@ -426,9 +426,10 @@ def get(conn, org, brand, campaign_id, set_id):
             # `angle()` refuses one on any other kind), so every other item's learning is
             # trivially "not recorded" without a lookup.
             "learning": (
-                ads_learnings.view_for_item(conn, brand, item["id"])
+                ads_learnings.view_for_item(conn, brand, item["id"],
+                                           product_id=sell_way.of_campaign(camp))
                 if item["kind"] == "pause" and (item.get("angle") or is_ab)
-                else {"recorded": False, "confidence": None, "count": 0}
+                else {"recorded": False, "confidence": None, "count": 0, "evidence": None}
             ),
         }
         increases = item["kind"] in {"launch", "new_ad"} or (
