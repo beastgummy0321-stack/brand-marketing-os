@@ -89,23 +89,33 @@ for (const width of [1024, 1920]) {
     });
     for (const card of bounds.cards) {expect(card.left).toBeGreaterThanOrEqual(bounds.left - 1); expect(card.right).toBeLessThanOrEqual(bounds.right + 1);}
     await expect(page.getByRole("button", {name: "每期廣告排名"})).toHaveAttribute("aria-expanded", "false");
-    await scene.getByRole("button", {name: "查看 →"}).first().click();
+    const longSourceTrigger = scene.getByRole("button", {name: "查看 →"}).first();
+    await longSourceTrigger.click();
     const longSource = page.getByRole("dialog", {name: "經驗來源與適用範圍"});
     await longSource.getByRole("button", {name: "完整來源與限制"}).click();
     expect(await longSource.evaluate(node => node.scrollWidth)).toBeLessThanOrEqual(await longSource.evaluate(node => node.clientWidth));
     await expect(longSource.getByText("已有反向觀察，需重新核對。", {exact: true})).toBeVisible();
     await page.screenshot({path: info.outputPath(`library-source-long-complete-${width}.png`), fullPage: true});
     await page.keyboard.press("Escape");
+    await expect(longSource).toHaveCount(0);
+    await expect(longSourceTrigger).toBeFocused();
     const sourceTrigger = scene.getByRole("button", {name: "查看 →"}).nth(3);
-    await sourceTrigger.focus(); await page.keyboard.press("Enter");
+    await sourceTrigger.focus();
+    await expect(sourceTrigger).toBeFocused();
+    await page.keyboard.press("Enter");
     const dialog = page.getByRole("dialog", {name: "經驗來源與適用範圍"});
     await expect(dialog.getByText("樣本尚未完整核實", {exact: true})).toBeVisible();
     for (let i = 0; i < 8; i++) {await page.keyboard.press("Tab"); expect(await dialog.evaluate(node => node.contains(document.activeElement))).toBe(true);}
     await page.screenshot({path: info.outputPath(`library-source-null-${width}.png`), fullPage: true});
-    await page.keyboard.press("Escape"); await expect(sourceTrigger).toBeFocused();
-    await scene.getByRole("button", {name: "查看 →"}).nth(4).click();
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
+    await expect(sourceTrigger).toBeFocused();
+    const zeroSourceTrigger = scene.getByRole("button", {name: "查看 →"}).nth(4);
+    await zeroSourceTrigger.click();
     await expect(dialog.getByText("0 筆", {exact: true})).toBeVisible();
     await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
+    await expect(zeroSourceTrigger).toBeFocused();
     await page.getByRole("button", {name: "下一期商品範圍"}).click();
     await page.getByRole("combobox", {name: "選擇商品"}).selectOption("prd_second");
     await expect(page.getByRole("link", {name: "用可參考資料規劃下一期 →"})).toHaveAttribute("href", "/app/brands/brd_f53_ui/ads/new?sell_way=prd_second");
