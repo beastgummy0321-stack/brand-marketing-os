@@ -119,7 +119,11 @@ def write_visual_learnings(conn: _AnyConn, org_id: str, brand_id: str, campaign_
     if not strata:
         return []
 
-    outcome_rows = outcome._fetch_rows(conn, org_id, brand_id, campaign_id, "ad")  # noqa: SLF001
+    window = outcome.period_window(conn, org_id, brand_id, detail)
+    outcome_rows = outcome.select_period(
+        outcome.rows(conn, org_id, brand_id, campaign_id, "ad"), window,
+    )
+    days = window["days"]
     rows_by_entity: dict[str, list] = {}
     for row in outcome_rows:
         rows_by_entity.setdefault(row["entity_id"], []).append(row)
@@ -131,6 +135,9 @@ def write_visual_learnings(conn: _AnyConn, org_id: str, brand_id: str, campaign_
     written: list[dict] = []
     for audience_key, stratum_ads in strata.items():
         audience_label = audience_labels.get(audience_key, audience_key)
+        comparison = outcome.period_bucket([
+            row for ad in stratum_ads for row in rows_by_entity.get(ad["id"], [])
+        ])
         for dimension, dimension_name in _DIMENSIONS:
             value_groups = _value_groups(stratum_ads, fingerprints, dimension)
             if len(value_groups) < 2:
@@ -139,10 +146,11 @@ def write_visual_learnings(conn: _AnyConn, org_id: str, brand_id: str, campaign_
             buckets = {}
             for value_key, ad_ids in value_groups.items():
                 rows = [r for ad_id in ad_ids for r in rows_by_entity.get(ad_id, [])]
-                bucket = outcome._bucket(rows)  # noqa: SLF001
+                bucket = outcome.period_bucket(rows)
                 buckets[value_key] = {
                     "label": fingerprints[ad_ids[0]][dimension].get("label", value_key),
-                    "metric_value": _metric_value(metric, bucket),
+                    "metric_value": (_metric_value(metric, bucket)
+                                     if comparison["reason"] is None else None),
                     "purchases": bucket["purchases"],
                     "sample_bucket": outcome.sample_bucket(bucket["purchases"], days),
                     "ad_count": len(ad_ids),
@@ -182,7 +190,9 @@ def write_visual_learnings(conn: _AnyConn, org_id: str, brand_id: str, campaign_
                 sample_size = _smallest_bucket([b["sample_bucket"] for b in comparable.values()])
             else:
                 # Untracked purchases are checked first: never reported as a small sample.
-                if any(b["purchases"] is None for b in buckets.values()):
+                if comparison["reason"] is not None:
+                    reason = "資料範圍或金額尚未核實，不能比較"
+                elif any(b["purchases"] is None for b in buckets.values()):
                     reason = "成效未追蹤"
                 elif any(b["metric_value"] is None for b in buckets.values()):
                     reason = "有一組沒賣出"

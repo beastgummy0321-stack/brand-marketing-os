@@ -91,6 +91,16 @@ function view(overrides: Partial<SettleView> = {}): SettleView {
   };
 }
 
+/** Only the two named TWD ranking/money controls opt into current served unit evidence. */
+function knownView(): SettleView {
+  const original = view();
+  return {...original, buckets: original.buckets.map((bucket) => ({...bucket, currency: "TWD"})),
+    rows: original.rows.map((row) => ({...row,
+      cap_comparison: {basis: "own", currency: "TWD", reason: null, message: null, source: "user", unit_basis: "manual_ntd_input"},
+      break_even_unit: {basis: "break_even", currency: row.break_even === null ? null : "TWD", source: "product_economics", unit_basis: row.break_even === null ? null : "confirmed_product_economics"},
+    }))};
+}
+
 /** The two settle routes as `App.tsx` mounts them: `/settle/:month?step=` renders the page (`key` on the month), the
  * old `/settle/:month/:step` path redirects to the query form. */
 function Route_() {
@@ -143,7 +153,7 @@ beforeEach(() => {
 
 describe("SettlePage step 1 這期成績", () => {
   it("groups rows per campaign; an imported campaign carries its origin tag and its own cap", async () => {
-    getSettle.mockResolvedValue(view());
+    getSettle.mockResolvedValue(knownView());
     renderAt("result");
     const imported = await screen.findByRole("region", { name: SN });
     expect(within(imported).getByText("從 Meta 帶進來")).toBeTruthy();
@@ -152,20 +162,20 @@ describe("SettlePage step 1 這期成績", () => {
     expect(within(imported).queryByText("晨光隨行杯・日常出發")).toBeNull();
     const own = screen.getByRole("region", { name: DN });
     expect(within(own).queryByText("從 Meta 帶進來")).toBeNull();
-    expect(within(own).getByText("日常商品推廣的上限 450")).toBeTruthy();
+    expect(within(own).getByText("日常商品推廣的上限 450 TWD")).toBeTruthy();
     expect(screen.getByText("45%")).toBeTruthy();
-    expect(screen.getByText("在這期預算 33,000 內")).toBeTruthy();
+    expect(screen.getByText("在這期預算 33,000 TWD 內")).toBeTruthy();
   });
 
   it("each row prints its served place, sales and 樣本少; the fate follows the ranking, never a sample gate", async () => {
-    getSettle.mockResolvedValue(view());
+    getSettle.mockResolvedValue(knownView());
     renderAt("result");
     const own = await screen.findByRole("region", { name: DN });
     const li = (name: string) => within(own).getByText(name).closest("li") as HTMLElement;
     const good = li("晨光隨行杯・日常出發");
     expect(within(good).getByText("第 1／5 名・成交 24 筆")).toBeTruthy();
     expect(within(good).getByText("記成有效")).toBeTruthy();
-    expect(within(good).getByText(/每筆 353 元/)).toBeTruthy();
+    expect(within(good).getByText(/每筆 353 TWD/)).toBeTruthy();
     expect(within(good).queryByText("樣本少")).toBeNull();
     const few = li("健身情境・保冷 12 小時");
     expect(within(few).getByText("第 3／5 名・成交 4 筆")).toBeTruthy();

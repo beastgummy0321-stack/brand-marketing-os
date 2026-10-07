@@ -11,13 +11,13 @@ them (`outcome_seed.bind_platform` + `external_repository.upsert_observation`).
 """
 
 import unittest
-from datetime import timedelta
+from datetime import UTC, date, datetime, timedelta
+from unittest.mock import patch
 
-from app.ads import closeout, coordinate_learning, external_repository, plan
+from app.ads import channels, closeout, coordinate_learning, coverage, external_repository, plan
 from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi_repo
 from app.core import db as coredb
-from app.core import settings as coresettings
 from app.shared import web
 from app.tests.fixtures.ads_external import outcome_seed
 
@@ -36,23 +36,33 @@ class CoordinateLearningTestBase(unittest.TestCase):
             self.conn, org_id=self.org_id, name="測試品牌：排名學習", client_name=None,
             actor=ACTOR,
         )["id"]
-        self.today = coresettings.today_for_org(self.conn, org_id=self.org_id)
+        # Ranking fixtures describe seven fully completed days, not a provisional final day.
+        self.today = coverage.last_complete_day(self.conn, self.org_id, self.brand_id)
         self.start = self.today - timedelta(days=DAYS - 1)
         product = bi_repo.create_product(self.conn, self.brand_id, name="三盒組", actor=ACTOR)
         self.product_id = product["id"]
+        bi_repo.save_product_economics(
+            self.conn, self.brand_id, self.product_id, selling_price=CAP + 100, currency="TWD",
+            confirmed_by=ACTOR, actor=ACTOR, unit_variable_cost=100,
+        )
         self.groups = bi_repo.save_customer_groups(self.conn, self.brand_id, product["id"], [
             {"who": "學生備考", "pain_keys": ["effort"]},
             {"who": "通勤上班族", "pain_keys": ["experience"]},
         ], actor=ACTOR)
         self.conn.commit()
 
+
     def _campaign(self, name="三盒組・第一期") -> dict:
         campaign = ads_repo.create_campaign(self.conn, self.org_id, self.brand_id, {
-            "name": name, "goal_text": "衝一波", "objective": "購買", "target_cost": CAP,
+            "name": name, "goal_text": "衝一波", "objective": "購買", "target_cost": None,
             "start_date": self.start, "end_date": self.today, "status": "live",
             # F48 Contract M: a non-draft campaign's sell-way is fixed (no PATCH after adoption).
             "context_json": {"product_ids": [self.product_id]},
         }, created_by=ACTOR)
+        ads_repo.save_campaign_target(
+            self.conn, self.org_id, self.brand_id, campaign["id"],
+            basis="own", value=CAP, expected_revision=0, actor=ACTOR,
+        )
         outcome_seed.set_coverage(
             self.conn, self.org_id, self.brand_id, campaign["id"], self.start, self.today,
         )
@@ -134,6 +144,98 @@ class CoordinateLearningTestBase(unittest.TestCase):
 
     def _close(self, campaign: dict) -> dict:
         return closeout.close(self.conn, self.org_id, self.brand_id, campaign["id"], actor=ACTOR)
+
+
+class CompletedPeriodCoordinateTest(CoordinateLearningTestBase):
+    def test_new_coordinate_ledger_excludes_incomplete_day_and_retry_keeps_source_cycle(self):
+        with patch.object(coredb, "now_utc", return_value=datetime(2026, 10, 27, 4, tzinfo=UTC)):
+            account = type(
+                "BoundAccount",
+                (),
+                {
+                    "accounts": lambda self, conn, org, brand: [
+                        {"account_id": outcome_seed.SOURCE_ACCOUNT, "timezone_name": "Asia/Taipei"}
+                    ]
+                },
+            )()
+            real_reader = channels.external_reader
+            with patch.object(
+                channels,
+                "external_reader",
+                side_effect=lambda platform: (
+                    account if platform == outcome_seed.PLATFORM else real_reader(platform)
+                ),
+            ):
+                bi_repo.save_product_economics(
+                    self.conn, self.brand_id, self.product_id, selling_price=200, currency="TWD",
+                    confirmed_by=ACTOR, actor=ACTOR, unit_variable_cost=100,
+                )
+                campaign = ads_repo.create_campaign(
+                    self.conn,
+                    self.org_id,
+                    self.brand_id,
+                    {
+                        "name": "Completed period ranking",
+                        "goal_text": "Period purchases",
+                        "objective": "購買",
+                        "target_cost": None,
+                        "start_date": date(2026, 10, 24),
+                        "end_date": date(2026, 10, 30),
+                        "status": "live",
+                        "context_json": {"product_ids": [self.product_id]},
+                    },
+                    created_by=ACTOR,
+                )
+                group = self._group(campaign["id"])
+                ads = [
+                    self._ad(
+                        campaign["id"],
+                        group["id"],
+                        name=name,
+                        angle=name,
+                        pain="effort",
+                        customer_group_id=self.groups[0]["id"],
+                    )
+                    for name in ("A", "B")
+                ]
+                entities = outcome_seed.bind_platform(
+                    self.conn, self.org_id, self.brand_id, campaign["id"]
+                )
+                for ad, spend, results in ((ads[0], 100, 1), (ads[1], 200, 3)):
+                    for day in (24, 25, 26, 27):
+                        external_repository.upsert_observation(
+                            self.conn,
+                            self.org_id,
+                            self.brand_id,
+                            campaign["id"],
+                            {
+                                "entity_id": entities[ad["id"]],
+                                "day": date(2026, 10, day),
+                                "metric_scope": "ad",
+                                "attribution_key": "test",
+                                "currency": "TWD",
+                                "source": "test",
+                                "spend": 9999 if day == 27 and ad == ads[1] else spend,
+                                "purchases": results,
+                            },
+                            result_kind="purchase",
+                            result_count=results,
+                            result_action="omni_purchase",
+                            result_attribution="7d_click+1d_view",
+                        )
+                self.conn.commit()
+                written = coordinate_learning.write_coordinate_learnings(
+                    self.conn, self.org_id, self.brand_id, campaign["id"], actor=ACTOR
+                )
+                scopes = {row["source_cycle_id"]: row["applicability_scope"] for row in written}
+                self.assertIn("spend=600；cpr=66.67", scopes[f"{campaign['id']}:{ads[1]['id']}"])
+                self.assertIn("spend=300；cpr=100", scopes[f"{campaign['id']}:{ads[0]['id']}"])
+                self.assertEqual(
+                    coordinate_learning.write_coordinate_learnings(
+                        self.conn, self.org_id, self.brand_id, campaign["id"], actor=ACTOR
+                    ),
+                    [],
+                )
 
 
 class CloseWritesRankedRowsTest(CoordinateLearningTestBase):

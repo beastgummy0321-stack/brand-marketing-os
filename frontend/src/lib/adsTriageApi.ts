@@ -53,6 +53,10 @@ export interface TriageWindow {
 /** F28-I01: the one cost-per-result cap (screen word 上限) -- the user's own, else break-even
  * using product economics; never a trailing actual. */
 export type CapBasis = "own" | "break_even";
+export interface CapComparison {
+  basis: string | null; currency: string | null; reason: string | null;
+  message: string | null; source?: string | null; unit_basis?: string | null;
+}
 export interface TriageTargetView {
   value: number | null; basis: CapBasis | null;
   result_kind: string | null;
@@ -62,18 +66,22 @@ export interface TriageTargetView {
   // F28-I14: the triage `target` is the full cap view, so these always arrive (ruler 打平 mark,
   // ROAS 參考 = price ÷ cap); optional only because older hand-written test factories omit them.
   break_even?: number | null; price?: number | null;
+  cap_unit?: Omit<CapComparison, "reason" | "message">;
+  break_even_unit?: Omit<CapComparison, "reason" | "message">;
 }
 /** F28-I01 cap view (`app/ads/targets.py::resolve`): campaign detail `cap`, triage `target`.
  * `break_even`/`price` are sent even when an own cap wins (打平 mark, ROAS 參考 = price ÷ cap). */
 export interface CapView extends TriageTargetView {
   own_value: number | null; break_even: number | null; price: number | null;
   product_id: string | null; revision: number;
+  price_unit?: Omit<CapComparison, "reason" | "message">;
 }
 export interface TriageMetricsView {
   spend: number | null; result_count: number | null; cost_per_result: number | null;
   result_kind: string | null;
   result_label: string; // F19-I06: see `TriageTargetView.result_label`.
   derived_zero_days: number; reason: string | null;
+  currency?: string | null;
 }
 /** F48 Contract R: the graded window's sample size -- `few` is shown beside the grade (「樣本少」), never a gate.
  * `sales` = known result count (`null` unknown); `few` = 1 to `rules.grade.sample_few - 1` sales; `too_new` = data
@@ -117,6 +125,7 @@ export interface TriageItem {
   previous_grade: RankedGrade | null; grade_move: GradeMove | null;
   window: TriageWindow; target: TriageTargetView;
   current: TriageMetricsView; previous: TriageMetricsView;
+  cap_comparison?: CapComparison; previous_cap_comparison?: CapComparison;
   change_pct: number | null; sample: TriageSampleView;
   // F27-I01: optional -- existing hand-written test factories don't set these (real responses
   // always carry them, same `do_not_touch`-vs-`touch` reasoning as `TriageData` below).

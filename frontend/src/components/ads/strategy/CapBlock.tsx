@@ -20,6 +20,7 @@ import { Chip, Disclosure, Segmented, TargetRuler, formatAmount, type RulerAd, t
 
 const TARGET_CONFLICT = "target_conflict";
 const fmt = (v: number | null | undefined) => formatAmount(v) ?? "未知";
+const unitMoney = (value: number, currency: string | null | undefined) => `${fmt(value)} ${currency ?? "幣別未知"}`;
 /** ROAS 參考 = price ÷ cap, two decimals at most (kit formatter). */
 const roas = (price: number, cap: number) => <Figure basis="roas_at_cap" value={roasAtCap(price, cap)} />;
 const errorText = (err: unknown, fallback: string) => (err instanceof Error ? err.message : fallback);
@@ -32,6 +33,9 @@ export function CapBlock({ brandId, campaign: c, onCampaignChange }: {
   onCampaignChange: (campaign: CampaignDetail) => void;
 }) {
   const cap = c.cap;
+  const capCurrency = cap.cap_unit?.currency ?? null;
+  const breakEvenCurrency = cap.break_even_unit?.currency ?? null;
+  const priceCurrency = cap.price_unit?.currency ?? null;
   const hasCap = cap.value !== null;
   const [editOpen, setEditOpen] = useState(false);
   const editing = editOpen || !hasCap;
@@ -65,15 +69,19 @@ export function CapBlock({ brandId, campaign: c, onCampaignChange }: {
     if (!showsBreakEven) return;
     let cancelled = false;
     getTarget(brandId, c.id)
-      .then((t) => { if (!cancelled) setCost(t.cost); })
+      .then((t) => { if (!cancelled) setCost(breakEvenCurrency && t.break_even_unit?.currency === breakEvenCurrency ? t.cost : null); })
       .catch(() => { /* the line stays without the subtraction */ });
     return () => { cancelled = true; };
-  }, [brandId, c.id, showsBreakEven, cap.revision, cap.value]);
+  }, [brandId, c.id, showsBreakEven, cap.revision, cap.value, breakEvenCurrency]);
 
   const trimmed = value.trim();
   const typed = /^[1-9]\d*$/.test(trimmed) ? Number(trimmed) : null;
   const breakEven = cap.break_even;
   const price = cap.price;
+  const fillReason = breakEvenCurrency === "TWD" ? undefined : breakEvenCurrency
+    ? `打平線是 ${breakEvenCurrency}，不能直接作為 TWD 上限`
+    : "打平線的幣別尚未核實，不能直接作為 TWD 上限";
+  const comparisonReason = "售價、打平線與上限的幣別不同或尚未核實，暫時不能比較。";
 
   async function save(body: TargetRequest) {
     setSaving(true);
@@ -112,8 +120,9 @@ export function CapBlock({ brandId, campaign: c, onCampaignChange }: {
       : typed === null
         ? <span className="text-danger">請填大於 0 的整數金額</span>
         : <span className="text-muted-foreground">
-            {breakEven !== null && (typed >= breakEven ? `比打平 ${fmt(breakEven)} 高 ${fmt(typed - breakEven)}` : `比打平 ${fmt(breakEven)} 低 ${fmt(breakEven - typed)}`)}
-            {price !== null && <>{breakEven !== null ? "・" : ""}ROAS {roas(price, typed)}</>}
+            {breakEven !== null && breakEvenCurrency === "TWD" && (typed >= breakEven ? `比打平 ${unitMoney(breakEven, breakEvenCurrency)} 高 ${fmt(typed - breakEven)}` : `比打平 ${unitMoney(breakEven, breakEvenCurrency)} 低 ${fmt(breakEven - typed)}`)}
+            {price !== null && priceCurrency === "TWD" && <>{breakEven !== null && breakEvenCurrency === "TWD" ? "・" : ""}ROAS {roas(price, typed)}</>}
+            {(breakEven !== null && breakEvenCurrency !== "TWD" || price !== null && priceCurrency !== "TWD") && comparisonReason}
           </span>;
     const beFill = breakEven !== null ? Math.round(breakEven) : null;
     left = (
@@ -131,7 +140,7 @@ export function CapBlock({ brandId, campaign: c, onCampaignChange }: {
               autoFocus={editOpen}
             />
           </label>
-          {beFill !== null && <Button variant="outline" size="sm" onClick={() => setValue(String(beFill))}>用打平 {fmt(beFill)}</Button>}
+          {beFill !== null && <Button variant="outline" size="sm" disabledReason={fillReason} onClick={() => setValue(String(beFill))}>用打平 {unitMoney(beFill, breakEvenCurrency)}</Button>}
           <Button variant="outline" busy={saving} disabledReason={typed === null ? "請填大於 0 的整數上限" : undefined} onClick={() => typed !== null && saveOwn(typed)}>{saving ? "儲存中…" : "儲存上限"}</Button>
           {editOpen && hasCap && <Button variant="ghost" size="sm" busy={saving} onClick={() => { setEditOpen(false); setValue(""); setError(null); }}>取消</Button>}
         </div>
@@ -151,13 +160,14 @@ export function CapBlock({ brandId, campaign: c, onCampaignChange }: {
     left = (
       <div>
         <div className="text-sm text-muted-foreground">上限・每賣一筆最多花</div>
-        <div className="mt-1 flex flex-wrap items-center gap-2.5"><CapValue value={v} /><Chip tone="warn">暫用打平</Chip></div>
+        <div className="mt-1 flex flex-wrap items-center gap-2.5"><CapValue value={v} currency={capCurrency} /><Chip tone="warn">暫用打平</Chip></div>
         <div className="numeric mt-1 text-xs text-muted-foreground">
-          {`打平線 ${fmt(v)}`}
-          {price !== null && <>{cost !== null ? `：售價 ${fmt(price)} − 成本含運 ${fmt(cost)}` : `・售價 ${fmt(price)}`}・ROAS {roas(price, v)}</>}
+          {`打平線 ${unitMoney(v, breakEvenCurrency)}`}
+          {price !== null && <>・售價 {unitMoney(price, priceCurrency)}{cost !== null && breakEvenCurrency && priceCurrency === breakEvenCurrency ? ` − 成本含運 ${unitMoney(cost, breakEvenCurrency)}` : ""}</>}
+          {price !== null && capCurrency && priceCurrency === capCurrency ? <>・ROAS {roas(price, v)}</> : price !== null && `・${comparisonReason}`}
         </div>
         <div className="mt-3 flex flex-wrap gap-2">
-          <Button variant="outline" size="sm" busy={saving} onClick={() => saveOwn(v)}>就用 {fmt(v)}</Button>
+          <Button variant="outline" size="sm" busy={saving} disabledReason={fillReason} onClick={() => saveOwn(v)}>就用 {unitMoney(v, breakEvenCurrency)}</Button>
           <Button variant="ghost" size="sm" busy={saving} onClick={() => setEditOpen(true)}>設定自己的上限</Button>
         </div>
       </div>
@@ -169,14 +179,15 @@ export function CapBlock({ brandId, campaign: c, onCampaignChange }: {
     const source = c.context_json?.field_sources?.cap;
     const ownWord = source === "parsed" || source === "system" ? "猜的，請確認"
       : source === "copied" ? "沿用上一期" : source === "break_even" ? "打平線"
-      : breakEven !== null && cap.own_value === breakEven ? "打平值" : "自己填";
+      : breakEven !== null && capCurrency && breakEvenCurrency === capCurrency && cap.own_value === breakEven ? "打平值" : "自己填";
     left = (
       <div>
         <div className="text-sm text-muted-foreground">上限・每賣一筆最多花</div>
-        <div className="mt-1 flex flex-wrap items-center gap-2.5"><CapValue value={v} /><Chip>{ownWord}</Chip></div>
+        <div className="mt-1 flex flex-wrap items-center gap-2.5"><CapValue value={v} currency={capCurrency} /><Chip>{ownWord}</Chip></div>
         {(price !== null || breakEven !== null) && (
           <div className="numeric mt-1 text-xs text-muted-foreground">
-            {price !== null && <>ROAS {roas(price, v)}</>}{breakEven !== null && `・打平 ${fmt(breakEven)}`}
+            {price !== null && capCurrency && priceCurrency === capCurrency && <>ROAS {roas(price, v)}</>}{breakEven !== null && `・打平 ${unitMoney(breakEven, breakEvenCurrency)}`}
+            {(price !== null && (!capCurrency || priceCurrency !== capCurrency) || breakEven !== null && (!capCurrency || breakEvenCurrency !== capCurrency)) && `・${comparisonReason}`}
           </div>
         )}
         <div className="mt-3"><Button variant="outline" size="sm" onClick={() => setEditOpen(true)}>修改</Button></div>
@@ -184,7 +195,7 @@ export function CapBlock({ brandId, campaign: c, onCampaignChange }: {
     );
   }
 
-  const rulerCap: RulerCap | null = hasCap && cap.basis ? { value: cap.value as number, basis: cap.basis } : null;
+  const rulerCap: RulerCap | null = hasCap && cap.basis ? { value: cap.value as number, basis: cap.basis, currency: capCurrency } : null;
   const items = triage.status === "ready" ? triage.items : [];
   const ads: RulerAd[] = items.map((item) => ({
     id: item.entity_id,
@@ -193,6 +204,8 @@ export function CapBlock({ brandId, campaign: c, onCampaignChange }: {
     gradeLabel: item.grade_label,
     costPerResult: item.current.cost_per_result,
     spend: item.current.spend,
+    currency: item.current.currency, comparisonReason: item.cap_comparison?.reason,
+    comparisonMessage: item.cap_comparison?.message,
     thumbnailUrl: item.thumbnail_url,
   }));
   const needsSource = cap.missing.includes("product") || cap.missing.includes("result_kind");
@@ -212,7 +225,7 @@ export function CapBlock({ brandId, campaign: c, onCampaignChange }: {
         </span>
         {left}
         <div className="min-w-0">
-          <TargetRuler ads={ads} cap={rulerCap} breakEven={breakEven} size="mid" tray={false} />
+          <TargetRuler ads={ads} cap={rulerCap} breakEven={breakEven} breakEvenCurrency={breakEvenCurrency} size="mid" tray={false} />
           {triage.status === "error" && (
             <p role="alert" className="mt-2 flex flex-wrap items-center gap-2 text-xs text-warning">
               廣告讀取失敗：{triage.message}
@@ -239,8 +252,8 @@ export function CapBlock({ brandId, campaign: c, onCampaignChange }: {
   );
 }
 
-function CapValue({ value }: { value: number }) {
-  return <span className="numeric text-[30px] leading-[1.1] font-[650] tracking-[-0.025em]">{formatMoney(value, "TWD")}</span>;
+function CapValue({ value, currency }: { value: number; currency: string | null }) {
+  return <span className="numeric text-[30px] leading-[1.1] font-[650] tracking-[-0.025em]">{currency ? formatMoney(value, currency) : unitMoney(value, null)}</span>;
 }
 
 /** The fold for a campaign that has no product or no result kind yet: the product break-even needs one, grading

@@ -190,11 +190,21 @@ class GradePeriodTest(unittest.TestCase):
         self.assertEqual(rows["台幣"]["spend"], 500.0)
         self.assertEqual(rows["美金"]["spend"], 50.0)
         self.assertEqual(rows["美金"]["cap"], 10.0)  # each ad against its own campaign's cap
+        self.assertEqual(rows["台幣"]["currency"], "TWD")
+        self.assertEqual(rows["美金"]["currency"], "USD")
+        self.assertEqual(rows["台幣"]["grade"], "on_target")
+        self.assertEqual(rows["美金"]["grade"], "insufficient")
+        self.assertEqual(rows["美金"]["reason_code"], "cap_currency_mismatch")
+        self.assertEqual(rows["美金"]["cap_comparison"]["currency"], "TWD")
+        self.assertEqual(rows["美金"]["cap_comparison"]["source"], "user")
         summary = period_grades.summarize(list(rows.values()))
         self.assertIsNone(summary["spent"])
         on_target = next(b for b in summary["buckets"] if b["grade"] == "on_target")
-        self.assertEqual(on_target["count"], 2)
-        self.assertIsNone(on_target["amount"])
+        self.assertEqual(on_target["count"], 1)
+        self.assertEqual(on_target["amount"], 500.0)
+        insufficient = next(b for b in summary["buckets"] if b["grade"] == "insufficient")
+        self.assertEqual(insufficient["count"], 1)
+        self.assertEqual(insufficient["amount"], 50.0)
 
     def test_no_cap_is_not_judged(self):
         uncapped = self.make_campaign("沒上限", "c3", cap=None)

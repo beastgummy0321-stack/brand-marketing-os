@@ -18,6 +18,7 @@ import {
   type CampaignDetail,
   type CampaignLabels,
   type CampaignPerformance,
+  type ImportedCampaignPerformance,
 } from "@/lib/adsApi";
 import { CloseCampaignDialog, DayChips, EARLY_CLOSE_SENTENCE, coveredRange, shortDay } from "./CloseCampaignDialog";
 import { ExperimentPlan } from "./ExperimentPlan";
@@ -51,8 +52,8 @@ function fmtPurchases(v: number | null): string {
 function fmtCpa(v: number | null): string {
   return v === null ? "算不出來" : formatMoney(v, "TWD");
 }
-function fmtMetricValue(metric: VerdictMetric, v: number | null): ReactNode {
-  if (metric === "cpa") return fmtCpa(v);
+function fmtMetricValue(metric: VerdictMetric, v: number | null, currency: string | null): ReactNode {
+  if (metric === "cpa") return v === null ? "算不出來" : formatMoney(v, currency ?? "幣別未知");
   if (metric === "purchases") return fmtPurchases(v);
   return <Figure basis="roas_all_spend" value={v} />;
 }
@@ -65,6 +66,8 @@ interface AdsVerdictJson {
   sample_bucket?: string;
   missing?: string;
   close_reason?: string;
+  scope?: {currency?: string | null};
+  cap_comparison?: {currency?: string | null};
 }
 
 const VERDICT_TONE: Record<string, "default" | "destructive" | "outline"> = {
@@ -73,7 +76,7 @@ const VERDICT_TONE: Record<string, "default" | "destructive" | "outline"> = {
   看不出: "outline",
 };
 
-function buildTrendOption(daily: PerformanceView["daily"], native = false, currency: string | null = null, bases?: FigureBases): EChartsOption {
+function buildTrendOption(daily: PerformanceView["daily"], native = false, currency: string | null = null, bases?: FigureBases, scoped = false): EChartsOption {
   const roasLabel = `ROAS${bases?.roas_all_spend ? `（${bases.roas_all_spend.label}）` : ""}`;
   return {
     grid: { left: 56, right: 56, top: 28, bottom: 40 },
@@ -95,7 +98,7 @@ function buildTrendOption(daily: PerformanceView["daily"], native = false, curre
         const lines = [`<b>${list[0]?.axisValue ?? ""}</b>`];
         for (const p of list) {
           lines.push(
-            `${p.seriesName}：${p.seriesName === "花費" ? (native ? nativeMoney(p.value, currency) : formatCurrency(p.value)) : (p.value === null ? "不明" : formatFigure("ratio", p.value))}`,
+            `${p.seriesName}：${p.seriesName === "花費" ? (native || scoped ? nativeMoney(p.value, daily.find(day => day.day === p.axisValue)?.currency ?? currency) : formatCurrency(p.value)) : (p.value === null ? "不明" : formatFigure("ratio", p.value))}`,
           );
         }
         return lines.join("<br/>");
@@ -129,9 +132,9 @@ function buildTrendOption(daily: PerformanceView["daily"], native = false, curre
 function nativeMoney(value: number | null, currency: string | null) {
   return value === null ? "未知" : `${value.toLocaleString("zh-TW", { maximumFractionDigits: 2 })} ${currency ?? "幣別未知"}`;
 }
-function TrendChart({ daily, native, currency }: { daily: PerformanceView["daily"]; native: boolean; currency: string | null }) {
+function TrendChart({ daily, native, currency, scoped }: { daily: PerformanceView["daily"]; native: boolean; currency: string | null; scoped: boolean }) {
   const bases = useFigureBases();
-  const option = useMemo(() => buildTrendOption(daily, native, currency, bases), [daily, native, currency, bases]);
+  const option = useMemo(() => buildTrendOption(daily, native, currency, bases, scoped), [daily, native, currency, bases, scoped]);
   const ref = useEchart(option);
   return <div ref={ref} className="h-64 w-full" />;
 }
@@ -185,10 +188,6 @@ export function PerformanceTab({
   // 「廣告花費占比」那一列；比對不到就印一行「這則廣告沒有成效資料」，不是靜默失敗。
   const highlightAd = searchParams.get("ad");
   const imported = c.origin === "imported";
-  const scopes = useMemo(() => nativeMetricScopes(c.external_view), [c.external_view]);
-  const [scopeKey, setScopeKey] = useState<string>();
-  const selectedScope = scopes.find(scope => scope.key === scopeKey) ?? (highlightAd ? scopes.find(scope => scope.metricScope === "ad") : undefined) ?? scopes[0];
-  const nativeData = useMemo(() => nativePerformance(c.external_view, selectedScope?.key), [c.external_view, selectedScope?.key]);
   const life = c.lifecycle?.state ?? null;
   const published = life !== null && life !== "draft";
   const labels = c.labels ?? DEFAULT_LABELS;
@@ -197,16 +196,21 @@ export function PerformanceTab({
   const [state, setState] = useState<
     | { status: "loading" }
     | { status: "error"; message: string }
-    | { status: "ready"; data: CampaignPerformance }
+    | { status: "ready"; data: CampaignPerformance | ImportedCampaignPerformance }
   >({ status: "loading" });
+  const nativeView = state.status === "ready" && "external_view" in state.data ? state.data.external_view : undefined;
+  const scopes = useMemo(() => nativeMetricScopes(nativeView), [nativeView]);
+  const [scopeKey, setScopeKey] = useState<string>();
+  const selectedScope = scopes.find(scope => scope.key === scopeKey) ?? (highlightAd ? scopes.find(scope => scope.metricScope === "ad") : undefined) ?? scopes[0];
+  const nativeData = useMemo(() => nativePerformance(nativeView, selectedScope?.key), [nativeView, selectedScope?.key]);
   const [comparisonRefresh, setComparisonRefresh] = useState(0);
   // F40-I06: the dialog itself is `CloseCampaignDialog` (shared with the 這期狀態列); mounted only while open.
   const [closeOpen, setCloseOpen] = useState(false);
 
   const load = useCallback(() => {
-    if (!published || imported) return;
+    if (!published && !imported) return;
     setState({ status: "loading" });
-    getPerformance(brandId, c.id)
+    (imported ? getPerformance(brandId, c.id, true) : getPerformance(brandId, c.id))
       .then((data) => setState({ status: "ready", data }))
       .catch((err: unknown) =>
         setState({ status: "error", message: err instanceof Error ? err.message : "讀取成效失敗。" }),
@@ -252,10 +256,10 @@ export function PerformanceTab({
 
   return (
     <div className="flex flex-col gap-4">
-      {imported ? (
+      {state.status === "ready" && imported && nativeView ? (
         <PerformanceReady simulated={false} native data={nativeData} labels={labels} refreshing={syncing}
           onRefresh={() => onSync?.()} refreshDisabled={!onSync} currency={selectedScope?.currency ?? null} note={syncNote}
-          scopeCaption={`${selectedScope?.label ?? "尚無資料範圍"} · ${c.external_view?.window.start ?? "未知"} ～ ${c.external_view?.window.end ?? "未知"}`}
+          scopeCaption={`${selectedScope?.label ?? "尚無資料範圍"} · ${nativeView.window.start ?? "未知"} ～ ${nativeView.window.end ?? "未知"}`}
           scopeControl={scopes.length > 0 ? <label className="flex flex-col gap-1 text-sm">資料範圍<select className="input-field" value={selectedScope?.key} onChange={event => setScopeKey(event.target.value)}>{scopes.map(scope => <option key={scope.key} value={scope.key}>{scope.label}</option>)}</select></label> : null}
           highlightAd={highlightAd} />
       ) : state.status === "loading" ? (
@@ -264,11 +268,11 @@ export function PerformanceTab({
         </div>
       ) : state.status === "error" ? (
         <EmptyState title="讀取失敗" description={state.message} onAction={load} actionLabel="重新載入" />
-      ) : (
+      ) : state.status === "ready" && "totals" in state.data ? (
         <PerformanceReady simulated={!!c.simulation_mode || c.external_id?.startsWith("sim_") === true}
           data={state.data} labels={labels} refreshing={syncing} onRefresh={() => onSync?.()} refreshDisabled={!onSync} note={syncNote}
           highlightAd={highlightAd} />
-      )}
+      ) : <EmptyState title="讀取失敗" description="成效資料範圍不符，請重新載入。" onAction={load} actionLabel="重新載入" />}
 
       {(imported || c.lifecycle?.can_close === true) && (
         <div className="surface">
@@ -334,12 +338,14 @@ function PerformanceReady({
   note?: SyncNote | null;
 }) {
   const t = data.totals;
-  const money = (value: number | null) => native ? nativeMoney(value, currency) : formatCurrency(value);
-  const count = (value: number | null) => native && value === null ? "未知" : fmtPurchases(value);
-  const cpa = (value: number | null) => native
-    ? value === null ? "未知" : `${perSaleAmount(value)} ${currency ?? "幣別未知"}`
+  const scoped = data.scope !== undefined;
+  const displayCurrency = native ? currency : data.scope?.currency ?? null;
+  const money = (value: number | null, rowCurrency = displayCurrency) => native || scoped ? nativeMoney(value, rowCurrency) : formatCurrency(value);
+  const count = (value: number | null) => (native || scoped) && value === null ? "未知" : fmtPurchases(value);
+  const cpa = (value: number | null, rowCurrency = displayCurrency) => native || scoped
+    ? value === null ? "未知" : `${perSaleAmount(value)} ${rowCurrency ?? "幣別未知"}`
     : fmtCpa(value);
-  const percent = (value: number | null) => native && value === null ? "未知" : formatPercent(value);
+  const percent = (value: number | null) => (native || scoped) && value === null ? "未知" : formatPercent(value);
   const source = simulated ? "模擬回收" : "平台回報";
   const latestDay = data.daily[data.daily.length - 1]?.day ?? null;
   // F37 Contract P: the internal campaign's platform-read coverage (the native view has its own caption).
@@ -381,6 +387,9 @@ function PerformanceReady({
         <div className="surface-body flex flex-col gap-2">
           {note && !refreshing && <p role="status" data-state={note.state} className={`text-xs ${syncNoteTone(note)}`}>{note.text}</p>}
           <p className="text-sm font-medium">{outcome}</p>
+          {data.scope && <p className="text-xs text-muted-foreground">{data.scope.caption}</p>}
+          {data.scope?.reason_text && <p className="text-xs text-warning">{data.scope.reason_text}</p>}
+          {data.cap_comparison?.message && <p className="text-xs text-warning">{data.cap_comparison.message}</p>}
           {native && <p className="text-xs text-muted-foreground">{scopeCaption}。僅彙整已讀回資料，完整性未知。</p>}
           <p className="text-xs text-muted-foreground">資料狀態：{readStatus}；來源為{source}。</p>
           {missingDays.length > 0 && (
@@ -412,7 +421,7 @@ function PerformanceReady({
           {native && <p className="text-xs text-muted-foreground">目前指標只計算所選層級、幣別與歸因；不同層級不相加。缺少資料顯示未知，不推算缺漏天數。</p>}
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <Kpi label="點擊率" value={percent(t.ctr)} caption="累計點擊 ÷ 曝光" />
-            <Kpi label="曝光" value={native && t.impressions === null ? "未知" : formatCount(t.impressions)} caption={`累計曝光・${source}`} />
+            <Kpi label="曝光" value={t.impressions === null ? "未知" : formatCount(t.impressions)} caption={`累計曝光・${source}`} />
           </div>
 
       <div className="surface">
@@ -423,7 +432,7 @@ function PerformanceReady({
           {data.daily.length === 0 ? (
             <p className="py-6 text-center text-sm text-muted-foreground">還沒有每日資料。</p>
           ) : (
-            <TrendChart daily={data.daily} native={native} currency={currency} />
+            <TrendChart daily={data.daily} native={native} currency={displayCurrency} scoped={scoped} />
           )}
           <ul className="flex flex-col gap-1 text-xs text-muted-foreground">
             {data.coverage != null && data.coverage.expected > 0 && (
@@ -446,8 +455,8 @@ function PerformanceReady({
               <th className="px-3 py-2 font-medium">{native ? "ROAS" : "ROAS（保守／樂觀）"}</th>
             </tr></thead>
             <tbody>{data.daily.length ? data.daily.map((day) => <tr key={day.day} className="border-t border-border">
-              <td className="px-3 py-2">{day.day}</td><td className="px-3 py-2">{money(day.spend)}</td>
-              <td className="px-3 py-2">{count(day.purchases)}</td><td className="px-3 py-2">{cpa(day.cpa)}</td>
+              <td className="px-3 py-2">{day.day}</td><td className="px-3 py-2">{money(day.spend, day.currency ?? displayCurrency)}</td>
+              <td className="px-3 py-2">{count(day.purchases)}</td><td className="px-3 py-2">{cpa(day.cpa, day.currency ?? displayCurrency)}</td>
               <td className="px-3 py-2">{<Figure basis="roas_all_spend" value={day.roas_all_spend} alt={native ? undefined : {basis: "roas_tracked_spend", value: day.roas_tracked_spend}} />}</td>
             </tr>) : <tr><td colSpan={5} className="px-3 py-6 text-center text-muted-foreground">還沒有每日資料。</td></tr>}</tbody>
           </table>
@@ -482,9 +491,9 @@ function PerformanceReady({
                 data.groups.map((g) => (
                   <tr key={g.group_id} className="border-t border-border">
                     <td className="px-3 py-2">{g.name}</td>
-                    <td className="px-3 py-2">{money(g.spend)}</td>
+                    <td className="px-3 py-2">{money(g.spend, g.currency ?? displayCurrency)}</td>
                     <td className="px-3 py-2">{count(g.purchases)}</td>
-                    <td className="px-3 py-2">{cpa(g.cpa)}</td>
+                    <td className="px-3 py-2">{cpa(g.cpa, g.currency ?? displayCurrency)}</td>
                     <td className="px-3 py-2">
                       {<Figure basis="roas_all_spend" value={g.roas_all_spend} alt={native ? undefined : {basis: "roas_tracked_spend", value: g.roas_tracked_spend}} />}
                     </td>
@@ -530,7 +539,7 @@ function PerformanceReady({
                     )}
                   >
                     <td className="px-3 py-2">{a.name}</td>
-                    <td className="px-3 py-2">{money(a.spend)}</td>
+                    <td className="px-3 py-2">{money(a.spend, a.currency ?? displayCurrency)}</td>
                     <td className="px-3 py-2">{percent(a.spend_share)}</td>
                   </tr>
                 ))
@@ -572,12 +581,12 @@ function VerdictCard({ brandId, campaign: c }: { brandId: string; campaign: Camp
           <div className="field-card">
             <div className="text-xs text-muted-foreground">上限</div>
             <div className="text-sm font-semibold">
-              {vj.target == null ? "未設定" : fmtMetricValue(metric, vj.target)}
+              {vj.target == null ? "未設定" : fmtMetricValue(metric, vj.target, vj.cap_comparison?.currency ?? null)}
             </div>
           </div>
           <div className="field-card">
             <div className="text-xs text-muted-foreground">實際</div>
-            <div className="text-sm font-semibold">{fmtMetricValue(metric, vj.actual ?? null)}</div>
+            <div className="text-sm font-semibold">{fmtMetricValue(metric, vj.actual ?? null, vj.scope?.currency ?? null)}</div>
           </div>
           <div className="field-card">
             <div className="text-xs text-muted-foreground">樣本</div>

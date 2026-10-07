@@ -76,12 +76,17 @@ const OWN_450: Cap = { value: 450, basis: "own", break_even: 520 };
 function ad(id: string, name: string, grade: TriageItem["grade"], spend: number | null, results: number | null, cap: Cap = OWN_450, extra: Partial<TriageItem> = {}): TriageItem {
   const labels = { on_target: "划算", watch: "偏貴", over: "太貴", wasted: "沒賣出", insufficient: "剛開始、數字還不夠", no_target: "未判斷" };
   const cost = spend !== null && results ? Math.round((spend / results) * 100) / 100 : null;
-  const metrics = { spend, result_count: results, cost_per_result: cost, result_kind: "purchase", result_label: "購買", derived_zero_days: 0, reason: null };
+  const metrics = { spend, result_count: results, cost_per_result: cost, result_kind: "purchase", result_label: "購買", derived_zero_days: 0, reason: null, currency: "TWD" };
+  const capUnit = {basis: cap.basis, currency: cap.basis ? "TWD" : null,
+    source: cap.basis === "own" ? "user" : "product_economics",
+    unit_basis: cap.basis === "own" ? "manual_ntd_input" : "confirmed_product_economics"};
   return {
     entity_id: id, native_id: `n_${id}`, name, campaign_id: "cmp_1", campaign_name: CAMPAIGN_NAME, thumbnail_url: null,
     class: "flat", label: "持平", reason_code: "", grade, grade_label: labels[grade], previous_grade: null, grade_move: null,
     window: { start: "2026-09-10", end: "2026-09-23", days: 14, previous_start: "2026-08-27", previous_end: "2026-09-09", extended_from: null },
-    target: { value: cap.value, basis: cap.basis, result_kind: "purchase", result_label: "購買", missing: [], break_even: cap.break_even ?? null },
+    target: { value: cap.value, basis: cap.basis, result_kind: "purchase", result_label: "購買", missing: [], break_even: cap.break_even ?? null, cap_unit: capUnit,
+      break_even_unit: {basis: "break_even", currency: cap.break_even === undefined || cap.break_even === null ? null : "TWD", source: "product_economics", unit_basis: "confirmed_product_economics"}},
+    cap_comparison: {...capUnit, reason: null, message: null},
     current: metrics, previous: { ...metrics, spend: null, result_count: null, cost_per_result: null }, change_pct: null,
     sample: { gate: grade !== "insufficient", spend_multiple: null, days_with_events: 10 },
     ...extra,
@@ -217,7 +222,7 @@ describe("CampaignDetailPage (F28-I10, v10 tabPerf F29-I13)", () => {
     vi.mocked(getTriage).mockResolvedValue(triage(dailyAds()));
     const { container } = renderPage();
 
-    expect(await rulerTitle()).toBe("在投 8 則對照上限 450");
+    expect(await rulerTitle()).toBe("在投 8 則對照上限 450 TWD");
     expect(screen.getByRole("heading", { level: 1, name: CAMPAIGN_NAME })).toBeTruthy();
     // The legend and the money rule print once per screen; the dashed 打平 mark is named under the ruler.
     expect(container.querySelectorAll("[data-slot=grade-rules]").length).toBe(1);
@@ -230,7 +235,7 @@ describe("CampaignDetailPage (F28-I10, v10 tabPerf F29-I13)", () => {
     expect(screen.queryByRole("link", { name: /目標/ })).toBeNull();
     expect(screen.getByRole("link", { name: "全部資料 ›" }).getAttribute("href")).toBe(WS);
     expect(container.querySelector('[data-slot=target-ruler][data-variant="full"]')).toBeTruthy();
-    expect(screen.getByText("打平 520")).toBeTruthy();
+    expect(screen.getByText("打平 520 TWD")).toBeTruthy();
     expect(container.querySelector(".max-w-\\[1260px\\]")).toBeTruthy();
   });
 
@@ -251,7 +256,7 @@ describe("CampaignDetailPage (F28-I10, v10 tabPerf F29-I13)", () => {
     expect(within(screen.getByTestId("ad-row-a7")).getByRole("link", { name: "在清理提議" })).toBeTruthy();
     expect(within(screen.getByTestId("ad-row-a6")).getByRole("link", { name: "去處理" }).getAttribute("href")).toBe(`${WS}/review/a6`);
     expect(within(wasted).getByText("0 筆")).toBeTruthy();
-    expect(within(screen.getByTestId("ad-row-a7")).getByText("618 元")).toBeTruthy();
+    expect(within(screen.getByTestId("ad-row-a7")).getByText("618 TWD")).toBeTruthy();
     expect(screen.getByRole("link", { name: "看清理提議 →" }).getAttribute("href")).toBe(`${WS}/propose/cleanup/cmp_1`);
     expect(screen.getByRole("link", { name: "← 總覽" }).getAttribute("href")).toBe(WS);
 
@@ -289,7 +294,7 @@ describe("CampaignDetailPage (F28-I10, v10 tabPerf F29-I13)", () => {
     vi.mocked(getTriage).mockResolvedValue(triage(dailyAds(be)));
     renderPage();
 
-    expect(await rulerTitle()).toBe("在投 8 則對照暫用打平線 520");
+    expect(await rulerTitle()).toBe("在投 8 則對照暫用打平線 520 TWD");
     expect(screen.getByText("暫用打平 520", { selector: "[data-slot=chip]" }).getAttribute("data-tone")).toBe("warn");
     expect(screen.queryByText("打平 520")).toBeNull();
     expect(screen.queryByText(/^橘色虛線：/)).toBeNull();
@@ -345,7 +350,7 @@ describe("CampaignDetailPage (F28-I10, v10 tabPerf F29-I13)", () => {
     expect(screen.getByRole("link", { name: "去設上限" }).getAttribute("href")).toBe(`${WS}?tab=strategy`);
     expect(container.querySelector("[data-slot=grade-rules]")).toBeNull();
     expect(detailsOf("未判斷").open).toBe(false);
-    expect(within(screen.getByTestId("ad-row-a2")).getByText("830.5 元")).toBeTruthy();
+    expect(within(screen.getByTestId("ad-row-a2")).getByText("830.5 TWD")).toBeTruthy();
     expect(container.querySelector("[data-slot=money-tag]")).toBeNull();
   });
 
@@ -382,7 +387,7 @@ describe("CampaignDetailPage (F28-I10, v10 tabPerf F29-I13)", () => {
     renderPage();
 
     expect(await screen.findByText(/^決策進度讀不到（佇列讀取失敗）/)).toBeTruthy();
-    expect(await rulerTitle()).toBe("在投 8 則對照上限 450");
+    expect(await rulerTitle()).toBe("在投 8 則對照上限 450 TWD");
     expect(within(screen.getByTestId("ad-row-a8")).queryByRole("link", { name: "在清理提議" })).toBeNull();
     // 「暫停」 needs no queue: the pause page reads the ad itself (F45-I06).
     expect(within(screen.getByTestId("ad-row-a8")).getByRole("link", { name: "暫停" })).toBeTruthy();
@@ -405,7 +410,7 @@ describe("CampaignDetailPage (F28-I10, v10 tabPerf F29-I13)", () => {
 
     vi.mocked(getTriage).mockResolvedValue(triage(dailyAds()));
     await userEvent.click(screen.getByRole("button", { name: "重試" }));
-    expect(await rulerTitle()).toBe("在投 8 則對照上限 450");
+    expect(await rulerTitle()).toBe("在投 8 則對照上限 450 TWD");
     expect(listCampaigns).toHaveBeenCalledTimes(1);
   });
 
@@ -538,7 +543,7 @@ describe("A/B block (F29-I13, v10 abBlock)", () => {
     await userEvent.click(await screen.findByRole("button", { name: "關掉輸家（A）→" }));
     expect(await screen.findByText("關掉輸家沒建立成：輸家那則還沒對應到平台上的廣告，先完成上架核對。")).toBeTruthy();
     expect(screen.queryByTestId("where")).toBeNull();
-    expect(await rulerTitle()).toBe("在投 8 則對照上限 450");
+    expect(await rulerTitle()).toBe("在投 8 則對照上限 450 TWD");
 
     vi.mocked(pauseAbLoser).mockResolvedValue({ id: "set_ab" } as ChangeSet);
     await userEvent.click(screen.getByRole("button", { name: "關掉輸家（A）→" }));
@@ -655,7 +660,7 @@ describe("換掉這一則 (F29-I13, v10 row menu)", () => {
     await userEvent.click(within(inUse).getByRole("button", { name: "取消換掉這一則" }));
     expect((await within(inUse).findByRole("alert")).textContent).toBe("取消換掉這一則沒成功：此素材需求已被核准的變更清單採用，不能取消。");
     expect(within(inUse).getByText("換掉這一則・需求已開")).toBeTruthy();
-    expect(await rulerTitle()).toBe("在投 8 則對照上限 450");
+    expect(await rulerTitle()).toBe("在投 8 則對照上限 450 TWD");
   });
 
   it("the material list fails: its own failure with retry; the rows and their decisions stay", async () => {
@@ -749,6 +754,10 @@ describe("這期狀態列 (F40-I06, prototype #/perf)", () => {
       daily: [], groups: [], ads: [],
       coverage: { start: "2026-09-26", end: "2026-10-02", expected: 7, missing: 0, missing_days: [], never_synced: false, ...o },
       last_data_at: "2026-10-02T13:00:00Z",
+      scope: {start: "2026-09-26", end: "2026-10-02", days: 7, basis: "campaign_window",
+        state: "ready", last_complete_day: "2026-10-02", incomplete_day_policy: "excluded",
+        day_basis: "account_timezone", account_timezone: "Asia/Taipei", currency: "TWD",
+        caption: "本期 2026-09-26 ～ 2026-10-02；只計完整帳戶日，今日尚未完整的資料不計入。"},
     };
   }
   /** The 4 platform ads: 3 bound to local ads, 1 built elsewhere (`bound_ad_id: null`). */
@@ -778,11 +787,11 @@ describe("這期狀態列 (F40-I06, prototype #/perf)", () => {
 
   it("live: five cells from getPerformance totals, the backend's grade chip 對上限 450, 平台已讀到, both buttons and the 整期 caption", async () => {
     renderBody(campaignDetail());
-    expect(await within(row()).findByText("10,081 元")).toBeTruthy();
+    expect(await within(row()).findByText("10,081 TWD")).toBeTruthy();
     expect(cellText("期間")).toBe("期間 09/26～10/02 7 天");
-    expect(cellText("花費")).toBe("花費 10,081 元 整期合計");
+    expect(cellText("花費")).toBe("花費 10,081 TWD 整期合計");
     expect(cellText("購買")).toBe("購買 19 筆 平台回報");
-    expect(cellText("每賣一筆")).toBe("每賣一筆 531 元 偏貴 對上限 450");
+    expect(cellText("每賣一筆")).toBe("每賣一筆 531 TWD 偏貴 對上限 450 幣別未知");
     expect(cellText("ROAS")).toBe("ROAS 保守 ? 1.88x ・ 樂觀 ? 1.88x");
     const grade = within(row()).getByText("偏貴").closest("[data-slot=chip]")!;
     expect(grade.getAttribute("data-grade")).toBe("watch");
@@ -814,14 +823,14 @@ describe("這期狀態列 (F40-I06, prototype #/perf)", () => {
 
   it("重新讀取平台 calls the workspace's sync; while it runs the button says 讀取中…; when it ends the row re-reads its numbers", async () => {
     const { onSync, rerender } = renderBody(campaignDetail());
-    await within(row()).findByText("10,081 元");
+    await within(row()).findByText("10,081 TWD");
     fireEvent.click(within(row()).getByRole("button", { name: "重新讀取平台" }));
     expect(onSync).toHaveBeenCalledTimes(1);
     rerender({ syncing: true });
     expect((within(row()).getByRole("button", { name: "讀取中…" }) as HTMLButtonElement).disabled).toBe(true);
     vi.mocked(getPerformance).mockResolvedValue(perf({}, { spend: 11581, purchases: 21 }));
     rerender({ syncing: false });
-    expect(await within(row()).findByText("11,581 元")).toBeTruthy();
+    expect(await within(row()).findByText("11,581 TWD")).toBeTruthy();
     expect(getPerformance).toHaveBeenCalledTimes(2);
   });
 
@@ -831,7 +840,7 @@ describe("這期狀態列 (F40-I06, prototype #/perf)", () => {
     vi.mocked(closeCampaign).mockResolvedValue(closed);
     vi.mocked(getCoordinateLearnings).mockResolvedValue(LEARNED);
     const { onCampaignChange } = renderBody(campaignDetail());
-    await within(row()).findByText("10,081 元");
+    await within(row()).findByText("10,081 TWD");
     await user.click(within(row()).getByRole("button", { name: "結案這一期 →" }));
     const dialog = await screen.findByRole("dialog");
     // F48-I11: no ad count (the planned ads are not the platform ads closeout ranks; that count is not on this payload).
@@ -849,7 +858,7 @@ describe("這期狀態列 (F40-I06, prototype #/perf)", () => {
   it("closed: the numbers stay, 重新讀取／結案 are gone; 已結案 with the two exits where 結案這一期 was", async () => {
     vi.mocked(getCoordinateLearnings).mockResolvedValue(LEARNED);
     renderBody(campaignDetail({ status: "closed", verdict: "達成", closed_at: "2026-10-03T02:00:00Z" }));
-    expect(await within(row()).findByText("10,081 元")).toBeTruthy();
+    expect(await within(row()).findByText("10,081 TWD")).toBeTruthy();
     expect(within(row()).getByText("已結案")).toBeTruthy();
     expect(within(row()).queryByRole("button", { name: "結案這一期 →" })).toBeNull();
     expect(within(row()).queryByRole("button", { name: "重新讀取平台" })).toBeNull();
@@ -864,27 +873,30 @@ describe("這期狀態列 (F40-I06, prototype #/perf)", () => {
   it("closed, learnings unreadable: both exits stay, the next period opens the plain create page", async () => {
     vi.mocked(getCoordinateLearnings).mockRejectedValue(new Error("讀取投放學到的失敗。"));
     renderBody(campaignDetail({ status: "closed", verdict: "達成", closed_at: "2026-10-03T02:00:00Z" }));
-    expect(await within(row()).findByText("10,081 元")).toBeTruthy();
+    expect(await within(row()).findByText("10,081 TWD")).toBeTruthy();
     expect(within(row()).getByRole("link", { name: "看學到什麼 →" })).toBeTruthy();
     expect(within(row()).getByRole("link", { name: "用這些學習排下一期 →" }).getAttribute("href")).toBe("/brands/brd_1/ads/new");
   });
 
-  it("imported: no close button, the capability's own sentence; totals come from the native view, never getPerformance", async () => {
+  it("imported: scoped public read, no close button and the capability's own sentence", async () => {
     const view = {
       entities: [{ id: "e1", platform: "meta", source_account: "act_1", native_kind: "adset", native_id: "n1", native_label: null, name: "新客", parent_native_id: null, native_status: "ACTIVE", start_date: null, end_date: null, budget_amount: null, budget_type: "daily", budget_raw: {}, currency: "TWD", last_success_at: "2026-10-02T13:00:00Z", sync_error: null, creative: {} }],
       observations: [{ id: "o1", entity_id: "e1", day: "2026-10-01", metric_scope: "adset", attribution_key: "default", currency: "TWD", spend: 500, impressions: 100, clicks: 10, purchases: 2, revenue: 1996, availability: {} }],
       next_entity_cursor: null, next_observation_cursor: null, window: { start: "2026-09-26", end: "2026-10-02" }, connections: [],
       sync: { entities: { status: "ok", last_success_at: "2026-10-02T13:00:00Z" }, observations: { status: "ok", last_success_at: "2026-10-02T13:30:00Z" } }, coverage: {},
     } as unknown as CampaignDetail["external_view"];
+    vi.mocked(getPerformance).mockResolvedValue({origin: "imported", external_view: {
+      ...view!, scope: {...perf().scope!, basis: "requested_range"},
+    }});
     renderBody(campaignDetail({ origin: "imported", capabilities: { allowed: [], unavailable: { close: "既有平台活動不使用內部結案。" } }, external_view: view }), { origin: "imported" });
-    expect(await within(row()).findByText("500 元")).toBeTruthy();
+    expect(await within(row()).findByText("500 TWD")).toBeTruthy();
     expect(cellText("購買")).toBe("購買 2 筆 平台回報");
     expect(within(row()).queryByRole("button", { name: "結案這一期 →" })).toBeNull();
     expect(within(row()).getByRole("button", { name: "重新讀取平台" })).toBeTruthy();
     expect(within(row()).getByText("既有平台活動不使用內部結案。")).toBeTruthy();
     expect(within(row()).getByText("最新 10/02 21:30")).toBeTruthy(); // the newest external_view.sync section
     expect(within(row()).getByText("未判斷").closest("[data-slot=chip]")!.getAttribute("data-grade")).toBe("no_target");
-    expect(getPerformance).not.toHaveBeenCalled();
+    expect(getPerformance).toHaveBeenCalledWith("brd_1", "cmp_1", true);
   });
 
   it("the totals read fails on its own: the row keeps its buttons and says why with 重試; the ruler card still renders", async () => {
@@ -894,7 +906,7 @@ describe("這期狀態列 (F40-I06, prototype #/perf)", () => {
     expect(within(row()).getByRole("button", { name: "結案這一期 →" })).toBeTruthy();
     expect(await screen.findByRole("region", { name: "對照上限" })).toBeTruthy();
     fireEvent.click(within(row()).getByRole("button", { name: "重試" }));
-    expect(await within(row()).findByText("10,081 元")).toBeTruthy();
+    expect(await within(row()).findByText("10,081 TWD")).toBeTruthy();
   });
 
   it("a draft (DraftPerf's case) or no campaign handed in (the standalone page): no row, no totals read", async () => {
@@ -906,13 +918,13 @@ describe("這期狀態列 (F40-I06, prototype #/perf)", () => {
 
   it("F49 Contract L: an ended campaign (stored live, past its end date) keeps 結案這一期; the served lifecycle decides", async () => {
     renderBody(campaignDetail({ status: "live", lifecycle: { state: "ended", label: "已結束・待結案", can_close: true } }));
-    expect(await within(row()).findByText("10,081 元")).toBeTruthy();
+    expect(await within(row()).findByText("10,081 TWD")).toBeTruthy();
     expect(within(row()).getByRole("button", { name: "結案這一期 →" })).toBeTruthy();
   });
 
   it("F49 Contract L: 結案這一期 shows only when the served lifecycle can close", async () => {
     renderBody(campaignDetail({ lifecycle: { state: "live", label: "投放中", can_close: false } }));
-    expect(await within(row()).findByText("10,081 元")).toBeTruthy();
+    expect(await within(row()).findByText("10,081 TWD")).toBeTruthy();
     expect(within(row()).queryByRole("button", { name: "結案這一期 →" })).toBeNull();
     expect(within(row()).getByRole("button", { name: "重新讀取平台" })).toBeTruthy();
   });
@@ -932,7 +944,7 @@ describe("這期狀態列 (F40-I06, prototype #/perf)", () => {
   it("?close=1 on a campaign that cannot close (already closed) opens nothing and drops the param", async () => {
     vi.mocked(getCoordinateLearnings).mockResolvedValue(LEARNED);
     renderBody(campaignDetail({ status: "closed" }), {}, "?tab=perf&close=1");
-    expect(await within(row()).findByText("10,081 元")).toBeTruthy();
+    expect(await within(row()).findByText("10,081 TWD")).toBeTruthy();
     await vi.waitFor(() => expect(screen.getByTestId("where").textContent).toBe(`${WS}?tab=perf`));
     expect(screen.queryByRole("dialog")).toBeNull();
   });
@@ -940,7 +952,7 @@ describe("這期狀態列 (F40-I06, prototype #/perf)", () => {
   it("F49 Contract O: the last platform read's served outcome prints beside 重新讀取平台 (a partial read names its reason)", async () => {
     const note = { state: "partial" as const, text: "有部分平台資料沒讀到：平台暫時沒有回應，稍後會再試" };
     renderBody(campaignDetail(), { syncNote: note });
-    expect(await within(row()).findByText("10,081 元")).toBeTruthy();
+    expect(await within(row()).findByText("10,081 TWD")).toBeTruthy();
     const status = within(row()).getByRole("status");
     expect(status.textContent).toBe(note.text);
     expect(status.getAttribute("data-state")).toBe("partial");
@@ -965,7 +977,7 @@ describe("在投 N 則 counts platform ads only (F40-I06, prototype #/detail)", 
   it("unbuilt local ads: the 缺圖 line names them with 到素材補圖 → the assets tab; the title still counts the platform ads", async () => {
     vi.mocked(getTriage).mockResolvedValue(triage(built));
     renderBody(withAds([localAd("l1", "運動後與忙碌日常", "bound"), localAd("l5", "週末補眠", "unbound"), localAd("l6", "考前衝刺", "unbound")]));
-    expect(await rulerTitle()).toBe("在投 2 則對照上限 450");
+    expect(await rulerTitle()).toBe("在投 2 則對照上限 450 TWD");
     expect(screen.getByTestId("unbuilt-line").textContent).toBe("另有 2 則沒建到平台（缺圖），不算在投：週末補眠、考前衝刺");
     expect(screen.getByRole("link", { name: "到素材補圖 →" }).getAttribute("href")).toBe(`${WS}?tab=assets`);
     expect(screen.queryByTestId("unmatched-line")).toBeNull();
@@ -974,7 +986,7 @@ describe("在投 N 則 counts platform ads only (F40-I06, prototype #/detail)", 
   it("platform ads not built here (bound_ad_id null): their own line; an older item without the field is not counted", async () => {
     vi.mocked(getTriage).mockResolvedValue(triage([...built, ad("a4", "上班日午休（平台手動建）", "wasted", 1600, 0, OWN_450, { bound_ad_id: null }), ad("a5", "舊工廠沒帶欄位", "on_target", 900, 3)]));
     renderBody(withAds([localAd("l1", "運動後與忙碌日常", "bound")]));
-    expect(await rulerTitle()).toBe("在投 4 則對照上限 450");
+    expect(await rulerTitle()).toBe("在投 4 則對照上限 450 TWD");
     expect(screen.getByTestId("unmatched-line").textContent).toBe("平台上另有 1 則不是這裡建的：上班日午休（平台手動建）");
     expect(screen.queryByTestId("unbuilt-line")).toBeNull();
   });
@@ -985,6 +997,47 @@ describe("在投 N 則 counts platform ads only (F40-I06, prototype #/detail)", 
     await rulerTitle();
     expect(screen.queryByTestId("program-lines")).toBeNull();
     expect(programLines(built, undefined)).toEqual({ unbuilt: [], unmatched: [] });
+  });
+});
+
+describe("served recent money units", () => {
+  it.each(["USD", null])("keeps observed %s money and refuses the manual TWD ruler comparison", async (currency) => {
+    const comparison = {
+      basis: "own", currency: "TWD", source: "user", unit_basis: "manual_ntd_input",
+      reason: currency ? "cap_currency_mismatch" : "cap_currency_unknown",
+      message: "上限與本期成效的幣別不同或尚未核實，不能比較。",
+    };
+    const base = ad("usd", "真實平台廣告・三十筆購買", "insufficient", 12000, 30, {value: 350, basis: "own"});
+    const observed = {
+      ...base, grade_label: "資料不足", reason_code: comparison.reason,
+      current: {...base.current, currency}, cap_comparison: comparison,
+      target: {...base.target, cap_unit: comparison},
+    };
+    vi.mocked(getTriage).mockResolvedValue(triage([observed]));
+    renderPage();
+    const ruler = await screen.findByRole("region", {name: "對照上限"});
+    expect(ruler.textContent).toContain(`已花 12,000 ${currency ?? "幣別未知"}`);
+    expect(ruler.textContent).not.toContain("1143%");
+    expect(ruler.textContent).not.toContain("／1,050");
+    expect(ruler.textContent).toContain(comparison.message);
+    const row = await screen.findByTestId("ad-row-usd");
+    expect(row.textContent).toContain(`12,000 ${currency ?? "幣別未知"}`);
+    expect(row.textContent).toContain(comparison.message);
+    expect(row.querySelector("[data-slot=money-tag]")).toBeNull();
+    expect(within(ruler).getByRole("link", {name: "去改上限"}).getAttribute("href")).toBe(`${WS}?tab=strategy`);
+  });
+
+  it("keeps the original threshold percentage when the observed and recorded units match", async () => {
+    const base = ad("twd", "完整同幣別樣本", "insufficient", 400, 0, {value: 350, basis: "own"});
+    const comparison = {basis: "own", currency: "TWD", reason: null, message: null, source: "user", unit_basis: "manual_ntd_input"};
+    vi.mocked(getTriage).mockResolvedValue(triage([{
+      ...base, reason_code: "too_new", current: {...base.current, currency: "TWD"},
+      target: {...base.target, cap_unit: comparison}, cap_comparison: comparison,
+    }]));
+    renderPage();
+    const ruler = await screen.findByRole("region", {name: "對照上限"});
+    expect(ruler.textContent).toContain("已花 400 TWD／1,050 TWD");
+    expect(ruler.textContent).toContain("38%");
   });
 });
 

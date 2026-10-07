@@ -3,13 +3,18 @@ import { Link } from "react-router-dom";
 import { Button } from "@/components/layout/ui/button";
 import type { SettleCampaign, SettleRow, SettleView } from "@/lib/adsSettleApi";
 import { cn } from "@/lib/utils";
+import { perSaleAmount } from "../patterns/csv";
 import {
   ActionBar, Chip, GradeBar, GradeTermChip, Meter, MoneyTag, OriginTag, Term, Thumb, formatAmount, gradeWord, sampleWords,
   unsoldLine, useAdsRules, type GradeBarBucket,
 } from "../patterns";
 import {
-  FROM_META, campaignOf, campaignShort, downloadSettleCsv, isImported, money, rangeText, rankText, settleRule, yuan,
+  FROM_META, campaignOf, campaignShort, downloadSettleCsv, isImported, rangeText, rankText, settleRule,
 } from "./settleCsv";
+
+const money = (value: number | null, currency: string | null) => value === null ? "未知" : `${formatAmount(value)} ${currency ?? "幣別未知"}`;
+const perSale = (value: number | null, currency: string | null) => value === null ? "未知" : `${perSaleAmount(value)} ${currency ?? "幣別未知"}`;
+const comparisonReason = "上限與本期成效的幣別不同或尚未核實，不能比較。";
 
 /** F29-I12 step 1 「這期成績」 (prototype v10 `stepRes()` + `glRow()`, hash `d/settle/res`): the month's numbers,
  * the share of spend on ads written as 有效 (the ranking keeps them) with its grade bar, then one card per campaign whose ads are graded against that
@@ -32,8 +37,12 @@ function cppNote(view: SettleView): { tone: keyof typeof TONE_TEXT; text: string
   const capped = view.campaigns.filter((c) => c.cap !== null);
   if (view.cost_per_result === null) return { tone: "mut", text: "還算不出來" };
   if (capped.length === 0) return { tone: "mut", text: "活動都還沒設上限，不比較" };
+  if (!view.currency || capped.some((c) => {
+    const rows = view.rows.filter((row) => row.campaign_id === c.campaign_id);
+    return rows.length === 0 || rows.some((row) => row.cap_comparison?.currency !== view.currency || row.cap_comparison?.reason !== null);
+  })) return {tone: "mut", text: comparisonReason};
   const caps = capped.map((c) => (c.cap as { value: number }).value);
-  const list = capped.map((c) => `${campaignShort(c.name)} ${formatAmount((c.cap as { value: number }).value)}`).join("、");
+  const list = capped.map((c) => `${campaignShort(c.name)} ${money((c.cap as { value: number }).value, view.currency)}`).join("、");
   const cpp = view.cost_per_result;
   if (cpp <= Math.min(...caps)) return { tone: "ok", text: `在每個活動自己的上限內（${list}）` };
   if (cpp <= Math.max(...caps)) return { tone: "warn", text: `介於各活動的上限之間（${list}）` };
@@ -42,10 +51,10 @@ function cppNote(view: SettleView): { tone: keyof typeof TONE_TEXT; text: string
 
 function budgetNote(view: SettleView): { tone: keyof typeof TONE_TEXT; text: string } {
   if (view.budget === null) return { tone: "mut", text: "這期沒設預算" };
-  if (view.spent === null) return { tone: "mut", text: `這期預算 ${formatAmount(view.budget)}` };
+  if (view.spent === null || !view.currency) return { tone: "mut", text: `這期預算 ${money(view.budget, view.currency)}，暫時不能比較` };
   return view.spent <= view.budget
-    ? { tone: "ok", text: `在這期預算 ${formatAmount(view.budget)} 內` }
-    : { tone: "bad", text: `超出這期預算 ${money(view.spent - view.budget)}` };
+    ? { tone: "ok", text: `在這期預算 ${money(view.budget, view.currency)} 內` }
+    : { tone: "bad", text: `超出這期預算 ${money(view.spent - view.budget, view.currency)}` };
 }
 
 function Numbers({ view }: { view: SettleView }) {
@@ -54,27 +63,30 @@ function Numbers({ view }: { view: SettleView }) {
   return (
     <section aria-label="這期數字" className="surface grid grid-cols-2 gap-x-5 gap-y-3 px-[22px] py-5 md:grid-cols-4 md:gap-x-0 md:gap-y-0 md:divide-x md:divide-border">
       <Kv label="期間" value={rangeText(view.start, view.end)} note={`${view.days} 天・${view.status === "not_ended" ? "還沒結束" : "已結束"}`} />
-      <Kv label="花費" value={money(view.spent)} note={budget.text} tone={budget.tone} />
+      <Kv label="花費" value={money(view.spent, view.currency)} note={budget.text} tone={budget.tone} />
       <Kv
         label="購買" value={view.results === null ? "未知" : `${formatAmount(view.results)} 筆`}
         note={view.on_target_results === null ? "記成有效的廣告賣了幾筆還不知道" : `${formatAmount(view.on_target_results)} 筆來自記成有效的廣告`}
         tone={view.on_target_results ? "ok" : "mut"}
       />
-      <Kv label="每賣一筆花多少" value={yuan(view.cost_per_result)} note={cpp.text} tone={cpp.tone} />
+      <Kv label="每賣一筆花多少" value={perSale(view.cost_per_result, view.currency)} note={cpp.text} tone={cpp.tone} />
     </section>
   );
 }
 
 /** One break-even for the rules line only when every campaign shares it; otherwise the term stays without a value. */
-function sharedBreakEven(campaigns: SettleCampaign[]): number | null {
-  const values = new Set(campaigns.map((c) => c.break_even));
+function sharedBreakEven(view: SettleView): number | null {
+  if (!view.currency || view.rows.some((row) => row.break_even_unit?.currency !== view.currency)) return null;
+  const values = new Set(view.rows.map((row) => row.break_even));
   return values.size === 1 ? [...values][0] : null;
 }
 
 function Share({ view }: { view: SettleView }) {
-  const rule = settleRule(useAdsRules());
+  const rules = useAdsRules();
+  const rule = settleRule(rules);
   const pct = view.on_target_spend_share === null ? null : Math.round(view.on_target_spend_share * 100);
-  const buckets: GradeBarBucket[] = view.buckets.map((b) => ({ grade: b.grade, amount: b.amount, count: b.count }));
+  const buckets: GradeBarBucket[] = view.buckets.map((b) => ({ grade: b.grade, amount: b.amount, count: b.count, currency: b.currency }));
+  const unknownGrade = view.rows.some((row) => row.grade === "insufficient" && row.reason_code !== "too_new");
   return (
     <section aria-label="花在有效廣告的比例" className="surface px-[22px] py-5">
       <div className="mb-1.5 flex flex-wrap items-baseline gap-3">
@@ -83,7 +95,8 @@ function Share({ view }: { view: SettleView }) {
         </span>
         <span className="text-base font-medium">的錢花在記成有效的廣告</span>
       </div>
-      <GradeBar buckets={buckets} withMoney breakEven={sharedBreakEven(view.campaigns)} />
+      <GradeBar buckets={buckets} withMoney thinLabel={unknownGrade ? gradeWord(rules, "insufficient", "no_data") ?? "" : undefined} breakEven={sharedBreakEven(view)} />
+      {[...new Set(view.buckets.flatMap((bucket) => bucket.messages ?? []))].map((message) => <p key={message} className="mt-2 text-xs text-muted-foreground">{message}</p>)}
       {rule && (
         <div className="mt-2 text-xs text-muted-foreground">
           <i aria-hidden="true" className="mr-[5px] inline-block size-2 rounded-[2px] bg-primary" />{rule}
@@ -108,7 +121,9 @@ const GRADED = new Set(["on_target", "watch", "over", "wasted"]);
 export function GradedRow({ row }: { row: SettleRow }) {
   const rules = useAdsRules();
   const cap = row.cap;
-  const graded = cap !== null && GRADED.has(row.grade);
+  const comparable = Boolean(row.currency) && row.cap_comparison?.currency === row.currency && row.cap_comparison.reason === null;
+  const graded = cap !== null && GRADED.has(row.grade) && comparable;
+  const capOnly = (row.reason_code === "cap_currency_mismatch" || row.reason_code === "cap_currency_unknown") && row.cost_per_result !== null && Boolean(row.currency);
   const thin = row.fate === "skip";
   const tooNew = row.grade === "insufficient" && (!row.reason_code || row.reason_code === "too_new");
   const word = row.grade_label || gradeWord(rules, row.grade, row.reason_code) || "";
@@ -116,9 +131,10 @@ export function GradedRow({ row }: { row: SettleRow }) {
   if (!graded) {
     viz = (
       <>
-        <div className="text-[13px] font-medium">{tooNew ? <Term k="thin">{word}</Term> : word}</div>
+        <div className="text-[13px] font-medium">{capOnly ? `每筆 ${perSale(row.cost_per_result, row.currency)}` : tooNew ? <Term k="thin">{word}</Term> : word}</div>
         <div className="text-[11.5px]">
-          花 {money(row.spend)}・{row.results === null ? "筆數未知" : `${formatAmount(row.results)} 筆`}
+          花 {money(row.spend, row.currency)}・{row.results === null ? "筆數未知" : `${formatAmount(row.results)} 筆`}
+          {cap !== null && !comparable && `・${row.cap_comparison?.message ?? comparisonReason}`}
         </div>
       </>
     );
@@ -127,8 +143,8 @@ export function GradedRow({ row }: { row: SettleRow }) {
     viz = (
       <Meter
         value={row.spend} max={line === null ? null : line * 1.4} marker={line} tone="danger"
-        left={<>花 {money(row.spend)}・0 筆</>}
-        right={line === null ? <Term k="wasted">{word}</Term> : <>花到 {formatAmount(line)} 還一筆都沒賣，就算「<Term k="wasted">{word}</Term>」</>}
+        left={<>花 {money(row.spend, row.currency)}・0 筆</>}
+        right={line === null ? <Term k="wasted">{word}</Term> : <>花到 {money(line, row.currency)} 還一筆都沒賣，就算「<Term k="wasted">{word}</Term>」</>}
       />
     );
   } else {
@@ -136,8 +152,8 @@ export function GradedRow({ row }: { row: SettleRow }) {
       <Meter
         value={row.cost_per_result} max={cap * 1.6} marker={cap}
         tone={row.grade === "on_target" ? "success" : row.grade === "watch" ? "warning" : "danger"}
-        left={<>每筆 {yuan(row.cost_per_result)}<MoneyTag cost={row.cost_per_result} breakEven={row.break_even} /></>}
-        right={<>上限 {formatAmount(cap)}</>}
+        left={<>每筆 {perSale(row.cost_per_result, row.currency)}{row.break_even_unit?.currency && row.break_even_unit.currency === row.currency && <MoneyTag cost={row.cost_per_result} breakEven={row.break_even} />}</>}
+        right={<>上限 {money(cap, row.cap_comparison?.currency ?? null)}</>}
       />
     );
   }
@@ -170,11 +186,13 @@ export function GradedRow({ row }: { row: SettleRow }) {
   );
 }
 
-function capChip(campaign: SettleCampaign): ReactNode {
+function capChip(campaign: SettleCampaign, rows: SettleRow[]): ReactNode {
   const who = campaignShort(campaign.name);
   if (campaign.cap === null) return <Chip tone="neutral">{who}沒設上限</Chip>;
   const word = campaign.cap.basis === "break_even" ? "暫用打平線" : "的上限";
-  return <Chip tone="accent">{who}{word} {formatAmount(campaign.cap.value)}</Chip>;
+  const units = new Set(rows.map((row) => row.cap_comparison?.currency ?? null));
+  const currency = rows.length > 0 && units.size === 1 && rows.every((row) => row.cap === campaign.cap?.value) ? [...units][0] : null;
+  return <Chip tone="accent">{who}{word} {money(campaign.cap.value, currency)}</Chip>;
 }
 
 export function CampaignCard({ view, campaign }: { view: SettleView; campaign: SettleCampaign }) {
@@ -189,7 +207,7 @@ export function CampaignCard({ view, campaign }: { view: SettleView; campaign: S
         </h2>
         <div className="flex flex-wrap items-center gap-2">
           {status.state !== "ready" && status.label && <Chip tone="warn">{status.label}</Chip>}
-          {capChip(campaign)}
+          {capChip(campaign, rows)}
         </div>
       </div>
       <ol>{rows.map((row) => <GradedRow key={row.entity_id} row={row} />)}</ol>

@@ -330,8 +330,22 @@ def get_campaign_target(conn: _AnyConn, org_id: str, brand_id: str, campaign_id:
     campaign = get_campaign(conn, org_id, brand_id, campaign_id)
     if campaign is None:
         raise ValueError("campaign_unknown")
-    resolved = targets.resolve(conn, org_id, brand_id, campaign)
+    resolved = _target_units(
+        conn, brand_id, campaign, targets.resolve(conn, org_id, brand_id, campaign),
+    )
     return _campaign_target_view(campaign, resolved)
+
+
+def _target_units(conn: _AnyConn, brand_id: str, campaign: dict, resolved: dict) -> dict:
+    """Relay the same source-based unit evidence to the campaign and target read contracts."""
+    from app.ads import outcome as performance
+
+    return {
+        **resolved,
+        "cap_unit": performance.cap_unit(conn, brand_id, resolved, campaign=campaign),
+        "break_even_unit": performance.break_even_unit(conn, brand_id, resolved, campaign=campaign),
+        "price_unit": performance.price_unit(conn, brand_id, resolved, campaign=campaign),
+    }
 
 
 def save_campaign_target(
@@ -695,12 +709,15 @@ def list_campaigns(conn: _AnyConn, org_id: str, brand_id: str) -> list:
         state = lifecycle.view(row, root=roots.get(row["id"]), today=today)
         groups = _groups_for_campaign(conn, org_id, brand_id, row["id"])
         outcome = (_empty_external_outcome() if row["origin"] == "imported" else
-                   _outcome_totals(conn, org_id, brand_id, row["id"]))
+                   _outcome_totals(conn, org_id, brand_id, row["id"], campaign=row))
         budget_total = _budget_total(row["start_date"], row["end_date"], groups)
-        spend = float(outcome["spend"]) if outcome["row_count"] else None
+        spend = (float(outcome["spend"])
+                 if outcome["spend"] is not None and outcome["row_count"] else None)
         pct = (
             round(spend / float(budget_total) * 100)
-            if spend is not None and budget_total else None
+            if spend is not None and budget_total
+            and outcome.get("scope", {}).get("currency") == "TWD"
+            else None
         )
         entries.append({
             "id": row["id"], "name": row["name"], "status": row["status"],
@@ -712,11 +729,20 @@ def list_campaigns(conn: _AnyConn, org_id: str, brand_id: str) -> list:
             "created_at": row["created_at"], "created_by": row["created_by"],
             "budget_planned": row["budget_planned"],
             "budget_total": budget_total,
-            "budget_progress": {"spent": spend, "total": budget_total, "pct": pct},
+            "budget_progress": {
+                "spent": spend, "total": budget_total, "pct": pct,
+                "currency": outcome.get("scope", {}).get("currency"), "budget_currency": "TWD",
+                "scope": outcome.get("scope"),
+                "reason": (outcome.get("scope", {}).get("reason_text") or
+                           ("本期花費與 TWD 預算的幣別不同或尚未核實，無法比較進度。"
+                            if spend is not None and budget_total and pct is None else None)),
+            },
             "spend": spend,
             "outcome": outcome,
             "judgment": judgment.campaign_judgment({**row, "budget_total": budget_total,
-                                                     "spend": spend}, today=today,
+                                                     "spend": spend,
+                                                     "performance_scope": outcome.get("scope")},
+                                                   today=today,
                                                    state=state["state"]),
             "data": {
                 "sync": campaign_sync_state(
@@ -761,7 +787,7 @@ def performance_rows(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: st
     `NULL` -- nothing here coerces them."""
     rows = conn.execute(
         "SELECT n.id AS entity_id, d.day, d.spend, d.impressions, d.clicks, d.purchases,"
-        " d.revenue, d.currency, d.source, d.observed_at"
+        " d.revenue, d.currency, d.attribution_key, d.source, d.observed_at"
         + _perf_join(kind)
         + " AND d.org_id = %s AND d.brand_id = %s AND d.campaign_id = %s"
         " ORDER BY d.day, n.id",
@@ -770,23 +796,26 @@ def performance_rows(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: st
     return [dict(r) for r in rows]
 
 
-def _outcome_totals(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str) -> dict:
-    """Campaign-level totals sum the group-grain rows of `performance_rows` only (Contract P).
-    Ad-grain rows exist too (for the per-ad 花費占比) and are never summed into a campaign
-    total -- summing both levels double-counts (§0 "money totals belong to the group level").
-    `purchases`／`revenue` may be `NULL` (untracked): `SUM()` already ignores `NULL` rows on its
-    own, so no `COALESCE` here -- when every row is untracked the sum comes back `NULL`/`None`,
-    never a fabricated 0. `spend` stays `COALESCE`d to 0 for the no-row case, and `row_count` is
-    how callers already tell "no data at all" apart from "zero spend"."""
-    row = conn.execute(
-        "SELECT COALESCE(SUM(d.spend), 0) AS spend, SUM(d.purchases) AS purchases,"
-        " SUM(d.revenue) AS revenue, COUNT(*) AS row_count"
-        + _perf_join("group")
-        + " AND d.org_id = %s AND d.brand_id = %s AND d.campaign_id = %s",
-        (external_repository.MONTHLY_BUDGET_ATTRIBUTION_KEY, org_id, brand_id, campaign_id),
-    ).fetchone()
-    return dict(row) if row is not None else {
-        "spend": 0, "purchases": None, "revenue": None, "row_count": 0,
+def _outcome_totals(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, *,
+                    campaign: dict | None = None) -> dict:
+    """List/detail period totals use the same completed-day projection as performance.
+
+    Supply the already-read campaign to avoid enriched detail recursion. Raw performance_rows
+    remains available to consumers with their own explicit comparison windows.
+    """
+    from app.ads import outcome
+
+    if campaign is None:
+        campaign = get_campaign(conn, org_id, brand_id, campaign_id)
+    if campaign is None:
+        return {"spend": 0, "purchases": None, "revenue": None, "row_count": 0}
+    projected = outcome.period_projection(
+        conn, org_id, brand_id, campaign,
+        performance_rows(conn, org_id, brand_id, campaign_id, "group"), [],
+    )
+    totals = projected["totals"]
+    return {key: totals[key] for key in ("spend", "purchases", "revenue")} | {
+        "row_count": len(projected["group_rows"]), "scope": projected["scope"],
     }
 
 
@@ -912,21 +941,25 @@ def campaign_detail(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str
         (org_id, brand_id, campaign_id),
     ).fetchall()
     outcome = (_empty_external_outcome() if campaign["origin"] == "imported" else
-               _outcome_totals(conn, org_id, brand_id, campaign_id))
+               _outcome_totals(conn, org_id, brand_id, campaign_id, campaign=campaign))
     budget_total = _budget_total(campaign["start_date"], campaign["end_date"], groups)
 
     detail = dict(campaign)
     from app.ads import targets
 
-    detail["cap"] = targets.resolve(conn, org_id, brand_id, campaign)
+    detail["cap"] = _target_units(
+        conn, brand_id, campaign, targets.resolve(conn, org_id, brand_id, campaign),
+    )
     detail["lifecycle"] = lifecycle.view(
         campaign, root=lifecycle.root(conn, org_id, brand_id, campaign_id), today=today,
     )
     detail["capabilities"] = external_models.capabilities(campaign["origin"])
-    detail["external_view"] = (
-        external_repository.external_view(conn, org_id, brand_id, campaign_id)
-        if campaign["origin"] == "imported" else None
-    )
+    if campaign["origin"] == "imported":
+        from app.ads import outcome as performance
+
+        detail["external_view"] = performance.native_period_view(conn, org_id, brand_id, campaign)
+    else:
+        detail["external_view"] = None
     detail["groups"] = groups
     strategy_basis = (detail.get("budget_basis_json") or {}).get("strategy") or {}
     if groups and strategy_basis.get("allocation"):
@@ -941,9 +974,11 @@ def campaign_detail(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str
     detail["budget_total"] = budget_total
     detail["actions"] = [dict(a) for a in latest_actions]
     detail["outcome"] = outcome
-    detail_spend = float(outcome["spend"]) if outcome["row_count"] else None
+    detail_spend = (float(outcome["spend"])
+                    if outcome["spend"] is not None and outcome["row_count"] else None)
     detail["judgment"] = judgment.campaign_judgment(
-        {**campaign, "budget_total": budget_total, "spend": detail_spend}, today=today,
+        {**campaign, "budget_total": budget_total, "spend": detail_spend,
+         "performance_scope": outcome.get("scope")}, today=today,
         state=detail["lifecycle"]["state"],
     )
     detail["action_lines"] = [
@@ -1214,9 +1249,10 @@ def set_budget_cap(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str,
                    budget_cap: int | None) -> dict:
     """F28-I03: write only `constraints_json.budget` (set or removed) and flip
     `context_json.field_sources.budget` to the user's -- in any status, no status or binding
-    check, and no other column (`budget_planned`／`budget_scenario`／`budget_basis_json` stay as
-    saved). The caller validated the value. Both documents are edited in place in SQL, so a
-    concurrent edit of another key in them is never overwritten."""
+    check. The selected `budget_planned`/`budget_scenario` stay as saved; the stored strategy
+    decision revision refreshes against the changed constraints. The caller validated the
+    value. Both documents are edited in place in SQL, so a concurrent edit of another key
+    in them is never overwritten."""
     require_internal_campaign(conn, org_id, brand_id, campaign_id)
     conn.execute(
         "UPDATE ads_campaign SET"

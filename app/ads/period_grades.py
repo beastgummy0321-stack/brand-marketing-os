@@ -12,7 +12,7 @@ stays unknown: a window whose spend or result can't be known reads 資料不足 
 
 from collections import defaultdict
 
-from app.ads import coverage, targets, triage
+from app.ads import coverage, outcome, targets, triage
 
 # Display order of the buckets (Contract C): 划算, 偏貴, 太貴, 沒賣出, then the ungraded ones.
 BUCKET_ORDER = ("on_target", "watch", "over", "wasted", "insufficient", "no_target")
@@ -89,10 +89,19 @@ def grade_period(conn, org_id, brand_id, start, end) -> list[dict]:
             continue
         if campaign["id"] not in target_by_campaign:
             target_by_campaign[campaign["id"]] = targets.resolve(conn, org_id, brand_id, campaign)
+            target_by_campaign[campaign["id"]]["cap_unit"] = outcome.cap_unit(
+                conn, brand_id, target_by_campaign[campaign["id"]], campaign=campaign,
+            )
+            target_by_campaign[campaign["id"]]["break_even_unit"] = outcome.break_even_unit(
+                conn, brand_id, target_by_campaign[campaign["id"]], campaign=campaign,
+            )
         target = target_by_campaign[campaign["id"]]
         entity_rows = rows_by_entity[entity_id]
         view, spend = triage._ad_window(entity_rows, start, end)
         grade, label, reason_code = _grade(view, spend, target, days)
+        comparison = outcome.compare_cap_unit(target["cap_unit"], _currency(entity_rows))
+        if comparison["reason"] is not None and grade in triage.GRADED:
+            grade, label, reason_code = "insufficient", triage.NO_DATA_LABEL, comparison["reason"]
         group_name = (
             group_names.get((campaign["id"], entity.get("parent_native_id")))
             if entity.get("parent_native_kind") == "adset" else None
@@ -106,7 +115,11 @@ def grade_period(conn, org_id, brand_id, start, end) -> list[dict]:
             "cost_per_result": view["cost_per_result"] if view is not None else None,
             "cap": target["value"], "break_even": target.get("break_even"),
             "grade": grade, "grade_label": label, "reason_code": reason_code,
-            "sample": triage._sample_view(spend, view, target["value"], days),
+            "sample": triage._sample_view(
+                spend, view, target["value"] if comparison["reason"] is None else None, days,
+            ),
+            "cap_comparison": comparison,
+            "break_even_unit": target["break_even_unit"],
             "currency": _currency(entity_rows),
         })
     out.sort(key=lambda row: (row["campaign_name"] or "", row["name"] or "", row["entity_id"]))
@@ -127,17 +140,26 @@ def summarize(rows) -> dict:
     """`{spent, buckets}` over `grade_period` rows (Contract C): `spent` null unless every ad's
     spend is known in one currency; one bucket per grade in `BUCKET_ORDER`, empty ones included."""
     buckets = []
+    currency = _currency(rows)
     for grade in BUCKET_ORDER:
         members = [row for row in rows if row["grade"] == grade]
         buckets.append({
             "grade": grade, "amount": _known_sum(members) if members else 0, "count": len(members),
+            "currency": _currency(members) if members else currency,
+            "reason_codes": list(dict.fromkeys(
+                row.get("reason_code") for row in members if row.get("reason_code")
+            )),
+            "messages": list(dict.fromkeys(
+                row["cap_comparison"]["message"] for row in members
+                if (row.get("cap_comparison") or {}).get("message")
+            )),
             "ads": [
                 {"entity_id": row["entity_id"], "name": row["name"],
                  "thumbnail_url": row["thumbnail_url"], "spend": row["spend"]}
                 for row in members
             ],
         })
-    return {"spent": _known_sum(rows), "buckets": buckets}
+    return {"spent": _known_sum(rows), "currency": currency, "buckets": buckets}
 
 
 def missing(conn, org_id, brand_id, start, end) -> list[dict]:

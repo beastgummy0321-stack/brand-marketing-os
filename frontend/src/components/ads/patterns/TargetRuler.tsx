@@ -20,6 +20,10 @@ export interface RulerAd {
   gradeLabel?: string | null;
   costPerResult: number | null;
   spend: number | null;
+  /** Observed money and comparison evidence from the served window. */
+  currency?: string | null;
+  comparisonReason?: string | null;
+  comparisonMessage?: string | null;
   thumbnailUrl?: string | null;
   /** Trend note under the tooltip (prototype `trend()`, e.g. 「比前 14 天 ▲12%」). */
   note?: string | null;
@@ -28,6 +32,7 @@ export interface RulerAd {
 export interface RulerCap {
   value: number;
   basis: "own" | "break_even";
+  currency?: string | null;
 }
 
 export type RulerSize = "mini" | "mid" | "full";
@@ -59,13 +64,16 @@ export function rulerScale(cap: number, costs: number[]) {
 
 const text = (v: number | null | undefined) => formatAmount(v) ?? "未知";
 const perSale = (v: number | null | undefined) => perSaleAmount(v) ?? "未知";
+const money = (v: number | null | undefined, currency: string | null | undefined, perResult = false) =>
+  v === null || v === undefined ? "未知" : `${perResult ? perSale(v) : text(v)} ${currency ?? "幣別未知"}`;
 
-export function TargetRuler({ ads, cap, breakEven = null, size = "full", highlight, tray = true, onAdClick, emptyText = "沒設上限，先不分等級" }: {
+export function TargetRuler({ ads, cap, breakEven = null, breakEvenCurrency = null, size = "full", highlight, tray = true, onAdClick, emptyText = "沒設上限，先不分等級" }: {
   ads: RulerAd[];
   /** The campaign's resolved cap (`cap.value` + `cap.basis`); null draws the empty state. */
   cap: RulerCap | null;
   /** Product break-even; drawn as a dashed 打平 mark only beside an own cap that differs from it. */
   breakEven?: number | null;
+  breakEvenCurrency?: string | null;
   size?: RulerSize;
   /** `close` badges the ads a cleanup closes (mini: red ring, others dimmed); `scale`/`self` ring the set and dim the rest. */
   highlight?: { mode: "close" | "scale" | "self"; ids: string[] };
@@ -92,9 +100,10 @@ export function TargetRuler({ ads, cap, breakEven = null, size = "full", highlig
   const band = rules ? watchLine(rules, T) : null;
   const unsold = rules ? unsoldLine(rules, T) : null;
   const capWord = cap.basis === "break_even" ? (mini ? "暫用" : "暫用打平") : "上限";
-  const onAxis = ads.filter((a) => ON_AXIS.has(a.grade) && a.costPerResult !== null);
-  const wasted = ads.filter((a) => a.grade === "wasted");
-  const thin = ads.filter((a) => a.grade === "insufficient");
+  const comparable = (a: RulerAd) => Boolean(cap.currency && a.currency === cap.currency && a.comparisonReason === null);
+  const onAxis = ads.filter((a) => ON_AXIS.has(a.grade) && a.costPerResult !== null && comparable(a));
+  const wasted = ads.filter((a) => a.grade === "wasted" && comparable(a));
+  const thin = ads.filter((a) => a.grade === "insufficient" || !comparable(a));
   const { pos } = rulerScale(T, onAxis.map((a) => a.costPerResult as number));
 
   // Dot plot: a dot that would overlap its left neighbour moves up one level.
@@ -111,7 +120,8 @@ export function TargetRuler({ ads, cap, breakEven = null, size = "full", highlig
     });
   const fieldHeight = g.top + Math.max(levels.length, 1) * g.step + (g.dot - g.step) + 6;
   const markBottom = mini ? 0 : 18;
-  const showBreakEven = cap.basis === "own" && breakEven !== null && Math.abs(breakEven - T) > 0.01;
+  const showBreakEven = cap.basis === "own" && cap.currency && breakEvenCurrency === cap.currency
+    && breakEven !== null && Math.abs(breakEven - T) > 0.01;
   const inSet = (id: string) => highlight?.ids.includes(id) ?? false;
 
   const dot = (a: RulerAd, p: number | null, level: number) => {
@@ -129,9 +139,9 @@ export function TargetRuler({ ads, cap, breakEven = null, size = "full", highlig
     if (mini) return <span key={a.id} className={common} style={style} aria-hidden="true" data-grade={a.grade}>{body}</span>;
     const tipSide = p === null || p > 70 ? "right-[-4px]" : p < 22 ? "left-[-4px]" : "left-1/2 -translate-x-1/2";
     const facts = a.grade === "wasted"
-      ? `花 ${text(a.spend)} 元・0 筆購買${unsold === null ? "" : `（花到 ${formatAmount(unsold)} 還沒賣）`}`
-      : `每筆 ${perSale(a.costPerResult)} 元・${label}`;
-    const aria = `${a.name}｜${a.grade === "wasted" ? `花 ${text(a.spend)} 元・0 筆購買` : `每筆 ${perSale(a.costPerResult)} 元`}｜${label}`;
+      ? `花 ${money(a.spend, a.currency)}・0 筆購買${unsold === null ? "" : `（花到 ${money(unsold, cap.currency)} 還沒賣）`}`
+      : `每筆 ${money(a.costPerResult, a.currency, true)}・${label}`;
+    const aria = `${a.name}｜${a.grade === "wasted" ? `花 ${money(a.spend, a.currency)}・0 筆購買` : `每筆 ${money(a.costPerResult, a.currency, true)}`}｜${label}`;
     return (
       <button key={a.id} type="button" className={cn(common, "group")} style={style} aria-label={aria} data-grade={a.grade} onClick={onAdClick ? () => onAdClick(a.id) : undefined}>
         {body}
@@ -145,7 +155,7 @@ export function TargetRuler({ ads, cap, breakEven = null, size = "full", highlig
 
   const counts = SUMMARY_ORDER.filter((grade) => ads.some((a) => a.grade === grade))
     .map((grade) => `${word(grade)} ${ads.filter((a) => a.grade === grade).length}`).join("、");
-  const capLabel = `${cap.basis === "break_even" ? "暫用打平" : "上限"} ${formatAmount(T)}`;
+  const capLabel = `${cap.basis === "break_even" ? "暫用打平" : "上限"} ${money(T, cap.currency)}`;
   const thinGroups = [...new Set(thin.map((a) => word(a.grade, a.gradeLabel)))];
 
   return (
@@ -162,9 +172,9 @@ export function TargetRuler({ ads, cap, breakEven = null, size = "full", highlig
           </div>
           {!mini && rules && band !== null && <ZoneLabels rules={rules} starts={[0, pos(T) + 1, pos(band) + 1]} />}
           {showBreakEven && (
-            <Mark at={pos(breakEven as number)} bottom={markBottom} side={(breakEven as number) < T ? "left" : "right"} dashed label={mini ? null : `打平 ${formatAmount(breakEven)}`} />
+            <Mark at={pos(breakEven as number)} bottom={markBottom} side={(breakEven as number) < T ? "left" : "right"} dashed label={mini ? null : `打平 ${money(breakEven, breakEvenCurrency)}`} />
           )}
-          <Mark at={pos(T)} bottom={markBottom} side={showBreakEven && (breakEven as number) > T ? "left" : "right"} label={`${capWord} ${formatAmount(T)}`} />
+          <Mark at={pos(T)} bottom={markBottom} side={showBreakEven && (breakEven as number) > T ? "left" : "right"} label={`${capWord} ${money(T, cap.currency)}`} />
         </div>
         <div className="relative flex shrink-0 flex-col items-center justify-end gap-1 rounded-lg border border-dashed border-danger/45 bg-danger/10 pt-1 pb-[22px]" style={{ width: g.box }}>
           {wasted.map((a) => dot(a, null, 0))}
@@ -183,7 +193,7 @@ export function TargetRuler({ ads, cap, breakEven = null, size = "full", highlig
             return [
               <span key={`h-${heading}`} className="text-xs font-semibold text-muted-foreground">{heading} {group.length} 則</span>,
               ...group.map((a) => {
-                const gate = unsold;
+                const gate = comparable(a) ? unsold : null;
                 const pct = a.spend === null || gate === null ? null : Math.round((a.spend / gate) * 100);
                 return (
                   <div key={a.id} className="flex max-w-[280px] min-w-[180px] flex-1 items-center gap-2">
@@ -196,8 +206,9 @@ export function TargetRuler({ ads, cap, breakEven = null, size = "full", highlig
                         </div>
                       )}
                       <div className="numeric flex justify-between gap-2 text-[11.5px] text-muted-foreground">
-                        <span>已花 {text(a.spend)}{gate === null ? " 元" : `／${formatAmount(gate)} 元`}</span>{pct !== null && <span>{pct}%</span>}
+                        <span>已花 {money(a.spend, a.currency)}{gate === null ? "" : `／${money(gate, cap.currency)}`}</span>{pct !== null && <span>{pct}%</span>}
                       </div>
+                      {!comparable(a) && <p className="text-[11.5px] text-muted-foreground">{a.comparisonMessage ?? "幣別不同或尚未核實，不能比較。"}</p>}
                     </div>
                   </div>
                 );

@@ -17,7 +17,7 @@ from datetime import timedelta
 from fastapi.testclient import TestClient
 
 import app.main as main
-from app.ads import closeout, external_repository, jobs, plan
+from app.ads import closeout, coverage, external_repository, jobs, plan
 from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi_repo
 from app.core import db as coredb
@@ -38,17 +38,29 @@ class CloseoutTestBase(unittest.TestCase):
             actor=ACTOR,
         )["id"]
         self.today = coresettings.today_for_org(self.conn, org_id=self.org_id)
+        # Unbound fixture accounts use the existing conservative cutoff, not today's rows.
+        self.complete_day = coverage.last_complete_day(self.conn, self.org_id, self.brand_id)
         self.conn.commit()
 
     def _campaign(self, *, cap, start_date, end_date, status="live", context=None,
                   covered=True) -> dict:
         """`covered` records a successful platform read over the whole window (F37 Contract Q:
-        closeout refuses an unread window, so every verdict case starts honestly covered)."""
+        closeout refuses an unread window, so every verdict case starts honestly covered).
+        Arithmetic/sample fixtures retain their manual NT$ cap through the existing target writer.
+        """
+        context = dict(context or {})
         campaign = ads_repo.create_campaign(self.conn, self.org_id, self.brand_id, {
             "name": f"測試 Campaign {cap}", "goal_text": "衝一波", "objective": "購買",
-            "target_cost": cap, "context_json": context or {},
+            "target_cost": None, "context_json": context,
             "start_date": start_date, "end_date": end_date, "status": status,
         }, created_by=ACTOR)
+        if cap is not None:
+            ads_repo.save_campaign_target(
+                self.conn, self.org_id, self.brand_id, campaign["id"],
+                basis="own", value=cap, expected_revision=0, actor=ACTOR,
+            )
+            campaign = ads_repo.get_campaign(self.conn, self.org_id, self.brand_id, campaign["id"])
+            assert campaign is not None
         if covered:
             outcome_seed.set_coverage(
                 self.conn, self.org_id, self.brand_id, campaign["id"], start_date, end_date,
@@ -74,7 +86,7 @@ class CloseoutTestBase(unittest.TestCase):
 
     def _three_days(self, campaign: dict, *, spend: float, purchases: int | None,
                     revenue: float | None, source: str = "simulated") -> None:
-        start = self.today - timedelta(days=2)
+        start = self.complete_day - timedelta(days=2)
         group = self._group(campaign["id"])
         for offset in range(3):
             self._outcome_row(
@@ -95,8 +107,8 @@ class CloseoutTestBase(unittest.TestCase):
 
 class BeatTargetClosesAchievedTest(CloseoutTestBase):
     def test_cost_per_result_under_the_cap_closes_as_achieved(self):
-        start = self.today - timedelta(days=2)
-        campaign = self._campaign(cap=300, start_date=start, end_date=self.today)
+        start = self.complete_day - timedelta(days=2)
+        campaign = self._campaign(cap=300, start_date=start, end_date=self.complete_day)
         self._three_days(campaign, spend=1000.0, purchases=5, revenue=2500.0)
 
         closed = closeout.close(self.conn, self.org_id, self.brand_id, campaign["id"], actor=ACTOR)
@@ -117,8 +129,8 @@ class BeatTargetClosesAchievedTest(CloseoutTestBase):
     def test_campaign_read_serves_the_ledger_sentence_after_closeout_only(self):
         """F51 Contract F: `learning_sentence` is the closeout sentence the ledger stored (the
         browser never rebuilds it); null before closeout."""
-        start = self.today - timedelta(days=2)
-        campaign = self._campaign(cap=300, start_date=start, end_date=self.today)
+        start = self.complete_day - timedelta(days=2)
+        campaign = self._campaign(cap=300, start_date=start, end_date=self.complete_day)
         self._three_days(campaign, spend=1000.0, purchases=5, revenue=2500.0)
         client = TestClient(main.app)
         url = f"/api/ads/brands/{self.brand_id}/campaigns/{campaign['id']}"
@@ -139,9 +151,9 @@ class CloseResolvesTheQueueRowsTest(CloseoutTestBase):
     def test_closing_resolves_every_queue_row_of_the_campaign(self):
         """F49 Contract Q: the closeout row and any row raised before the end leave the inbox
         with the close; another campaign's row stays."""
-        start = self.today - timedelta(days=2)
-        campaign = self._campaign(cap=300, start_date=start, end_date=self.today)
-        other = self._campaign(cap=200, start_date=start, end_date=self.today)
+        start = self.complete_day - timedelta(days=2)
+        campaign = self._campaign(cap=300, start_date=start, end_date=self.complete_day)
+        other = self._campaign(cap=200, start_date=start, end_date=self.complete_day)
         self._three_days(campaign, spend=1000.0, purchases=5, revenue=2500.0)
         day = start.isoformat()
         rows = {
@@ -169,8 +181,8 @@ class CloseResolvesTheQueueRowsTest(CloseoutTestBase):
 
 class MissedTargetClosesUnachievedTest(CloseoutTestBase):
     def test_over_the_cap_closes_as_unachieved(self):
-        start = self.today - timedelta(days=2)
-        campaign = self._campaign(cap=300, start_date=start, end_date=self.today)
+        start = self.complete_day - timedelta(days=2)
+        campaign = self._campaign(cap=300, start_date=start, end_date=self.complete_day)
         self._three_days(campaign, spend=2000.0, purchases=5, revenue=1000.0)
 
         closed = closeout.close(self.conn, self.org_id, self.brand_id, campaign["id"], actor=ACTOR)
@@ -184,8 +196,8 @@ class LowSampleIsShownNeverAVerdictSwitchTest(CloseoutTestBase):
     into 看不出; it only keeps the learning's confidence at `observed`."""
 
     def _week(self, *, cap, purchases_per_day):
-        start = self.today - timedelta(days=6)
-        campaign = self._campaign(cap=cap, start_date=start, end_date=self.today)
+        start = self.complete_day - timedelta(days=6)
+        campaign = self._campaign(cap=cap, start_date=start, end_date=self.complete_day)
         group = self._group(campaign["id"])
         for offset, purchases in enumerate(purchases_per_day):
             self._outcome_row(campaign["id"], group["id"], start + timedelta(days=offset),
@@ -193,9 +205,9 @@ class LowSampleIsShownNeverAVerdictSwitchTest(CloseoutTestBase):
         return campaign
 
     def test_two_purchases_closes_on_the_cap_and_still_writes_a_learning(self):
-        campaign = self._campaign(cap=300, start_date=self.today, end_date=self.today)
+        campaign = self._campaign(cap=300, start_date=self.complete_day, end_date=self.complete_day)
         group = self._group(campaign["id"])
-        self._outcome_row(campaign["id"], group["id"], self.today, spend=200.0, purchases=2,
+        self._outcome_row(campaign["id"], group["id"], self.complete_day, spend=200.0, purchases=2,
                            revenue=400.0)
 
         closed = closeout.close(self.conn, self.org_id, self.brand_id, campaign["id"], actor=ACTOR)
@@ -249,8 +261,8 @@ class LowSampleIsShownNeverAVerdictSwitchTest(CloseoutTestBase):
 
 class MetaUntrackedPurchasesCloseInconclusiveNamingUntrackedTest(CloseoutTestBase):
     def test_meta_sourced_campaign_closes_inconclusive_naming_untracked_not_low_sample(self):
-        start = self.today - timedelta(days=6)
-        campaign = self._campaign(cap=300, start_date=start, end_date=self.today)
+        start = self.complete_day - timedelta(days=6)
+        campaign = self._campaign(cap=300, start_date=start, end_date=self.complete_day)
         group = self._group(campaign["id"])
         for offset in range(7):
             self._outcome_row(
@@ -282,8 +294,8 @@ class LeadGoalPrintsLeadLabelsTest(CloseoutTestBase):
 
     def test_lead_brand_missed_cap_never_prints_purchase(self):
         self._lead_brand()
-        start = self.today - timedelta(days=2)
-        campaign = self._campaign(cap=300, start_date=start, end_date=self.today)
+        start = self.complete_day - timedelta(days=2)
+        campaign = self._campaign(cap=300, start_date=start, end_date=self.complete_day)
         self._three_days(campaign, spend=2000.0, purchases=5, revenue=1000.0)
 
         closed = closeout.close(self.conn, self.org_id, self.brand_id, campaign["id"], actor=ACTOR)
@@ -295,8 +307,8 @@ class LeadGoalPrintsLeadLabelsTest(CloseoutTestBase):
 
     def test_lead_brand_untracked_metric_names_lead_cost_untracked(self):
         self._lead_brand()
-        start = self.today - timedelta(days=6)
-        campaign = self._campaign(cap=300, start_date=start, end_date=self.today)
+        start = self.complete_day - timedelta(days=6)
+        campaign = self._campaign(cap=300, start_date=start, end_date=self.complete_day)
         group = self._group(campaign["id"])
         for offset in range(7):
             self._outcome_row(
@@ -314,8 +326,8 @@ class PurchaseGoalKeepsExistingStringsTest(CloseoutTestBase):
     """品牌沒設 `conversion_goal`（`None`）：學習句印唯一的指標（每筆成本上限）與實際數字。"""
 
     def test_default_brand_prints_the_cap_sentence(self):
-        start = self.today - timedelta(days=2)
-        campaign = self._campaign(cap=300, start_date=start, end_date=self.today)
+        start = self.complete_day - timedelta(days=2)
+        campaign = self._campaign(cap=300, start_date=start, end_date=self.complete_day)
         self._three_days(campaign, spend=2000.0, purchases=5, revenue=1000.0)
 
         closeout.close(self.conn, self.org_id, self.brand_id, campaign["id"], actor=ACTOR)
@@ -326,8 +338,8 @@ class PurchaseGoalKeepsExistingStringsTest(CloseoutTestBase):
 
 class SecondCampaignSameDirectionUpgradesLearningTest(CloseoutTestBase):
     def _achieved_campaign(self):
-        start = self.today - timedelta(days=2)
-        campaign = self._campaign(cap=300, start_date=start, end_date=self.today)
+        start = self.complete_day - timedelta(days=2)
+        campaign = self._campaign(cap=300, start_date=start, end_date=self.complete_day)
         self._three_days(campaign, spend=1000.0, purchases=5, revenue=2500.0)
         return campaign
 
@@ -348,7 +360,7 @@ class SecondCampaignSameDirectionUpgradesLearningTest(CloseoutTestBase):
         first = self._achieved_campaign()
         ads_repo.save_campaign_target(
             self.conn, self.org_id, self.brand_id, first["id"],
-            result_kind="lead", expected_revision=0, actor=ACTOR,
+            result_kind="lead", expected_revision=first["target_revision"], actor=ACTOR,
         )
         closeout.close(self.conn, self.org_id, self.brand_id, first["id"], actor=ACTOR)
         second = self._achieved_campaign()
@@ -363,8 +375,8 @@ class SecondCampaignSameDirectionUpgradesLearningTest(CloseoutTestBase):
 
 class ClosingTwiceDoesNotDuplicateLearningTest(CloseoutTestBase):
     def test_closing_twice_writes_only_one_learning(self):
-        start = self.today - timedelta(days=2)
-        campaign = self._campaign(cap=300, start_date=start, end_date=self.today)
+        start = self.complete_day - timedelta(days=2)
+        campaign = self._campaign(cap=300, start_date=start, end_date=self.complete_day)
         self._three_days(campaign, spend=1000.0, purchases=5, revenue=2500.0)
 
         first = closeout.close(self.conn, self.org_id, self.brand_id, campaign["id"], actor=ACTOR)
@@ -390,13 +402,13 @@ class CloseResolvesRuntimeAlertsTest(CloseoutTestBase):
         }
 
     def test_close_resolves_the_campaigns_open_runtime_rows(self):
-        start = self.today - timedelta(days=2)
-        campaign = self._campaign(cap=300, start_date=start, end_date=self.today)
-        other = self._campaign(cap=300, start_date=start, end_date=self.today)
+        start = self.complete_day - timedelta(days=2)
+        campaign = self._campaign(cap=300, start_date=start, end_date=self.complete_day)
+        other = self._campaign(cap=300, start_date=start, end_date=self.complete_day)
         self._three_days(campaign, spend=1000.0, purchases=5, revenue=2500.0)
         keys = [
             f"ads-runtime:{campaign['id']}:budget_unknown",
-            f"ads-runtime:{campaign['id']}:{self.today}:plan_date_passed",
+            f"ads-runtime:{campaign['id']}:{self.complete_day}:plan_date_passed",
             f"ads-runtime:{other['id']}:budget_unknown",
         ]
         for key in keys:
@@ -430,7 +442,7 @@ class CapResolutionTest(CloseoutTestBase):
         )
         self.conn.commit()
         campaign = self._campaign(
-            cap=None, start_date=self.today - timedelta(days=2), end_date=self.today,
+            cap=None, start_date=self.complete_day - timedelta(days=2), end_date=self.complete_day,
             context={"product_ids": [product_id]},
         )
         closed = self._close(campaign)
@@ -442,9 +454,9 @@ class CapResolutionTest(CloseoutTestBase):
                     if row["source_cycle_id"] == campaign["id"]]
         self.assertEqual([row["product_id"] for row in verdicts], [product_id])
 
-    def test_cap_set_on_the_target_route_is_the_one_judged(self):
+    def test_target_route_manual_ntd_own_cap_wins(self):
         campaign = self._campaign(
-            cap=None, start_date=self.today - timedelta(days=2), end_date=self.today,
+            cap=None, start_date=self.complete_day - timedelta(days=2), end_date=self.complete_day,
         )
         ads_repo.save_campaign_target(
             self.conn, self.org_id, self.brand_id, campaign["id"],
@@ -452,11 +464,15 @@ class CapResolutionTest(CloseoutTestBase):
         )
         closed = self._close(campaign)
         self.assertEqual(closed["verdict_json"]["target"], 350)
-        self.assertEqual(closed["verdict"], "未達成")  # 400 > 350
+        self.assertEqual(closed["verdict_json"]["actual"], 400)
+        self.assertEqual(closed["verdict_json"]["basis"], "own")
+        self.assertIsNone(closed["verdict_json"]["cap_comparison"]["reason"])
+        self.assertEqual(closed["verdict_json"]["cap_comparison"]["unit_basis"], "manual_ntd_input")
+        self.assertEqual(closed["verdict"], "未達成")
 
     def test_no_cap_at_all_is_inconclusive_naming_the_cap(self):
         campaign = self._campaign(
-            cap=None, start_date=self.today - timedelta(days=2), end_date=self.today,
+            cap=None, start_date=self.complete_day - timedelta(days=2), end_date=self.complete_day,
         )
         closed = self._close(campaign)
         self.assertEqual(closed["verdict"], "看不出")

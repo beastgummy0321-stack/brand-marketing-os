@@ -23,6 +23,7 @@ and `strategy.py` import this. Ledger access goes through `app.brand_intelligenc
 public functions.
 """
 
+from datetime import date
 from typing import cast
 
 from app.ads import (
@@ -31,8 +32,10 @@ from app.ads import (
     learning_rank,
     learning_view,
     live_creative,
+    outcome,
     period_grades,
     sell_way,
+    targets,
 )
 from app.ads import asset_binding_repository as bindings
 from app.ads import learning as ads_learning
@@ -106,9 +109,10 @@ def write_coordinate_learnings(conn: _AnyConn, org_id: str, brand_id: str, campa
     detail = ads_repo.campaign_detail(conn, org_id, brand_id, campaign_id)
     if detail is None:
         raise ValueError("campaign_unknown")
-    start, end = detail.get("start_date"), detail.get("end_date")
-    if start is None or end is None:
+    window = outcome.period_window(conn, org_id, brand_id, detail)
+    if window["start"] is None or window["end"] is None:
         return []
+    start, end = date.fromisoformat(window["start"]), date.fromisoformat(window["end"])
     # Same stance as the visual track: the coordinates the creatives went out with.
     detail = live_creative.with_learning_coordinates(conn, org_id, brand_id, detail)
     ads = [ad for group in detail["groups"] for ad in group["ads"]]
@@ -126,12 +130,30 @@ def write_coordinate_learnings(conn: _AnyConn, org_id: str, brand_id: str, campa
         ).fetchall()
     }
     ad_by_native = {ad["external_id"]: ad for ad in ads if ad.get("external_id")}
+    by_ad: dict[str, list] = {}
+    observations = outcome.select_period(
+        outcome.rows(conn, org_id, brand_id, campaign_id, "ad"), window,
+    )
+    for observation in observations:
+        by_ad.setdefault(observation["entity_id"], []).append(observation)
+    cohort = outcome.period_bucket(observations)
+    if cohort["reason"] in {"mixed_currency", "mixed_attribution", "attribution_unknown"}:
+        return []
+    cap = targets.resolve(conn, org_id, brand_id, detail)
     entries = []
     for row in period_grades.grade_period(conn, org_id, brand_id, start, end):
         if row["campaign_id"] != campaign_id:
             continue
         ad = ad_by_native.get(native_by_entity.get(row["entity_id"]))
         if ad is None:
+            continue
+        bucket = outcome.period_bucket(by_ad.get(ad["id"], []))
+        if bucket["reason"] is not None:
+            continue
+        comparison = outcome.cap_comparison(
+            conn, brand_id, cap, bucket["currency"], campaign=detail,
+        )
+        if comparison["reason"] is not None:
             continue
         entries.append({**row, "name": ad.get("name") or row.get("name") or ad["id"], "ad": ad})
     ranked = learning_rank.rank(entries)

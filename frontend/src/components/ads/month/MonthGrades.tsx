@@ -1,9 +1,12 @@
 import type { MonthGrades as Grades, PeriodGradeBucket } from "@/lib/adsMonthApi";
 import type { TriageGrade } from "@/lib/adsTriageApi";
 import {
-  Chip, GradeBar, ThumbTiles, figure, useAdsRules, watchTenths, type AdsRules, type ChipTone, type GradeBarBucket,
+  Chip, GradeBar, ThumbTiles, figure, formatAmount, gradeWord, useAdsRules, watchTenths, type AdsRules, type ChipTone, type GradeBarBucket,
 } from "../patterns";
-import { countWord, mmdd, money } from "./monthCsv";
+import { countWord, mmdd } from "./monthCsv";
+
+const money = (value: number | null, currency: string | null | undefined) =>
+  value === null ? "未知" : `${formatAmount(value)} ${currency ?? "幣別未知"}`;
 
 /** F29-I15: the month's spend split by the one cap ruler (prototype v10 `month()` split card + `bucket()` cards;
  * Feature F29 Contract C `grades`, the same rows a settle of this month reads). 有效 counts 划算 only. */
@@ -13,6 +16,7 @@ const TILE_LIMIT = 12;
 
 /** One break-even for the rules line only when every graded ad shares it; otherwise the term stays without one. */
 function sharedBreakEven(grades: Grades): number | null {
+  if (!grades.currency || grades.rows.some((row) => row.break_even_unit?.currency !== grades.currency)) return null;
   const values = new Set(grades.rows.map((row) => row.break_even));
   return values.size === 1 ? [...values][0] : null;
 }
@@ -35,8 +39,10 @@ export function MissingNote({ grades }: { grades: Grades }) {
 /** Prototype split card: 「9 月已花 22,000 元，分到這幾格」 + the grade bar with amounts + the grade rules. An unknown
  * total (two currencies, or a day's spend unknown) never prints as 0. */
 export function GradeSplit({ month, grades }: { month: number; grades: Grades }) {
-  const buckets: GradeBarBucket[] = grades.buckets.map((b) => ({ grade: b.grade, amount: b.amount, count: b.count }));
-  const title = grades.spent === null ? `${month} 月的花費分到這幾格` : `${month} 月已花 ${money(grades.spent)}，分到這幾格`;
+  const rules = useAdsRules();
+  const buckets: GradeBarBucket[] = grades.buckets.map((b) => ({ grade: b.grade, amount: b.amount, count: b.count, currency: b.currency }));
+  const title = grades.spent === null ? `${month} 月的花費分到這幾格` : `${month} 月已花 ${money(grades.spent, grades.currency)}，分到這幾格`;
+  const unknownGrade = grades.rows.some((row) => row.grade === "insufficient" && row.reason_code !== "too_new");
   return (
     <section aria-label="花費分到哪幾格" className="surface px-[22px] py-5">
       <div className="mb-3.5 flex flex-wrap items-center justify-between gap-3">
@@ -47,7 +53,7 @@ export function GradeSplit({ month, grades }: { month: number; grades: Grades })
       </div>
       {grades.rows.length === 0
         ? <p className="text-sm text-muted-foreground">這個月還沒有花到錢的廣告。</p>
-        : <GradeBar buckets={buckets} withMoney breakEven={sharedBreakEven(grades)} />}
+        : <GradeBar buckets={buckets} withMoney thinLabel={unknownGrade ? gradeWord(rules, "insufficient", "no_data") ?? "" : undefined} breakEven={sharedBreakEven(grades)} />}
       <MissingNote grades={grades} />
     </section>
   );
@@ -72,28 +78,40 @@ function bucketSpecs(rules: AdsRules | null): BucketSpec[] {
 
 function merge(buckets: PeriodGradeBucket[], grades: TriageGrade[]) {
   const own = buckets.filter((b) => grades.includes(b.grade));
+  const populated = own.filter((b) => b.count > 0);
+  const units = new Set((populated.length ? populated : own).map((b) => b.currency ?? null));
+  const currency = units.size === 1 ? [...units][0] : null;
+  const amount = populated.length === 1 ? populated[0].amount
+    : own.some((b) => b.amount === null) || (populated.length > 0 && !currency) ? null : own.reduce((s, b) => s + (b.amount as number), 0);
   return {
     count: own.reduce((s, b) => s + b.count, 0),
-    amount: own.some((b) => b.amount === null) ? null : own.reduce((s, b) => s + (b.amount as number), 0),
+    amount, currency,
+    reasonCodes: [...new Set(own.flatMap((b) => b.reason_codes ?? []))],
+    messages: [...new Set(own.flatMap((b) => b.messages ?? []))],
     thumbs: own.flatMap((b) => b.ads.map((ad) => ad.thumbnail_url)),
   };
 }
 
 /** The four bucket cards (prototype `bucket()`); `withAmounts` adds 「・花 X 元」 to each caption. */
 export function GradeBuckets({ grades, withAmounts }: { grades: Grades; withAmounts: boolean }) {
-  const specs = bucketSpecs(useAdsRules());
+  const rules = useAdsRules();
+  const specs = bucketSpecs(rules);
   return (
     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
       {specs.map((spec) => {
         const b = merge(grades.buckets, spec.grades);
-        const spend = b.amount === null ? "花費未知" : `花 ${money(b.amount)}`;
+        const spend = b.amount === null ? "花費未知" : `花 ${money(b.amount, b.currency)}`;
+        const unknownGrade = spec.key === "insufficient" && b.count > 0
+          && (b.reasonCodes.length === 0 || b.reasonCodes.some((reason) => reason !== "too_new"));
+        const title = unknownGrade ? gradeWord(rules, "insufficient", "no_data") ?? "" : spec.title;
+        const caption = unknownGrade ? b.messages.join("・") || "目前資料不足，暫時不能比較。" : spec.caption;
         return (
-          <section key={spec.key} aria-label={spec.title || undefined} data-bucket={spec.grades.join(",")} className="surface px-[22px] py-5">
+          <section key={spec.key} aria-label={title || undefined} data-bucket={spec.grades.join(",")} className="surface px-[22px] py-5">
             <div className="flex items-center justify-between gap-3">
-              <h2 className="text-[15px] font-semibold">{spec.title}</h2>
+              <h2 className="text-[15px] font-semibold">{title}</h2>
               <Chip tone={spec.tone}>{b.count} 則</Chip>
             </div>
-            <div className="text-xs text-muted-foreground" data-part="caption">{spec.caption}{withAmounts && `${spec.caption ? "・" : ""}${spend}`}</div>
+            <div className="text-xs text-muted-foreground" data-part="caption">{caption}{withAmounts && `${caption ? "・" : ""}${spend}`}</div>
             {b.count > 0
               ? <div className="mt-1"><ThumbTiles items={b.thumbs} size={44} max={TILE_LIMIT} /></div>
               : <p className="mt-3 text-sm text-muted-foreground">0 則</p>}

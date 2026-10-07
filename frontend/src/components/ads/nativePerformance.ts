@@ -1,5 +1,5 @@
 import { roasOf } from "@/lib/figures";
-import type { CampaignPerformance, OutcomeBucket } from "@/lib/adsApi";
+import type { CampaignPerformance, OutcomeBucket, PerformanceScope } from "@/lib/adsApi";
 import type { ExternalView, NativeObservation } from "@/lib/adsExternalApi";
 
 export type PerformanceBucket = Omit<OutcomeBucket, "spend" | "impressions" | "clicks"> & {
@@ -12,6 +12,8 @@ export interface PerformanceView {
   ads: (PerformanceBucket & { ad_id: string; name: string; spend_share: number | null })[];
   coverage: CampaignPerformance["coverage"] | null;
   last_data_at: string | null;
+  scope?: PerformanceScope;
+  cap_comparison?: CampaignPerformance["cap_comparison"];
 }
 export interface NativeMetricScope { key: string; label: string; metricScope: string; currency: string | null; attribution: string }
 export const nativeScopeKey = (o: NativeObservation) => JSON.stringify([o.metric_scope, o.currency, o.attribution_key]);
@@ -34,7 +36,7 @@ function aggregate(rows: NativeObservation[]): PerformanceBucket {
   return { spend, impressions, clicks, purchases, revenue, cpa: ratio(spend, purchases), ctr: ratio(clicks, impressions), roas_all_spend: roasOf(revenue, spend), roas_tracked_spend: null };
 }
 /** A selected native scope is the only aggregation boundary: never add parent and child observations. */
-export function nativePerformance(view?: ExternalView | null, scopeKey?: string): PerformanceView {
+export function nativePerformance(view?: (ExternalView & { scope?: PerformanceScope }) | null, scopeKey?: string): PerformanceView {
   const selected = scopeKey ?? nativeMetricScopes(view)[0]?.key;
   const unique = new Map<string, NativeObservation>();
   for (const row of view?.observations ?? []) if (nativeScopeKey(row) === selected) unique.set(JSON.stringify([row.entity_id, row.day]), row);
@@ -49,5 +51,5 @@ export function nativePerformance(view?: ExternalView | null, scopeKey?: string)
   return { totals, daily: days.map(day => ({ day, ...aggregate(rows.filter(row => row.day === day)) })),
     groups: entities.filter(row => row.kind === "adset").map(row => ({ ...row, group_id: row.id })),
     ads: entities.filter(row => row.kind === "ad").map(row => ({ ...row, ad_id: row.id })),
-    coverage: null, last_data_at: days.at(-1) ?? null };
+    coverage: null, last_data_at: days.at(-1) ?? null, scope: view?.scope };
 }

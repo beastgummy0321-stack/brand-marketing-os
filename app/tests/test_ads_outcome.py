@@ -10,7 +10,7 @@ are exact; the retired manual ingest endpoint is gone; real purchases reach clos
 import json
 import unittest
 import uuid
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
@@ -71,6 +71,8 @@ class OutcomeTestBase(unittest.TestCase):
         )
         self.brand_id = self.brand["id"]
         self.today = coresettings.today_for_org(web.conn, org_id=self.org_id)
+        # Metric fixtures end on a complete bound-account day; today stays distinct for coverage.
+        self.complete_day = coresettings.last_complete_day(web.conn, org_id=self.org_id)
         self._orig_provider = plan.PROVIDER
         web.conn.commit()
 
@@ -78,18 +80,38 @@ class OutcomeTestBase(unittest.TestCase):
         plan.PROVIDER = self._orig_provider
 
     def _bound_campaign(self, *, start_date=None, end_date=None,
-                         cap=300) -> tuple[dict, str, str]:
+                         cap=300, confirmed_cap=False, cap_source=None, pending_economics=False,
+                         name=None) -> tuple[dict, str, str]:
         """回傳 (campaign_detail, group_external_id, ad_external_id)，campaign/group/ad 三層
         都已經綁定完成、Campaign 轉 `live`（F31-I08 起用上架回讀同一組 repository 綁定函式），
         平台實體鏈也登記好了（`outcome_seed.bind_platform`）。每個平台實體 id 都是這次呼叫
         自己造的（`uuid`），不同測試、不同 Campaign 之間不會撞名。`cap`（F28-I01 唯一的上限，
         每筆成果成本）預設 300，結案整合測試才覆寫。"""
-        start_date = start_date or self.today
-        end_date = end_date or self.today
+        start_date = start_date or self.complete_day
+        end_date = end_date or self.complete_day
+        context = {}
+        if cap_source is not None:
+            context["field_sources"] = {"cap": cap_source}
+        if confirmed_cap or pending_economics:
+            product = bi_repo.create_product(
+                web.conn, self.brand_id, name="Confirmed TWD period cap", actor=ACTOR,
+            )
+            if pending_economics:
+                bi_repo.create_pending_product_economics(
+                    web.conn, self.brand_id, product["id"], selling_price=620,
+                    currency="USD", source_reference_id=None, actor=ACTOR,
+                )
+            else:
+                bi_repo.save_product_economics(
+                    web.conn, self.brand_id, product["id"], selling_price=cap + 100,
+                    currency="TWD", confirmed_by=ACTOR, actor=ACTOR, unit_variable_cost=100,
+                )
+            context = {**context, "product_ids": [product["id"]]}
         allocation = [{"role": "new", "label": "新客", "pct": 100, "rationale": None}]
         campaign = ads_repo.create_campaign(web.conn, self.org_id, self.brand_id, {
-            "name": f"測試 Campaign {uuid.uuid4().hex[:6]}", "goal_text": "幫產品衝購買",
-            "objective": "購買", "target_cost": cap or 300,
+            "name": name or f"測試 Campaign {uuid.uuid4().hex[:6]}", "goal_text": "幫產品衝購買",
+            "objective": "購買", "target_cost": None if confirmed_cap else cap or 300,
+            "context_json": context,
             "start_date": start_date, "end_date": end_date, "status": "draft",
             "budget_planned": 500, "budget_scenario": "recommended",
             "budget_basis_json": {"strategy": {"allocation": allocation}},
@@ -151,7 +173,7 @@ class NoDataDayIsUntrackedNotZeroTest(OutcomeTestBase):
         result = outcome.summary(web.conn, self.org_id, self.brand_id, detail["id"])
 
         self.assertEqual(result["daily"], [])
-        self.assertEqual(result["totals"]["spend"], 0)
+        self.assertIsNone(result["totals"]["spend"])
         self.assertIsNone(result["totals"]["purchases"])
         self.assertIsNone(result["totals"]["revenue"])
         self.assertIsNone(result["totals"]["cpa"])
@@ -162,13 +184,13 @@ class NoDataDayIsUntrackedNotZeroTest(OutcomeTestBase):
 class ConservativeAndOptimisticRoasBothPresentTest(OutcomeTestBase):
     def test_conservative_and_optimistic_roas_are_both_present(self):
         detail, _group_ext, _ad_ext = self._bound_campaign(
-            start_date=self.today - timedelta(days=1), end_date=self.today,
+            start_date=self.complete_day - timedelta(days=1), end_date=self.complete_day,
         )
         group_id = detail["groups"][0]["id"]
         # 兩天各一個真的購買與它的營收：總營收 1800／總花費 1000。
-        self._insert_row(detail["id"], group_id, self.today - timedelta(days=1),
+        self._insert_row(detail["id"], group_id, self.complete_day - timedelta(days=1),
                           spend=400.0, purchases=1, revenue=1200.0)
-        self._insert_row(detail["id"], group_id, self.today,
+        self._insert_row(detail["id"], group_id, self.complete_day,
                           spend=600.0, purchases=1, revenue=600.0)
 
         result = outcome.summary(web.conn, self.org_id, self.brand_id, detail["id"])
@@ -187,14 +209,14 @@ class RoasBasesDivergeWhenPartlyUntrackedTest(OutcomeTestBase):
 
     def test_optimistic_and_conservative_roas_diverge_when_one_day_is_untracked(self):
         detail, _group_ext, _ad_ext = self._bound_campaign(
-            start_date=self.today - timedelta(days=1), end_date=self.today,
+            start_date=self.complete_day - timedelta(days=1), end_date=self.complete_day,
         )
         group_id = detail["groups"][0]["id"]
         # 有追蹤到營收的一天：花費 500、營收 1000。
-        self._insert_row(detail["id"], group_id, self.today - timedelta(days=1),
+        self._insert_row(detail["id"], group_id, self.complete_day - timedelta(days=1),
                           spend=500.0, purchases=2, revenue=1000.0)
         # 沒有購買事件的一天：花費 500，營收未追蹤（不是 0）。
-        self._insert_row(detail["id"], group_id, self.today,
+        self._insert_row(detail["id"], group_id, self.complete_day,
                           spend=500.0, purchases=None, revenue=None)
 
         totals = outcome.summary(web.conn, self.org_id, self.brand_id, detail["id"])["totals"]
@@ -213,14 +235,14 @@ class TrackedZeroUntrackedAndRealCountSumOnlyKnownTest(OutcomeTestBase):
 
     def test_bucket_sums_only_tracked_days_never_coercing_null_to_zero(self):
         detail, _group_ext, _ad_ext = self._bound_campaign(
-            start_date=self.today - timedelta(days=2), end_date=self.today,
+            start_date=self.complete_day - timedelta(days=2), end_date=self.complete_day,
         )
         group_id = detail["groups"][0]["id"]
-        self._insert_row(detail["id"], group_id, self.today - timedelta(days=2),
+        self._insert_row(detail["id"], group_id, self.complete_day - timedelta(days=2),
                           spend=100.0, purchases=None, revenue=None)
-        self._insert_row(detail["id"], group_id, self.today - timedelta(days=1),
+        self._insert_row(detail["id"], group_id, self.complete_day - timedelta(days=1),
                           spend=100.0, purchases=0, revenue=0.0)
-        self._insert_row(detail["id"], group_id, self.today,
+        self._insert_row(detail["id"], group_id, self.complete_day,
                           spend=100.0, purchases=5, revenue=500.0)
 
         result = outcome.summary(web.conn, self.org_id, self.brand_id, detail["id"])
@@ -233,7 +255,7 @@ class TrackedZeroUntrackedAndRealCountSumOnlyKnownTest(OutcomeTestBase):
 class OutcomeTotalsReturnsNullNotZeroWhenAllUnknownTest(OutcomeTestBase):
     def test_outcome_totals_purchases_and_revenue_are_none_when_every_row_is_untracked(self):
         detail, _group_ext, _ad_ext = self._bound_campaign()
-        self._insert_row(detail["id"], detail["groups"][0]["id"], self.today, spend=500.0,
+        self._insert_row(detail["id"], detail["groups"][0]["id"], self.complete_day, spend=500.0,
                           purchases=None, revenue=None)
 
         # `campaign_detail`'s `outcome` key is `_outcome_totals`'s return value verbatim for an
@@ -257,7 +279,7 @@ class OnlyBoundPlatformRowsReachTheNumbersTest(OutcomeTestBase):
         detail, _group_ext, ad_ext = self._bound_campaign()
         ad = detail["groups"][0]["ads"][0]
         outcome_seed.seed_day(web.conn, self.org_id, self.brand_id, detail["id"], "ad",
-                              ad["id"], self.today, spend=120.0, purchases=1, revenue=300.0)
+                              ad["id"], self.complete_day, spend=120.0, purchases=1, revenue=300.0)
         web.conn.commit()
         self.assertEqual(
             [r["entity_id"] for r in outcome.rows(web.conn, self.org_id, self.brand_id,
@@ -279,16 +301,17 @@ class OnlyBoundPlatformRowsReachTheNumbersTest(OutcomeTestBase):
         ).fetchone()
         self.assertEqual(stored["n"], 1)
         ads = outcome.summary(web.conn, self.org_id, self.brand_id, detail["id"])["ads"]
-        self.assertEqual(ads[0]["spend"], 0)
+        self.assertIsNone(ads[0]["spend"])
         self.assertIsNone(ads[0]["purchases"])
 
     def test_monthly_budget_rows_are_excluded(self):
         detail, _group_ext, _ad_ext = self._bound_campaign()
         group_id = detail["groups"][0]["id"]
-        self._insert_row(detail["id"], group_id, self.today, spend=500.0, purchases=2,
+        self._insert_row(detail["id"], group_id, self.complete_day, spend=500.0, purchases=2,
                           revenue=900.0)
         outcome_seed.seed_day(
-            web.conn, self.org_id, self.brand_id, detail["id"], "group", group_id, self.today,
+            web.conn, self.org_id, self.brand_id, detail["id"], "group", group_id,
+            self.complete_day,
             spend=99999.0, attribution_key=external_repository.MONTHLY_BUDGET_ATTRIBUTION_KEY,
         )
         web.conn.commit()
@@ -341,7 +364,9 @@ class CoverageNamesUnreadDaysTest(OutcomeTestBase):
         self.assertEqual(coverage["expected"], 4)
 
     def test_a_campaign_starting_today_has_no_window(self):
-        detail, _group_ext, _ad_ext = self._bound_campaign()
+        detail, _group_ext, _ad_ext = self._bound_campaign(
+            start_date=self.today, end_date=self.today,
+        )
         outcome_seed.set_coverage(web.conn, self.org_id, self.brand_id, detail["id"],
                                   self.today, self.today)
         web.conn.commit()
@@ -359,11 +384,12 @@ class PeriodGradeTest(OutcomeTestBase):
 
     def _seven_days(self, *, cap, spend_per_day=400.0, purchases_per_day=2):
         detail, _group_ext, _ad_ext = self._bound_campaign(
-            start_date=self.today - timedelta(days=6), end_date=self.today, cap=cap,
+            start_date=self.complete_day - timedelta(days=6), end_date=self.complete_day, cap=cap,
+            cap_source="user" if cap is not None else None,
         )
         for i in range(7):
             self._insert_row(detail["id"], detail["groups"][0]["id"],
-                              self.today - timedelta(days=i), spend=spend_per_day,
+                              self.complete_day - timedelta(days=i), spend=spend_per_day,
                               purchases=purchases_per_day, revenue=None)
         return detail
 
@@ -442,15 +468,16 @@ class RealPurchasesReachCloseoutTest(OutcomeTestBase):
 
     def _three_days(self, cap):
         detail, _group_ext, _ad_ext = self._bound_campaign(
-            start_date=self.today - timedelta(days=2), end_date=self.today, cap=cap,
+            start_date=self.complete_day - timedelta(days=2), end_date=self.complete_day, cap=cap,
+            cap_source="user",
         )
         # 三天各 4 個真的購買，合計 12、每筆 1200/12=100。
         for i in range(3):
             self._insert_row(detail["id"], detail["groups"][0]["id"],
-                              self.today - timedelta(days=i), spend=400.0, purchases=4,
+                              self.complete_day - timedelta(days=i), spend=400.0, purchases=4,
                               revenue=4000.0)
         outcome_seed.set_coverage(web.conn, self.org_id, self.brand_id, detail["id"],
-                                  self.today - timedelta(days=2), self.today)
+                                  self.complete_day - timedelta(days=2), self.complete_day)
         web.conn.commit()
         return detail
 
@@ -475,6 +502,881 @@ class RealPurchasesReachCloseoutTest(OutcomeTestBase):
 
         self.assertEqual(closed["verdict"], "未達成")  # 100 > 80
         self.assertEqual(closed["verdict_json"]["actual"], 100)
+
+    def test_public_adopted_close_serves_new_learning(self):
+        detail = self._three_days(cap=150)
+        client = TestClient(main.app, raise_server_exceptions=False)
+        response = client.post(
+            f"/api/ads/brands/{self.brand_id}/campaigns/{detail['id']}/close", json={})
+        print("ADOPTED_PUBLIC_CLOSE_RECEIPT", response.status_code, response.text)
+        self.assertEqual(response.status_code, 200, response.text)
+
+
+class PeriodProjectionPublicTest(OutcomeTestBase):
+    """Contract P: public period numbers and raw comparison history are distinct."""
+
+    def setUp(self):
+        clock = patch.object(coredb, "now_utc", return_value=datetime(2026, 10, 27, 4, tzinfo=UTC))
+        clock.start()
+        self.addCleanup(clock.stop)
+        super().setUp()
+
+    def test_public_budget_pace_uses_completed_days_without_mixing_native_currency(self):
+        for currency in ("TWD", "USD"):
+            detail, _, _ = self._bound_campaign(
+                start_date=date(2026, 10, 24), end_date=date(2026, 10, 30)
+            )
+            group = detail["groups"][0]
+            for day in (24, 25, 26):
+                outcome_seed.seed_day(
+                    web.conn, self.org_id, self.brand_id, detail["id"], "group", group["id"],
+                    date(2026, 10, day), spend=300, purchases=4, revenue=6240, currency=currency,
+                )
+            web.conn.commit()
+            base = f"/api/ads/brands/{self.brand_id}/campaigns"
+            listed = self.client.get(base)
+            viewed = self.client.get(f"{base}/{detail['id']}")
+            self.assertEqual(listed.status_code, 200, listed.text)
+            self.assertEqual(viewed.status_code, 200, viewed.text)
+            row = next(c for c in listed.json()["campaigns"] if c["id"] == detail["id"])
+            record = viewed.json()["campaign"]
+            print("PUBLIC_BUDGET_PACE_RECEIPT", currency,
+                  json.dumps({"list": row, "detail": record}))
+            with self.subTest(consumer="pct", currency=currency):
+                self.assertIsNotNone(row["budget_progress"]["total"])
+                if currency == "USD":
+                    self.assertIsNone(row["budget_progress"]["pct"])
+                else:
+                    self.assertIsNotNone(row["budget_progress"]["pct"])
+            for consumer, value in (("list", row), ("detail", record)):
+                with self.subTest(consumer=consumer, currency=currency):
+                    self.assertEqual(value["outcome"]["scope"]["days"], 3)
+                    self.assertIn("第 3／7 天", value["judgment"]["detail"])
+                    if currency == "USD":
+                        self.assertNotIn("NT$", value["judgment"]["detail"])
+                        self.assertNotIn("快", value["judgment"]["text"])
+                        self.assertNotIn("慢", value["judgment"]["text"])
+
+    def test_public_recent_grades_do_not_compare_usd_results_with_manual_twd_cap(self):
+        for currency in ("TWD", "USD"):
+            with self.subTest(currency=currency):
+                detail, _, _ = self._bound_campaign(
+                    start_date=date(2026, 10, 24), end_date=date(2026, 10, 30),
+                )
+                base = f"/api/ads/brands/{self.brand_id}/campaigns/{detail['id']}"
+                saved = self.client.put(
+                    f"{base}/target",
+                    json={"basis": "own", "value": 350, "expected_revision": 0},
+                )
+                self.assertEqual(saved.status_code, 200, saved.text)
+                ad = detail["groups"][0]["ads"][0]
+                for day in (24, 25, 26):
+                    row = outcome_seed.seed_day(
+                        web.conn, self.org_id, self.brand_id, detail["id"], "ad", ad["id"],
+                        date(2026, 10, day), spend=4000, purchases=10, revenue=5000,
+                        currency=currency,
+                    )
+                    external_repository.upsert_observation(
+                        web.conn, self.org_id, self.brand_id, detail["id"],
+                        {"entity_id": row["entity_id"], "day": date(2026, 10, day),
+                         "metric_scope": "ad", "attribution_key": outcome_seed.ATTRIBUTION_KEY,
+                         "currency": currency, "spend": 4000, "purchases": 10, "revenue": 5000,
+                         "source": "test"},
+                        result_kind="purchase", result_count=10, result_action="omni_purchase",
+                        result_attribution="7d_click+1d_view",
+                    )
+                outcome_seed.set_coverage(
+                    web.conn, self.org_id, self.brand_id, detail["id"],
+                    date(2026, 10, 24), date(2026, 10, 26),
+                )
+                web.conn.commit()
+                result = self.client.get(f"{base}/triage")
+                self.assertEqual(result.status_code, 200, result.text)
+                print("PUBLIC_RECENT_CAP_UNIT_RECEIPT", currency, json.dumps(result.json()))
+                items = result.json()["triage"]["items"]
+                self.assertEqual(len(items), 1)
+                self.assertEqual(items[0]["current"]["cost_per_result"], 400)
+                self.assertEqual(items[0]["current"]["result_count"], 30)
+                self.assertEqual(items[0]["current"]["currency"], currency)
+                with self.subTest(consumer="recent_grade"):
+                    self.assertEqual(
+                        items[0]["grade"], "watch" if currency == "TWD" else "insufficient",
+                    )
+                    comparison = items[0]["cap_comparison"]
+                    self.assertEqual(comparison["currency"], "TWD")
+                    self.assertEqual(comparison["source"], "user")
+                    self.assertEqual(
+                        comparison["reason"],
+                        None if currency == "TWD" else "cap_currency_mismatch",
+                    )
+                    if currency == "USD":
+                        self.assertEqual(items[0]["reason_code"], "cap_currency_mismatch")
+                        self.assertIsNone(items[0]["sample"]["spend_multiple"])
+                monthly = self.client.get(
+                    f"/api/ads/brands/{self.brand_id}/month-summary?month=2026-10",
+                )
+                self.assertEqual(monthly.status_code, 200, monthly.text)
+                print("PUBLIC_EXPLICIT_MONTH_CAP_UNIT_RECEIPT", currency, monthly.text)
+                grades = [row for row in monthly.json()["grades"]["rows"]
+                          if row["campaign_id"] == detail["id"]]
+                self.assertEqual(len(grades), 1)
+                with self.subTest(consumer="explicit_month_grade"):
+                    self.assertEqual(
+                        grades[0]["grade"], "watch" if currency == "TWD" else "insufficient",
+                    )
+                    self.assertEqual(grades[0]["spend"], 12000)
+                    self.assertEqual(grades[0]["cost_per_result"], 400)
+                    self.assertEqual(grades[0]["currency"], currency)
+                    self.assertEqual(grades[0]["cap_comparison"]["currency"], "TWD")
+                    self.assertEqual(
+                        grades[0]["cap_comparison"]["reason"],
+                        None if currency == "TWD" else "cap_currency_mismatch",
+                    )
+
+    def test_public_break_even_unit_is_independent_of_manual_own_unit(self):
+        for currency, status in (("TWD", "confirmed"), ("USD", "confirmed"),
+                                 ("USD", "pending"), (None, None)):
+            confirmed = status == "confirmed"
+            with self.subTest(break_even_currency=currency, economics_status=status):
+                detail, _, _ = self._bound_campaign(
+                    start_date=date(2026, 10, 24), end_date=date(2026, 10, 30),
+                    cap=520 if confirmed else 300, confirmed_cap=confirmed,
+                    pending_economics=status == "pending",
+                )
+                base = f"/api/ads/brands/{self.brand_id}/campaigns/{detail['id']}"
+                if confirmed:
+                    bi_repo.save_product_economics(
+                        web.conn, self.brand_id, detail["cap"]["product_id"],
+                        selling_price=620, unit_variable_cost=100, currency=currency,
+                        confirmed_by=ACTOR, actor=ACTOR,
+                    )
+                    web.conn.commit()
+                saved = self.client.put(
+                    f"{base}/target", json={"basis": "own", "value": 450, "expected_revision": 0},
+                )
+                self.assertEqual(saved.status_code, 200, saved.text)
+                ad = detail["groups"][0]["ads"][0]
+                for day in (24, 25, 26):
+                    row = outcome_seed.seed_day(
+                        web.conn, self.org_id, self.brand_id, detail["id"], "ad", ad["id"],
+                        date(2026, 10, day), spend=480, purchases=10, revenue=800,
+                    )
+                    external_repository.upsert_observation(
+                        web.conn, self.org_id, self.brand_id, detail["id"],
+                        {"entity_id": row["entity_id"], "day": date(2026, 10, day),
+                         "metric_scope": "ad", "attribution_key": outcome_seed.ATTRIBUTION_KEY,
+                         "currency": "TWD", "spend": 480, "purchases": 10, "revenue": 800,
+                         "source": "test"},
+                        result_kind="purchase", result_count=10, result_action="omni_purchase",
+                        result_attribution="7d_click+1d_view",
+                    )
+                outcome_seed.set_coverage(
+                    web.conn, self.org_id, self.brand_id, detail["id"],
+                    date(2026, 10, 24), date(2026, 10, 26),
+                )
+                web.conn.commit()
+                response = self.client.get(f"{base}/triage")
+                self.assertEqual(response.status_code, 200, response.text)
+                print("PUBLIC_INDEPENDENT_BREAK_EVEN_UNIT", currency, status, response.text)
+                item = response.json()["triage"]["items"][0]
+                self.assertEqual(item["target"]["basis"], "own")
+                self.assertEqual(item["target"]["value"], 450)
+                self.assertEqual(item["target"]["break_even"], 520 if confirmed else None)
+                self.assertEqual(item["current"]["cost_per_result"], 48)
+                self.assertEqual(item["target"]["cap_unit"]["currency"], "TWD")
+                self.assertEqual(
+                    item["target"]["break_even_unit"]["currency"], currency if confirmed else None,
+                )
+                self.assertEqual(item["target"]["break_even_unit"]["unit_basis"],
+                                 "confirmed_product_economics" if confirmed else None)
+                for path in (base, f"{base}/target"):
+                    read = self.client.get(path)
+                    self.assertEqual(read.status_code, 200, read.text)
+                    cap = read.json()["campaign"]["cap"] if path == base else read.json()["target"]
+                    self.assertEqual(cap.get("cap_unit", {}).get("currency"), "TWD")
+                    self.assertEqual(cap.get("break_even_unit", {}).get("currency"),
+                                     currency if confirmed else None)
+                    self.assertEqual(cap.get("price_unit", {}).get("currency"),
+                                     currency if confirmed else None)
+
+    def test_public_confirmed_price_unit_remains_known_without_cost_or_break_even(self):
+        detail, _, _ = self._bound_campaign(
+            start_date=date(2026, 10, 24), end_date=date(2026, 10, 30),
+            cap=520, confirmed_cap=True,
+        )
+        bi_repo.save_product_economics(
+            web.conn, self.brand_id, detail["cap"]["product_id"],
+            selling_price=620, unit_variable_cost=None, currency="USD",
+            confirmed_by=ACTOR, actor=ACTOR,
+        )
+        web.conn.commit()
+        base = f"/api/ads/brands/{self.brand_id}/campaigns/{detail['id']}"
+        saved = self.client.put(
+            f"{base}/target", json={"basis": "own", "value": 450, "expected_revision": 0},
+        )
+        self.assertEqual(saved.status_code, 200, saved.text)
+        for path in (base, f"{base}/target"):
+            read = self.client.get(path)
+            self.assertEqual(read.status_code, 200, read.text)
+            print("PUBLIC_CONFIRMED_PRICE_WITHOUT_COST", path, json.dumps(read.json()))
+            cap = read.json()["campaign"]["cap"] if path == base else read.json()["target"]
+            self.assertEqual(cap["price"], 620)
+            self.assertEqual(cap["value"], 450)
+            self.assertEqual(cap["cap_unit"]["currency"], "TWD")
+            self.assertEqual(cap["price_unit"]["currency"], "USD")
+            self.assertEqual(cap["price_unit"]["unit_basis"], "confirmed_product_economics")
+            self.assertIsNone(cap["break_even"])
+            self.assertIsNone(cap["break_even_unit"]["currency"])
+            if path.endswith("/target"):
+                self.assertIsNone(cap["cost"])
+
+    def test_public_manual_target_unit_uses_recorded_input_not_current_account(self):
+        for source, value, currency in (
+            ("copied", 350, "TWD"), ("copied", 350, "USD"),
+            ("copied", 300, "TWD"), ("break_even", 300, "USD"),
+        ):
+            with self.subTest(source=source, stored_value=value, currency=currency):
+                detail, _, _ = self._bound_campaign(
+                    start_date=date(2026, 10, 24), end_date=date(2026, 10, 30), cap=value,
+                    cap_source=source,
+                )
+                for day in (24, 25, 26):
+                    outcome_seed.seed_day(
+                        web.conn, self.org_id, self.brand_id, detail["id"], "group",
+                        detail["groups"][0]["id"], date(2026, 10, day),
+                        spend=400, purchases=1, revenue=500, currency=currency,
+                    )
+                outcome_seed.set_coverage(
+                    web.conn, self.org_id, self.brand_id, detail["id"],
+                    date(2026, 10, 24), date(2026, 10, 26),
+                )
+                web.conn.commit()
+                base = f"/api/ads/brands/{self.brand_id}/campaigns/{detail['id']}"
+                saved = self.client.put(
+                    f"{base}/target", json={"basis": "own", "value": 350, "expected_revision": 0},
+                )
+                self.assertEqual(saved.status_code, 200, saved.text)
+                result = self.client.get(f"{base}/performance")
+                closed = self.client.post(f"{base}/close", json={})
+                self.assertEqual(result.status_code, 200, result.text)
+                self.assertEqual(closed.status_code, 200, closed.text)
+                data, record = result.json(), closed.json()["campaign"]
+                print("MANUAL_TARGET_UNIT_RECEIPT",
+                      json.dumps({"performance": data, "close": record}))
+                self.assertEqual(data["totals"]["cpa"], 400)
+                self.assertEqual(record["cap"]["value"], 350)
+                self.assertEqual(record["cap"]["basis"], "own")
+                comparison = data["cap_comparison"]
+                if value == 350:
+                    self.assertEqual(comparison["source"], source)
+                    self.assertIsNone(comparison["currency"])
+                    self.assertEqual(comparison["reason"], "cap_currency_unknown")
+                    self.assertEqual(record["verdict"], "看不出")
+                    self.assertEqual(data["totals"]["grade"]["grade"], "insufficient")
+                else:
+                    self.assertEqual(comparison["source"], "user")
+                    self.assertEqual(comparison["currency"], "TWD")
+                    self.assertEqual(comparison["unit_basis"], "manual_ntd_input")
+                    self.assertEqual(
+                        comparison["reason"],
+                        None if currency == "TWD" else "cap_currency_mismatch",
+                    )
+                    self.assertEqual(record["verdict"], "未達成" if currency == "TWD" else "看不出")
+                    if currency == "TWD":
+                        self.assertNotEqual(data["totals"]["grade"]["grade"], "insufficient")
+                    else:
+                        self.assertEqual(data["totals"]["grade"]["grade"], "insufficient")
+
+    def test_public_all_null_counts_are_unknown_while_observed_zero_stays_zero(self):
+        for value in (None, 0):
+            with self.subTest(observed=value):
+                detail, _, _ = self._bound_campaign(
+                    start_date=date(2026, 10, 24), end_date=date(2026, 10, 26)
+                )
+                group = detail["groups"][0]
+                for kind, node in (("group", group), ("ad", group["ads"][0])):
+                    outcome_seed.seed_day(
+                        web.conn,
+                        self.org_id,
+                        self.brand_id,
+                        detail["id"],
+                        kind,
+                        node["id"],
+                        date(2026, 10, 24),
+                        spend=0,
+                        purchases=0,
+                        revenue=0,
+                        impressions=value,
+                        clicks=value,
+                    )
+                web.conn.commit()
+                response = self.client.get(
+                    f"/api/ads/brands/{self.brand_id}/campaigns/{detail['id']}/performance"
+                )
+                self.assertEqual(response.status_code, 200, response.text)
+                result = response.json()
+                print("NULL_COUNTS_PUBLIC_RECEIPT", json.dumps(result))
+                for consumer, bucket in (
+                    ("totals", result["totals"]),
+                    ("daily", result["daily"][0]),
+                    ("group", result["groups"][0]),
+                    ("ad", result["ads"][0]),
+                ):
+                    with self.subTest(consumer=consumer):
+                        self.assertEqual(bucket["spend"], 0)
+                        self.assertEqual(bucket["impressions"], value)
+                        self.assertEqual(bucket["clicks"], value)
+
+    def test_c15_public_period_uses_completed_campaign_days_preserving_six_raw_rows(self):
+        detail, _, _ = self._bound_campaign(
+            start_date=date(2026, 10, 24),
+            end_date=date(2026, 10, 30),
+            cap=100,
+        )
+        group = detail["groups"][0]
+        ad = group["ads"][0]
+        for day in range(21, 27):
+            spend, purchases, revenue = (500, 1, 1560) if day < 24 else (300, 4, 6240)
+            for kind, node in (("group", group), ("ad", ad)):
+                outcome_seed.seed_day(
+                    web.conn,
+                    self.org_id,
+                    self.brand_id,
+                    detail["id"],
+                    kind,
+                    node["id"],
+                    date(2026, 10, day),
+                    spend=spend,
+                    purchases=purchases,
+                    revenue=revenue,
+                )
+        outcome_seed.set_coverage(
+            web.conn,
+            self.org_id,
+            self.brand_id,
+            detail["id"],
+            date(2026, 10, 21),
+            date(2026, 10, 26),
+        )
+        web.conn.commit()
+        base = f"/api/ads/brands/{self.brand_id}/campaigns"
+        perf = self.client.get(f"{base}/{detail['id']}/performance")
+        listed = self.client.get(base)
+        viewed = self.client.get(f"{base}/{detail['id']}")
+        for response in (perf, listed, viewed):
+            self.assertEqual(response.status_code, 200, response.text)
+        raw = outcome.rows(web.conn, self.org_id, self.brand_id, detail["id"], "group")
+        listed_row = next(c for c in listed.json()["campaigns"] if c["id"] == detail["id"])
+        print(
+            "C15_PUBLIC_RECEIPT",
+            json.dumps(
+                {
+                    "clock": coredb.now_utc(),
+                    "raw": raw,
+                    "performance": perf.json(),
+                    "list": listed_row["outcome"],
+                    "detail": viewed.json()["campaign"]["outcome"],
+                },
+                default=str,
+                ensure_ascii=False,
+            ),
+        )
+        self.assertEqual(len(raw), 6)
+        for source, totals in (
+            ("performance", perf.json()["totals"]),
+            ("list", listed_row["outcome"]),
+            ("detail", viewed.json()["campaign"]["outcome"]),
+        ):
+            with self.subTest(source=source):
+                self.assertEqual(float(totals["spend"]), 900)
+                self.assertEqual(totals["purchases"], 12)
+                self.assertEqual(float(totals["revenue"]), 18720)
+        self.assertEqual(perf.json()["totals"]["cpa"], 75)
+        self.assertEqual(perf.json()["totals"]["roas_all_spend"], 20.8)
+        self.assertEqual(
+            [row["day"] for row in perf.json()["daily"]], ["2026-10-24", "2026-10-25", "2026-10-26"]
+        )
+
+    def test_imported_public_period_excludes_intraday_but_raw_requested_history_keeps_it(self):
+        imported = external_repository.create_imported_campaign(
+            web.conn,
+            self.org_id,
+            self.brand_id,
+            name="Imported observed range",
+            created_by=ACTOR,
+        )
+        entity = external_repository.upsert_entity(
+            web.conn,
+            self.org_id,
+            self.brand_id,
+            imported["id"],
+            {
+                "platform": outcome_seed.PLATFORM,
+                "source_account": outcome_seed.SOURCE_ACCOUNT,
+                "native_kind": "campaign",
+                "native_id": f"native-{imported['id']}",
+            },
+        )
+        for day, spend in ((26, 300), (27, 999)):
+            external_repository.upsert_observation(
+                web.conn,
+                self.org_id,
+                self.brand_id,
+                imported["id"],
+                {
+                    "entity_id": entity["id"],
+                    "day": date(2026, 10, day),
+                    "metric_scope": "campaign",
+                    "attribution_key": "test",
+                    "currency": "TWD",
+                    "spend": spend,
+                    "purchases": 4,
+                    "revenue": 6240,
+                    "source": "test",
+                },
+            )
+        web.conn.commit()
+        base = f"/api/ads/brands/{self.brand_id}/campaigns/{imported['id']}"
+        performance = self.client.get(f"{base}/performance")
+        detail = self.client.get(base)
+        self.assertEqual(performance.status_code, 200, performance.text)
+        self.assertEqual(detail.status_code, 200, detail.text)
+        raw = external_repository.external_view(
+            web.conn,
+            self.org_id,
+            self.brand_id,
+            imported["id"],
+            start=date(2026, 10, 26),
+            end=date(2026, 10, 27),
+        )
+        print(
+            "IMPORTED_PUBLIC_RECEIPT",
+            json.dumps(
+                {
+                    "clock": coredb.now_utc(),
+                    "raw": raw,
+                    "performance": performance.json(),
+                    "detail": detail.json(),
+                },
+                default=str,
+            ),
+        )
+        self.assertEqual(len(raw["observations"]), 2)
+        for consumer, view in (
+            ("performance", performance.json()["external_view"]),
+            ("detail", detail.json()["campaign"]["external_view"]),
+        ):
+            with self.subTest(consumer=consumer):
+                self.assertEqual(view["window"]["end"], "2026-10-26")
+                self.assertEqual([row["day"] for row in view["observations"]], ["2026-10-26"])
+
+    def test_imported_period_is_complete_beyond_both_page_cursors(self):
+        imported = external_repository.create_imported_campaign(
+            web.conn,
+            self.org_id,
+            self.brand_id,
+            name="Native complete pagination",
+            created_by=ACTOR,
+        )
+        for index in range(101):
+            entity = external_repository.upsert_entity(
+                web.conn,
+                self.org_id,
+                self.brand_id,
+                imported["id"],
+                {
+                    "platform": outcome_seed.PLATFORM,
+                    "source_account": outcome_seed.SOURCE_ACCOUNT,
+                    "native_kind": "ad",
+                    "native_id": f"native-{index}",
+                },
+            )
+            external_repository.upsert_observation(
+                web.conn,
+                self.org_id,
+                self.brand_id,
+                imported["id"],
+                {
+                    "entity_id": entity["id"],
+                    "day": date(2026, 10, 26),
+                    "metric_scope": "ad",
+                    "attribution_key": "test",
+                    "currency": "TWD",
+                    "spend": 10,
+                    "source": "test",
+                },
+            )
+        web.conn.commit()
+        base = f"/api/ads/brands/{self.brand_id}/campaigns/{imported['id']}"
+        for consumer, response in (
+            ("performance", self.client.get(f"{base}/performance")),
+            ("detail", self.client.get(base)),
+        ):
+            with self.subTest(consumer=consumer):
+                self.assertEqual(response.status_code, 200, response.text)
+                data = response.json()
+                view = (data if consumer == "performance" else data["campaign"])["external_view"]
+                print("NATIVE_PAGE_PUBLIC_RECEIPT", consumer, json.dumps(view))
+                self.assertEqual(len(view["entities"]), 101)
+                self.assertEqual(len(view["observations"]), 101)
+                self.assertIsNone(view["next_entity_cursor"])
+                self.assertIsNone(view["next_observation_cursor"])
+                self.assertEqual(sum(float(row["spend"]) for row in view["observations"]), 1010)
+
+    def test_ambiguous_currency_or_attribution_never_prints_a_combined_money_value(self):
+        for currencies, attributions in (
+            (["TWD", "USD"], ["test", "test"]),
+            (["TWD", "TWD"], ["test", "old"]),
+            ([None, None], ["test", "test"]),
+        ):
+            with self.subTest(currencies=currencies, attributions=attributions):
+                detail, _, _ = self._bound_campaign(
+                    start_date=date(2026, 10, 24), end_date=date(2026, 10, 30)
+                )
+                group = detail["groups"][0]
+                for offset, (currency, attribution) in enumerate(
+                    zip(currencies, attributions, strict=True)
+                ):
+                    for kind, node in (("group", group), ("ad", group["ads"][0])):
+                        outcome_seed.seed_day(
+                            web.conn,
+                            self.org_id,
+                            self.brand_id,
+                            detail["id"],
+                            kind,
+                            node["id"],
+                            date(2026, 10, 24 + offset),
+                            spend=300,
+                            purchases=4,
+                            revenue=6240,
+                            currency=currency,
+                            attribution_key=attribution,
+                        )
+                outcome_seed.set_coverage(
+                    web.conn,
+                    self.org_id,
+                    self.brand_id,
+                    detail["id"],
+                    date(2026, 10, 24),
+                    date(2026, 10, 26),
+                )
+                web.conn.commit()
+                response = self.client.get(
+                    f"/api/ads/brands/{self.brand_id}/campaigns/{detail['id']}/performance"
+                )
+                self.assertEqual(response.status_code, 200, response.text)
+                print("AMBIGUOUS_PUBLIC_RECEIPT", json.dumps(response.json()))
+                self.assertIsNone(response.json()["totals"]["spend"])
+                self.assertIsNone(response.json()["totals"]["cpa"])
+                self.assertIsNone(response.json()["totals"]["roas_all_spend"])
+                for node in [*response.json()["groups"], *response.json()["ads"]]:
+                    self.assertIsNone(node["spend_share"])
+                closed = self.client.post(
+                    f"/api/ads/brands/{self.brand_id}/campaigns/{detail['id']}/close", json={}
+                )
+                self.assertEqual(closed.status_code, 200, closed.text)
+                self.assertEqual(closed.json()["campaign"]["verdict"], "看不出")
+                ledger = bi_repo.list_learnings(web.conn, self.brand_id, limit=500)
+                current = [row for row in ledger if row["source_cycle_id"] == detail["id"]]
+                ranked = [
+                    row
+                    for row in ledger
+                    if (row["source_cycle_id"] or "").startswith(detail["id"] + ":")
+                ]
+                self.assertEqual(len(current), 1)
+                self.assertIn("看不出", current[0]["learning_text"])
+                self.assertEqual(ranked, [])
+
+    def test_product_twd_cap_cannot_grade_or_close_usd_period_as_achieved(self):
+        product = bi_repo.create_product(web.conn, self.brand_id, name="TWD economics", actor=ACTOR)
+        bi_repo.save_product_economics(
+            web.conn,
+            self.brand_id,
+            product["id"],
+            selling_price=1000,
+            currency="TWD",
+            confirmed_by=ACTOR,
+            actor=ACTOR,
+            unit_variable_cost=450,
+            shipping_cost=50,
+        )
+        campaign = ads_repo.create_campaign(
+            web.conn,
+            self.org_id,
+            self.brand_id,
+            {
+                "name": "USD observations versus TWD product",
+                "goal_text": "Period cost",
+                "objective": "購買",
+                "target_cost": None,
+                "start_date": date(2026, 10, 24),
+                "end_date": date(2026, 10, 30),
+                "status": "live",
+                "context_json": {"product_ids": [product["id"]]},
+            },
+            created_by=ACTOR,
+        )
+        group = plan.create_group(
+            web.conn,
+            self.org_id,
+            self.brand_id,
+            campaign["id"],
+            name="USD group",
+            role="new",
+            daily_budget=100,
+        )
+        for day in (24, 25, 26):
+            outcome_seed.seed_day(
+                web.conn,
+                self.org_id,
+                self.brand_id,
+                campaign["id"],
+                "group",
+                group["id"],
+                date(2026, 10, day),
+                spend=100,
+                purchases=5,
+                revenue=1000,
+                currency="USD",
+            )
+        outcome_seed.set_coverage(
+            web.conn,
+            self.org_id,
+            self.brand_id,
+            campaign["id"],
+            date(2026, 10, 24),
+            date(2026, 10, 26),
+        )
+        web.conn.commit()
+        base = f"/api/ads/brands/{self.brand_id}/campaigns/{campaign['id']}"
+        performance = self.client.get(f"{base}/performance")
+        closed = self.client.post(f"{base}/close", json={})
+        self.assertEqual(performance.status_code, 200, performance.text)
+        self.assertEqual(closed.status_code, 200, closed.text)
+        print(
+            "CAP_CURRENCY_RECEIPT",
+            json.dumps({"performance": performance.json(), "closed": closed.json()}),
+        )
+        with self.subTest(consumer="period_grade"):
+            self.assertEqual(performance.json()["totals"]["grade"]["grade"], "insufficient")
+        with self.subTest(consumer="closeout"):
+            self.assertEqual(closed.json()["campaign"]["verdict"], "看不出")
+        with self.subTest(consumer="window"):
+            self.assertEqual(
+                closed.json()["campaign"]["verdict_json"]["window"],
+                {"start": "2026-10-24", "end": "2026-10-26"},
+            )
+            self.assertEqual(closed.json()["campaign"]["verdict_json"]["sample"]["days"], 3)
+
+    def test_public_own_scalar_cap_keeps_priority_but_unknown_unit_cannot_claim_achieved(self):
+        detail, _, _ = self._bound_campaign(
+            start_date=date(2026, 10, 24),
+            end_date=date(2026, 10, 30),
+            cap=100,
+        )
+        group = detail["groups"][0]
+        for day in (24, 25, 26):
+            outcome_seed.seed_day(
+                web.conn,
+                self.org_id,
+                self.brand_id,
+                detail["id"],
+                "group",
+                group["id"],
+                date(2026, 10, day),
+                spend=100,
+                purchases=5,
+                revenue=1000,
+                currency="USD",
+            )
+        outcome_seed.set_coverage(
+            web.conn,
+            self.org_id,
+            self.brand_id,
+            detail["id"],
+            date(2026, 10, 24),
+            date(2026, 10, 26),
+        )
+        web.conn.commit()
+        account = {
+            "account_id": outcome_seed.SOURCE_ACCOUNT,
+            "timezone_name": "Asia/Taipei",
+            "currency": "USD",
+        }
+        base = f"/api/ads/brands/{self.brand_id}/campaigns/{detail['id']}"
+        with patch.object(_SeedAccount, "accounts", return_value=[account]):
+            performance = self.client.get(f"{base}/performance")
+            closed = self.client.post(f"{base}/close", json={})
+        self.assertEqual(performance.status_code, 200, performance.text)
+        self.assertEqual(closed.status_code, 200, closed.text)
+        print(
+            "OWN_CAP_UNIT_PUBLIC_RECEIPT",
+            json.dumps(
+                {
+                    "performance": performance.json(),
+                    "closed": closed.json(),
+                }
+            ),
+        )
+        self.assertEqual(closed.json()["campaign"]["cap"]["basis"], "own")
+        self.assertEqual(closed.json()["campaign"]["cap"]["value"], 100)
+        with self.subTest(consumer="grade"):
+            self.assertEqual(performance.json()["totals"]["grade"]["grade"], "insufficient")
+        with self.subTest(consumer="close"):
+            self.assertEqual(closed.json()["campaign"]["verdict"], "看不出")
+        with self.subTest(consumer="basis"):
+            self.assertEqual(performance.json()["cap_comparison"]["reason"], "cap_currency_unknown")
+
+    def test_inclusive_period_boundaries_known_zero_today_future_and_missing_dates_are_distinct(
+        self,
+    ):
+        detail, _, _ = self._bound_campaign(
+            start_date=date(2026, 10, 24), end_date=date(2026, 10, 25)
+        )
+        group = detail["groups"][0]
+        for day in (23, 24, 25, 26, 27, 31):
+            outcome_seed.seed_day(
+                web.conn,
+                self.org_id,
+                self.brand_id,
+                detail["id"],
+                "group",
+                group["id"],
+                date(2026, 10, day),
+                spend=100,
+                purchases=0,
+                revenue=0,
+            )
+        web.conn.commit()
+        base = f"/api/ads/brands/{self.brand_id}/campaigns/{detail['id']}"
+        result = self.client.get(f"{base}/performance").json()
+        self.assertEqual([row["day"] for row in result["daily"]], ["2026-10-24", "2026-10-25"])
+        self.assertEqual(result["totals"]["spend"], 200)
+        self.assertEqual(result["totals"]["purchases"], 0)
+        self.assertEqual(result["totals"]["revenue"], 0)
+        self.assertEqual(result["totals"]["roas_all_spend"], 0)
+        self.assertIsNone(result["totals"]["cpa"])
+        self.assertEqual(
+            len(outcome.rows(web.conn, self.org_id, self.brand_id, detail["id"], "group")), 6
+        )
+        for start, end, state in (
+            (date(2026, 10, 27), date(2026, 10, 30), "future"),
+            (None, None, "missing_dates"),
+        ):
+            with self.subTest(state=state):
+                unknown = ads_repo.create_campaign(
+                    web.conn,
+                    self.org_id,
+                    self.brand_id,
+                    {
+                        "name": state,
+                        "goal_text": "Missing completed scope",
+                        "objective": "購買",
+                        "start_date": start,
+                        "end_date": end,
+                        "target_cost": 100,
+                    },
+                    created_by=ACTOR,
+                )
+                web.conn.commit()
+                data = self.client.get(
+                    f"/api/ads/brands/{self.brand_id}/campaigns/{unknown['id']}/performance"
+                ).json()
+                self.assertEqual(data["scope"]["state"], state)
+                self.assertIsNone(data["totals"]["spend"])
+                self.assertIsNone(data["totals"]["purchases"])
+                self.assertEqual(data["daily"], [])
+
+    def test_real_account_reader_failure_uses_existing_conservative_cutoff_and_preserves_history(
+        self,
+    ):
+        from app.ads.adapters.external import SourceReadError
+
+        detail, _, _ = self._bound_campaign(
+            start_date=date(2026, 10, 24), end_date=date(2026, 10, 30)
+        )
+        group = detail["groups"][0]
+        for day in (24, 25, 26, 27):
+            outcome_seed.seed_day(
+                web.conn,
+                self.org_id,
+                self.brand_id,
+                detail["id"],
+                "group",
+                group["id"],
+                date(2026, 10, day),
+                spend=100,
+                purchases=1,
+                revenue=200,
+            )
+        external_repository.record_sync(
+            web.conn,
+            self.org_id,
+            self.brand_id,
+            detail["id"],
+            section="observations",
+            state={"status": "error", "error": "fixture account unreadable"},
+        )
+        web.conn.commit()
+        with patch.object(
+            _SeedAccount, "accounts", side_effect=SourceReadError("fixture unreadable")
+        ):
+            response = self.client.get(
+                f"/api/ads/brands/{self.brand_id}/campaigns/{detail['id']}/performance"
+            )
+            self.assertEqual(response.status_code, 200, response.text)
+            data = response.json()
+        self.assertEqual(data["scope"]["end"], "2026-10-25")
+        self.assertEqual(data["scope"]["day_basis"], "conservative_org_fallback")
+        self.assertIsNone(data["scope"]["account_timezone"])
+        self.assertEqual(data["totals"]["spend"], 200)
+        self.assertEqual(
+            len(outcome.rows(web.conn, self.org_id, self.brand_id, detail["id"], "group")), 4
+        )
+
+    def test_account_day_differs_from_org_day_and_null_spend_is_not_zero(self):
+        detail, _, _ = self._bound_campaign(
+            start_date=date(2026, 10, 24), end_date=date(2026, 10, 30)
+        )
+        group = detail["groups"][0]
+        for day in (24, 25, 26):
+            outcome_seed.seed_day(
+                web.conn,
+                self.org_id,
+                self.brand_id,
+                detail["id"],
+                "group",
+                group["id"],
+                date(2026, 10, day),
+                spend=None if day == 25 else 100,
+                purchases=1,
+                revenue=200,
+            )
+        web.conn.commit()
+        account = {
+            "account_id": outcome_seed.SOURCE_ACCOUNT,
+            "timezone_name": "America/New_York",
+            "currency": "TWD",
+        }
+        with (
+            patch.object(coredb, "now_utc", return_value=datetime(2026, 10, 27, 2, tzinfo=UTC)),
+            patch.object(_SeedAccount, "accounts", return_value=[account]),
+        ):
+            response = self.client.get(
+                f"/api/ads/brands/{self.brand_id}/campaigns/{detail['id']}/performance"
+            )
+        self.assertEqual(response.status_code, 200, response.text)
+        data = response.json()
+        self.assertEqual(data["scope"]["end"], "2026-10-25")
+        self.assertEqual(data["scope"]["account_timezone"], "America/New_York")
+        self.assertEqual(data["scope"]["day_basis"], "account_timezone")
+        self.assertEqual(data["scope"]["reason"], "spend_unknown")
+        self.assertIsNone(data["totals"]["spend"])
+        self.assertEqual(data["daily"][0]["spend"], 100)
+        self.assertIsNone(data["daily"][1]["spend"])
+        self.assertEqual(
+            len(outcome.rows(web.conn, self.org_id, self.brand_id, detail["id"], "group")), 3
+        )
 
 
 if __name__ == "__main__":

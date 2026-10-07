@@ -27,7 +27,6 @@ from app.ads import (
     closeout,
     experiment_routes,
     external_models,
-    external_repository,
     handoff_assignment,
     judgment,
     learning,
@@ -990,8 +989,8 @@ def get_performance(request: Request, brand_id: str, campaign_id: str):
     web.require_brand(brand_id, actor)  # 另一個組織的品牌 → 404
     campaign = repository.get_campaign(web.conn, actor.org_id, brand_id, campaign_id)
     if campaign and campaign.get("origin") == "imported":
-        return {"origin": "imported", "external_view": external_repository.external_view(
-            web.conn, actor.org_id, brand_id, campaign_id)}
+        return {"origin": "imported", "external_view": outcome.native_period_view(
+            web.conn, actor.org_id, brand_id, campaign)}
     try:
         result = outcome.summary(web.conn, actor.org_id, brand_id, campaign_id)
     except ValueError as exc:

@@ -67,13 +67,26 @@ def _live_judgment(campaign: dict[str, Any]) -> dict:
     days = (end_date - start_date).days + 1
     today = campaign["_today"]
     day_n = min(max((today - start_date).days + 1, 1), days) if days > 0 else None
+    scope = campaign.get("performance_scope")
+    if scope is not None:
+        # The supplied spend covers complete account days, not today's partial calendar day.
+        day_n = scope["days"]
     if day_n is None:
         return {"tone": "neutral", "text": "投放中", "detail": "還沒有可比的總預算"}
 
     if spend is None:
+        missing = (scope.get("reason_text") if scope is not None else None) or "還沒有花費資料"
         return {
             "tone": "neutral", "text": "投放中",
-            "detail": f"還沒有花費資料・第 {day_n}／{days} 天",
+            "detail": f"{missing}・第 {day_n}／{days} 天",
+        }
+
+    if scope is not None and scope.get("currency") != "TWD":
+        currency = scope.get("currency") or "幣別未知"
+        return {
+            "tone": "neutral", "text": "投放中，預算進度無法比較",
+            "detail": (f"已花費 {currency} {budget.whole(spend):,}・第 {day_n}／{days} 天；"
+                       "本期花費與 TWD 預算的幣別不同或尚未核實。"),
         }
 
     budget_pct = spend / float(budget_total)

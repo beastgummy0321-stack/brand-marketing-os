@@ -10,7 +10,7 @@ import { Button } from "@/components/layout/ui/button";
 import { Input } from "@/components/layout/ui/input";
 import { Badge } from "@/components/layout/ui/badge";
 import { KpiStrip, campaignWord } from "./patterns";
-import { formatCurrency } from "@/lib/format";
+import { formatCurrency, formatMoney } from "@/lib/format";
 import { formatDay, orgDateOf, useOrgClock } from "@/lib/orgClock";
 import { listCampaigns, type CampaignCard, type LifecycleState } from "@/lib/adsApi";
 
@@ -190,11 +190,12 @@ export function AllCampaignsPage({ brandId }: { brandId: string }) {
                   const total = c.budget_progress.total;
                   const pct = c.budget_progress.pct;
                   const percent = pct === null ? null : Math.min(100, Math.max(0, pct));
-                  const percentText = pct !== null ? `${pct}%` : spent === null ? "未追蹤" : "未設定";
+                  const reason = c.budget_progress.reason;
+                  const percentText = pct !== null ? `${pct}%` : reason ? "無法比較" : spent === null ? "未追蹤" : "未設定";
                   const amountText =
                     total === null
                       ? "尚未設定總預算"
-                      : `${spent === null ? "還沒有花費資料" : formatCurrency(spent)} / ${formatCurrency(total)}`;
+                      : `${spent === null ? "花費未知" : formatMoney(spent, c.budget_progress.currency ?? "幣別未知")} / ${formatCurrency(total)}`;
                   const JudgmentIcon = JUDGMENT_ICON[c.judgment.tone];
                   return (
                     <tr key={c.id} className="border-t border-border align-top">
@@ -215,6 +216,8 @@ export function AllCampaignsPage({ brandId }: { brandId: string }) {
                               style={{ width: `${percent}%` }}
                             />}
                           </div>
+                          {c.budget_progress.scope?.caption && <p className="text-xs text-muted-foreground">{c.budget_progress.scope.caption}</p>}
+                          {reason && <p className="text-xs text-muted-foreground">{reason}</p>}
                         </div>
                       </td>
                       <td className="px-3 py-2">
