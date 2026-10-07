@@ -533,14 +533,14 @@ describe("StrategyTab (F28-I09)", () => {
       const panel = screen.getByRole("dialog", { name: "策略依據" });
       expect(within(panel).getByText("划算・每筆 422")).toBeTruthy();
       expect(within(panel).getByText(VERDICT.text)).toBeTruthy();
-      expect(within(panel).queryByText("沒有可用的學習紀錄。")).toBeNull();
+      expect(within(panel).getByText("這份安排尚未列出已核實的學習引用。")).toBeTruthy();
     });
 
     it("a strategy from before F41 (no coordinate_learnings) shows the verdict lines only", async () => {
       const user = userEvent.setup();
       renderTab(withReasons({ learnings: [VERDICT] }));
       await user.click(await screen.findByRole("button", { name: "為什麼這樣建議" }));
-      expect(screen.queryByRole("heading", { name: "用到的學習" })).toBeNull();
+      expect(screen.queryByRole("heading", { name: "原活動排名與觀察" })).toBeNull();
       await user.click(screen.getByRole("button", { name: /查看策略依據/ }));
       const panel = screen.getByRole("dialog", { name: "策略依據" });
       expect(panel.querySelector("[data-slot=coordinate-learning]")).toBeNull();
@@ -552,7 +552,7 @@ describe("StrategyTab (F28-I09)", () => {
       renderTab(withReasons());
       await user.click(await screen.findByRole("button", { name: "為什麼這樣建議" }));
       await user.click(screen.getByRole("button", { name: /查看策略依據/ }));
-      expect(within(screen.getByRole("dialog", { name: "策略依據" })).getByText("沒有可用的學習紀錄。")).toBeTruthy();
+      expect(within(screen.getByRole("dialog", { name: "策略依據" })).getByText("這份安排尚未列出已核實的學習引用。")).toBeTruthy();
     });
 
     // F46-I07 (prototype f46-learnings `#/strategy`): a strategy made since F46 stores the Contract L view it was
@@ -595,8 +595,8 @@ describe("StrategyTab (F28-I09)", () => {
       await user.click(await screen.findByRole("button", { name: "為什麼這樣建議" }));
       await user.click(screen.getByRole("button", { name: /查看策略依據/ }));
       const panel = screen.getByRole("dialog", { name: "策略依據" });
-      // Prototype order: 用到的學習 first, then 品牌事實, 商品價格.
-      expect(within(panel).getAllByRole("heading", { level: 4 }).map((h) => h.textContent)).toEqual(["用到的學習", "未用於提案的資料", "品牌事實", "商品價格"]);
+      // Actual citations and unused inputs precede the preserved original ranking and brand/price facts.
+      expect(within(panel).getAllByRole("heading", { level: 4 }).map((h) => h.textContent)).toEqual(["用到的學習", "未用於提案的資料", "原活動排名與觀察", "品牌事實", "商品價格"]);
       expect(within(panel).getByText("和品牌智庫「投放學到的」同一份排名")).toBeTruthy();
       const groups = within(panel).getByRole("list", { name: "各顧客群每筆成本" });
       expect(within(groups).getAllByRole("listitem").map((li) => li.getAttribute("data-group"))).toEqual(["pcg_study", "pcg_commute"]);
@@ -609,14 +609,14 @@ describe("StrategyTab (F28-I09)", () => {
       expect(within(panel).getByRole("table", { name: "三盒組・09/05～09/18 每則廣告排名" })).toBeTruthy();
       expect(within(panel).getByRole("link", { name: "到品牌智庫看完整表 →" }).getAttribute("href")).toBe("/brands/brd_1/library?tab=ads-learnings");
       expect(panel.querySelector("[data-slot=coordinate-learning]")).toBeNull();
-      expect(within(panel).queryByText("沒有可用的學習紀錄。")).toBeNull();
+      expect(within(panel).getByText("這份安排尚未列出已核實的學習引用。")).toBeTruthy();
     });
 
     it("the why fold follows the same rule: ranked_learnings → the same ranking; it wins over old coordinate_learnings", async () => {
       const user = userEvent.setup();
       renderTab(withReasons({ ranked_learnings: RANKED, coordinate_learnings: COORD }));
       await user.click(await screen.findByRole("button", { name: "為什麼這樣建議" }));
-      const section = screen.getByRole("heading", { name: "用到的學習" }).closest("section") as HTMLElement;
+      const section = screen.getByRole("heading", { name: "原活動排名與觀察" }).closest("section") as HTMLElement;
       expect(within(section).getByText("和品牌智庫「投放學到的」同一份排名")).toBeTruthy();
       expect(within(section).getByRole("table", { name: "三盒組・09/19～10/01 每則廣告排名" })).toBeTruthy();
       expect(section.querySelector("[data-slot=coordinate-learning]")).toBeNull();
@@ -626,9 +626,9 @@ describe("StrategyTab (F28-I09)", () => {
       const user = userEvent.setup();
       renderTab(withReasons({ ranked_learnings: { evidence_context: evidenceContext, campaigns: [], groups: [], next: null } }));
       await user.click(await screen.findByRole("button", { name: "為什麼這樣建議" }));
-      expect(screen.queryByRole("heading", { name: "用到的學習" })).toBeNull();
+      expect(screen.queryByRole("heading", { name: "原活動排名與觀察" })).toBeNull();
       await user.click(screen.getByRole("button", { name: /查看策略依據/ }));
-      expect(within(screen.getByRole("dialog", { name: "策略依據" })).getByText("沒有可用的學習紀錄。")).toBeTruthy();
+      expect(within(screen.getByRole("dialog", { name: "策略依據" })).getByText("這份安排尚未列出已核實的學習引用。")).toBeTruthy();
     });
 
     it("brand facts print 「MM/DD 更新」 on the org calendar and prices 〈sell way〉 〈price〉・〈MM/DD〉 起 — never a raw ISO string", async () => {
@@ -850,7 +850,7 @@ describe("F53 strategy basis interaction", () => {
     mount(c);
     expect(await screen.findByText("99 條可參考經驗")).toBeTruthy();
     expect(screen.getByText("單次觀察 · 樣本少")).toBeTruthy();
-    expect(screen.getByText("重複觀察 · 未證明因果")).toBeTruthy();
+    expect(screen.queryByText("重複觀察 · 未證明因果")).toBeNull();
     expect(generateStrategy).not.toHaveBeenCalled();
   });
 

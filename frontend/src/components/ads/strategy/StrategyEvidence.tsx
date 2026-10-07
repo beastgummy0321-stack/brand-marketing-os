@@ -1,20 +1,14 @@
-import type { StrategyBasis } from "@/lib/adsStrategyTypes";
-import type { LearningEvidence } from "@/lib/adsLearningEvidence";
+import type { StrategyBasis, StrategyDecision } from "@/lib/adsStrategyTypes";
 import { Button } from "@/components/layout/ui/button";
 import { Chip, Disclosure, LearningEvidenceCard } from "../patterns";
 
-/** The saved plan's explicit citations, including conservative projections of old plans. */
-export function citedEvidence(basis: StrategyBasis | undefined): LearningEvidence[] {
-  return (basis?.learnings ?? []).flatMap((row) => row.evidence ? [row.evidence] : []);
-}
+import { usedEvidence, unusedEvidence } from "./evidenceProjection";
 
-export function StrategyEvidence({ basis, onBasis }: {
-  basis: StrategyBasis | undefined; onBasis: () => void;
+export function StrategyEvidence({ basis, decision, onBasis }: {
+  basis: StrategyBasis | undefined; decision?: StrategyDecision; onBasis: () => void;
 }) {
-  const cited = citedEvidence(basis);
-  const used = cited.filter((row) => row.use_state === "usable" && row.allowed_uses.length > 0);
-  const usedIds = new Set(used.map((row) => row.id));
-  const unused = (basis?.evidence_context?.items ?? []).filter((row) => !usedIds.has(row.id));
+  const used = usedEvidence(basis, decision);
+  const unused = unusedEvidence(basis, decision);
   const verified = Boolean(basis?.evidence_context);
   const cold = verified && basis!.evidence_context.eligible_count === 0;
   return <section data-slot="strategy-evidence" className="surface min-w-0 self-start">

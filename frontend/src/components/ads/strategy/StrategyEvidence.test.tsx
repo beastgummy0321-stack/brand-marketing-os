@@ -10,11 +10,12 @@ describe("served strategy learning evidence", () => {
     const user = userEvent.setup();
     const basis = strategyFixture().budget_basis_json.basis!;
     const onBasis = vi.fn();
-    render(<StrategyEvidence basis={basis} onBasis={onBasis} />);
+    render(<StrategyEvidence basis={basis} decision={strategyFixture().budget_basis_json.strategy!.decision} onBasis={onBasis} />);
     expect(screen.getByText("單次觀察 · 樣本少")).toBeTruthy();
-    expect(screen.getByText("重複觀察 · 未證明因果")).toBeTruthy();
+    expect(screen.queryByText("重複觀察 · 未證明因果")).toBeNull();
     expect(screen.queryByText("會員優惠訊息在先前活動中表現較佳")).toBeNull();
     await user.click(screen.getByRole("button", {name: "未用於提案的資料"}));
+    expect(screen.getByText("重複觀察 · 未證明因果")).toBeTruthy();
     expect(screen.getByText("需重新核對")).toBeTruthy();
     expect(screen.getByText("先前優惠已結束，這期不能沿用它的優惠承諾。")).toBeTruthy();
     await user.click(screen.getByRole("button", {name: "查看依據 →"}));
@@ -43,6 +44,7 @@ describe("served strategy learning evidence", () => {
     expect(within(dl).getByText("5 次")).toBeTruthy();
     expect(screen.getByText("下班後夜跑者")).toBeTruthy();
     expect(dl.textContent).not.toContain("customer-group:");
+    expect(within(dl).getByText("來源未提供，尚未核實")).toBeTruthy();
   });
 
   it("source disclosure preserves period and unknown labels without leaking machine IDs", async () => {

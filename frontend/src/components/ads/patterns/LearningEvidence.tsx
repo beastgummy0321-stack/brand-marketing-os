@@ -53,6 +53,7 @@ export function LearningEvidenceSource({ evidence, audienceLabel }: { evidence: 
       <div><dt className="text-xs text-muted-foreground">適用商品</dt><dd className="mt-1 [overflow-wrap:anywhere]">{evidence.scope.product_label ?? "商品尚未核實"}</dd></div>
       <div><dt className="text-xs text-muted-foreground">受眾</dt><dd className="mt-1 [overflow-wrap:anywhere]">{audienceLabel ?? "受眾名稱尚未提供"}</dd></div>
       <div><dt className="text-xs text-muted-foreground">成果樣本</dt><dd className="numeric mt-1">{evidence.sample.result_events === null ? "樣本尚未完整核實" : `${formatAmount(evidence.sample.result_events)} 筆`}</dd></div>
+      <div><dt className="text-xs text-muted-foreground">當時每筆成本</dt><dd className="mt-1">來源未提供，尚未核實</dd></div>
       <div><dt className="text-xs text-muted-foreground">獨立觀察</dt><dd className="numeric mt-1">{formatAmount(evidence.independent_count)} 次</dd></div>
       <div><dt className="text-xs text-muted-foreground">連續同向</dt><dd className="numeric mt-1">{formatAmount(evidence.same_direction_count)} 次</dd></div>
       <div><dt className="text-xs text-muted-foreground">反向觀察</dt><dd className="numeric mt-1">{formatAmount(evidence.contrary_count)} 次</dd></div>

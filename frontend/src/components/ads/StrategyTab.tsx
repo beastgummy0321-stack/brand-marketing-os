@@ -25,10 +25,10 @@ import {
   type StrategyFact,
   type StrategyRole,
 } from "@/lib/adsApi";
-import { cn } from "@/lib/utils";
 import { ActionBar, AllocationBar, Chip, Disclosure, GradeChip, formatAmount, LearningEvidenceCard, LearningEvidenceSource } from "./patterns";
 import type { LearningEvidence } from "@/lib/adsLearningEvidence";
-import { StrategyEvidence, citedEvidence } from "./strategy/StrategyEvidence";
+import { StrategyEvidence } from "./strategy/StrategyEvidence";
+import { usedEvidence, unusedEvidence } from "./strategy/evidenceProjection";
 import { perSaleAmount } from "./patterns/csv";
 import { nextStep, type StepTarget } from "./nextStep";
 import { CapBlock } from "./strategy/CapBlock";
@@ -458,7 +458,7 @@ export function StrategyTab({
               <Disclosure label="還有哪些未知"><ul className="space-y-2 text-[13px]">{strategy.unknowns.map((line, i) => <li key={i}>{line}</li>)}</ul>{strategy.unknowns.length === 0 && <p className="text-[13px] text-muted-foreground">沒有另列未知；觀察仍不是效果保證。</p>}</Disclosure>
             </div>
             </section>
-            <StrategyEvidence basis={basis} onBasis={() => setBasisOpen(true)} />
+            <StrategyEvidence basis={basis} decision={decision} onBasis={() => setBasisOpen(true)} />
             </div>
 
             <CapBlock brandId={brandId} campaign={c} onCampaignChange={onCampaignChange} />
@@ -520,7 +520,7 @@ export function StrategyTab({
               {usedLearnings && (
                 // F46: the ranking the planner read (older strategies: F41's per-ad grade rows).
                 <section aria-labelledby="coordinate-learnings-title">
-                  <h3 id="coordinate-learnings-title" className="mb-1 text-[12.5px] font-semibold">用到的學習</h3>
+                  <h3 id="coordinate-learnings-title" className="mb-1 text-[12.5px] font-semibold">原活動排名與觀察</h3>
                   <UsedLearnings brandId={brandId} ranked={rankedLearnings} rows={coordinateLearnings} />
                 </section>
               )}
@@ -578,17 +578,13 @@ export function StrategyTab({
             {sourceEvidence ? <><LearningEvidenceSource evidence={sourceEvidence} audienceLabel={decision?.slots.find((slot) => slot.customer_group_id !== null && slot.customer_group_id === sourceEvidence.scope.customer_group_id)?.display?.customer_group_label} /><Button variant="outline" className="w-fit" onClick={() => setSourceEvidence(null)}>返回策略依據</Button></> : <>
             <section>
               <h4 className="mb-2 text-sm font-semibold">用到的學習</h4>
-              {usedLearnings && <UsedLearnings brandId={brandId} ranked={rankedLearnings} rows={coordinateLearnings} />}
-              {basis.learnings.length === 0 ? (
-                !usedLearnings && <p className="text-sm text-muted-foreground">沒有可用的學習紀錄。</p>
-              ) : (
-                <div className={cn(usedLearnings && "mt-2 border-t border-border pt-2.5")}>
-                  {citedEvidence(basis).map((row) => <LearningEvidenceCard key={row.id} evidence={row} onSource={setSourceEvidence} />)}
-                  {basis.learnings.filter((row) => !row.evidence).map((row) => <div key={row.id} className="py-2 text-sm"><p>{row.text}</p><p className="text-xs text-muted-foreground">歷史適用性尚未核實</p></div>)}
-                </div>
-              )}
+              {usedEvidence(basis, decision).length === 0 && <p className="text-sm text-muted-foreground">這份安排尚未列出已核實的學習引用。</p>}
+              {usedEvidence(basis, decision).map((row) => <LearningEvidenceCard key={row.id} evidence={row} onSource={setSourceEvidence} />)}
             </section>
-            <section><h4 className="mb-2 text-sm font-semibold">未用於提案的資料</h4>{(basis.evidence_context?.items ?? []).filter((row) => !citedEvidence(basis).some((cited) => cited.id === row.id)).map((row) => <LearningEvidenceCard key={row.id} evidence={row} onSource={setSourceEvidence} />)}</section>
+            <section><h4 className="mb-2 text-sm font-semibold">未用於提案的資料</h4>{unusedEvidence(basis, decision).map((row) => <LearningEvidenceCard key={row.id} evidence={row} onSource={setSourceEvidence} />)}
+              {basis.learnings.filter((row) => !row.evidence).map((row) => <div key={row.id} className="py-2 text-sm"><p>{row.text}</p><p className="text-xs text-muted-foreground">歷史適用性尚未核實</p></div>)}
+            </section>
+            {usedLearnings && <section><h4 className="mb-2 text-sm font-semibold">原活動排名與觀察</h4><UsedLearnings brandId={brandId} ranked={rankedLearnings} rows={coordinateLearnings} /></section>}
             <section>
               <h4 className="mb-2 text-sm font-semibold">品牌事實</h4>
               {basis.brand_facts.length === 0 ? (
