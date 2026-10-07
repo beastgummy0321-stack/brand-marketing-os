@@ -489,7 +489,7 @@ def _slot_display(ctx, slot):
     customers = {g["id"]: g["who"] for g in ctx["customer_groups"]}
     offers = {o["key"]: f"{o['label']}：{o['sentence']}" for o in ctx["offers"]}
     carried = {i["ad"]["id"]: i["ad"]["name"] for i in ctx["carried_candidates"]}
-    evidence = {("learning", r["id"]): r["text"] for r in ctx["learnings"]["ads"]}
+    evidence = {("learning", r["id"]): r["learning_text"] for r in ctx["learnings"]["ads"]}
     for identifier in ctx["ranked_ids"]:
         evidence.setdefault(("learning", identifier), "本期可用的投放學習排名")
     for campaign in ctx["learnings"]["ranked"]["campaigns"]:
@@ -1110,8 +1110,9 @@ def set_budget_cap(conn, org_id: str, brand_id: str, campaign_id: str, *,
     """F28-I03 (user ruling 2026-09-25): the budget cap stays editable after the wizard, in any
     campaign status. A positive whole number sets `constraints_json.budget`, `None` clears it;
     anything else is `ValueError("budget_cap_invalid")`. Internal planning number only: it never
-    writes the platform, never touches `budget_planned` or the saved scenario, and is not part of
-    any handoff premise -- the next scenarios read (`budget.current_scenarios`) reflects it."""
+    writes the platform or changes the selected plan budget/scenario. The constraints refresh
+    the stored strategy revision; launch provenance detects that accepted strategy changed.
+    The next scenarios read (`budget.current_scenarios`) reflects the updated cap."""
     if budget_cap is not None:
         # F50 Contract I: a whole number (never a bool) > 0 through `input_rules.count`.
         if isinstance(budget_cap, bool) or not isinstance(budget_cap, int):

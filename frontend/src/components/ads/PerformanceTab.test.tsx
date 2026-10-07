@@ -8,13 +8,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 
-import type { AdRow, CampaignDetail, CampaignPerformance, DeliveryGroupRow } from "@/lib/adsApi";
-import { closeCampaign, coverageGapOf, getPerformance } from "@/lib/adsApi";
+import type { AdRow, CampaignCard, CampaignDetail, CampaignPerformance, DeliveryGroupRow } from "@/lib/adsApi";
+import type { ExternalView, NativeObservation } from "@/lib/adsExternalApi";
+import { closeCampaign, coverageGapOf, getPerformance, listCampaigns } from "@/lib/adsApi";
 import { ApiResponseError } from "@/lib/http";
 import { getCoordinateLearnings, type CoordinateLearnings, type LearningCampaign } from "@/lib/adsLearningsApi";
 import { readComparison } from "@/lib/adsExperimentApi";
 import { readSimulation } from "@/lib/adsSimulationApi";
 import { PerformanceTab } from "./PerformanceTab";
+import { PeriodStatusRow } from "./detail/PeriodStatusRow";
+import { AllCampaignsPage } from "./AllCampaignsPage";
 
 vi.mock("@/lib/useEchart", () => ({ useEchart: () => ({ current: null }) }));
 vi.mock("@/lib/auth", () => ({ getOrgId: () => "test_org", getAccessToken: async () => "test_token", setOrgId: vi.fn(), signOut: vi.fn() }));
@@ -58,6 +61,7 @@ vi.mock("@/lib/adsApi", async () => {
     ...actual,
     getPerformance: vi.fn(),
     closeCampaign: vi.fn(),
+    listCampaigns: vi.fn(),
   };
 });
 
@@ -530,12 +534,13 @@ it("imported shares the KPI layout and sync while disabling internal operations"
       { id: "a", entity_id: "a", day: "2026-09-01", metric_scope: "ad", attribution_key: "7d", currency: "USD", spend: 999, impressions: null, clicks: null, purchases: null, revenue: null, availability: {} },
     ], next_entity_cursor: null, next_observation_cursor: null, window: { start: "2026-09-01", end: "2026-09-30" }, connections: [], sync: {}, coverage: {},
   } });
+  vi.mocked(getPerformance).mockResolvedValue({origin: "imported", external_view: c.external_view!});
   render(
     <MemoryRouter>
       <PerformanceTab brandId="b" campaign={c} onCampaignChange={vi.fn()} onChangeTab={vi.fn()} onSync={sync} />
     </MemoryRouter>,
   );
-  expect(screen.getByText(/活動 · USD · 7d · 2026-09-01 ～ 2026-09-30/)).toBeTruthy();
+  expect(await screen.findByText(/活動 · USD · 7d · 2026-09-01 ～ 2026-09-30/)).toBeTruthy();
   expect(screen.getByText("目前成果")).toBeTruthy(); expect(screen.getByText("12 USD")).toBeTruthy(); expect(screen.queryByText(/保守值/)).toBeNull();
   expect((screen.getByRole("button", { name: "立即結案" }) as HTMLButtonElement).disabled).toBe(true);
   await userEvent.click(screen.getByRole("button", { name: "重新讀取平台" })); expect(sync).toHaveBeenCalledOnce();
@@ -544,18 +549,19 @@ it("imported shares the KPI layout and sync while disabling internal operations"
   expect(screen.getAllByText("999 USD").length).toBeGreaterThan(0);
   await userEvent.click(screen.getByRole("button", { name: "成效比較" }));
   expect(screen.getByText("既有平台活動不支援內部成效比較。")).toBeTruthy();
-  expect(getPerformance).not.toHaveBeenCalled(); expect(readComparison).not.toHaveBeenCalled(); expect(closeCampaign).not.toHaveBeenCalled();
+  expect(getPerformance).toHaveBeenCalledWith("b", "cmp_1", true); expect(readComparison).not.toHaveBeenCalled(); expect(closeCampaign).not.toHaveBeenCalled();
 });
 
 
-it("native reported zero spend is distinct from missing spend", () => {
+it("native reported zero spend is distinct from missing spend", async () => {
   const c = campaign({ origin: "imported", external_view: { entities: [], observations: [{ id: "o", entity_id: "c", day: "2026-09-01", metric_scope: "campaign", attribution_key: "7d", currency: "USD", spend: 0, impressions: 0, clicks: 0, purchases: null, revenue: null, availability: {} }], next_entity_cursor: null, next_observation_cursor: null, window: { start: "2026-09-01", end: "2026-09-30" }, connections: [], sync: {}, coverage: {} } });
+  vi.mocked(getPerformance).mockResolvedValue({origin: "imported", external_view: c.external_view!});
   render(
     <MemoryRouter>
       <PerformanceTab brandId="b" campaign={c} onCampaignChange={vi.fn()} onChangeTab={vi.fn()} />
     </MemoryRouter>,
   );
-  expect(screen.getByText("已讀回花費為 0，暫時無法判讀 CPA 或 ROAS。")).toBeTruthy();
+  expect(await screen.findByText("已讀回花費為 0，暫時無法判讀 CPA 或 ROAS。")).toBeTruthy();
   expect(screen.getByText("0 USD")).toBeTruthy();
 });
 
@@ -789,4 +795,116 @@ it("prints both served ROAS bases for the KPI, daily and group rows", async () =
   expect(screen.getByText("3.75x")).toBeTruthy();
   expect(screen.getAllByRole("button", {name: "保守怎麼算：營收 ÷ 全部花費"}).length).toBeGreaterThan(0);
   expect(screen.getAllByRole("button", {name: "樂觀怎麼算：營收 ÷ 有追到營收的那部分花費"}).length).toBeGreaterThan(0);
+});
+
+it.each(["currency", "reason"])("actual campaign list preserves served incomparable-money %s", async (field) => {
+  const reason = "本期花費與 TWD 預算的幣別不同或尚未核實，無法比較進度。";
+  const card: CampaignCard = {
+    id: "cmp_usd", name: "USD actual period vs TWD plan", status: "live", origin: "internal",
+    capabilities: campaign().capabilities, objective: "購買", created_at: "2026-10-24T00:00:00Z",
+    created_by: null, start_date: "2026-10-24", end_date: "2026-10-30", budget_planned: 500,
+    budget_total: 497, budget_progress: {spent: 900, total: 497, pct: null},
+    outcome: {spend: 900, purchases: 12, revenue: 18720},
+    lifecycle: {state: "live", label: "進行中", can_close: true},
+    judgment: {tone: "neutral", text: "投放中，預算進度無法比較",
+      detail: "已花費 USD 900・第 3／7 天；本期花費與 TWD 預算的幣別不同或尚未核實。"},
+  };
+  Object.assign(card.budget_progress, {currency: "USD", budget_currency: "TWD", reason});
+  vi.mocked(listCampaigns).mockResolvedValue([card]);
+  render(<MemoryRouter><AllCampaignsPage brandId="brd_1" /></MemoryRouter>);
+  const row = await screen.findByRole("row", {name: /USD actual period vs TWD plan/});
+  const budgetCell = within(row).getAllByRole("cell")[3];
+  if (field === "currency") expect(budgetCell.textContent).toContain("900 USD / NT$ 497");
+  if (field === "reason") expect(budgetCell.textContent).toContain(reason);
+});
+
+it("prints the served completed period and currency without reconstructing dates or money", async () => {
+  const data = performance();
+  data.totals.spend = 123.45;
+  data.totals.cpa = 24.69;
+  data.totals.purchases = 5;
+  data.totals.revenue = 1000;
+  data.scope = {start: "2026-10-24", end: "2026-10-26", days: 3, basis: "campaign_window",
+    state: "ready", last_complete_day: "2026-10-26", incomplete_day_policy: "excluded",
+    day_basis: "account_timezone", account_timezone: "America/New_York", currency: "USD",
+    attribution_key: "7d", caption: "本期 2026-10-24 ～ 2026-10-26；只計完整帳戶日，今日尚未完整的資料不計入。"};
+  data.cap_comparison = {basis: "break_even", currency: "TWD", reason: "cap_currency_mismatch",
+    message: "上限與本期成效的幣別不同或尚未核實，不能比較。"};
+  vi.mocked(getPerformance).mockResolvedValue(data);
+  renderTab(campaign({status: "live", end_date: "2026-10-30"}));
+  expect(await screen.findByText(data.scope.caption)).toBeTruthy();
+  expect(screen.getByText("123.45 USD")).toBeTruthy();
+  expect(screen.getByText("25 USD")).toBeTruthy();
+  expect(screen.getByText(data.cap_comparison.message!)).toBeTruthy();
+});
+
+it("uses the scoped imported performance read after workspace hydration supplied raw today", async () => {
+  const complete: NativeObservation = { id: "complete", entity_id: "native", day: "2026-10-26", metric_scope: "campaign", attribution_key: "test", currency: "TWD", spend: 300, impressions: null, clicks: null, purchases: 4, revenue: 6240, availability: {} };
+  const raw: ExternalView = { entities: [], observations: [complete, {...complete, id: "today", day: "2026-10-27", spend: 999}], next_entity_cursor: null, next_observation_cursor: null, window: {start: "2026-09-28", end: "2026-10-27"}, connections: [], sync: {}, coverage: {} };
+  const c = campaign({origin: "imported", external_view: raw});
+  const actualScopedResponse = {origin: "imported" as const, external_view: {...raw, observations: [complete], window: {...raw.window, end: "2026-10-26"}}};
+  vi.mocked(getPerformance).mockResolvedValue(actualScopedResponse);
+  renderTab(c);
+  expect(await screen.findByText("300 TWD")).toBeTruthy();
+  expect(screen.queryByText("1,299 TWD")).toBeNull();
+  expect(getPerformance).toHaveBeenCalledWith("brd_1", "cmp_1", true);
+});
+
+it.each(["currency", "window", "days"])("the full workspace status row uses served %s", async (field) => {
+  vi.useFakeTimers({toFake: ["Date"]});
+  vi.setSystemTime(new Date("2026-10-27T04:00:00Z"));
+  const data = performance();
+  data.totals.spend = 900; data.totals.purchases = 12; data.totals.cpa = 75;
+  data.scope = {start: "2026-10-24", end: "2026-10-26", days: 3, basis: "campaign_window",
+    state: "ready", last_complete_day: "2026-10-26", incomplete_day_policy: "excluded",
+    day_basis: "account_timezone", account_timezone: "America/New_York", currency: "USD",
+    caption: "本期 2026-10-24 ～ 2026-10-26；只計完整帳戶日，今日尚未完整的資料不計入。"};
+  vi.mocked(getPerformance).mockResolvedValue(data);
+  render(<MemoryRouter><PeriodStatusRow brandId="brd_1"
+    campaign={campaign({start_date: "2026-10-24", end_date: "2026-10-30"})}
+    onCampaignChange={vi.fn()} /></MemoryRouter>);
+  const row = within(screen.getByTestId("period-status-row"));
+  await waitFor(() => expect(getPerformance).toHaveBeenCalled());
+  try {
+    if (field === "currency") expect(await row.findByText("900 USD")).toBeTruthy();
+    if (field === "window") expect(await row.findByText("10/24～10/26")).toBeTruthy();
+    if (field === "days") expect(await row.findByText("3 天")).toBeTruthy();
+  } finally { vi.useRealTimers(); }
+});
+
+it.each([
+  {currency: "TWD", capCurrency: "TWD", source: "user", reason: null},
+  {currency: "USD", capCurrency: "TWD", source: "user", reason: "cap_currency_mismatch"},
+  {currency: "TWD", capCurrency: null, source: "copied", reason: "cap_currency_unknown"},
+])("actual status row names the recorded $source cap unit beside $currency CPA", async ({currency, capCurrency, source, reason}) => {
+  const data = performance();
+  data.totals = {...data.totals, spend: 1200, purchases: 3, cpa: 400};
+  data.scope = {basis: "campaign_window", start: "2026-10-24", end: "2026-10-26", days: 3,
+    last_complete_day: "2026-10-26", incomplete_day_policy: "excluded", state: "ready", currency,
+    day_basis: "account_timezone", account_timezone: "Asia/Taipei",
+    caption: "本期 2026-10-24 ～ 2026-10-26；只計完整帳戶日。"};
+  data.cap_comparison = {basis: "own", currency: capCurrency, source,
+    unit_basis: capCurrency ? "manual_ntd_input" : null, reason,
+    message: reason ? "上限與本期成效的幣別不同或尚未核實，不能比較。" : null};
+  vi.mocked(getPerformance).mockResolvedValue(data);
+  const c = campaign(); c.cap = {...c.cap, value: 350, basis: "own"};
+  render(<MemoryRouter><PeriodStatusRow brandId="brd_1" campaign={c} onCampaignChange={vi.fn()} /></MemoryRouter>);
+  const row = within(screen.getByTestId("period-status-row"));
+  expect(await row.findByText(`400 ${currency}`)).toBeTruthy();
+  expect(row.getByText(`對上限 350 ${capCurrency ?? "幣別未知"}`)).toBeTruthy();
+  if (reason) expect(row.getByText(data.cap_comparison.message!)).toBeTruthy();
+});
+
+it("actual closed verdict preserves distinct saved cap and result currencies", async () => {
+  vi.mocked(getPerformance).mockResolvedValue(performance());
+  renderTab(campaign({status: "closed", verdict: "看不出", verdict_json: {
+    metric: "cpa", target: 350, actual: 400, scope: {currency: "USD"},
+    cap_comparison: {currency: "TWD", source: "user", unit_basis: "manual_ntd_input",
+      reason: "cap_currency_mismatch"},
+    missing: "上限與本期成效的幣別不同或尚未核實，不能比較。",
+  }}));
+  const heading = await screen.findByRole("heading", {name: /結案判定/});
+  const card = within(heading.closest("div.surface")!);
+  expect(card.getByText("350 TWD")).toBeTruthy();
+  expect(card.getByText("400 USD")).toBeTruthy();
 });

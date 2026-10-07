@@ -187,12 +187,18 @@ def _brand_accounts(conn, org_id: str, brand_id: str) -> list[dict]:
     return found
 
 
-def last_complete_day(conn, org_id: str, brand_id: str, campaign_id: str | None = None) -> date:
+def last_complete_day(conn, org_id: str, brand_id: str, campaign_id: str | None = None, *,
+                      basis: dict | None = None) -> date:
     """The newest platform day that has fully ended: the campaign's ad account's yesterday; with
     no campaign, the earliest over the brand's bound accounts; unknown -> the fallback."""
     if campaign_id is not None:
-        return account_last_complete_day(
-            conn, org_id, _campaign_account(conn, org_id, brand_id, campaign_id))
+        account = _campaign_account(conn, org_id, brand_id, campaign_id)
+        zone = account_zone(account)
+        if basis is not None:
+            basis.update({"day_basis": "account_timezone" if zone else "conservative_org_fallback",
+                          "account_timezone": str(zone) if zone else None,
+                          "account_currency": (account or {}).get("currency")})
+        return account_last_complete_day(conn, org_id, account)
     accounts = _brand_accounts(conn, org_id, brand_id)
     if not accounts:
         return _fallback_day(conn, org_id)

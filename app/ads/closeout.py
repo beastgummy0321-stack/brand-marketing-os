@@ -142,7 +142,7 @@ def close(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, *, actor
     labels = conversion_labels(brand.get("conversion_goal") if brand else None)
 
     totals = result["totals"]
-    days = _days(campaign["start_date"], campaign["end_date"])
+    days = result["scope"]["days"]
     # `purchases` is `None` only when no day of the campaign carries a tracked purchase count
     # (Meta purchases are tracked since F16-I05; a legacy or untracked day stays NULL) -- passed
     # as is: the bucket reads 「未追蹤」, never 低 or 0 (F48-I02).
@@ -153,6 +153,13 @@ def close(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, *, actor
 
     cap = targets.resolve(conn, org_id, brand_id, campaign)
     verdict, verdict_json = _judge(cap, campaign, totals, sample, labels)
+    verdict_json["window"] = {key: result["scope"][key] for key in ("start", "end")}
+    verdict_json["scope"] = result["scope"]
+    verdict_json["cap_comparison"] = result["cap_comparison"]
+    if result["cap_comparison"]["reason"] is not None:
+        verdict = "看不出"
+        if totals["cpa"] is not None:
+            verdict_json["missing"] = "上限與本期成效的幣別不同或尚未核實，不能比較。"
     if simulation_mode.enabled(conn, org_id, brand_id):
         verdict_json["data_source"] = "isolated_simulation"
         verdict_json["simulation_receipts"] = recovery.get("days", {}) if recovery else {}

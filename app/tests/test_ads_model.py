@@ -11,7 +11,8 @@ one write this issue owns.
 """
 
 import unittest
-from datetime import date
+from datetime import UTC, date, datetime
+from unittest.mock import patch
 
 import psycopg
 
@@ -226,7 +227,8 @@ class NoGroupsMeansNoTotalTest(_AdsModelTestBase):
 
 
 class OutcomeTotalsGroupOnlyTest(_AdsModelTestBase):
-    def test_campaign_total_sums_group_rows_only_not_ad_rows(self):
+    @patch.object(coredb, "now_utc", return_value=datetime(2026, 11, 12, 4, tzinfo=UTC))
+    def test_campaign_total_sums_group_rows_only_not_ad_rows(self, _clock):
         """Ad-grain rows exist for per-ad 花費占比 and must never be summed into
         the campaign total — summing both levels double-counts (review fix 1)."""
         campaign = ads_repo.create_campaign(

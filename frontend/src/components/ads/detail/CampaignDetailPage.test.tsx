@@ -749,6 +749,10 @@ describe("這期狀態列 (F40-I06, prototype #/perf)", () => {
       daily: [], groups: [], ads: [],
       coverage: { start: "2026-09-26", end: "2026-10-02", expected: 7, missing: 0, missing_days: [], never_synced: false, ...o },
       last_data_at: "2026-10-02T13:00:00Z",
+      scope: {start: "2026-09-26", end: "2026-10-02", days: 7, basis: "campaign_window",
+        state: "ready", last_complete_day: "2026-10-02", incomplete_day_policy: "excluded",
+        day_basis: "account_timezone", account_timezone: "Asia/Taipei", currency: "TWD",
+        caption: "本期 2026-09-26 ～ 2026-10-02；只計完整帳戶日，今日尚未完整的資料不計入。"},
     };
   }
   /** The 4 platform ads: 3 bound to local ads, 1 built elsewhere (`bound_ad_id: null`). */
@@ -778,11 +782,11 @@ describe("這期狀態列 (F40-I06, prototype #/perf)", () => {
 
   it("live: five cells from getPerformance totals, the backend's grade chip 對上限 450, 平台已讀到, both buttons and the 整期 caption", async () => {
     renderBody(campaignDetail());
-    expect(await within(row()).findByText("10,081 元")).toBeTruthy();
+    expect(await within(row()).findByText("10,081 TWD")).toBeTruthy();
     expect(cellText("期間")).toBe("期間 09/26～10/02 7 天");
-    expect(cellText("花費")).toBe("花費 10,081 元 整期合計");
+    expect(cellText("花費")).toBe("花費 10,081 TWD 整期合計");
     expect(cellText("購買")).toBe("購買 19 筆 平台回報");
-    expect(cellText("每賣一筆")).toBe("每賣一筆 531 元 偏貴 對上限 450");
+    expect(cellText("每賣一筆")).toBe("每賣一筆 531 TWD 偏貴 對上限 450 幣別未知");
     expect(cellText("ROAS")).toBe("ROAS 保守 ? 1.88x ・ 樂觀 ? 1.88x");
     const grade = within(row()).getByText("偏貴").closest("[data-slot=chip]")!;
     expect(grade.getAttribute("data-grade")).toBe("watch");
@@ -814,14 +818,14 @@ describe("這期狀態列 (F40-I06, prototype #/perf)", () => {
 
   it("重新讀取平台 calls the workspace's sync; while it runs the button says 讀取中…; when it ends the row re-reads its numbers", async () => {
     const { onSync, rerender } = renderBody(campaignDetail());
-    await within(row()).findByText("10,081 元");
+    await within(row()).findByText("10,081 TWD");
     fireEvent.click(within(row()).getByRole("button", { name: "重新讀取平台" }));
     expect(onSync).toHaveBeenCalledTimes(1);
     rerender({ syncing: true });
     expect((within(row()).getByRole("button", { name: "讀取中…" }) as HTMLButtonElement).disabled).toBe(true);
     vi.mocked(getPerformance).mockResolvedValue(perf({}, { spend: 11581, purchases: 21 }));
     rerender({ syncing: false });
-    expect(await within(row()).findByText("11,581 元")).toBeTruthy();
+    expect(await within(row()).findByText("11,581 TWD")).toBeTruthy();
     expect(getPerformance).toHaveBeenCalledTimes(2);
   });
 
@@ -831,7 +835,7 @@ describe("這期狀態列 (F40-I06, prototype #/perf)", () => {
     vi.mocked(closeCampaign).mockResolvedValue(closed);
     vi.mocked(getCoordinateLearnings).mockResolvedValue(LEARNED);
     const { onCampaignChange } = renderBody(campaignDetail());
-    await within(row()).findByText("10,081 元");
+    await within(row()).findByText("10,081 TWD");
     await user.click(within(row()).getByRole("button", { name: "結案這一期 →" }));
     const dialog = await screen.findByRole("dialog");
     // F48-I11: no ad count (the planned ads are not the platform ads closeout ranks; that count is not on this payload).
@@ -849,7 +853,7 @@ describe("這期狀態列 (F40-I06, prototype #/perf)", () => {
   it("closed: the numbers stay, 重新讀取／結案 are gone; 已結案 with the two exits where 結案這一期 was", async () => {
     vi.mocked(getCoordinateLearnings).mockResolvedValue(LEARNED);
     renderBody(campaignDetail({ status: "closed", verdict: "達成", closed_at: "2026-10-03T02:00:00Z" }));
-    expect(await within(row()).findByText("10,081 元")).toBeTruthy();
+    expect(await within(row()).findByText("10,081 TWD")).toBeTruthy();
     expect(within(row()).getByText("已結案")).toBeTruthy();
     expect(within(row()).queryByRole("button", { name: "結案這一期 →" })).toBeNull();
     expect(within(row()).queryByRole("button", { name: "重新讀取平台" })).toBeNull();
@@ -864,27 +868,30 @@ describe("這期狀態列 (F40-I06, prototype #/perf)", () => {
   it("closed, learnings unreadable: both exits stay, the next period opens the plain create page", async () => {
     vi.mocked(getCoordinateLearnings).mockRejectedValue(new Error("讀取投放學到的失敗。"));
     renderBody(campaignDetail({ status: "closed", verdict: "達成", closed_at: "2026-10-03T02:00:00Z" }));
-    expect(await within(row()).findByText("10,081 元")).toBeTruthy();
+    expect(await within(row()).findByText("10,081 TWD")).toBeTruthy();
     expect(within(row()).getByRole("link", { name: "看學到什麼 →" })).toBeTruthy();
     expect(within(row()).getByRole("link", { name: "用這些學習排下一期 →" }).getAttribute("href")).toBe("/brands/brd_1/ads/new");
   });
 
-  it("imported: no close button, the capability's own sentence; totals come from the native view, never getPerformance", async () => {
+  it("imported: scoped public read, no close button and the capability's own sentence", async () => {
     const view = {
       entities: [{ id: "e1", platform: "meta", source_account: "act_1", native_kind: "adset", native_id: "n1", native_label: null, name: "新客", parent_native_id: null, native_status: "ACTIVE", start_date: null, end_date: null, budget_amount: null, budget_type: "daily", budget_raw: {}, currency: "TWD", last_success_at: "2026-10-02T13:00:00Z", sync_error: null, creative: {} }],
       observations: [{ id: "o1", entity_id: "e1", day: "2026-10-01", metric_scope: "adset", attribution_key: "default", currency: "TWD", spend: 500, impressions: 100, clicks: 10, purchases: 2, revenue: 1996, availability: {} }],
       next_entity_cursor: null, next_observation_cursor: null, window: { start: "2026-09-26", end: "2026-10-02" }, connections: [],
       sync: { entities: { status: "ok", last_success_at: "2026-10-02T13:00:00Z" }, observations: { status: "ok", last_success_at: "2026-10-02T13:30:00Z" } }, coverage: {},
     } as unknown as CampaignDetail["external_view"];
+    vi.mocked(getPerformance).mockResolvedValue({origin: "imported", external_view: {
+      ...view!, scope: {...perf().scope!, basis: "requested_range"},
+    }});
     renderBody(campaignDetail({ origin: "imported", capabilities: { allowed: [], unavailable: { close: "既有平台活動不使用內部結案。" } }, external_view: view }), { origin: "imported" });
-    expect(await within(row()).findByText("500 元")).toBeTruthy();
+    expect(await within(row()).findByText("500 TWD")).toBeTruthy();
     expect(cellText("購買")).toBe("購買 2 筆 平台回報");
     expect(within(row()).queryByRole("button", { name: "結案這一期 →" })).toBeNull();
     expect(within(row()).getByRole("button", { name: "重新讀取平台" })).toBeTruthy();
     expect(within(row()).getByText("既有平台活動不使用內部結案。")).toBeTruthy();
     expect(within(row()).getByText("最新 10/02 21:30")).toBeTruthy(); // the newest external_view.sync section
     expect(within(row()).getByText("未判斷").closest("[data-slot=chip]")!.getAttribute("data-grade")).toBe("no_target");
-    expect(getPerformance).not.toHaveBeenCalled();
+    expect(getPerformance).toHaveBeenCalledWith("brd_1", "cmp_1", true);
   });
 
   it("the totals read fails on its own: the row keeps its buttons and says why with 重試; the ruler card still renders", async () => {
@@ -894,7 +901,7 @@ describe("這期狀態列 (F40-I06, prototype #/perf)", () => {
     expect(within(row()).getByRole("button", { name: "結案這一期 →" })).toBeTruthy();
     expect(await screen.findByRole("region", { name: "對照上限" })).toBeTruthy();
     fireEvent.click(within(row()).getByRole("button", { name: "重試" }));
-    expect(await within(row()).findByText("10,081 元")).toBeTruthy();
+    expect(await within(row()).findByText("10,081 TWD")).toBeTruthy();
   });
 
   it("a draft (DraftPerf's case) or no campaign handed in (the standalone page): no row, no totals read", async () => {
@@ -906,13 +913,13 @@ describe("這期狀態列 (F40-I06, prototype #/perf)", () => {
 
   it("F49 Contract L: an ended campaign (stored live, past its end date) keeps 結案這一期; the served lifecycle decides", async () => {
     renderBody(campaignDetail({ status: "live", lifecycle: { state: "ended", label: "已結束・待結案", can_close: true } }));
-    expect(await within(row()).findByText("10,081 元")).toBeTruthy();
+    expect(await within(row()).findByText("10,081 TWD")).toBeTruthy();
     expect(within(row()).getByRole("button", { name: "結案這一期 →" })).toBeTruthy();
   });
 
   it("F49 Contract L: 結案這一期 shows only when the served lifecycle can close", async () => {
     renderBody(campaignDetail({ lifecycle: { state: "live", label: "投放中", can_close: false } }));
-    expect(await within(row()).findByText("10,081 元")).toBeTruthy();
+    expect(await within(row()).findByText("10,081 TWD")).toBeTruthy();
     expect(within(row()).queryByRole("button", { name: "結案這一期 →" })).toBeNull();
     expect(within(row()).getByRole("button", { name: "重新讀取平台" })).toBeTruthy();
   });
@@ -932,7 +939,7 @@ describe("這期狀態列 (F40-I06, prototype #/perf)", () => {
   it("?close=1 on a campaign that cannot close (already closed) opens nothing and drops the param", async () => {
     vi.mocked(getCoordinateLearnings).mockResolvedValue(LEARNED);
     renderBody(campaignDetail({ status: "closed" }), {}, "?tab=perf&close=1");
-    expect(await within(row()).findByText("10,081 元")).toBeTruthy();
+    expect(await within(row()).findByText("10,081 TWD")).toBeTruthy();
     await vi.waitFor(() => expect(screen.getByTestId("where").textContent).toBe(`${WS}?tab=perf`));
     expect(screen.queryByRole("dialog")).toBeNull();
   });
@@ -940,7 +947,7 @@ describe("這期狀態列 (F40-I06, prototype #/perf)", () => {
   it("F49 Contract O: the last platform read's served outcome prints beside 重新讀取平台 (a partial read names its reason)", async () => {
     const note = { state: "partial" as const, text: "有部分平台資料沒讀到：平台暫時沒有回應，稍後會再試" };
     renderBody(campaignDetail(), { syncNote: note });
-    expect(await within(row()).findByText("10,081 元")).toBeTruthy();
+    expect(await within(row()).findByText("10,081 TWD")).toBeTruthy();
     const status = within(row()).getByRole("status");
     expect(status.textContent).toBe(note.text);
     expect(status.getAttribute("data-state")).toBe("partial");

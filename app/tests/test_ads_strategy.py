@@ -1351,7 +1351,7 @@ class BudgetCapRoutesTest(StrategyTestBase):
         self.assertEqual(row["over_cap"], 3000)
         self.assertEqual(scenarios["recommended"], "cap")
 
-    def test_non_draft_campaign_cap_is_editable_and_the_launch_snapshot_is_unchanged(self):
+    def test_non_draft_cap_edit_preserves_plan_and_refreshes_strategy_provenance(self):
         self.assertEqual(self._choose("recommended").status_code, 200)
         orig_plan_provider = plan.PROVIDER
         plan.PROVIDER = _fake(_VALID_PLAN_REPLY)
@@ -1381,10 +1381,18 @@ class BudgetCapRoutesTest(StrategyTestBase):
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json()["campaign"]["status"], "ready")
         self.assertEqual(response.json()["campaign"]["budget_planned"], 15000)
+        snapshot_after = change_control_launch.snapshot(
+            web.conn, self.org_id, self.brand_id, self.campaign["id"])
+        before = snapshot_before["strategy_provenance"]
+        after = snapshot_after["strategy_provenance"]
+        self.assertEqual(before["state"], "adopted")
+        self.assertEqual(after["state"], "modified")
+        self.assertNotEqual(before["current_revision"], after["current_revision"])
+        for key in ("accepted_revision", "operation_id", "accepted_receipt"):
+            self.assertEqual(after[key], before[key])
         self.assertEqual(
-            change_control_launch.snapshot(
-                web.conn, self.org_id, self.brand_id, self.campaign["id"]),
-            snapshot_before,
+            {key: value for key, value in snapshot_after.items() if key != "strategy_provenance"},
+            {key: value for key, value in snapshot_before.items() if key != "strategy_provenance"},
         )
 
     def test_live_campaign_cap_is_editable(self):

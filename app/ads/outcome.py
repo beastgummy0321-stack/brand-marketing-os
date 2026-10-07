@@ -22,7 +22,7 @@ Coverage (Contract P/Q, F49 Contract V): `coverage` names the campaign-window da
 nothing was read.
 """
 
-from datetime import date
+from datetime import date, timedelta
 
 from app.core import settings as coresettings
 from app.core.db import Conn, ConnProxy
@@ -60,6 +60,228 @@ def rows(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, kind: str
 def _fetch_rows(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str,
                  entity_kind: str) -> list:
     return rows(conn, org_id, brand_id, campaign_id, entity_kind)
+
+
+def period_window(conn: _AnyConn, org_id: str, brand_id: str, campaign: dict) -> dict:
+    """The internal campaign's inclusive window through its last completed account day.
+
+    Raw history and explicitly requested comparison/month windows remain independent.
+    Missing campaign dates are unknown; a future window contains no completed days.
+    """
+    from app.ads import coverage
+
+    basis: dict = {}
+    cutoff = coverage.last_complete_day(conn, org_id, brand_id, campaign["id"], basis=basis)
+    start, planned_end = campaign.get("start_date"), campaign.get("end_date")
+    state, selected_start, selected_end, days = "missing_dates", None, None, 0
+    if start is not None and planned_end is not None and start <= planned_end:
+        end = min(planned_end, cutoff)
+        state = "future"
+        if start <= end:
+            state = "ready"
+            selected_start, selected_end = start.isoformat(), end.isoformat()
+            days = (end - start).days + 1
+    return {
+        "start": selected_start,
+        "end": selected_end,
+        "days": days,
+        "campaign_start": start.isoformat() if start else None,
+        "campaign_end": planned_end.isoformat() if planned_end else None,
+        "last_complete_day": cutoff.isoformat(),
+        "basis": "campaign_window",
+        "incomplete_day_policy": "excluded",
+        "state": state,
+        **basis,
+    }
+
+
+def select_period(rows: list, window: dict) -> list:
+    """Select rows without altering the unbounded history reader."""
+    if window["start"] is None or window["end"] is None:
+        return []
+    start, end = date.fromisoformat(window["start"]), date.fromisoformat(window["end"])
+    return [row for row in rows if start <= row["day"] <= end]
+
+
+def period_projection(
+    conn: _AnyConn, org_id: str, brand_id: str, campaign: dict, group_rows: list, ad_rows: list
+) -> dict:
+    """Project supplied raw rows using one account cutoff, without campaign-detail recursion."""
+    window = period_window(conn, org_id, brand_id, campaign)
+    selected_groups, selected_ads = (
+        select_period(group_rows, window),
+        select_period(ad_rows, window),
+    )
+    totals = period_bucket(selected_groups)
+    return {
+        "scope": {
+            **window,
+            "currency": totals["currency"],
+            "attribution_key": totals["attribution_key"],
+            "reason": totals["reason"],
+            "caption": _scope_caption(window),
+            "reason_text": _reason_text(totals["reason"]),
+        },
+        "group_rows": selected_groups,
+        "ad_rows": selected_ads,
+        "totals": totals,
+    }
+
+
+def _scope_caption(window: dict) -> str:
+    if window["state"] == "missing_dates":
+        return "活動期間未設定，無法彙整本期。"
+    if window["state"] == "future":
+        return "還沒有完整的本期資料日。"
+    label = "本期" if window["basis"] == "campaign_window" else "查詢期間"
+    day_basis = (
+        "帳戶時區未知，採保守完整日"
+        if window["day_basis"] == "conservative_org_fallback"
+        else "只計完整帳戶日"
+    )
+    return f"{label} {window['start']} ～ {window['end']}；{day_basis}，今日尚未完整的資料不計入。"
+
+
+def _reason_text(reason: str | None) -> str | None:
+    if reason is None:
+        return None
+    return {
+        "no_data": "本期尚無成效資料，缺資料不算零。",
+        "mixed_attribution": "本期有不同歸因，不能合計或比較。",
+        "attribution_unknown": "本期歸因尚未核實，不能合計或比較。",
+        "mixed_currency": "本期有不同幣別，金額與花費占比不能合計。",
+        "currency_unknown": "本期幣別尚未核實，金額與花費占比未知。",
+        "spend_unknown": "本期有未知花費，合計花費與花費占比未知。",
+    }.get(reason)
+
+
+def period_bucket(rows: list) -> dict:
+    """Keep the existing two ROAS/known-result sums within one currency and attribution.
+
+    No inferred exchange rate or attribution priority. Unknown spend is not fabricated zero;
+    missing result/revenue tracking retains the existing named optimistic/conservative bases.
+    """
+    bucket = _bucket(rows)
+    for key in ("impressions", "clicks"):
+        if not any(row[key] is not None for row in rows):
+            bucket[key] = None
+    currencies = {row["currency"] for row in rows}
+    attributions = {row.get("attribution_key") for row in rows}
+    currency = next(iter(currencies)) if len(currencies) == 1 else None
+    attribution = next(iter(attributions)) if len(attributions) == 1 else None
+    reason = (
+        "no_data"
+        if not rows
+        else "mixed_attribution"
+        if len(attributions) > 1
+        else "attribution_unknown"
+        if attribution is None
+        else "mixed_currency"
+        if len(currencies) > 1
+        else "currency_unknown"
+        if currency is None
+        else "spend_unknown"
+        if any(row["spend"] is None for row in rows)
+        else None
+    )
+    if reason in {"mixed_attribution", "attribution_unknown"}:
+        bucket = dict.fromkeys(bucket)
+    elif reason is not None:
+        for key in ("spend", "revenue", "cpa", "roas_tracked_spend", "roas_all_spend"):
+            bucket[key] = None
+        if not rows:
+            bucket["impressions"] = bucket["clicks"] = None
+    return {**bucket, "currency": currency, "attribution_key": attribution, "reason": reason}
+
+
+def native_period_view(conn: _AnyConn, org_id: str, brand_id: str, campaign: dict) -> dict:
+    """Imported performance keeps its existing requested range, excluding incomplete days.
+
+    The external history reader itself is unchanged. A missing campaign date is not invented:
+    the range names the existing request default, distinct from the internal campaign period.
+    """
+    from app.ads import coverage, external_repository
+
+    requested_end = coresettings.today_for_org(conn, org_id=org_id)
+    requested_start = requested_end - timedelta(days=29)
+    basis: dict = {}
+    cutoff = coverage.last_complete_day(conn, org_id, brand_id, campaign["id"], basis=basis)
+    end = min(requested_end, cutoff)
+    view = external_repository.external_view(
+        conn, org_id, brand_id, campaign["id"], start=requested_start, end=end
+    )
+    # Both cursors are independent. A scoped performance response is complete, never a first page.
+    for kind, rows_key in (("entity", "entities"), ("observation", "observations")):
+        cursor_key = f"next_{kind}_cursor"
+        cursor = view[cursor_key]
+        seen = set()
+        while cursor:
+            if cursor in seen:
+                raise ValueError("平台資料分頁重複，請重新載入。")
+            seen.add(cursor)
+            page = external_repository.external_view(
+                conn, org_id, brand_id, campaign["id"], start=requested_start, end=end,
+                **{f"{kind}_after": cursor},
+            )
+            view[rows_key].extend(page[rows_key])
+            if kind == "entity":
+                view["connections"].extend(page["connections"])
+            cursor = page[cursor_key]
+        view[cursor_key] = None
+    view["connections"] = list({
+        (row["platform"], row["source_account"]): row for row in view["connections"]
+    }.values())
+    view["scope"] = {
+        "basis": "requested_range",
+        "start": requested_start.isoformat(),
+        "end": end.isoformat(),
+        "requested_start": requested_start.isoformat(),
+        "requested_end": requested_end.isoformat(),
+        "last_complete_day": cutoff.isoformat(),
+        "incomplete_day_policy": "excluded",
+        "state": "ready",
+        "days": (end - requested_start).days + 1,
+        **basis,
+    }
+    view["scope"]["caption"] = _scope_caption(view["scope"])
+    return view
+
+
+def cap_comparison(conn: _AnyConn, brand_id: str, cap: dict, currency: str | None,
+                   *, campaign: dict) -> dict:
+    """Compare only units supported by the cap's recorded source.
+
+    The manual NT$ input records source=user. Other historical own sources lack a frozen
+    unit; a current product/account cannot establish the unit of their stored value.
+    """
+    from app.brand_intelligence import repository as bi_repo
+
+    cap_currency = None
+    source = ((campaign.get("context_json") or {}).get("field_sources") or {}).get("cap")
+    unit_basis = None
+    if cap["basis"] == "own" and source == "user":
+        cap_currency, unit_basis = "TWD", "manual_ntd_input"
+    if cap["basis"] == "break_even" and cap.get("product_id"):
+        economics = bi_repo.get_product_economics(conn, brand_id, cap["product_id"])
+        cap_currency = (economics or {}).get("currency")
+        unit_basis = "confirmed_product_economics" if cap_currency else None
+    reason = None
+    if cap["basis"] in {"own", "break_even"}:
+        reason = (
+            "cap_currency_unknown"
+            if cap_currency is None or currency is None
+            else "cap_currency_mismatch"
+            if cap_currency != currency
+            else None
+        )
+    return {
+        "basis": cap["basis"],
+        "currency": cap_currency,
+        "source": source,
+        "unit_basis": unit_basis,
+        "reason": reason,
+        "message": "上限與本期成效的幣別不同或尚未核實，不能比較。" if reason else None,
+    }
 
 
 def roas_pair(rows: list) -> dict:
@@ -147,10 +369,10 @@ def _daily_series(rows: list) -> list:
     by_day: dict[date, list] = {}
     for row in rows:
         by_day.setdefault(row["day"], []).append(row)
-    return [{"day": day, **_bucket(day_rows)} for day, day_rows in sorted(by_day.items())]
+    return [{"day": day, **period_bucket(day_rows)} for day, day_rows in sorted(by_day.items())]
 
 
-def _coverage(conn: _AnyConn, org_id: str, brand_id: str, campaign: dict) -> dict:
+def _coverage(conn: _AnyConn, org_id: str, brand_id: str, campaign: dict, window: dict) -> dict:
     """Contract P's `coverage`: the campaign window `start_date … min(end_date, last complete
     day)` (F50 Contract K: `coverage.last_complete_day`, the campaign's ad-account day) checked
     day by day by `coverage.gap` (F49 Contract V, the rule triage/closeout/review share).
@@ -158,14 +380,13 @@ def _coverage(conn: _AnyConn, org_id: str, brand_id: str, campaign: dict) -> dic
     `never_synced` still says whether anything was ever read."""
     from app.ads import coverage  # 延遲 import 避免循環
 
-    start = campaign.get("start_date")
-    yesterday = coverage.last_complete_day(conn, org_id, brand_id, campaign["id"])
-    end = campaign.get("end_date")
-    end = min(end, yesterday) if end is not None else yesterday
-    if start is None or end < start:
-        never_synced = coverage.gap(conn, org_id, brand_id, campaign, end, end)["never_synced"]
+    if window["start"] is None or window["end"] is None:
+        cutoff = date.fromisoformat(window["last_complete_day"])
+        gap = coverage.gap(conn, org_id, brand_id, campaign, cutoff, cutoff)
+        never_synced = gap["never_synced"]
         return {"start": None, "end": None, "expected": 0, "missing": 0, "missing_days": [],
                 "never_synced": never_synced}
+    start, end = date.fromisoformat(window["start"]), date.fromisoformat(window["end"])
     gap = coverage.gap(conn, org_id, brand_id, campaign, start, end)
     return {
         "start": start.isoformat(),
@@ -175,17 +396,6 @@ def _coverage(conn: _AnyConn, org_id: str, brand_id: str, campaign: dict) -> dic
         "missing_days": gap["missing_days"],
         "never_synced": gap["never_synced"],
     }
-
-
-def _window_days(campaign: dict, today: date, daily: list) -> int:
-    """The period the status row grades: `start_date … min(end_date, today)` in calendar days
-    (today included -- `totals` already sums today's rows). A campaign with no window yet (no
-    start date, or one after its end) is graded over the days it actually has rows for."""
-    start, end = campaign.get("start_date"), campaign.get("end_date")
-    end = min(end, today) if end is not None else today
-    if start is None or end < start:
-        return len(daily)
-    return (end - start).days + 1
 
 
 def _period_view(totals: dict, group_rows: list, result_kind: str | None) -> dict | None:
@@ -198,7 +408,7 @@ def _period_view(totals: dict, group_rows: list, result_kind: str | None) -> dic
     if totals["purchases"] is None:
         return None
     currencies = {r["currency"] for r in group_rows}
-    reason = None
+    reason = totals.get("reason")
     if len(currencies) > 1:
         reason = "mixed_currency"
     elif any(r["purchases"] is None or r["spend"] is None for r in group_rows):
@@ -210,8 +420,7 @@ def _period_view(totals: dict, group_rows: list, result_kind: str | None) -> dic
     }
 
 
-def _period_grade(campaign: dict, totals: dict, group_rows: list, daily: list, cap: dict,
-                  today: date) -> dict:
+def _period_grade(totals: dict, group_rows: list, cap: dict, days: int) -> dict:
     """F40-I01: `totals.grade` = the one cap ruler (`triage.grade_window`, ads.md §6.33) over the
     whole period -- `{grade, label}`, `grade` in on_target|watch|over|wasted|insufficient|
     no_target. No cap, or a cap with no result kind anywhere (the precondition `triage` and
@@ -222,7 +431,7 @@ def _period_grade(campaign: dict, totals: dict, group_rows: list, daily: list, c
         return {"grade": "no_target", "label": triage.GRADE_LABELS["no_target"]}
     grade, label, _reason = triage.grade_window(
         _period_view(totals, group_rows, cap["result_kind"]), totals["spend"], cap["value"],
-        _window_days(campaign, today, daily),
+        days,
     )
     return {"grade": grade, "label": label}
 
@@ -239,34 +448,35 @@ def summary(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str) -> dic
     detail = ads_repo.campaign_detail(conn, org_id, brand_id, campaign_id)
     if detail is None:
         raise ValueError("campaign_unknown")
-    today = coresettings.today_for_org(conn, org_id=org_id)
-
-    group_rows = rows(conn, org_id, brand_id, campaign_id, "group")
-    ad_rows = rows(conn, org_id, brand_id, campaign_id, "ad")
-
-    totals = _bucket(group_rows)
+    projected = period_projection(conn, org_id, brand_id, detail,
+                                  rows(conn, org_id, brand_id, campaign_id, "group"),
+                                  rows(conn, org_id, brand_id, campaign_id, "ad"))
+    group_rows, ad_rows = projected["group_rows"], projected["ad_rows"]
+    totals = projected["totals"]
     daily = _daily_series(group_rows)
     cap = targets.resolve(conn, org_id, brand_id, detail)
-    totals["grade"] = _period_grade(detail, totals, group_rows, daily, cap, today)
+    totals["grade"] = _period_grade(totals, group_rows, cap, projected["scope"]["days"])
+    comparison = cap_comparison(conn, brand_id, cap, totals["currency"], campaign=detail)
+    if comparison["reason"] is not None:
+        from app.ads import triage
 
-    group_total_spend = sum(
-        float(r["spend"]) for r in group_rows if r["spend"] is not None
-    ) or 0.0
+        totals["grade"] = {"grade": "insufficient", "label": triage.NO_DATA_LABEL}
+
+    group_total_spend = totals["spend"]
     by_group: dict[str, list] = {}
     for row in group_rows:
         by_group.setdefault(row["entity_id"], []).append(row)
     groups_table = []
     for group in detail["groups"]:
         node_rows = by_group.get(group["id"], [])
-        bucket = _bucket(node_rows)
+        bucket = period_bucket(node_rows)
         bucket["group_id"] = group["id"]
         bucket["name"] = group["name"]
-        bucket["spend_share"] = (bucket["spend"] / group_total_spend) if group_total_spend else None
+        bucket["spend_share"] = (bucket["spend"] / group_total_spend) \
+            if group_total_spend and bucket["spend"] is not None else None
         groups_table.append(bucket)
 
-    ad_total_spend = sum(
-        float(r["spend"]) for r in ad_rows if r["spend"] is not None
-    ) or 0.0
+    ad_total_spend = period_bucket(ad_rows)["spend"]
     by_ad: dict[str, list] = {}
     for row in ad_rows:
         by_ad.setdefault(row["entity_id"], []).append(row)
@@ -274,10 +484,11 @@ def summary(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str) -> dic
     for group in detail["groups"]:
         for ad in group["ads"]:
             node_rows = by_ad.get(ad["id"], [])
-            bucket = _bucket(node_rows)
+            bucket = period_bucket(node_rows)
             bucket["ad_id"] = ad["id"]
             bucket["name"] = ad["name"]
-            bucket["spend_share"] = (bucket["spend"] / ad_total_spend) if ad_total_spend else None
+            bucket["spend_share"] = (bucket["spend"] / ad_total_spend) \
+                if ad_total_spend and bucket["spend"] is not None else None
             ads_table.append(bucket)
 
     all_rows = group_rows + ad_rows
@@ -288,6 +499,8 @@ def summary(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str) -> dic
         "daily": daily,
         "groups": groups_table,
         "ads": ads_table,
-        "coverage": _coverage(conn, org_id, brand_id, detail),
+        "coverage": _coverage(conn, org_id, brand_id, detail, projected["scope"]),
         "last_data_at": last_data_at,
+        "scope": projected["scope"],
+        "cap_comparison": comparison,
     }

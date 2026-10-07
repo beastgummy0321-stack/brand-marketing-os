@@ -3,7 +3,7 @@ export type { AdapterKey, AdapterOption, PublishChecklistField, PublishChecklist
 /** 投放中心 API 型別與呼叫（F03-I01），對應 `app/ads/routes.py`；後續票在這裡加，不重排既定形狀。
  * 錯誤：回應一律交給 `http.readJson`／`throwIfFailed`（F51 Contract H），失敗是 `ApiResponseError`（`code`／`details`）。 */
 import { apiFetch, isRejected, readJson, throwIfFailed, type ApiResponseError } from "./http";
-import type { ExternalCampaignFields } from "./adsExternalApi";
+import type { ExternalCampaignFields, ExternalView } from "./adsExternalApi";
 import type { ManualHandoff } from "./adsLaunchApi";
 // F27-I06 800-line gate: `CampaignCapacity` moved to `adsTriageApi.ts` (its own owner lookup
 // touches `triage_capacity.py`/`triage_scale.py`, already documented there) -- imported back
@@ -44,6 +44,10 @@ export interface CampaignBudgetProgress {
   spent: number | null;
   total: number | null;
   pct: number | null;
+  currency?: string | null;
+  budget_currency?: "TWD";
+  reason?: string | null;
+  scope?: PerformanceScope | null;
 }
 
 /** F24-I01: campaign-level sync status, read-only from `context_json.external_sync` plus the
@@ -631,9 +635,12 @@ export async function publishCampaign(
  * `revenue`／`cpa`／`ctr`／`roas_tracked_spend`／`roas_all_spend` 全部可能是 `null`——代表未追蹤，不是
  * 0（§0「never a percentage / never 0」的同一條精神）。F51 Contract F：ROAS 的 key 就是它的口徑代碼。 */
 export interface OutcomeBucket {
-  spend: number;
-  impressions: number;
-  clicks: number;
+  spend: number | null;
+  impressions: number | null;
+  clicks: number | null;
+  currency?: string | null;
+  attribution_key?: string | null;
+  reason?: string | null;
   purchases: number | null;
   revenue: number | null;
   cpa: number | null;
@@ -688,16 +695,46 @@ export interface CampaignPerformance {
   ads: OutcomeAdRow[];
   coverage: OutcomeCoverage;
   last_data_at: string | null;
+  /** Optional for historical client fixtures; current responses name their actual period. */
+  scope?: PerformanceScope;
+  cap_comparison?: { basis: string | null; currency: string | null; reason: string | null;
+    message: string | null; source?: string | null; unit_basis?: string | null };
 }
 
+export interface PerformanceScope {
+  start: string | null;
+  end: string | null;
+  days: number;
+  basis: "campaign_window" | "requested_range";
+  state: "ready" | "missing_dates" | "future";
+  last_complete_day: string;
+  incomplete_day_policy: "excluded";
+  day_basis: "account_timezone" | "conservative_org_fallback";
+  account_timezone: string | null;
+  account_currency?: string | null;
+  currency?: string | null;
+  attribution_key?: string | null;
+  reason?: string | null;
+  caption: string;
+  reason_text?: string | null;
+}
+
+export interface ImportedCampaignPerformance {
+  origin: "imported";
+  external_view: ExternalView & { scope?: PerformanceScope };
+}
+export function getPerformance(brandId: string, campaignId: string): Promise<CampaignPerformance>;
+export function getPerformance(brandId: string, campaignId: string, imported: true): Promise<ImportedCampaignPerformance>;
+export function getPerformance(brandId: string, campaignId: string, imported?: boolean): Promise<CampaignPerformance | ImportedCampaignPerformance>;
 export async function getPerformance(
   brandId: string,
   campaignId: string,
-): Promise<CampaignPerformance> {
+  _imported?: boolean,
+): Promise<CampaignPerformance | ImportedCampaignPerformance> {
   const res = await apiFetch(
     `${BASE}/brands/${encodeURIComponent(brandId)}/campaigns/${encodeURIComponent(campaignId)}/performance`,
   );
-  return readJson<CampaignPerformance>(res, "讀取成效失敗。");
+  return readJson<CampaignPerformance | ImportedCampaignPerformance>(res, "讀取成效失敗。");
 }
 
 // -- F03-I12：結案 -----------------------------------------------------------------------------

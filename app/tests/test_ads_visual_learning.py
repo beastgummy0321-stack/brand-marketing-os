@@ -9,10 +9,10 @@
 """
 
 import unittest
-from datetime import timedelta
+from datetime import UTC, date, datetime, timedelta
 from unittest import mock
 
-from app.ads import closeout, live_creative, plan
+from app.ads import channels, closeout, live_creative, plan, visual_learning
 from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi_repo
 from app.core import db as coredb
@@ -617,6 +617,66 @@ class ClosingTwiceWritesNoAdditionalVisualLearningTest(VisualLearningTestBase):
             second["verdict_json"]["learning_ids"], first["verdict_json"]["learning_ids"],
         )
         self.assertEqual(len(second["verdict_json"]["learning_ids"]), 2)
+
+
+class CompletedPeriodVisualTest(VisualLearningTestBase):
+    def test_adopted_fingerprint_comparison_uses_completed_period_not_old_or_intraday_rows(self):
+        with mock.patch.object(
+            coredb, "now_utc", return_value=datetime(2026, 10, 27, 4, tzinfo=UTC)
+        ):
+            account = type(
+                "BoundAccount",
+                (),
+                {
+                    "accounts": lambda self, conn, org, brand: [
+                        {"account_id": outcome_seed.SOURCE_ACCOUNT, "timezone_name": "Asia/Taipei"}
+                    ]
+                },
+            )()
+            real_reader = channels.external_reader
+            with mock.patch.object(
+                channels,
+                "external_reader",
+                side_effect=lambda platform: (
+                    account if platform == outcome_seed.PLATFORM else real_reader(platform)
+                ),
+            ):
+                campaign = self._campaign(
+                    start_date=date(2026, 10, 24), end_date=date(2026, 10, 30)
+                )
+                group = self._group(campaign["id"])
+                a = self._ad(campaign["id"], group["id"], audience_key="cold_unaware", name="A")
+                b = self._ad(campaign["id"], group["id"], audience_key="cold_unaware", name="B")
+                for day in range(21, 28):
+                    for ad, spend, count in ((a, 100, 1), (b, 200, 3)):
+                        if day < 24:
+                            spend, count = (50, 5) if ad == a else (450, 1)
+                        if day == 27 and ad == b:
+                            spend = 9999
+                        self._ad_outcome(
+                            campaign["id"],
+                            ad["id"],
+                            date(2026, 10, day),
+                            spend=spend,
+                            purchases=count,
+                            revenue=count * 1560,
+                        )
+                self._patch_workbench(
+                    {a["id"]: _fp(look="phone_raw"), b["id"]: _fp(look="studio_hero")}
+                )
+                written = visual_learning.write_visual_learnings(
+                    self.conn,
+                    self.org_id,
+                    self.brand_id,
+                    campaign["id"],
+                    actor=ACTOR,
+                    days=3,
+                    labels={"cpa": "CPA"},
+                )
+                self.assertEqual(len(written), 1)
+                self.assertIn("look=studio_hero", written[0]["applicability_scope"])
+                self.assertIn("CPA 66.67", written[0]["learning_text"])
+                self.assertIn("CPA 100", written[0]["learning_text"])
 
 
 if __name__ == "__main__":

@@ -3,22 +3,23 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useSearchParams } from "react-router-dom";
 import { RefreshCw } from "lucide-react";
 import { Button } from "@/components/layout/ui/button";
-import { getPerformance, type CampaignDetail, type PeriodGrade } from "@/lib/adsApi";
+import { getPerformance, type CampaignDetail, type PeriodGrade, type CampaignPerformance, type ImportedCampaignPerformance } from "@/lib/adsApi";
 import type { SyncOutcome } from "@/lib/adsExternalApi";
 import { daysBetween, formatInstant, useOrgClock } from "@/lib/orgClock";
+import { formatMoney } from "@/lib/format";
 import { useApiRead } from "@/lib/useApiRead";
 import { getCoordinateLearnings } from "@/lib/adsLearningsApi";
 import { CloseCampaignDialog, LearningExits, coveredRange, shortDay } from "../CloseCampaignDialog";
-import { nativePerformance } from "../nativePerformance";
+import { nativePerformance, nativeMetricScopes } from "../nativePerformance";
 import { Chip, GradeTermChip, ReadFailed, formatAmount } from "../patterns";
 import { perSaleAmount } from "../patterns/csv";
 
 /** F40-I06 (drill-7 #9 #12, prototype `#/perf` `statusCard`): the 「這期狀態列」 on top of the 成效分頁 for a
- * live／ended／closed campaign. Five cells — 期間 (calendar days through today, the window I01 grades), 花費
+ * live／ended／closed campaign. Five cells use the served completed period/currency: 期間, 花費
  * 整期合計, 購買 平台回報, 每賣一筆 with the period's one-ruler grade (`totals.grade`, the backend's answer) beside
  * 對上限 N, ROAS 營收 ÷ 花費 — the two actions 重新讀取平台／結案這一期 (the same `CloseCampaignDialog` the folded old
  * panel opens), the data-status chip and the 整期 vs 每月回顧 caption. Numbers: `getPerformance` totals for an
- * internal campaign; an imported one has no totals route, so its native view (first scope) prints, no grade and no
+ * internal campaign; an imported one reads the same route's scoped native view, no grade and no
  * close (`capabilities.unavailable.close`). A closed campaign keeps its numbers and loses the buttons (chip 已結案).
  * F49 Contract L: 結案這一期 shows only when the served `lifecycle.can_close` (never on a draft or an imported
  * campaign); the queue's closeout row links here with `?close=1`, which opens the close dialog once on load and is
@@ -84,7 +85,10 @@ export function PeriodStatusRow({ brandId, campaign: c, lastSuccessAt = null, on
   const imported = c.origin === "imported";
   const closed = c.lifecycle?.state === "closed";
   const canClose = c.lifecycle?.can_close === true;
-  const perf = useApiRead(() => (imported ? Promise.resolve(null) : getPerformance(brandId, c.id)), [brandId, c.id, imported]);
+  const perf = useApiRead<CampaignPerformance | ImportedCampaignPerformance>(
+    () => imported ? getPerformance(brandId, c.id, true) : getPerformance(brandId, c.id),
+    [brandId, c.id, imported],
+  );
   const [closeOpen, setCloseOpen] = useState(false);
   // `?close=1` (the closeout row's link): open the dialog once; the param goes when the dialog closes, or at once when
   // this campaign cannot be closed (a draft, imported or already closed).
@@ -117,24 +121,31 @@ export function PeriodStatusRow({ brandId, campaign: c, lastSuccessAt = null, on
   const wasSyncing = useRef(syncing);
   const reload = perf.reload;
   useEffect(() => {
-    if (wasSyncing.current && !syncing && !imported) reload();
+    if (wasSyncing.current && !syncing) reload();
     wasSyncing.current = syncing;
   }, [syncing, imported, reload]);
 
-  const native = imported ? nativePerformance(c.external_view) : null;
-  const totals = imported ? native!.totals : perf.status === "ready" && perf.data ? perf.data.totals : null;
-  const grade: PeriodGrade | null = !imported && perf.status === "ready" && perf.data ? perf.data.totals.grade ?? null : null;
-  const coverage = !imported && perf.status === "ready" && perf.data ? perf.data.coverage : null;
+  const data = perf.status === "ready" ? perf.data : null;
+  const internal = data && "totals" in data ? data : null;
+  const nativeView = data && "external_view" in data ? data.external_view : null;
+  const native = nativeView ? nativePerformance(nativeView) : null;
+  const totals = imported ? native?.totals : internal?.totals;
+  const grade: PeriodGrade | null = internal?.totals.grade ?? null;
+  const coverage = internal?.coverage;
+  const scope = internal?.scope ?? native?.scope;
+  const currency = imported ? nativeMetricScopes(nativeView)[0]?.currency ?? null : scope?.currency;
   const missingDays = coverage?.missing_days ?? [];
   const covered = coverage?.start && coverage.end ? coveredRange(coverage.start, coverage.end, missingDays) : null;
   const latest = latestReadAt(c, lastSuccessAt);
-  const days = periodDays(c.start_date, c.end_date, today);
+  const days = scope?.days ?? null;
   const cap = c.cap.value;
+  const capCurrency = internal?.cap_comparison?.currency ?? "幣別未知";
 
   const dash = perf.status === "loading" ? "…" : "—";
-  const spend = totals ? `${formatAmount(totals.spend) ?? "—"} 元` : dash;
+  const unit = currency ?? "幣別未知";
+  const spend = totals ? totals.spend === null ? "未知" : formatMoney(totals.spend, unit) : dash;
   const purchases = totals ? (totals.purchases === null ? "未追蹤" : `${formatAmount(totals.purchases)} 筆`) : dash;
-  const cpa = totals ? (totals.cpa === null ? "算不出來" : `${perSaleAmount(totals.cpa)} 元`) : dash;
+  const cpa = totals ? (totals.cpa === null ? "算不出來" : `${perSaleAmount(totals.cpa)} ${unit}`) : dash;
 
   const closeCaption = imported
     ? (c.capabilities?.unavailable.close ?? "既有平台活動不使用內部結案。")
@@ -151,14 +162,14 @@ export function PeriodStatusRow({ brandId, campaign: c, lastSuccessAt = null, on
       <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-5 max-md:grid-cols-1">
         <div className="grid grid-cols-5 max-md:grid-cols-2">
           <Cell label="期間" size="text-lg"
-            value={c.start_date ? `${md(c.start_date)}～${c.end_date ? md(c.end_date) : "未定"}` : "未定"}
-            sub={days === null ? "還沒設期間" : `${days} 天`} />
-          <Cell label="花費" value={spend} sub="整期合計" />
+            value={scope?.start && scope.end ? `${md(scope.start)}～${md(scope.end)}` : "未核實"}
+            sub={days === null ? "成效期間未核實" : `${days} 天`} />
+          <Cell label="花費" value={spend} sub={imported ? "查詢期間合計" : "整期合計"} />
           <Cell label="購買" value={purchases} sub="平台回報" />
           <Cell label="每賣一筆" value={cpa} sub={
             <>
               {(grade || imported) && <GradeTermChip grade={grade?.grade ?? null} label={grade?.label} />}
-              {cap !== null ? `對上限 ${formatAmount(cap)}` : "沒設上限"}
+              {cap !== null ? `對上限 ${formatAmount(cap)} ${capCurrency}` : "沒設上限"}
             </>
           } />
           <Cell label="ROAS" size="text-base" value={<Figure basis="roas_all_spend" value={totals?.roas_all_spend} alt={{basis: "roas_tracked_spend", value: totals?.roas_tracked_spend ?? null}} />} sub="" />
@@ -196,6 +207,9 @@ export function PeriodStatusRow({ brandId, campaign: c, lastSuccessAt = null, on
           {latest ? `最新 ${formatInstant(latest, timezone, "md_hm")}` : "還沒有讀取紀錄"}
         </span>
       </div>
+      {scope?.caption && <p className="mt-2 text-[11.5px] text-muted-foreground">{scope.caption}</p>}
+      {scope?.reason_text && <p className="mt-2 text-[11.5px] text-warning">{scope.reason_text}</p>}
+      {internal?.cap_comparison?.message && <p className="mt-2 text-[11.5px] text-warning">{internal.cap_comparison.message}</p>}
       <p className="mt-2 text-[11.5px] text-muted-foreground">整期＝活動期間的合計；每月回顧只算當月天數，同一則廣告兩邊數字會不同。</p>
       {closeOpen && (
         <CloseCampaignDialog brandId={brandId} campaign={c} onClose={closeDialog}
