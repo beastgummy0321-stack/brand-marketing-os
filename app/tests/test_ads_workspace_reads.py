@@ -877,6 +877,7 @@ class ImportedStructureTest(_WithReader):
 
     def test_public_structure_relays_the_same_known_unit_as_triage(self):
         from fastapi.testclient import TestClient
+
         from app import main
 
         brand = _brand(self.conn, self.org, "I14 public unit relay")
