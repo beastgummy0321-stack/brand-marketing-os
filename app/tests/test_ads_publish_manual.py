@@ -156,6 +156,75 @@ class PublishTestBase(unittest.TestCase):
         return [dict(r) for r in rows]
 
 
+class F52LaunchProvenanceTest(PublishTestBase):
+    def test_f52_snapshot_and_handoff_keep_stored_receipt_and_actual_assignment(self):
+        from app.ads import handoff_data
+
+        detail = self._ready_material(self._adopted_campaign())
+        campaign = ads_repo.get_campaign(web.conn, self.org_id, self.brand_id, detail["id"])
+        decision = campaign["budget_basis_json"]["strategy"]["decision"]
+        frozen = change_control_launch.snapshot(web.conn, self.org_id, self.brand_id, detail["id"])
+        provenance = frozen["strategy_provenance"]
+        self.assertEqual(provenance["current_revision"], decision["revision"])
+        self.assertEqual(provenance["accepted_revision"], decision["receipt"]["revision"])
+        self.assertEqual(provenance["operation_id"], decision["receipt"]["operation_id"])
+        self.assertEqual(provenance["accepted_receipt"], decision["receipt"])
+        group = frozen["groups"][0]
+        ad = group["ads"][0]
+        assignment = ad["strategy_assignment"]
+        receipt = next(r for r in decision["receipt"]["slots"] if r["ad_id"] == ad["id"])
+        actual = ads_repo.get_ad(web.conn, self.org_id, self.brand_id, ad["id"])
+        self.assertEqual((assignment["ad_id"], assignment["group_id"], assignment["slot_id"]),
+                         (actual["id"], actual["group_id"], receipt["slot_id"]))
+        self.assertEqual(assignment["customer_group_id"], actual["customer_group_id"])
+        self.assertEqual(assignment["offer_key"], actual["offer_key"])
+        self.assertEqual(assignment["role"], detail["groups"][0]["role"])
+        self.assertNotIn("format", assignment["coordinates"])
+        self._publish_with_isolated_budget_evidence(detail["id"])
+        rows = handoff_data.workspace(web.conn, self.org_id, self.brand_id, detail["id"])["items"]
+        exported = next(r for r in rows if r["planned_kind"] == "ad")
+        self.assertEqual(exported["expected_json"]["strategy_assignment"], assignment)
+        self.assertEqual(exported["expected_json"]["strategy_provenance"], provenance)
+
+    def test_f52_volatile_served_decision_does_not_change_the_approval_hash(self):
+        from app.ads import strategy
+
+        detail = self._ready_material(self._adopted_campaign())
+        before = change_control_launch.snapshot(web.conn, self.org_id, self.brand_id, detail["id"])
+        with mock.patch.object(strategy, "served_decision", return_value={
+            "state": "modified", "revision": "volatile", "receipt": {},
+            "feasibility": {"reasons": [{"message": "New label, not a saved change"}]},
+        }):
+            after = change_control_launch.snapshot(
+                web.conn, self.org_id, self.brand_id, detail["id"])
+        self.assertEqual(change_control_data.digest(before), change_control_data.digest(after))
+        self.assertNotEqual(after["strategy_provenance"]["current_revision"], "volatile")
+
+    def test_f52_historical_missing_provenance_is_compatible_but_new_changes_are_not(self):
+        detail = self._ready_material(self._adopted_campaign())
+        before = change_control_launch.snapshot(web.conn, self.org_id, self.brand_id, detail["id"])
+        historical = change_control_launch.normalized(before)
+        historical.pop("strategy_provenance", None)
+        for group in historical["groups"]:
+            for ad in group["ads"]:
+                ad.pop("strategy_assignment", None)
+        self.assertTrue(change_control_launch.approved_matches(historical, before))
+        changed = change_control_launch.normalized(before)
+        changed["groups"][0]["ads"][0]["strategy_assignment"]["offer_key"] = "discount"
+        self.assertFalse(change_control_launch.approved_matches(before, changed))
+        changed = change_control_launch.normalized(before)
+        changed["strategy_provenance"]["current_revision"] = "changed-real-plan"
+        self.assertFalse(change_control_launch.approved_matches(before, changed))
+        changed = change_control_launch.normalized(before)
+        changed["launch_settings"]["pixel_id"] = "changed-setting"
+        self.assertFalse(change_control_launch.approved_matches(historical, changed))
+        partial = change_control_launch.normalized(before)
+        partial.pop("strategy_provenance")
+        changed = change_control_launch.normalized(before)
+        changed["groups"][0]["ads"][0]["strategy_assignment"]["offer_key"] = "real-edit"
+        self.assertFalse(change_control_launch.approved_matches(partial, changed))
+
+
 class ChecklistContentTest(PublishTestBase):
     def test_checklist_names_every_node_exactly_once(self):
         detail = self._adopted_campaign()

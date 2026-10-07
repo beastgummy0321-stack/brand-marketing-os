@@ -13,6 +13,7 @@ from app.ads import (
     external_sync,
     handoff_check,
     handoff_data,
+    launch_settings,
     manual_settings,
     targets,
 )
@@ -401,6 +402,9 @@ def view(conn, org, brand, campaign_id):
     readback. F41-I03: the list step also carries `month_budget` (`launch.month_fit`, the same
     numbers approve's month preflight uses) for the first-launch list page's 「本月預算放得下」
     card; approved steps carry `None`."""
+    launch_settings.initialize(conn, org, brand, campaign_id)
+    # The platform read may have allowed a local edit to finish; summary metadata must
+    # come from the same side of that wait as the displayed list and approval revision.
     campaign = changes.campaign(conn, org, brand, campaign_id)
     deferred: list = []
     current = launch.snapshot(conn, org, brand, campaign_id, deferred=deferred)
@@ -412,6 +416,8 @@ def view(conn, org, brand, campaign_id):
     if change_set is None:
         return {
             "step": "list",
+            "content_hash": changes.digest(current),
+            "launch_settings": current["launch_settings"],
             "version": None,
             "approved_at": None,
             "summary": _summary(current, campaign, current, deferred),
@@ -447,6 +453,8 @@ def view(conn, org, brand, campaign_id):
     read_at = _read_at(rows)
     return {
         "step": "stale" if stale else "verify" if read_at is not None else "platform",
+        "content_hash": changes.digest(current),
+        "launch_settings": current["launch_settings"],
         "version": int(change_set["plan_json"].get("version") or 1),
         "approved_at": change_set["approved_at"],
         "summary": _summary(frozen, campaign, current, deferred),

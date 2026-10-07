@@ -105,6 +105,8 @@ def install_launch(conn, org, brand, campaign, set_id, action_id, frozen):
                 "copy_text": ad.get("copy_text"),
                 "material_required": True,
                 "landing_url": values.get("landing_url"),
+                "strategy_provenance": frozen.get("strategy_provenance"),
+                "strategy_assignment": ad.get("strategy_assignment"),
             }
             if frozen.get("launch_settings") is not None:
                 expected["launch_settings"] = launch_settings.ad_subset(frozen["launch_settings"])
@@ -135,6 +137,12 @@ def install_launch(conn, org, brand, campaign, set_id, action_id, frozen):
             )
 
 
+def _platform_expected(expected):
+    """Local strategy identities do not assert a change of platform settings or material."""
+    return {key: value for key, value in expected.items()
+            if key not in {"strategy_provenance", "strategy_assignment"}}
+
+
 def carry_launch(conn, org, brand, campaign, old_set, new_set, action_id):
     """Re-approval (F28 "Stale launch"): the new set's items were just installed pending. An item
     whose expected fields and material are unchanged keeps the old item's platform binding,
@@ -152,8 +160,10 @@ def carry_launch(conn, org, brand, campaign, old_set, new_set, action_id):
         previous = old.get((new["planned_kind"], new["planned_id"]))
         if previous is None:
             continue
-        same = (previous["expected_json"], previous["placement_id"], previous["placement_revision"])
-        if same != (new["expected_json"], new["placement_id"], new["placement_revision"]):
+        same = (_platform_expected(previous["expected_json"]), previous["placement_id"],
+                previous["placement_revision"])
+        if same != (_platform_expected(new["expected_json"]), new["placement_id"],
+                    new["placement_revision"]):
             continue
         carried.append((previous, new))
     for previous in old.values():

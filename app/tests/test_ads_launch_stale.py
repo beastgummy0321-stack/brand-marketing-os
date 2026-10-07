@@ -378,6 +378,103 @@ class LaunchStaleTest(unittest.TestCase):
         self.assertEqual(rechecked["status"], "deviated", rechecked["evidence_json"])
         self.assertIn("budget_amount", rechecked["evidence_json"]["deviated_fields"])
 
+    def test_f52_strategy_change_requires_approval_without_claiming_changed_platform_material(self):
+        placement = self.assigned_material()
+        self.launch()
+        items = self.items()
+        root = self.check(items["campaign"], "campaign", "root")
+        group = self.check(items["group"], "adset", "group")
+        reader = external_sync.account_reader(self.conn, self.org, self.brand,
+                                             "fixture", self.account)[0]
+        original_read = reader.verify_native
+        native_ad = self.node("ad", "ad", parent_native_kind="adset", parent_native_id="group",
+                              creative={"kind": "image", "fields": {
+                                  "title": "標題", "body": "文案", "description": "說明"}})
+
+        def read(*args, **kwargs):
+            if kwargs["native_kind"] == "ad":
+                return {"entity": native_ad, "parents": [self.native_group, self.root]}
+            return original_read(*args, **kwargs)
+
+        with patch.object(reader, "verify_native", side_effect=read):
+            ad_proof = self.check(items["ad"], "ad", "ad")
+        self.assertEqual(ad_proof["status"], "confirmed", ad_proof["evidence_json"])
+        self.assertEqual(ad_proof["evidence_json"]["material_evidence"], "unknown")
+        material_before = items["ad"]["expected_json"]
+        self.sql("UPDATE ads_ad SET scene='下班在健身房門口準備今天的訓練補給',"
+                 "updated_at=now() WHERE id=%s",
+                 self.ad)
+        stale = self.workspace()["launch_stale"]
+        self.assertEqual([row["field"] for row in stale["diff"]], ["strategy_assignment"])
+        self.assertIn("讀者情境", stale["diff"][0]["field_label"])
+        self.assertIsNone(stale["diff"][0]["before"])
+        self.assertIsInstance(stale["diff"][0]["after"], str)
+        self.assertEqual(stale["diff"][0]["after"], "下班在健身房門口準備今天的訓練補給")
+        self.assertFalse(stale["revertible"])
+        with patch.object(change_control_launch.month_budget, "preflight",
+                          return_value={"can_increase": True}):
+            self.reapprove(stale)
+        now = self.items()
+        self.assertEqual(now["campaign"]["entity_id"], root["entity_id"])
+        self.assertEqual(now["group"]["entity_id"], group["entity_id"])
+        self.assertEqual(now["group"]["evidence_json"], group["evidence_json"])
+        self.assertEqual(now["ad"]["expected_json"]["asset_sha256"],
+                         material_before["asset_sha256"])
+        self.assertEqual(now["ad"]["expected_json"]["copy_hash"], material_before["copy_hash"])
+        self.assertEqual(now["ad"]["expected_json"]["strategy_assignment"]["scene"],
+                         "下班在健身房門口準備今天的訓練補給")
+        self.assertEqual(now["ad"]["status"], "confirmed")
+        self.assertEqual(now["ad"]["entity_id"], ad_proof["entity_id"])
+        self.assertEqual(now["ad"]["evidence_json"], ad_proof["evidence_json"])
+
+        campaigns.save_strategy(self.conn, self.org, self.brand, self.campaign,
+                                budget_basis_json={"strategy": {"decision": {
+                                    "schema_version": 1, "slots": [],
+                                    "state": "modified", "revision": "new-stored-revision",
+                                    "feasibility": {"state": "blocked", "reasons": []}}}})
+        self.conn.commit()
+        stale = self.workspace()["launch_stale"]
+        self.assertEqual([row["field"] for row in stale["diff"]], ["strategy_provenance"])
+        self.assertIsInstance(stale["diff"][0]["after"], str)
+        with patch.object(change_control_launch.month_budget, "preflight",
+                          return_value={"can_increase": True}):
+            self.reapprove(stale)
+        retained = self.items()["ad"]
+        self.assertEqual(retained["status"], "confirmed")
+        self.assertEqual(retained["entity_id"], ad_proof["entity_id"])
+        self.assertEqual(retained["evidence_json"], ad_proof["evidence_json"])
+
+        revision = self.revise(placement)
+        self.assign(placement["id"], revision)
+        stale = self.workspace()["launch_stale"]
+        self.assertIn("material", [row["field"] for row in stale["diff"]])
+        with patch.object(change_control_launch.month_budget, "preflight",
+                          return_value={"can_increase": True}):
+            self.reapprove(stale)
+        changed_material = self.items()["ad"]
+        self.assertEqual(changed_material["status"], "pending")
+        self.assertIsNone(changed_material["entity_id"])
+        self.assertEqual(changed_material["evidence_json"], {})
+        self.assertNotEqual(changed_material["expected_json"]["copy_hash"],
+                            material_before["copy_hash"])
+
+    def test_f52_assignment_fields_and_stored_strategy_receipt_conflict_independently(self):
+        self.launch()
+        original = change_control_launch.snapshot(self.conn, self.org, self.brand, self.campaign)
+        for field, value in (("role", "explore"), ("customer_group_id", "actual-customer"),
+                             ("offer_key", "actual-offer"), ("scene", "actual-scene"),
+                             ("slot_id", "actual-slot"), ("carry_from_ad_id", "actual-carried")):
+            with self.subTest(field=field):
+                changed = copy.deepcopy(original)
+                changed["groups"][0]["ads"][0]["strategy_assignment"][field] = value
+                self.assertFalse(change_control_launch.approved_matches(original, changed))
+        for field, value in (("state", "modified"), ("current_revision", "new-revision"),
+                             ("accepted_revision", "new-accepted"), ("operation_id", "new-op")):
+            with self.subTest(field=field):
+                changed = copy.deepcopy(original)
+                changed["strategy_provenance"][field] = value
+                self.assertFalse(change_control_launch.approved_matches(original, changed))
+
     def test_concurrent_edit_after_viewing_is_refused_with_409(self):
         set_id = self.launch()
         self.sql("UPDATE ads_ad SET name='第一次改名' WHERE id=%s", self.ad)
