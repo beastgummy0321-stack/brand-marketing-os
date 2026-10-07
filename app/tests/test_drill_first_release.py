@@ -93,6 +93,98 @@ def test_harness_signature_matches_installed_byte_algorithm(tmp_path):
     assert runner.integration_signature(tmp_path)[0] != signature
 
 
+def test_effective_cycle_config_binds_file_first_values_without_disclosing_secrets(tmp_path):
+    from scripts import verify_existing_campaigns_assets as lifecycle
+
+    environment = {"DATABASE_URL": "shell-db-secret", "SUPABASE_JWT_SECRET": "shell-jwt-secret"}
+    args = SimpleNamespace(env_file=None)
+    original = runner.runtime_config_hash(tmp_path, environment)
+    (tmp_path / ".env").write_text(
+        "DATABASE_URL=\"file-db-secret\"\nSUPABASE_JWT_SECRET='file-jwt-secret'\n"
+    )
+    resolved = lifecycle.resolved_env(args, root=tmp_path, environment=environment)
+    assert resolved["DATABASE_URL"] == "file-db-secret"
+    assert resolved["SUPABASE_JWT_SECRET"] == "file-jwt-secret"
+    current = runner.runtime_config_hash(tmp_path, environment)
+    assert current != original
+    assert len(current) == 64 and "secret" not in current
+    (tmp_path / ".env").write_text("DATABASE_URL=file-db-secret\nSUPABASE_JWT_SECRET=changed-jwt\n")
+    assert runner.runtime_config_hash(tmp_path, environment) != current
+
+
+def test_safe_env_uses_the_same_readonly_resolution_and_preserves_admission(tmp_path, monkeypatch):
+    from scripts import verify_existing_campaigns_assets as lifecycle
+
+    monkeypatch.setattr(lifecycle, "ROOT", tmp_path)
+    monkeypatch.setenv("DATABASE_URL", "shell-db")
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "shell-service-key")
+    (tmp_path / ".env").write_text("DATABASE_URL=file-db\nSUPABASE_SERVICE_ROLE_KEY=file-key\n")
+    args = SimpleNamespace(env_file=None)
+    assert lifecycle.safe_env(args) == lifecycle.resolved_env(args, root=tmp_path)
+    assert lifecycle.safe_env(args)["DATABASE_URL"] == "file-db"
+    (tmp_path / ".env").write_text("DATABASE_URL=\nSUPABASE_SERVICE_ROLE_KEY=file-key\n")
+    with pytest.raises(RuntimeError, match="Provide local DATABASE_URL"):
+        lifecycle.safe_env(args)
+
+
+@pytest.mark.parametrize("key", ["DATABASE_URL", "SUPABASE_URL", "IDENTITY_ALLOW_HS256", "PGPORT"])
+def test_effective_config_detects_direct_shell_drift_even_when_cycle_file_wins(tmp_path, key):
+    from scripts import verify_existing_campaigns_assets as lifecycle
+
+    (tmp_path / ".env").write_text("DATABASE_URL=file-db\nSUPABASE_URL=http://127.0.0.1:54321\n")
+    environment = {"DATABASE_URL": "shell-db", "SUPABASE_URL": "http://127.0.0.1:54321"}
+    previous = runner.runtime_config_hash(tmp_path, environment)
+    after = {**environment, key: "changed-direct-setting"}
+    assert runner.runtime_config_hash(tmp_path, after) != previous
+    if key == "DATABASE_URL":
+        args = SimpleNamespace(env_file=None)
+        assert lifecycle.resolved_env(args, root=tmp_path, environment=after)[key] == "file-db"
+
+
+@pytest.mark.parametrize(
+    "filename", [".env", ".env.local", ".env.production", ".env.production.local"]
+)
+def test_effective_config_binds_frontend_production_dotenv_inputs(tmp_path, filename):
+    (tmp_path / "frontend").mkdir()
+    path = tmp_path / "frontend" / filename
+    previous = runner.runtime_config_hash(tmp_path, {})
+    path.write_text("VITE_SUPABASE_URL=http://127.0.0.1:54321\nVITE_SUPABASE_ANON_KEY=secret\n")
+    current = runner.runtime_config_hash(tmp_path, {})
+    assert current != previous
+    path.write_text("VITE_SUPABASE_URL=http://127.0.0.1:59999\nVITE_SUPABASE_ANON_KEY=secret\n")
+    assert runner.runtime_config_hash(tmp_path, {}) != current
+
+
+def test_readonly_context_check_refuses_ignored_env_drift_without_launching_probe(
+    tmp_path, monkeypatch
+):
+    environment = {"DATABASE_URL": "original-shell-db"}
+    monkeypatch.setattr(runner, "ROOT", tmp_path)
+    monkeypatch.setattr(
+        runner,
+        "relevant_hashes",
+        lambda: {"runtime_config": runner.runtime_config_hash(tmp_path, environment)},
+    )
+    monkeypatch.setattr(
+        runner, "command", lambda *a, **kw: pytest.fail("Readonly check launched a command")
+    )
+    directory = tmp_path / ".scratch/F53/owned"
+    cases_path = tmp_path / "cases.json"
+    cases_path.write_text("{}")
+    context = {
+        "directory": str(directory),
+        "feature": "F53",
+        "nonce": "a" * 32,
+        "cases": runner.reference(cases_path),
+        "hashes": runner.relevant_hashes(),
+    }
+    runner.write(directory / "context.json", context)
+    assert runner.context_at(directory / "context.json") == context
+    (tmp_path / ".env").write_text("DATABASE_URL=changed-file-db\n")
+    with pytest.raises(runner.ReceiptError, match="configuration changed"):
+        runner.context_at(directory / "context.json")
+
+
 def test_readonly_preintegration_never_calls_a_probe(tmp_path, monkeypatch):
     packet = {
         "feature": "F53",

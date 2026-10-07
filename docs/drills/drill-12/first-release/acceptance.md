@@ -23,6 +23,10 @@ model-consumer prompts/context, accepted node receipts, original copy/image hash
 five actual HTTP stale/reconfirmation boundaries. Source writers use existing targeted
 falsifiers in the owned schema. Pure qualification cases remain additional counterexamples;
 they cannot replace HTTP reader/adoption evidence. Missing expected evidence fails closed.
+Runtime binding reuses the cycle helper's readonly file-first settings resolver, hashes
+direct-mode shell inputs and cycle child overrides separately, and binds production Vite
+dotenv files plus VITE shell values. Ignored environment drift invalidates old receipts;
+neither the fingerprint nor its readonly checker publishes secret values or launches probes.
 The canned provider consumes the actual rendered learning/ranking sections captured at the
 consumer seam, and never re-reads a substitute database context. Every period must retain its
 own prompt and qualified citation proof. All four coordinate/visual/replay/product-B injections

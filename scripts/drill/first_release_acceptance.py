@@ -64,6 +64,16 @@ CONFIG_KEYS = (
     "DATABASE_URL",
     "BRAND_OS_JOB_QUEUE",
     "IDENTITY_DEV_TOKEN",
+    "BRAND_OS_LLM_MODEL",
+    "BRAND_OS_TODAY",
+    "ANTHROPIC_API_KEY",
+    "PGHOSTADDR",
+    "PGPORT",
+    "PGUSER",
+    "PGDATABASE",
+    "PGPASSWORD",
+    "PGSERVICE",
+    "PGSERVICEFILE",
 )
 
 
@@ -261,6 +271,58 @@ def source_fingerprint(root=ROOT):
     return fingerprint(root, [p for p in paths if p and not p.startswith((".work/", ".harness/"))])
 
 
+def runtime_config_hash(root=ROOT, environment=None):
+    """Bind actual mode inputs without reading a DB, loading dotenv, or publishing secrets."""
+    from scripts import verify_existing_campaigns_assets as lifecycle
+
+    root = Path(root)
+    environment = os.environ if environment is None else environment
+    cycle_values = lifecycle.resolved_env(
+        argparse.Namespace(env_file=None), root=root, environment=environment
+    )
+
+    def hashed(values):
+        return {key: sha(str(value).encode()) for key, value in values.items()}
+
+    # Direct provider/Auth/restore use the invoking environment. Cycle uses safe_env's
+    # file-first values before its explicit local/scripted/queue/guard overrides.
+    cycle_child = {
+        **{
+            key: environment.get(key, "")
+            for key in CONFIG_KEYS
+            if not any(
+                part in key.upper()
+                for part in ("API_KEY", "TOKEN", "SECRET", "DATABASE_URL", "BRAND_OS_LLM_PROVIDER")
+            )
+        },
+        **cycle_values,
+        "BRAND_OS_ENV": "local",
+        "BRAND_OS_JOB_QUEUE": "memory",
+        "BRAND_OS_LLM_PROVIDER": "scripted",
+        "IDENTITY_DEV_TOKEN": "",
+        "IDENTITY_ALLOW_HS256": "1",
+    }
+    # Vite's production dotenv files are independent build inputs. Binding raw hashes
+    # also covers interpolation and quoted/multiline values without emulating Vite.
+    # Auth explicitly overrides URL/anon, whose source values are in direct_runtime.
+    frontend_files = {
+        name: sha(path.read_bytes()) if path.is_file() else None
+        for name in (".env", ".env.local", ".env.production", ".env.production.local")
+        for path in (root / "frontend" / name,)
+    }
+    return cases.digest(
+        {
+            "direct_runtime": hashed({key: environment.get(key, "") for key in CONFIG_KEYS}),
+            "cycle_resolved": hashed(cycle_values),
+            "cycle_child": hashed(cycle_child),
+            "frontend_files": frontend_files,
+            "frontend_shell": hashed(
+                {key: value for key, value in environment.items() if key.startswith("VITE_")}
+            ),
+        }
+    )
+
+
 def relevant_hashes(root=ROOT, environment=None):
     paths = [p for p in git(root, "ls-files", "-z").decode().split("\0") if p]
     environment = os.environ if environment is None else environment
@@ -284,16 +346,14 @@ def relevant_hashes(root=ROOT, environment=None):
     ui = [
         p
         for p in paths
-        if p.startswith(("frontend/src/", "frontend/package"))
+        if p.startswith(("frontend/src/", "frontend/package", "frontend/vite.config."))
         and not p.endswith((".test.ts", ".test.tsx"))
     ]
     return {
         "product": fingerprint(root, product),
         "ui": fingerprint(root, ui),
         "probe": fingerprint(root, PROBE_PATHS),
-        "runtime_config": cases.digest(
-            {k: sha(environment.get(k, "").encode()) for k in CONFIG_KEYS}
-        ),
+        "runtime_config": runtime_config_hash(root, environment),
     }
 
 

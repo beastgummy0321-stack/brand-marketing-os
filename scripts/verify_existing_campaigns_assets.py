@@ -71,7 +71,8 @@ def child(args):
         thread.join(timeout=35)
 
 
-def safe_env(args):
+def resolved_env(args, *, root=ROOT, environment=None):
+    """Readonly settings resolution; file values precede shell values for this runner."""
     allowed = {
         "DATABASE_URL",
         "SUPABASE_URL",
@@ -81,7 +82,8 @@ def safe_env(args):
         "VITE_SUPABASE_URL",
         "VITE_SUPABASE_ANON_KEY",
     }
-    path = Path(args.env_file) if args.env_file else ROOT / ".env"
+    path = Path(args.env_file) if args.env_file else Path(root) / ".env"
+    environment = os.environ if environment is None else environment
     values = {}
     if path.exists():
         for line in path.read_text("utf-8-sig").splitlines():
@@ -89,8 +91,13 @@ def safe_env(args):
             if sep and key in allowed:
                 values[key] = value.strip().strip("\"'")
     for key in allowed:
-        if key not in values and os.environ.get(key):
-            values[key] = os.environ[key]
+        if key not in values and environment.get(key):
+            values[key] = environment[key]
+    return values
+
+
+def safe_env(args):
+    values = resolved_env(args, root=ROOT)
     if not values.get("DATABASE_URL") or not values.get("SUPABASE_SERVICE_ROLE_KEY"):
         raise RuntimeError(
             "Provide local DATABASE_URL and scoped Storage settings "
