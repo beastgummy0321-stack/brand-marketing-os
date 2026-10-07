@@ -80,6 +80,21 @@ describe("CapBlock", () => {
     expect(putTarget).not.toHaveBeenCalled();
   });
 
+  it.each(["TWD", "USD"])("confirmed %s price without break-even only divides by a same-unit cap", async (currency) => {
+    const c = knownCap(cap({value: 450, basis: "own", own_value: 450, price: 620, break_even: null, missing: ["product_cost"]}));
+    c.break_even_unit = {basis: "break_even", currency: null, source: "product_economics", unit_basis: null};
+    c.price_unit = {basis: "break_even", currency, source: "product_economics", unit_basis: "confirmed_product_economics"};
+    const {container} = renderBlock(campaign(c));
+    expect(await screen.findByText("450 TWD")).toBeTruthy();
+    if (currency === "TWD") expect(container.textContent).toContain("ROAS 1.38x");
+    else {
+      expect(container.textContent).not.toContain("ROAS");
+      expect(container.textContent).toContain("售價、打平線與上限的幣別不同或尚未核實，暫時不能比較。");
+    }
+    expect(container.textContent).not.toContain("打平 0");
+    expect(putTarget).not.toHaveBeenCalled();
+  });
+
   it("does not assign a unit to a legacy own cap while retaining its known scalar", async () => {
     renderBlock(campaign(OWN));
     expect(await screen.findByText("450 幣別未知")).toBeTruthy();

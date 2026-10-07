@@ -699,6 +699,37 @@ class PeriodProjectionPublicTest(OutcomeTestBase):
                     self.assertEqual(cap.get("price_unit", {}).get("currency"),
                                      currency if confirmed else None)
 
+    def test_public_confirmed_price_unit_remains_known_without_cost_or_break_even(self):
+        detail, _, _ = self._bound_campaign(
+            start_date=date(2026, 10, 24), end_date=date(2026, 10, 30),
+            cap=520, confirmed_cap=True,
+        )
+        bi_repo.save_product_economics(
+            web.conn, self.brand_id, detail["cap"]["product_id"],
+            selling_price=620, unit_variable_cost=None, currency="USD",
+            confirmed_by=ACTOR, actor=ACTOR,
+        )
+        web.conn.commit()
+        base = f"/api/ads/brands/{self.brand_id}/campaigns/{detail['id']}"
+        saved = self.client.put(
+            f"{base}/target", json={"basis": "own", "value": 450, "expected_revision": 0},
+        )
+        self.assertEqual(saved.status_code, 200, saved.text)
+        for path in (base, f"{base}/target"):
+            read = self.client.get(path)
+            self.assertEqual(read.status_code, 200, read.text)
+            print("PUBLIC_CONFIRMED_PRICE_WITHOUT_COST", path, json.dumps(read.json()))
+            cap = read.json()["campaign"]["cap"] if path == base else read.json()["target"]
+            self.assertEqual(cap["price"], 620)
+            self.assertEqual(cap["value"], 450)
+            self.assertEqual(cap["cap_unit"]["currency"], "TWD")
+            self.assertEqual(cap["price_unit"]["currency"], "USD")
+            self.assertEqual(cap["price_unit"]["unit_basis"], "confirmed_product_economics")
+            self.assertIsNone(cap["break_even"])
+            self.assertIsNone(cap["break_even_unit"]["currency"])
+            if path.endswith("/target"):
+                self.assertIsNone(cap["cost"])
+
     def test_public_manual_target_unit_uses_recorded_input_not_current_account(self):
         for source, value, currency in (
             ("copied", 350, "TWD"), ("copied", 350, "USD"),
