@@ -824,6 +824,7 @@ class ImportedStructureTest(_WithReader):
             "ad_id": None, "entity_id": self.a1, "name": "甲", "thumbnail_url": None,
             "spend": 400.0, "grade": "on_target", "grade_label": "划算", "cost_per_result": 80.0,
             "reason_code": None, "sample": _fake_sample(5),
+            "currency": None, "cap_comparison": None,
             "results": 5, "closing": False, "missing_material": False,
             "slot_state": None, "slot_label": None,
             "assignment": None,
@@ -854,6 +855,7 @@ class ImportedStructureTest(_WithReader):
         self.assertTrue(all(
             a["grade"] is None and a["results"] is None and a["spend"] is None for a in ads
         ))
+        self.assertTrue(all(a["currency"] is None and a["cap_comparison"] is None for a in ads))
 
     def test_real_triage_grade_is_the_structure_grade(self):
         _synced(self.conn, self.org, self.brand, self.campaign,
@@ -870,6 +872,39 @@ class ImportedStructureTest(_WithReader):
             self.assertEqual(ad["spend"], items[entity_id]["current"]["spend"])
             self.assertEqual(ad["reason_code"], items[entity_id]["reason_code"])
             self.assertEqual(ad["sample"], items[entity_id]["sample"])
+            self.assertEqual(ad["currency"], items[entity_id]["current"]["currency"])
+            self.assertEqual(ad["cap_comparison"], items[entity_id]["cap_comparison"])
+
+    def test_public_structure_relays_the_same_known_unit_as_triage(self):
+        from fastapi.testclient import TestClient
+        from app import main
+
+        brand = _brand(self.conn, self.org, "I14 public unit relay")
+        campaign = _imported(self.conn, self.org, brand, "Known unit", "i14_unit")
+        prefix = f"/api/ads/brands/{brand}/campaigns/{campaign}"
+        client = TestClient(main.app)
+        target = client.put(prefix + "/target", json={
+            "basis": "own", "value": 450, "result_kind": "purchase", "expected_revision": 0,
+        })
+        self.assertEqual(target.status_code, 200, target.text)
+        ad = _ad(self.conn, self.org, brand, campaign, "i14_unit_ad", ("campaign", "i14_unit"))
+        for offset in range(14):
+            _obs(self.conn, self.org, brand, campaign, ad, self.cutoff - timedelta(days=offset),
+                 spend=120, count=1)
+        _synced(self.conn, self.org, brand, campaign, self.cutoff - timedelta(days=13), self.cutoff)
+        triage_response = client.get(prefix + "/triage")
+        structure_response = client.get(prefix + "/structure")
+        self.assertEqual(triage_response.status_code, 200, triage_response.text)
+        self.assertEqual(structure_response.status_code, 200, structure_response.text)
+        item = triage_response.json()["triage"]["items"][0]
+        projected = structure_response.json()["groups"][0]["ads"][0]
+        self.assertEqual(item["current"]["currency"], "TWD")
+        self.assertEqual(item["grade"], "on_target")
+        self.assertIsNone(item["cap_comparison"]["reason"])
+        self.assertEqual(projected["entity_id"], item["entity_id"])
+        self.assertEqual(projected["currency"], item["current"]["currency"])
+        self.assertEqual(projected["cap_comparison"], item["cap_comparison"])
+        self.assertEqual(projected["cost_per_result"], 120)
 
 
 class AppBuiltStructureTest(_WithReader):

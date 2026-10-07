@@ -1,7 +1,7 @@
 import { Figure } from "@/components/layout/Figure";
 import { formatMoney } from "@/lib/format";
-import { campaignPath } from "@/lib/adsRoutes";
-import type { ReactNode } from "react";
+import { campaignPath, campaignFlowPath } from "@/lib/adsRoutes";
+import { useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { Skeleton } from "@/components/layout/Skeleton";
 import { Button } from "@/components/layout/ui/button";
@@ -19,6 +19,7 @@ import { cleanupAction, proposalAction } from "../home/status";
 import { decisionTitle } from "../home/QueueRow";
 import type { StepTarget } from "../nextStep";
 import { perSaleAmount } from "../patterns/csv";
+import { runningText } from "./WorkspaceHead";
 
 /** v10 (F30-I07) the workspace overview (prototype `tabOverview()` + `kvNumbers()`), in three states from
  * `GET …/workspace`: a draft's 上架前還差什麼 checklist (上限、預算、素材 x／y、上架 n／N, k／4) with the ruler preview;
@@ -47,7 +48,22 @@ const H2 = "text-[15px] font-semibold";
 const RANKED = new Set(["on_target", "watch", "over", "wasted"]);
 
 export function capOf(c: CampaignDetail): RulerCap | null {
-  return c.cap.value !== null && c.cap.basis !== null ? { value: c.cap.value, basis: c.cap.basis } : null;
+  return c.cap.value !== null && c.cap.basis !== null ? { value: c.cap.value, basis: c.cap.basis, currency: c.cap.cap_unit?.currency ?? null } : null;
+}
+
+function nextActionHref(brandId: string, c: CampaignDetail, ws: CampaignWorkspace): string | null {
+  const action = ws.next_action;
+  if (!action) return null;
+  return action.target.kind === "campaign" ? campaignPath(brandId, c.id, { tab: action.target.tab })
+    : campaignFlowPath(brandId, c.id, action.target.parts);
+}
+
+function DeliveryNote({ workspace: ws, closed = false }: { workspace: CampaignWorkspace; closed?: boolean }) {
+  const { timezone } = useOrgClock();
+  return <div className="text-sm text-muted-foreground" data-testid="delivery-observation">
+    <p>{runningText(ws, timezone, closed)}</p>
+    {ws.running?.reason && <p>{ws.running.reason}</p>}
+  </div>;
 }
 
 /** The ads on the ruler: on a platform, graded, not being closed by an approved pause (prototype `adsOf`). */
@@ -57,16 +73,20 @@ export function rulerAds(structure: CampaignStructure): RulerAd[] {
     .map((a) => ({
       id: a.entity_id as string, name: a.name, grade: a.grade!, gradeLabel: a.grade_label,
       costPerResult: a.cost_per_result, spend: a.spend, thumbnailUrl: a.thumbnail_url,
+      currency: a.currency ?? null, comparisonReason: a.cap_comparison?.reason ?? (a.cap_comparison ? null : "cap_currency_unknown"),
+      comparisonMessage: a.cap_comparison?.message,
     }));
 }
 
-const yuan = (v: number | null) => (formatAmount(v) === null ? "未知" : `${formatAmount(v)} 元`);
-const perSale = (v: number | null) => (perSaleAmount(v) === null ? "未知" : `${perSaleAmount(v)} 元`);
+const moneyText = (v: number | null, currency: string | null | undefined, perResult = false) => {
+  const amount = perResult ? perSaleAmount(v) : formatAmount(v);
+  return amount === null ? "未知" : currency === "TWD" ? `${amount} 元` : currency ? `${currency} ${amount}` : `${amount} 幣別未知`;
+};
 const md = (iso: string) => `${iso.slice(5, 7)}/${iso.slice(8, 10)}`;
 
 type Go = (target: StepTarget) => void;
 
-export function OverviewBody({ brandId, campaign: c, workspace: ws, canPublish, onGo, advanced }: {
+export function OverviewBody({ brandId, campaign: c, workspace: ws, canPublish, onGo, advanced, readGeneration = 0, refreshing = false }: {
   brandId: string;
   campaign: CampaignDetail;
   workspace: CampaignWorkspace;
@@ -75,13 +95,16 @@ export function OverviewBody({ brandId, campaign: c, workspace: ws, canPublish, 
   onGo: Go;
   /** The folded 「進階：更多活動資訊」 content. */
   advanced: ReactNode;
+  readGeneration?: number;
+  refreshing?: boolean;
 }) {
+  const [foldOpen, setFoldOpen] = useState(false);
   const draft = ws.draft;
   const gap = draft === null && ws.missing_days != null && ws.missing_days.length > 0 && c.lifecycle?.state !== "ended";
-  const fold = <Disclosure label="進階：更多活動資訊">{advanced}</Disclosure>;
+  const fold = <><Disclosure label="進階：更多活動資訊" open={foldOpen} onOpenChange={setFoldOpen}>{advanced}</Disclosure>{refreshing && <p role="status" className="text-sm text-muted-foreground">正在更新活動資料，畫面保留上次讀取結果。</p>}</>;
   if (draft) return <DraftOverview brandId={brandId} campaign={c} workspace={ws} draft={draft} canPublish={canPublish} onGo={onGo} fold={fold} />;
-  if (gap) return <GapOverview brandId={brandId} campaign={c} workspace={ws} fold={fold} />;
-  return <LiveOverview brandId={brandId} campaign={c} workspace={ws} fold={fold} />;
+  if (gap) return <GapOverview brandId={brandId} campaign={c} workspace={ws} fold={fold} readGeneration={readGeneration} />;
+  return <LiveOverview brandId={brandId} campaign={c} workspace={ws} fold={fold} readGeneration={readGeneration} />;
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -99,7 +122,7 @@ function DraftOverview({ brandId, campaign: c, workspace: ws, draft, canPublish,
   const publish: StepTarget = canPublish ? "publish" : "assets";
   const steps: { label: string; detail: string; done: boolean; target: StepTarget }[] = [
     { label: "上限", done: draft.cap_set, target: "strategy",
-      detail: draft.cap_set && c.cap.value !== null ? `每賣一筆最多 ${formatAmount(c.cap.value)} 元${c.cap.basis === "break_even" ? "（暫用打平）" : ""}` : "還沒設定" },
+      detail: draft.cap_set && c.cap.value !== null ? `每賣一筆最多 ${formatAmount(c.cap.value)} ${c.cap.cap_unit?.currency ?? "幣別未知"}${c.cap.basis === "break_even" ? "（暫用打平）" : ""}` : "還沒設定" },
     { label: "預算", done: draft.budget_set, target: "strategy",
       detail: draft.budget_set ? (c.budget_planned !== null ? formatMoney(c.budget_planned, "TWD") : "已選") : "還沒選" },
     { label: "素材", done: slotsDone, target: "assets", detail: `${draft.slots_ready}／${draft.slots_total} 格` },
@@ -111,6 +134,8 @@ function DraftOverview({ brandId, campaign: c, workspace: ws, draft, canPublish,
     : !draft.budget_set ? { label: "去選預算", target: "strategy" as StepTarget }
     : approved ? { label: "繼續：到平台完成", target: publish }
     : { label: "確認上架清單", target: publish };
+  const servedHref = ws.next_action && (canPublish || ws.next_action.target.kind !== "flow" || ws.next_action.target.parts[0] !== "publish")
+    ? nextActionHref(brandId, c, ws) : null;
   // F43-I16: cost lives on the knowledge product's 賣法與價格 step (onboarding step 4), not the old detail tab.
   const productHref = c.cap.knowledge_product_id ? `/brands/${brandId}/products/${c.cap.knowledge_product_id}/onboarding?step=4` : `/brands/${brandId}/products`;
 
@@ -128,13 +153,14 @@ function DraftOverview({ brandId, campaign: c, workspace: ws, draft, canPublish,
             <div className="text-sm text-muted-foreground">{s.detail}</div>
           </TodoRow>
         ))}
+        {ws.next_action && <p className="mt-3 text-sm text-muted-foreground">{ws.next_action.reason}</p>}
       </section>
       <section className={CARD} aria-labelledby="ov-preview">
         <div className={HEAD}>
           <h2 id="ov-preview" className={H2}>對照上限預覽</h2>
           <span className="text-sm text-muted-foreground">上架後廣告會落在這條尺上</span>
         </div>
-        <TargetRuler ads={[]} cap={cap} breakEven={c.cap.break_even} size="mid" tray={false} />
+        <TargetRuler ads={[]} cap={cap} breakEven={c.cap.break_even} breakEvenCurrency={c.cap.break_even_unit?.currency} size="mid" tray={false} />
         {cap && <GradeRules breakEven={c.cap.break_even} />}
         {!cap && c.cap.break_even === null && (
           <Button asChild variant="link" size="sm" className="mt-3 h-auto px-0"><Link to={productHref}>去填商品成本</Link></Button>
@@ -142,7 +168,8 @@ function DraftOverview({ brandId, campaign: c, workspace: ws, draft, canPublish,
       </section>
       {fold}
       <ActionBar back={{ label: "投放中心", to: `/brands/${brandId}/ads` }}>
-        <Button onClick={() => onGo(primary.target)}>{primary.label} →</Button>
+        {servedHref ? <Button asChild><Link to={servedHref}>{ws.next_action!.label} →</Link></Button>
+          : <Button onClick={() => onGo(primary.target)}>{primary.label} →</Button>}
       </ActionBar>
     </div>
   );
@@ -163,11 +190,11 @@ export function dayRange(days: string[], totals: WorkspaceTotals | null): string
 
 const WHICH = ["這天", "這兩天", "這三天"];
 
-function GapOverview({ brandId, campaign: c, workspace: ws, fold }: {
-  brandId: string; campaign: CampaignDetail; workspace: CampaignWorkspace; fold: ReactNode;
+function GapOverview({ brandId, campaign: c, workspace: ws, fold, readGeneration }: {
+  brandId: string; campaign: CampaignDetail; workspace: CampaignWorkspace; fold: ReactNode; readGeneration: number;
 }) {
-  const structure = useApiRead((signal) => getCampaignStructure(brandId, c.id, signal), [brandId, c.id]);
-  const triage = useApiRead((signal) => getTriage(brandId, c.id, signal), [brandId, c.id]);
+  const structure = useApiRead((signal) => getCampaignStructure(brandId, c.id, signal), [brandId, c.id, readGeneration]);
+  const triage = useApiRead((signal) => getTriage(brandId, c.id, signal), [brandId, c.id, readGeneration]);
   const status: CampaignDataStatus | null = triage.status === "ready" ? triage.data.data?.status ?? null : null;
   const missing = [...(ws.missing_days ?? [])].sort();
   const cap = capOf(c);
@@ -188,36 +215,43 @@ function GapOverview({ brandId, campaign: c, workspace: ws, fold }: {
         <div className={`${HEAD} mb-1`}>
           <h2 id="ov-gap" className={H2}>每則廣告離可以判斷還差多少</h2>
           {T === null ? <Chip tone="warn">沒設上限</Chip>
-            : gate !== null && rules ? <Chip>門檻：花到 {formatAmount(gate)} 元（上限 × {ruleFigure(rules.grade.unsold_spend_multiple)}）</Chip> : null}
+            : gate !== null && rules ? <Chip>門檻：花到 {moneyText(gate, cap?.currency)}（上限 × {ruleFigure(rules.grade.unsold_spend_multiple)}）</Chip> : null}
         </div>
         {structure.status === "loading" && <Skeleton className="h-40 w-full" />}
         {structure.status === "error" && <ReadFailed what={`每則廣告的花費讀不到：${structure.error}`} onRetry={structure.reload} />}
-        {structure.status === "ready" && ads.length === 0 && <p className="py-3 text-sm text-muted-foreground">還沒有在平台上的廣告</p>}
+        <DeliveryNote workspace={ws} />
+        {structure.status === "ready" && ads.length === 0 && <p className="py-3 text-sm text-muted-foreground">{ws.running && ws.running.count + ws.running.unknown + (ws.running.off ?? 0) + (ws.running.not_running ?? 0) > 0
+          ? "已讀到平台廣告，這裡還沒有可判斷的成效資料。" : "這裡還沒有可判斷的廣告成效資料。"}</p>}
         {ads.map((a) => {
           const graded = a.grade !== null && RANKED.has(a.grade);
-          const pct = a.spend !== null && gate ? Math.min(100, Math.round((a.spend / gate) * 100)) : null;
+          const comparable = Boolean(cap?.currency && a.currency === cap.currency && a.cap_comparison?.reason === null);
+          const breakEvenComparable = Boolean(a.currency && a.currency === c.cap.break_even_unit?.currency);
+          const pct = comparable && a.spend !== null && gate ? Math.min(100, Math.round((a.spend / gate) * 100)) : null;
           const sample = graded ? sampleWords(rules, a.sample) : [];
           return (
             <div key={a.entity_id} className="grid grid-cols-[40px_minmax(0,1fr)_minmax(160px,240px)_130px] items-center gap-3.5 border-t border-border py-[11px] first:border-t-0">
               <Thumb url={a.thumbnail_url} size={40} />
               <div className="min-w-0 font-medium [overflow-wrap:anywhere]">{a.name}</div>
               <div>
-                {a.grade === "wasted" ? (
+                {!comparable ? <>
+                  <p>已花 {moneyText(a.spend, a.currency)}{a.cost_per_result !== null && <>・每筆 {moneyText(a.cost_per_result, a.currency, true)}</>}</p>
+                  <p className="text-xs text-muted-foreground">{a.cap_comparison?.message ?? "幣別不同或尚未核實，不能比較。"}</p>
+                </> : a.grade === "wasted" ? (
                   // 沒賣出 has no cost per sale: the row shows what it spent against the served 沒賣出 line (same meter as
                   // the next-decision 沒賣出 figure), never 「每筆 未知」.
                   <Meter value={a.spend} max={Math.max(1, ...[gate === null ? null : gate * 1.4, a.spend === null ? null : a.spend * 1.1].filter((v): v is number => v !== null))} marker={gate} tone="danger"
-                    left={`花了 ${yuan(a.spend)}，0 筆`}
+                    left={`花了 ${moneyText(a.spend, a.currency)}，0 筆`}
                     right={gate !== null ? <span className="whitespace-nowrap">門檻 {formatAmount(gate)}</span> : null} />
                 ) : graded && T !== null ? (
                   <Meter value={a.cost_per_result} max={T * 1.6} marker={T}
                     tone={a.grade === "on_target" ? "success" : a.grade === "watch" ? "warning" : "danger"}
-                    left={<>每筆 {perSale(a.cost_per_result)}<MoneyTag cost={a.cost_per_result} breakEven={breakEven} /></>}
+                    left={<>每筆 {moneyText(a.cost_per_result, a.currency, true)}{breakEvenComparable && <MoneyTag cost={a.cost_per_result} breakEven={breakEven} />}</>}
                     right={<span className="whitespace-nowrap">上限 {formatAmount(T)}</span>} />
                 ) : (
                   <>
                     <MoneyMeter value={a.spend} max={gate} />
                     <div className="numeric mt-1 flex justify-between gap-2 text-[11.5px] text-muted-foreground">
-                      <span>已花 {yuan(a.spend)}</span><span>{pct === null ? "" : `${pct}%`}</span>
+                      <span>已花 {moneyText(a.spend, a.currency)}</span><span>{pct === null ? "" : `${pct}%`}</span>
                     </div>
                   </>
                 )}
@@ -237,6 +271,7 @@ function GapOverview({ brandId, campaign: c, workspace: ws, fold }: {
           {reason && <Chip tone="warn">{reason}</Chip>}
         </div>
         {triage.status === "error" && <div className="mb-3"><ReadFailed what={`缺資料的原因讀不到：${triage.error}`} onRetry={triage.reload} /></div>}
+        {!auth && ws.next_action && <p className="mb-3 text-sm text-muted-foreground">{ws.next_action.reason}</p>}
         <DayTiles days={dayRange(missing, ws.totals)} missing={new Set(missing)} size={34} />
         <Legend className="mt-2.5" items={[
           { label: "有資料", swatch: "bg-primary" },
@@ -245,6 +280,7 @@ function GapOverview({ brandId, campaign: c, workspace: ws, fold }: {
       </section>
       {fold}
       <ActionBar back={{ label: "投放中心", to: `/brands/${brandId}/ads` }}>
+        {!auth && ws.next_action && <Button asChild><Link to={nextActionHref(brandId, c, ws)!}>{ws.next_action.label} →</Link></Button>}
         <Button asChild><Link to={`/brands/${brandId}/ads/connections`}>{auth ? "去資料連線補授權" : "去資料連線"} →</Link></Button>
       </ActionBar>
     </div>
@@ -285,24 +321,23 @@ export function openDecisions(queue: QueuePayload, campaignId: string): OpenDeci
   return [...ads, ...closeouts].sort((a, b) => a.position - b.position);
 }
 
-function LiveOverview({ brandId, campaign: c, workspace: ws, fold }: {
-  brandId: string; campaign: CampaignDetail; workspace: CampaignWorkspace; fold: ReactNode;
+function LiveOverview({ brandId, campaign: c, workspace: ws, fold, readGeneration }: {
+  brandId: string; campaign: CampaignDetail; workspace: CampaignWorkspace; fold: ReactNode; readGeneration: number;
 }) {
   const { timezone } = useOrgClock();
-  const structure = useApiRead((signal) => getCampaignStructure(brandId, c.id, signal), [brandId, c.id]);
-  const queue = useApiRead((signal) => getQueue(brandId, signal), [brandId]);
+  const structure = useApiRead((signal) => getCampaignStructure(brandId, c.id, signal), [brandId, c.id, readGeneration]);
+  const queue = useApiRead((signal) => getQueue(brandId, signal), [brandId, c.id, readGeneration]);
   const open = queue.status === "ready" ? openDecisions(queue.data, c.id) : [];
   const first = open[0] ?? null;
   const total = queue.status === "ready" ? queue.data.decisions?.open ?? null : null;
-  const action = first === null ? null
+  const action = first === null ? ws.next_action ? { label: ws.next_action.label, href: nextActionHref(brandId, c, ws) } : null
     : first.type === "closeout" ? { label: "結案這一期", href: first.row.action_url }
     : decisionAction(brandId, first.item);
   const cap = capOf(c);
   const ads = structure.status === "ready" ? rulerAds(structure.data) : null;
   const perfHref = campaignPath(brandId, c.id, {tab: "perf"});
-  const closed = c.lifecycle?.state === "closed";
   const waiting = ws.delivery === "waiting";
-  const rulerTitle = closed ? "廣告對照上限" : ads ? `在投 ${ads.length} 則對照上限` : "在投廣告對照上限";
+  const rulerTitle = "廣告對照上限";
 
   return (
     <div className="flex flex-col gap-4">
@@ -316,16 +351,16 @@ function LiveOverview({ brandId, campaign: c, workspace: ws, fold }: {
             </div>
             {first.type === "closeout"
               ? <CloseoutDecision row={first.row} campaign={c} />
-              : <NextDecision item={first.item} ads={ads} cap={cap} breakEven={c.cap.break_even} workspace={ws} />}
+              : <NextDecision item={first.item} ads={ads} cap={cap} breakEven={c.cap.break_even} breakEvenCurrency={c.cap.break_even_unit?.currency ?? null} workspace={ws} />}
           </section>
         ) : (
           <section className={`${CARD} flex items-center gap-4`} aria-label="下一步">
             <div className="grid size-[52px] shrink-0 place-items-center rounded-full bg-success text-2xl text-white" aria-hidden="true">✓</div>
             <div className="min-w-0 flex-1">
-              <b className="text-[17px]">{waiting ? "已上架，等平台開始投放" : "這個活動沒有要決定的事"}</b>
-              <div className="text-sm text-muted-foreground">{waiting
+              <b className="text-[17px]">{ws.next_action?.label ?? (waiting ? "已上架，等平台開始投放" : "這個活動沒有要決定的事")}</b>
+              <div className="text-sm text-muted-foreground">{ws.next_action?.reason ?? (waiting
                 ? `平台開始花錢後，下次同步${ws.next_sync_at ? `（${formatInstant(ws.next_sync_at, timezone, "hm")}）` : ""}會出現第一筆數字。`
-                : ws.next_sync_at ? `下次同步 ${formatInstant(ws.next_sync_at, timezone, "hm")} 後重新判讀` : "下次同步後重新判讀"}</div>
+                : ws.next_sync_at ? `下次同步 ${formatInstant(ws.next_sync_at, timezone, "hm")} 後重新判讀` : "下次同步後重新判讀")}</div>
             </div>
           </section>
         )}
@@ -337,7 +372,7 @@ function LiveOverview({ brandId, campaign: c, workspace: ws, fold }: {
         </div>
         {structure.status === "loading" && <Skeleton className="h-24 w-full" />}
         {structure.status === "error" && <ReadFailed what={`每則廣告的成績讀不到：${structure.error}`} onRetry={structure.reload} />}
-        {ads && <TargetRuler ads={ads} cap={cap} breakEven={c.cap.break_even} size="mid" />}
+        {ads && <TargetRuler ads={ads} cap={cap} breakEven={c.cap.break_even} breakEvenCurrency={c.cap.break_even_unit?.currency} size="mid" />}
         {ads && cap && <GradeRules breakEven={c.cap.break_even} />}
       </section>
       {fold}
@@ -367,8 +402,7 @@ function CloseoutDecision({ row, campaign: c }: { row: CloseoutQueueRow; campaig
   const { end_date: end, running } = row.closeout;
   const { timezone } = useOrgClock();
   const still = running.read_at === null ? "平台上的廣告還沒讀過"
-    : running.count > 0 ? `平台上還在投 ${running.count} 則（${formatInstant(running.read_at, timezone, "md_hm")} 讀取）`
-    : "平台上已沒有在投的廣告";
+    : `上次讀取在投 ${running.count} 則（${formatInstant(running.read_at, timezone, "md_hm")} 讀取）`;
   return (
     <div className="grid grid-cols-[48px_minmax(0,1fr)_minmax(180px,240px)] items-center gap-4" data-testid="closeout-decision">
       <span className="grid size-12 place-items-center rounded-[10px] bg-zone-over text-xl text-danger" aria-hidden="true">■</span>
@@ -385,10 +419,11 @@ function CloseoutDecision({ row, campaign: c }: { row: CloseoutQueueRow; campaig
 }
 
 /** Prototype `qRow(q, …, bare)`: the decision's mark and title, and its figure on the right. */
-function NextDecision({ item, ads, cap, breakEven, workspace: ws }: {
-  item: QueueItem; ads: RulerAd[] | null; cap: RulerCap | null; breakEven: number | null; workspace: CampaignWorkspace;
+function NextDecision({ item, ads, cap, breakEven, breakEvenCurrency, workspace: ws }: {
+  item: QueueItem; ads: RulerAd[] | null; cap: RulerCap | null; breakEven: number | null; breakEvenCurrency: string | null; workspace: CampaignWorkspace;
 }) {
   const rules = useAdsRules();
+  const { timezone } = useOrgClock();
   const mark = markOf(item, rules);
   let figure: ReactNode = null;
   if (item.kind_key === "cleanup" && ads) {
@@ -397,7 +432,7 @@ function NextDecision({ item, ads, cap, breakEven, workspace: ws }: {
         <TargetRuler ads={ads} cap={cap} size="mini" tray={false} highlight={{ mode: "close", ids: (item.cleanup?.ads ?? []).map((a) => a.entity_id) }} />
         <div className="numeric mt-1 flex justify-between gap-2 text-[11.5px] text-muted-foreground">
           <span>{ws.daily_budget !== null && ws.can_support !== null ? `每日 ${formatAmount(ws.daily_budget)} 撐得起 ${ws.can_support} 則` : ""}</span>
-          <span>在投 {ws.active_ads}</span>
+          <span>{runningText(ws, timezone)}</span>
         </div>
       </>
     );
@@ -406,7 +441,9 @@ function NextDecision({ item, ads, cap, breakEven, workspace: ws }: {
       <>
         <TargetRuler ads={ads} cap={cap} size="mini" tray={false} highlight={{ mode: "self", ids: [item.triage.entity_id] }} />
         <div className="numeric mt-1 flex justify-between gap-2 text-[11.5px] text-muted-foreground">
-          <span>每筆 {perSale(item.triage.current.cost_per_result)}<MoneyTag cost={item.triage.current.cost_per_result} breakEven={breakEven} /></span>
+          <span>每筆 {perSaleAmount(item.triage.current.cost_per_result) ?? "未知"} {item.triage.current.currency ?? "幣別未知"}
+            {item.triage.current.currency && item.triage.current.currency === breakEvenCurrency && <MoneyTag cost={item.triage.current.cost_per_result} breakEven={breakEven} />}
+          </span>
         </div>
       </>
     );
@@ -440,11 +477,13 @@ function KvNumbers({ campaign: c, workspace: ws }: { campaign: CampaignDetail; w
   const money = (v: number | null, format: (v: number | null) => string | null = formatAmount) => {
     const text = format(v);
     if (text === null) return notSpent;
-    return !t?.currency || t.currency === "TWD" ? `${text} 元` : `${t.currency} ${text}`;
+    return t?.currency === "TWD" ? `${text} 元` : t?.currency ? `${t.currency} ${text}` : `${text} 幣別未知`;
   };
   const cost = t?.cost_per_result ?? null;
   const results = t?.results ?? null;
   const spend = t?.spend ?? null;
+  const capComparable = Boolean(t?.currency && cap?.currency && t.currency === cap.currency);
+  const breakEvenComparable = Boolean(t?.currency && c.cap.break_even_unit?.currency && t.currency === c.cap.break_even_unit.currency);
   const unknownCost = spend === null || results === null ? notSpent : results === 0 ? "還沒有成交" : notSpent;
   const cell = "min-w-0 border-l border-border px-5 first:border-l-0 first:pl-0";
   const label = "block text-xs text-muted-foreground";
@@ -465,13 +504,14 @@ function KvNumbers({ campaign: c, workspace: ws }: { campaign: CampaignDetail; w
         <div className={cell}>
           <span className={label}>{labels.conversion === "購買" ? "每賣一筆花多少" : labels.cpa}</span>
           <b className={big}>{cost === null ? <span className="text-base text-muted-foreground">{unknownCost}</span> : money(cost, perSaleAmount)}</b>
-          {cost !== null && <MoneyTag cost={cost} breakEven={c.cap.break_even} />}
-          {cost !== null && cap && rules && (
+          {cost !== null && breakEvenComparable && <MoneyTag cost={cost} breakEven={c.cap.break_even} />}
+          {cost !== null && cap && rules && capComparable && (
             <Meter value={cost} max={cap.value * 1.6} marker={cap.value}
               tone={cost <= cap.value ? "success" : cost <= watchLine(rules, cap.value) ? "warning" : "danger"} />
           )}
+          {cost !== null && (!capComparable || !breakEvenComparable) && <p className="text-xs text-muted-foreground">幣別不同或尚未核實，不能比較。</p>}
           <span className={label}>
-            {cap ? <>{who}{cap.basis === "break_even" ? "暫用" : "的"}<Term k={cap.basis === "break_even" ? "break_even" : "cap"} value={c.cap.break_even}>{cap.basis === "break_even" ? "打平線" : "上限"}</Term> {formatAmount(cap.value)}</> : "沒設上限"}
+            {cap ? <>{who}{cap.basis === "break_even" ? "暫用" : "的"}<Term k={cap.basis === "break_even" ? "break_even" : "cap"} value={c.cap.break_even}>{cap.basis === "break_even" ? "打平線" : "上限"}</Term> {formatAmount(cap.value)} {cap.currency ?? "幣別未知"}</> : "沒設上限"}
             <span className="block">ROAS <Figure basis="roas_all_spend" value={t?.roas_all_spend ?? null} alt={{basis: "roas_tracked_spend", value: t?.roas_tracked_spend ?? null}} /></span>
           </span>
         </div>
@@ -479,13 +519,15 @@ function KvNumbers({ campaign: c, workspace: ws }: { campaign: CampaignDetail; w
           <div className={cell}>
             <span className={label}>狀態</span>
             <b className="my-0.5 block text-[17px] font-semibold tracking-tight">
-              {c.lifecycle?.label}{ws.active_ads > 0 && `・平台上還開著 ${ws.active_ads} 則`}
+              {c.lifecycle?.label}
             </b>
+            <DeliveryNote workspace={ws} closed />
           </div>
         ) : (
           <div className={cell}>
-            <span className={label}>{ws.can_support !== null ? "在投／撐得起" : "在投"}</span>
-            <b className={big}>{ws.can_support !== null ? `${ws.active_ads}／${ws.can_support} 則` : `${ws.active_ads} 則`}</b>
+            <span className={label}>平台投放狀態</span>
+        <DeliveryNote workspace={ws} />
+            {ws.can_support !== null && <span className={label}>預算撐得起 {ws.can_support} 則</span>}
             <span className={label}>{ws.daily_budget !== null ? `每日 ${formatAmount(ws.daily_budget)}` : "每日預算未知"}</span>
           </div>
         )}

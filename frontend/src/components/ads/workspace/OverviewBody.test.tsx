@@ -1,32 +1,38 @@
-import { getPerformance } from "@/lib/adsApi";
+import { getCampaign, getPerformance } from "@/lib/adsApi";
+import { completeExternalView, syncCampaign, syncOutcome } from "@/lib/adsExternalApi";
+import { CampaignWorkspace as WorkspaceScreen } from "../CampaignWorkspace";
 import { PeriodStatusRow } from "../detail/PeriodStatusRow";
-vi.mock("@/lib/adsApi", async (actual) => ({...await actual<typeof import("@/lib/adsApi")>(),getPerformance: vi.fn()}));
+vi.mock("@/lib/adsApi", async (actual) => ({...await actual<typeof import("@/lib/adsApi")>(),getPerformance: vi.fn(), getCampaign: vi.fn()}));
+vi.mock("@/lib/adsExternalApi", async (actual) => ({ ...await actual<typeof import("@/lib/adsExternalApi")>(),
+  completeExternalView: vi.fn(), syncCampaign: vi.fn(), syncOutcome: vi.fn() }));
 vi.mock("@/lib/figures", async (actual) => ({ ...await actual<typeof import("@/lib/figures")>(), useFigureBases: () => ({roas_at_cap: {label: "花到上限時", formula: "售價 ÷ 每筆上限", unit: "ratio"}, roas_all_spend: {label: "保守", formula: "營收 ÷ 全部花費", unit: "ratio"}, roas_tracked_spend: {label: "樂觀", formula: "營收 ÷ 有追到營收的那部分花費", unit: "ratio"}}) }));
 /** F30-I07: the workspace overview in its three states (prototype v10 `tabOverview()`, `kvNumbers()`): draft checklist
  * with k／4 and the ruler preview; the data gap (per-ad distance to a judgeable sample, missing days, the reason chip);
  * live (the next open decision or 「沒有要決定的事」, the four 14-day numbers, the in-flight ruler). Every extra read
  * fails on its own; unknown numbers stay unknown. Realistic fixtures: prototype names, decimal costs, a closing ad. */
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CampaignDetail } from "@/lib/adsApi";
 import { getQueue, getTriage, type CloseoutQueueRow, type QueueItem, type QueuePayload } from "@/lib/adsTriageApi";
-import { getCampaignStructure, type CampaignStructure, type CampaignWorkspace, type StructureAd } from "@/lib/adsWorkspaceApi";
+import { getCampaignWorkspace, getCampaignStructure, type CampaignStructure, type CampaignWorkspace, type StructureAd } from "@/lib/adsWorkspaceApi";
 import { RULES_FIXTURE, seedAdsRules } from "../patterns/rulesFixture";
-import { OverviewBody, dayRange } from "./OverviewBody";
+import { OverviewBody, dayRange, rulerAds } from "./OverviewBody";
 // F50 Contract K: the org clock reads the workspace org zone; dates assert Asia/Taipei output, never the runner's.
 vi.mock("@/components/layout/WorkspaceContext", () => ({ useWorkspace: () => ({ scope: "user:org", identity: { user: { id: "u", email: "a@example.com" }, org: { id: "o", name: "測試", kind: "personal", role: "owner", timezone: "Asia/Taipei", today: "2026-10-01" }, orgs: [] } }) }));
 
 vi.mock("@/lib/adsWorkspaceApi", async () => {
   const actual = await vi.importActual<typeof import("@/lib/adsWorkspaceApi")>("@/lib/adsWorkspaceApi");
-  return { ...actual, getCampaignStructure: vi.fn() };
+  return { ...actual, getCampaignStructure: vi.fn(), getCampaignWorkspace: vi.fn() };
 });
 vi.mock("@/lib/adsTriageApi", async () => {
   const actual = await vi.importActual<typeof import("@/lib/adsTriageApi")>("@/lib/adsTriageApi");
   return { ...actual, getQueue: vi.fn(), getTriage: vi.fn() };
 });
 
-const CAP = { value: 450, basis: "own", own_value: 450, break_even: 520, price: 1580, product_id: "prd_cup", result_kind: "purchase", result_label: "購買", missing: [], revision: 1 };
+const CAP = { value: 450, basis: "own" as const, own_value: 450, break_even: 520, price: 1580, product_id: "prd_cup", result_kind: "purchase", result_label: "購買", missing: [], revision: 1,
+  cap_unit: { basis: "own", currency: "TWD", source: "user", unit_basis: "manual_ntd_input" },
+  break_even_unit: { basis: "break_even", currency: "TWD", source: "product_economics", unit_basis: "confirmed_product_economics" } };
 const NO_CAP = { ...CAP, value: null, basis: null, own_value: null, break_even: null, product_id: "prd_fall", knowledge_product_id: "kp_fall" };
 function detail(o: Partial<CampaignDetail> = {}): CampaignDetail {
   return { id: "cmp_daily", name: "日常商品推廣・轉換", objective: "購買", origin: "internal", status: "live", lifecycle: LIVE, cap: CAP,
@@ -37,6 +43,7 @@ const LAST_14 = { start: "2026-09-10", end: "2026-09-23", days: 14, label: "近 
 const DRAFT = { cap_set: false, budget_set: false, slots_ready: 7, slots_total: 8, launch_checked: 0, launch_total: 0 };
 function ws(o: Partial<CampaignWorkspace> = {}): CampaignWorkspace {
   return { stage: { key: "decide", done: ["plan", "assets", "launch", "read"] }, pending_count: 2, delivery: "live", daily_budget: 1200, active_ads: 8, can_support: 6,
+    running: { count: o.active_ads ?? 8, unknown: 0, read_at: "2026-09-23T04:40:00Z", stale: false, freshness: "read", state: "running" },
     next_sync_at: "2026-09-23T04:40:00Z", missing_days: [],
     totals: { start: "2026-09-10", end: "2026-09-23", window: LAST_14, currency: "TWD", spend: 15767, results: 121, cost_per_result: 130.31, roas_all_spend: 2.25, roas_tracked_spend: 3.75 }, draft: null, ...o };
 }
@@ -46,6 +53,7 @@ function ad(id: string, name: string, spend: number, results: number, grade: Str
     grade_label: grade === "insufficient" ? "剛開始、數字還不夠" : null,
     reason_code: grade === "insufficient" ? "too_new" : grade === "wasted" ? "spend_over_target_no_result" : null, sample: null,
     cost_per_result: results ? Math.round((spend / results) * 100) / 100 : null,
+    currency: "TWD", cap_comparison: { basis: "own", currency: "TWD", source: "user", unit_basis: "manual_ntd_input", reason: null, message: null },
     closing: false, missing_material: false, ...o };
 }
 const DAILY: CampaignStructure = { groups: [
@@ -112,6 +120,140 @@ beforeEach(() => {
   vi.mocked(getQueue).mockResolvedValue(queue([worseRow(), cleanupRow(), worseRow("cmp_other", 3)]));
 });
 
+describe("F52 served delivery and guidance", () => {
+  const failedReason = "本次平台結構讀取失敗；保留上次成功讀取時間與已知廣告數量。";
+
+  it("retains a failed read's count as a past observation and offers its served exit", async () => {
+    vi.mocked(getQueue).mockResolvedValue(queue([]));
+    renderBody(detail(), ws({ pending_count: 0, delivery: "unknown", active_ads: 1, running: {
+      count: 1, unknown: 0, read_at: "2026-09-20T06:00:00Z", stale: false,
+      state: "unknown", freshness: "failed", label: "平台投放狀態待確認", reason: failedReason,
+    }, next_action: { id: "read_platform", label: "查看平台讀取狀態", reason: failedReason,
+      target: { kind: "campaign", tab: "perf" } } }));
+    expect((await screen.findAllByText(failedReason)).length).toBeGreaterThan(0);
+    expect(screen.getByText(/上次讀取在投 1 則/)).toBeTruthy();
+    expect(within(bar()).getByRole("link", { name: "查看平台讀取狀態 →" }).getAttribute("href"))
+      .toBe("/brands/brd_1/ads/campaigns/cmp_daily?tab=perf");
+  });
+
+  it("known paused platform presence is not erased by empty judged structure", async () => {
+    vi.mocked(getCampaignStructure).mockResolvedValue({ groups: [] });
+    vi.mocked(getTriage).mockResolvedValue({ data: { status: { state: "no_rows", label: "還沒有成效紀錄。" } } } as never);
+    renderBody(detail({ origin: "imported" }), ws({ pending_count: 0, delivery: "off", active_ads: 0,
+      missing_days: ["2026-09-23"], running: {
+        count: 0, unknown: 0, off: 1, not_running: 0, scheduled: 0,
+        read_at: "2026-09-20T06:00:00Z", stale: false, freshness: "read", state: "off",
+        label: "平台未在投放", reason: "已暫停",
+      }, next_action: { id: "view_delivery", label: "查看未在投放的廣告", reason: "已暫停",
+        target: { kind: "campaign", tab: "structure" } } }));
+    expect(await screen.findByText(/已讀到平台廣告/)).toBeTruthy();
+    expect(screen.queryByText("還沒有在平台上的廣告")).toBeNull();
+  });
+
+  it("imported ended uses its capability-aware served performance action", async () => {
+    vi.mocked(getQueue).mockResolvedValue(queue([]));
+    renderBody(detail({ origin: "imported", lifecycle: { state: "ended", label: "已結束", can_close: false } }),
+      ws({ pending_count: 0, delivery: "off", next_action: {
+        id: "review_period", label: "查看本期成效", reason: "既有活動不使用內部結案。",
+        target: { kind: "campaign", tab: "perf" },
+      } }));
+    expect(await screen.findByText("既有活動不使用內部結案。")).toBeTruthy();
+    expect(within(bar()).getByRole("link", { name: "查看本期成效 →" })).toBeTruthy();
+    expect(within(bar()).queryByRole("link", { name: /結案/ })).toBeNull();
+  });
+});
+
+it.each([false, true])("F52: normal overview sync retains its fold across a gap transition=%s", async (fromGap) => {
+  let terminal = false;
+  const trace: string[] = [];
+  vi.mocked(getCampaign).mockResolvedValue(detail({ origin: "imported", context_json: {},
+    outcome: { spend: null, purchases: null, revenue: null }, budget_total: null } as never));
+  vi.mocked(completeExternalView).mockResolvedValue({ entities: [], observations: [], sync: {}, connections: [],
+    next_entity_cursor: null, next_observation_cursor: null, coverage: {}, window: {} } as never);
+  vi.mocked(getCampaignWorkspace).mockImplementation(async () => {
+    trace.push(`workspace ${terminal ? "fresh" : "old"}`);
+    return ws({ pending_count: 0, active_ads: terminal ? 2 : 1,
+      missing_days: fromGap && !terminal ? ["2026-09-23"] : [] });
+  });
+  vi.mocked(getCampaignStructure).mockImplementation(async () => {
+    trace.push(`structure ${terminal ? "fresh" : "old"}`);
+    return { groups: [{ group_id: null, name: "native group", daily_budget: null,
+      ads: [ad("actual-ad", terminal ? "fresh native creative" : "old native creative", 600, 2, "on_target")] }] };
+  });
+  vi.mocked(getQueue).mockImplementation(async () => {
+    trace.push(`queue ${terminal ? "fresh" : "old"}`); return queue([]);
+  });
+  vi.mocked(getTriage).mockResolvedValue({ data: { status: { state: "partial", label: "有幾天的資料還沒讀到，數字可能偏少。" } } } as never);
+  vi.mocked(syncCampaign).mockImplementation(async () => { trace.push("POST acknowledged");
+    return { job: { id: "sync_actual", status: "pending", last_success_at: null } } as never; });
+  vi.mocked(syncOutcome).mockImplementationOnce(async () => { trace.push("outcome running");
+    return { state: "running", code: null, text: "正在讀取平台資料", last_success_at: null } as never; })
+    .mockImplementationOnce(async () => { terminal = true; trace.push("outcome found");
+      return { state: "found", code: null, text: "讀取完成，已找到資料。", last_success_at: "2026-10-01T00:00:00Z" } as never; });
+  render(<MemoryRouter><WorkspaceScreen brandId="brd_1" campaignId="cmp_daily" /></MemoryRouter>);
+  await screen.findByText("old native creative");
+  fireEvent.click(screen.getByRole("button", { name: "進階：更多活動資訊" }));
+  await screen.findByRole("button", { name: "重新讀取平台" });
+  vi.useFakeTimers();
+  try {
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "重新讀取平台" })));
+    expect(trace).toContain("outcome running");
+    expect(vi.mocked(getCampaignStructure)).toHaveBeenCalledTimes(1);
+    await act(async () => vi.advanceTimersByTimeAsync(3000));
+  } finally { vi.useRealTimers(); }
+  console.info("F52 overview normal settlement", JSON.stringify(trace));
+  expect(trace).toContain("outcome found");
+  expect(trace).toContain("workspace fresh");
+  expect(trace).toContain("structure fresh");
+  expect(trace).toContain("queue fresh");
+  expect(await screen.findByText("fresh native creative")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "進階：更多活動資訊" }).getAttribute("aria-expanded")).toBe("true");
+});
+
+describe("F52 known monetary units", () => {
+  it.each(["TWD", "USD", null])("keeps actual structure %s unit evidence in the ruler and gap view", async (currency) => {
+    const comparison = { basis: "own", currency: "TWD", source: "user", unit_basis: "manual_ntd_input",
+      reason: currency === "TWD" ? null : currency ? "cap_currency_mismatch" : "cap_currency_unknown", message: null };
+    const structure = { groups: [{ group_id: null, name: "native", daily_budget: null,
+      ads: [ad("same-ad", "Observed unit ad", 840, 7, currency === "TWD" ? "on_target" : "insufficient", { currency, cap_comparison: comparison })] }] };
+    vi.mocked(getCampaignStructure).mockResolvedValue(structure);
+    vi.mocked(getTriage).mockResolvedValue({ data: { status: { state: "partial", label: "", missing_days: [] } } } as never);
+    expect(rulerAds(structure)[0]).toMatchObject({ currency, comparisonReason: comparison.reason });
+    renderBody(detail(), ws({ missing_days: ["2026-09-23"] }));
+    const row = (await screen.findByText("Observed unit ad")).parentElement!;
+    if (currency === "TWD") {
+      expect(row.querySelector("[data-slot=meter]")).not.toBeNull();
+      expect(row.textContent).toContain("每筆 120 元");
+      expect(row.querySelector("[data-slot=money-tag]")).not.toBeNull();
+    } else {
+      expect(row.querySelector("[data-slot=meter]")).toBeNull();
+      expect(row.querySelector("[data-slot=money-tag]")).toBeNull();
+      expect(row.textContent).toContain(currency ? "USD 840" : "840 幣別未知");
+      expect(row.textContent).not.toContain("元");
+    }
+  });
+  it.each(["USD", null])("does not compare %s observed CPA to confirmed TWD economics", async (currency) => {
+    vi.mocked(getQueue).mockResolvedValue(queue([]));
+    const capUnit = { basis: "own", currency: "TWD", source: "user", unit_basis: "manual_ntd_input" };
+    const breakEvenUnit = { basis: "break_even", currency: "TWD", source: "product_economics", unit_basis: "confirmed_product_economics" };
+    renderBody(detail({ cap: { ...CAP, cap_unit: capUnit, break_even_unit: breakEvenUnit } }), ws({
+      totals: { start: LAST_14.start, end: LAST_14.end, window: LAST_14, currency,
+        spend: 900, results: 12, cost_per_result: 75 },
+    }));
+    const kv = screen.getByRole("region", { name: "近 14 天數字" });
+    expect(kv.querySelector("[data-slot=money-tag]")).toBeNull();
+    expect(kv.textContent).toContain(currency ? "USD 75" : "75 幣別未知");
+    expect(await screen.findByText(/幣別不同或尚未核實，不能比較/)).toBeTruthy();
+  });
+
+  it("legacy missing cap units remain unknown rather than certifying a profit", () => {
+    renderBody(detail({ cap: { ...CAP, cap_unit: undefined, break_even_unit: undefined } }), ws());
+    const kv = screen.getByRole("region", { name: "近 14 天數字" });
+    expect(kv.querySelector("[data-slot=money-tag]")).toBeNull();
+    expect(kv.textContent).toContain("幣別未知");
+  });
+});
+
 describe("draft (v10 camp/fall/overview)", () => {
   it("nothing set: 0／4, each row's 去處理 goes where it is done, 去設上限 in the bar, the empty ruler and 去填商品成本; nothing else is read", async () => {
     const { onGo } = renderBody(detail({ status: "draft", name: "秋季新色預購", cap: NO_CAP as never, budget_planned: null }),
@@ -145,7 +287,7 @@ describe("draft (v10 camp/fall/overview)", () => {
     const w = ws({ stage: { key: "assets", done: ["plan"] }, draft: { ...DRAFT, cap_set: true, budget_set: true, slots_ready: 8 } });
     const { onGo } = renderBody(detail({ status: "draft" }), w, false);
     expect(screen.getByText("3／4 完成")).toBeTruthy();
-    expect(screen.getByText("每賣一筆最多 450 元")).toBeTruthy();
+    expect(screen.getByText("每賣一筆最多 450 TWD")).toBeTruthy();
     expect(screen.getByText("30,000 TWD")).toBeTruthy();
     expect(screen.getAllByRole("button", { name: "查看 →" })).toHaveLength(3);
     fireEvent.click(within(bar()).getByRole("button", { name: "確認上架清單 →" }));
@@ -158,6 +300,15 @@ describe("draft (v10 camp/fall/overview)", () => {
     expect(screen.getByText("2／5 已核對")).toBeTruthy();
     fireEvent.click(within(bar()).getByRole("button", { name: "繼續：到平台完成 →" }));
     expect(onGo).toHaveBeenLastCalledWith("publish");
+  });
+  it("approved draft uses the served checklist action without claiming platform delivery", () => {
+    renderBody(detail({ status: "draft" }), ws({ stage: { key: "launch", done: ["plan", "assets"] },
+      draft: { ...DRAFT, cap_set: true, budget_set: true, slots_ready: 8, launch_checked: 2, launch_total: 5 },
+      next_action: { id: "review_checklist", label: "查看已核准的平台交接清單",
+        reason: "核准與內部確認不代表平台已上架或開始投放。", target: { kind: "flow", parts: ["publish"] } } }));
+    expect(screen.getByText("核准與內部確認不代表平台已上架或開始投放。")).toBeTruthy();
+    expect(within(bar()).getByRole("link", { name: "查看已核准的平台交接清單 →" }).getAttribute("href"))
+      .toBe("/brands/brd_1/ads/campaigns/cmp_daily/publish");
   });
 });
 
@@ -262,8 +413,9 @@ describe("live (v10 camp/daily/overview)", () => {
     expect(within(kv).getByText("3.75x")).toBeTruthy();
     expect(within(kv).getByText("保守")).toBeTruthy();
     expect(within(kv).getByText("樂觀")).toBeTruthy();
-    expect(within(kv).getByText("8／6 則")).toBeTruthy();
-    expect(await screen.findByText("在投 5 則對照上限")).toBeTruthy();
+    expect(within(kv).getByText("在投 8 則")).toBeTruthy();
+    expect(within(kv).getByText("預算撐得起 6 則")).toBeTruthy();
+    expect(await screen.findByText("廣告對照上限")).toBeTruthy();
     expect(screen.getByRole("link", { name: "看成效 →" }).getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_daily?tab=perf");
   });
 
@@ -281,7 +433,7 @@ describe("live (v10 camp/daily/overview)", () => {
     const kv = screen.getByRole("region", { name: "近 14 天數字" });
     expect(within(kv).getAllByText("未知")).toHaveLength(3);
     expect(kv.textContent).not.toMatch(/\b0 元|0 筆/);
-    expect(within(kv).getByText("8 則")).toBeTruthy();
+    expect(within(kv).getByText("在投 8 則")).toBeTruthy();
     expect(within(kv).getByText("每日預算未知")).toBeTruthy();
     expect(kv.querySelector("[data-slot=money-tag]")).toBeNull();
   });
@@ -349,7 +501,8 @@ describe("F47-I08 delivery and closed (Contract E, drill-10 S3)", () => {
     renderBody(detail({ status: "closed", lifecycle: CLOSED }), ws({ delivery: null, pending_count: 0, active_ads: 6, can_support: 1,
       stage: { key: "review", done: ["plan", "assets", "launch", "read", "decide"] } }));
     const kv = screen.getByRole("region", { name: "近 14 天數字" });
-    expect(within(kv).getByText("已結案・平台上還開著 6 則")).toBeTruthy();
+    expect(within(kv).getByText("已結案")).toBeTruthy();
+    expect(within(kv).getByText("平台上還開著 6 則")).toBeTruthy();
     expect(await screen.findByText("廣告對照上限")).toBeTruthy();
     expect(document.body.textContent).not.toMatch(/在投/);
   });
@@ -419,7 +572,7 @@ describe("F49 Contract Q／L: the served decision queue and the closeout row", (
     expect(within(card).getByText("已結束・待結案")).toBeTruthy();
     expect(within(card).getByText("「日常商品推廣・轉換」已結束，待結案")).toBeTruthy();
     expect(within(card).getByText("10/09 結束")).toBeTruthy();
-    expect(within(card).getByText(/^平台上還在投 2 則（10\/11 \d\d:30 讀取）$/)).toBeTruthy();
+    expect(within(card).getByText(/^上次讀取在投 2 則（10\/11 \d\d:30 讀取）$/)).toBeTruthy();
     expect(within(bar()).getByRole("link", { name: "結案這一期 →" }).getAttribute("href")).toBe("/brands/brd_1/ads/campaigns/cmp_daily?tab=perf&close=1");
   });
 

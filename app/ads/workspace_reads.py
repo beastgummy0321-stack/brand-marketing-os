@@ -360,6 +360,8 @@ def _platform_ad(entity, graded, closing, *, ad_id=None, name=None) -> dict:
         # null when unknown -- never 0.
         "spend": None if current.get("spend") is None else round(float(current["spend"]), 2),
         "cost_per_result": current.get("cost_per_result"),
+        "currency": current.get("currency"),
+        "cap_comparison": item.get("cap_comparison") if item else None,
         "results": home_overview._count_out(current.get("result_count")),
         "closing": entity["id"] in closing, "missing_material": False,
         "slot_state": None, "slot_label": None,
@@ -489,6 +491,7 @@ def structure(conn, org_id: str, brand_id: str, campaign_id: str) -> dict:
                         "thumbnail_url": None, "spend": None, "grade": None,
                         "grade_label": None, "reason_code": None, "sample": None,
                         "cost_per_result": None, "results": None, "closing": False,
+                        "currency": None, "cap_comparison": None,
                         **_slot_fields(slot_of.get(ad["id"])),
                         "assignment": assignments[ad["id"]],
                     })
