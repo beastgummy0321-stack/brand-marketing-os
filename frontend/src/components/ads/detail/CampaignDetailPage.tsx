@@ -105,10 +105,10 @@ function RulerCard({ items, status, strategyHref, assetsHref, campaign, onAdClic
     note: trendNote(item),
   }));
   const title = !cap
-    ? <>在投 {items.length} 則，沒設<Term k="cap">上限</Term></>
+    ? <>{items.length} 則，沒設<Term k="cap">上限</Term></>
     : cap.basis === "break_even"
-      ? <>在投 {items.length} 則對照暫用<Term k="break_even" value={breakEven}>打平線</Term> {formatAmount(cap.value)} {cap.currency ?? "幣別未知"}</>
-      : <>在投 {items.length} 則對照<Term k="cap">上限</Term> {formatAmount(cap.value)} {cap.currency ?? "幣別未知"}</>;
+      ? <>{items.length} 則對照暫用<Term k="break_even" value={breakEven}>打平線</Term> {formatAmount(cap.value)} {cap.currency ?? "幣別未知"}</>
+      : <>{items.length} 則對照<Term k="cap">上限</Term> {formatAmount(cap.value)} {cap.currency ?? "幣別未知"}</>;
   // Prototype `beCap`: the dashed 打平 mark is drawn only beside an own cap that differs from it; this line names it.
   const beLine = cap && cap.basis === "own" && breakEven !== null && Math.abs(breakEven - cap.value) > 0.01;
   const statusChip = dataStatusChip(status);

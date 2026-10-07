@@ -222,7 +222,7 @@ describe("CampaignDetailPage (F28-I10, v10 tabPerf F29-I13)", () => {
     vi.mocked(getTriage).mockResolvedValue(triage(dailyAds()));
     const { container } = renderPage();
 
-    expect(await rulerTitle()).toBe("在投 8 則對照上限 450 TWD");
+    expect(await rulerTitle()).toBe("8 則對照上限 450 TWD");
     expect(screen.getByRole("heading", { level: 1, name: CAMPAIGN_NAME })).toBeTruthy();
     // The legend and the money rule print once per screen; the dashed 打平 mark is named under the ruler.
     expect(container.querySelectorAll("[data-slot=grade-rules]").length).toBe(1);
@@ -294,7 +294,7 @@ describe("CampaignDetailPage (F28-I10, v10 tabPerf F29-I13)", () => {
     vi.mocked(getTriage).mockResolvedValue(triage(dailyAds(be)));
     renderPage();
 
-    expect(await rulerTitle()).toBe("在投 8 則對照暫用打平線 520 TWD");
+    expect(await rulerTitle()).toBe("8 則對照暫用打平線 520 TWD");
     expect(screen.getByText("暫用打平 520", { selector: "[data-slot=chip]" }).getAttribute("data-tone")).toBe("warn");
     expect(screen.queryByText("打平 520")).toBeNull();
     expect(screen.queryByText(/^橘色虛線：/)).toBeNull();
@@ -343,7 +343,7 @@ describe("CampaignDetailPage (F28-I10, v10 tabPerf F29-I13)", () => {
     ]));
     const { container } = renderPage();
 
-    expect(await rulerTitle()).toBe("在投 2 則，沒設上限");
+    expect(await rulerTitle()).toBe("2 則，沒設上限");
     expect(screen.getByText("沒設上限", { selector: "[data-slot=chip]" }).getAttribute("data-tone")).toBe("warn");
     expect(container.querySelector('[data-slot=target-ruler][data-variant="empty"]')).toBeTruthy();
     expect(screen.getByText("沒設上限，先不分等級", { selector: "div" })).toBeTruthy();
@@ -387,7 +387,7 @@ describe("CampaignDetailPage (F28-I10, v10 tabPerf F29-I13)", () => {
     renderPage();
 
     expect(await screen.findByText(/^決策進度讀不到（佇列讀取失敗）/)).toBeTruthy();
-    expect(await rulerTitle()).toBe("在投 8 則對照上限 450 TWD");
+    expect(await rulerTitle()).toBe("8 則對照上限 450 TWD");
     expect(within(screen.getByTestId("ad-row-a8")).queryByRole("link", { name: "在清理提議" })).toBeNull();
     // 「暫停」 needs no queue: the pause page reads the ad itself (F45-I06).
     expect(within(screen.getByTestId("ad-row-a8")).getByRole("link", { name: "暫停" })).toBeTruthy();
@@ -410,7 +410,7 @@ describe("CampaignDetailPage (F28-I10, v10 tabPerf F29-I13)", () => {
 
     vi.mocked(getTriage).mockResolvedValue(triage(dailyAds()));
     await userEvent.click(screen.getByRole("button", { name: "重試" }));
-    expect(await rulerTitle()).toBe("在投 8 則對照上限 450 TWD");
+    expect(await rulerTitle()).toBe("8 則對照上限 450 TWD");
     expect(listCampaigns).toHaveBeenCalledTimes(1);
   });
 
@@ -543,7 +543,7 @@ describe("A/B block (F29-I13, v10 abBlock)", () => {
     await userEvent.click(await screen.findByRole("button", { name: "關掉輸家（A）→" }));
     expect(await screen.findByText("關掉輸家沒建立成：輸家那則還沒對應到平台上的廣告，先完成上架核對。")).toBeTruthy();
     expect(screen.queryByTestId("where")).toBeNull();
-    expect(await rulerTitle()).toBe("在投 8 則對照上限 450 TWD");
+    expect(await rulerTitle()).toBe("8 則對照上限 450 TWD");
 
     vi.mocked(pauseAbLoser).mockResolvedValue({ id: "set_ab" } as ChangeSet);
     await userEvent.click(screen.getByRole("button", { name: "關掉輸家（A）→" }));
@@ -660,7 +660,7 @@ describe("換掉這一則 (F29-I13, v10 row menu)", () => {
     await userEvent.click(within(inUse).getByRole("button", { name: "取消換掉這一則" }));
     expect((await within(inUse).findByRole("alert")).textContent).toBe("取消換掉這一則沒成功：此素材需求已被核准的變更清單採用，不能取消。");
     expect(within(inUse).getByText("換掉這一則・需求已開")).toBeTruthy();
-    expect(await rulerTitle()).toBe("在投 8 則對照上限 450 TWD");
+    expect(await rulerTitle()).toBe("8 則對照上限 450 TWD");
   });
 
   it("the material list fails: its own failure with retry; the rows and their decisions stay", async () => {
@@ -977,7 +977,7 @@ describe("在投 N 則 counts platform ads only (F40-I06, prototype #/detail)", 
   it("unbuilt local ads: the 缺圖 line names them with 到素材補圖 → the assets tab; the title still counts the platform ads", async () => {
     vi.mocked(getTriage).mockResolvedValue(triage(built));
     renderBody(withAds([localAd("l1", "運動後與忙碌日常", "bound"), localAd("l5", "週末補眠", "unbound"), localAd("l6", "考前衝刺", "unbound")]));
-    expect(await rulerTitle()).toBe("在投 2 則對照上限 450 TWD");
+    expect(await rulerTitle()).toBe("2 則對照上限 450 TWD");
     expect(screen.getByTestId("unbuilt-line").textContent).toBe("另有 2 則沒建到平台（缺圖），不算在投：週末補眠、考前衝刺");
     expect(screen.getByRole("link", { name: "到素材補圖 →" }).getAttribute("href")).toBe(`${WS}?tab=assets`);
     expect(screen.queryByTestId("unmatched-line")).toBeNull();
@@ -986,7 +986,7 @@ describe("在投 N 則 counts platform ads only (F40-I06, prototype #/detail)", 
   it("platform ads not built here (bound_ad_id null): their own line; an older item without the field is not counted", async () => {
     vi.mocked(getTriage).mockResolvedValue(triage([...built, ad("a4", "上班日午休（平台手動建）", "wasted", 1600, 0, OWN_450, { bound_ad_id: null }), ad("a5", "舊工廠沒帶欄位", "on_target", 900, 3)]));
     renderBody(withAds([localAd("l1", "運動後與忙碌日常", "bound")]));
-    expect(await rulerTitle()).toBe("在投 4 則對照上限 450 TWD");
+    expect(await rulerTitle()).toBe("4 則對照上限 450 TWD");
     expect(screen.getByTestId("unmatched-line").textContent).toBe("平台上另有 1 則不是這裡建的：上班日午休（平台手動建）");
     expect(screen.queryByTestId("unbuilt-line")).toBeNull();
   });
@@ -1039,6 +1039,20 @@ describe("served recent money units", () => {
     expect(ruler.textContent).toContain("已花 400 TWD／1,050 TWD");
     expect(ruler.textContent).toContain("38%");
   });
+});
+
+it("F52 does not call unknown platform rows running in the ruler heading", async () => {
+  // Projection of the actual native empty response: two platform rows, unknown delivery and unknown money.
+  const unknown = ["empty-a", "empty-b"].map(id => {
+    const item = ad(id, "還沒有讀到成效的廣告", "insufficient", null, null, {value: 350, basis: "own"});
+    return {...item, reason_code: "no_data", delivery: {state: "unknown" as const, label: "平台狀態不明"},
+      current: {...item.current, currency: null}};
+  });
+  vi.mocked(getTriage).mockResolvedValue(triage(unknown));
+  renderBody(campaignDetail(), {campaign: undefined});
+  const title = await rulerTitle();
+  expect(title).toBe("2 則對照上限 350 TWD");
+  expect(title).not.toContain("在投");
 });
 
 it("F52 makes initial and refreshed comparison reads explicit without presenting failed old data as current", async () => {
