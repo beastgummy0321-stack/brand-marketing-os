@@ -55,6 +55,11 @@ def apply_saved_task(conn, review, task):
         raise ValueError("已保存的模型結果與本回證據不符；不自動重送。")
     if task["status"] == "running":
         return None
+    stale = None
+    try:
+        review_rounds.check_learning_context(conn, review)
+    except ValueError as exc:
+        stale = str(exc)
     result, error = {}, "模型未完成；保留已知證據，不自動重送。"
     status = "failed" if task.get("cost") is not None else "unknown"
     if (
@@ -64,7 +69,11 @@ def apply_saved_task(conn, review, task):
         and review["llm_task_id"] == task["id"]
     ):
         return None
-    if task["status"] == "succeeded":
+    if stale:
+        error = stale
+        result = {"recommendations": [], "limitations": evidence["limitations"],
+                  "causality": "unavailable", "rejected": {"reason": stale}}
+    elif task["status"] == "succeeded":
         # A delivered reply that fails the fact check is not a failed round: the evidence is
         # still complete, so the round stays usable without an AI recommendation (Contract A).
         status, error = "ready", None
@@ -171,6 +180,7 @@ def run(org_id, brand_id, campaign_id, review_id):
             return
         evidence, sent = review["evidence_json"], False
         try:
+            review_rounds.check_learning_context(conn, review)
             provider = providers.select_provider(
                 review_rounds.PROVIDER, task_type=review_rounds.TASK_TYPE
             )

@@ -444,8 +444,15 @@ class RankedLearningsInDeliveryPlanPromptTest(PlanTestBase):
     （取代【座標成績表】），位置在行事曆之後、詞彙表之前（詞彙表永遠最後）；空品牌就寫「還沒有結案過的廣告」；用到的
     學習列 id 進 `knowledge_item_ids`。"""
 
+    def setUp(self):
+        super().setUp()
+        self.product = bi_repo.create_product(web.conn, self.brand_id, name="Current product",
+                                              actor=ACTOR)
+
     def _prompt(self) -> tuple[str, list]:
         campaign = self._create_adopted_campaign()
+        ads_repo.update_campaign(web.conn, self.org_id, self.brand_id, campaign["id"],
+                                 {"product_ids": [self.product["id"]]})
         provider = _fake(_VALID_PLAN_REPLY)
         plan.PROVIDER = provider
         with mock.patch.object(plan.gateway, "run_task", wraps=plan.gateway.run_task) as spy:
@@ -457,7 +464,7 @@ class RankedLearningsInDeliveryPlanPromptTest(PlanTestBase):
         (learning,) = _seed_closed(self.org_id, self.brand_id, [
             {"name": "上一期-免運", "verdict": "keep", "rank": 1, "of": 1, "sales": 6,
              "spend": 1200, "group": None, "angle": "angle_last"},
-        ])
+        ], product_id=self.product["id"])
         prompt, knowledge_item_ids = self._prompt()
         self.assertIn(_RANKED_HEADER, prompt)
         self.assertIn(
@@ -559,10 +566,19 @@ class RankedLearningGateTest(PlanTestBase):
         )
         self.assertIn("｜換掉・樣本少｜顧客群 2｜「通勤族・地鐵十分鐘」｜每筆 1,643", prompt)
 
-    def test_reusing_a_replaced_group_and_angle_is_refused(self):
-        self._assert_refused(_pair_reply(
+    def test_unknown_historical_replaced_pair_cannot_force_a_current_exclusion(self):
+        detail = self._adopt_reply(_pair_reply(
             {"new": (1, "box"), "retarget": (2, "metro"), "explore": (1, "other")},
         ))
+        self.assertEqual(detail["status"], "ready")
+        current = ads_repo.get_campaign(web.conn, self.org_id, self.brand_id, self.campaign["id"])
+        view = plan.planner_context.planner_context(
+            web.conn, self.org_id, self.brand_id, current["context_json"]["product_ids"][0],
+            campaign=current,
+        )["learnings"]["ranked"]
+        self.assertTrue(view["campaigns"][0]["rows"])
+        self.assertTrue(all(row["evidence"]["allowed_uses"] == []
+                            for row in view["campaigns"][0]["rows"]))
 
     def test_a_plan_can_explicitly_test_when_a_kept_ad_has_no_reusable_creative(self):
         # Contract S: an unavailable original is not silently copied as a missing-material ad.

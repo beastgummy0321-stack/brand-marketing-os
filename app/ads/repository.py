@@ -1019,6 +1019,7 @@ def campaign_detail(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str
         detail["budget_basis_json"] = {
             **budget_basis_json, "strategy": {**budget_basis_json["strategy"], "facts": facts,
                 "decision": strategy.served_decision(conn, org_id, brand_id, campaign, groups)},
+            "basis": strategy.served_basis(campaign, budget_basis_json.get("basis") or {}),
         }
     return detail
 

@@ -25,6 +25,7 @@ import math
 import re
 from copy import deepcopy
 
+from app import workbench
 from app.ads import (
     budget,
     calendar_tw,
@@ -37,6 +38,7 @@ from app.ads import (
     planner_context,
     sell_way,
     targets,
+    triage,
 )
 from app.ads import repository as ads_repo
 from app.brand_intelligence import benchmarks
@@ -289,7 +291,12 @@ def decision_context(ctx: dict, campaign: dict) -> dict:
         "menu": sorted((r["dimension"], r["key"]) for r in ctx["menu"]),
         "forbidden": ctx["forbidden"],
         "capacity": ctx.get("capacity"),
-        "learnings": [{"id": r["id"], "text": r.get("text")} for r in ctx["learnings"]["ads"]],
+        "learnings": sorted([
+            {"id": r["id"], "text": r["learning_text"],
+             "meaning_revision": (r.get("evidence") or {}).get("meaning_revision")}
+            for r in ctx["learnings"]["ads"]
+        ], key=lambda row: row["id"]),
+        "learning_revision": (ctx["learnings"].get("evidence_context") or {}).get("revision"),
         "ranked_ids": ctx["ranked_ids"],
         "calendar": ctx.get("calendar_evidence") or [],
         "brand_facts": [
@@ -311,6 +318,7 @@ def decision_context(ctx: dict, campaign: dict) -> dict:
                     for k in ("ad_id", "sales", "spend", "cost_per_sale", "verdict", "flags")
                 },
                 "coordinates": [(v["dimension"], v["key"]) for v in r.get("coordinates") or []],
+                "meaning_revision": (r.get("evidence") or {}).get("meaning_revision"),
             }
             for c in ctx["learnings"]["ranked"]["campaigns"]
             for r in c["rows"]
@@ -526,6 +534,44 @@ def _slot_display(ctx, slot):
         )) for r in displayed_refs],
         "evidence_omitted": len(refs) - len(displayed_refs),
     }
+
+
+def served_basis(campaign: dict, basis: dict) -> dict:
+    """Add conservative fields to an old display snapshot without reading today's ledger."""
+    result = deepcopy(basis)
+    product = (basis.get("planner_context") or {}).get("product_id")
+    rows = [{"id": row["id"], "org_id": campaign["org_id"], "brand_id": campaign["brand_id"],
+             "product_id": product, "learning_text": row.get("text") or "",
+             "applicability_scope": "", "needs_revalidation": row.get("needs_revalidation")}
+            for row in result.get("learnings") or [] if not row.get("evidence")]
+    for closed in (result.get("ranked_learnings") or {}).get("campaigns") or []:
+        for row in closed.get("rows") or []:
+            if not row.get("evidence"):
+                rows.append({"id": row["learning_id"], "org_id": campaign["org_id"],
+                             "brand_id": campaign["brand_id"],
+                             "product_id": closed.get("sell_way_id"),
+                             "learning_text": row.get("ad_name") or "", "applicability_scope": ""})
+    current = {"org_id": campaign["org_id"], "brand_id": campaign["brand_id"],
+               "product_id": product, "org_day": None, "conditions": {}, "mode": "real"}
+    projected = workbench.qualify_learning_evidence(
+        rows, current, min_result_events=triage.MIN_RESULT_EVENTS, max_age_days=180,
+    )
+    by_id = {item["id"]: item for item in projected["items"]}
+    for row in result.get("learnings") or []:
+        if not row.get("evidence"):
+            row["evidence"] = by_id[row["id"]]
+    ranked = result.get("ranked_learnings") or {}
+    for closed in ranked.get("campaigns") or []:
+        for row in closed.get("rows") or []:
+            if not row.get("evidence"):
+                row["evidence"] = by_id[row["learning_id"]]
+    context = {"schema_version": 1, "revision": projected["revision"], "scope_product_id": product,
+               "scope_label": None, "eligible_count": 0, "items": projected["items"][:30],
+               "omitted": max(len(projected["items"]) - 30, 0)}
+    result.setdefault("evidence_context", context)
+    if "ranked_learnings" in result:
+        ranked.setdefault("evidence_context", result["evidence_context"])
+    return result
 
 
 def served_decision(conn, org, brand, campaign, groups):

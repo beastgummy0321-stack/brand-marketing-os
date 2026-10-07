@@ -17,7 +17,7 @@ from app import workbench
 from app.brand_intelligence import repository as brands
 from app.core import db
 from app.llm import gateway, providers
-from app.workbench import jobs, repository, validate
+from app.workbench import encode_learning_scope, jobs, looks, repository, validate
 
 ACTOR = "測試員"
 
@@ -93,6 +93,28 @@ class CreativeGatewayContractTest(unittest.TestCase):
             conn, org_id=db.DEV_ORG_ID, name="Fixture shop", actor="test", client_name=None
         )["id"]
         workbench.register_tasks()
+        product = brands.create_product(conn, brand, name="Brief product", actor="test")
+        current = {"org_id": db.DEV_ORG_ID, "brand_id": brand, "product_id": product["id"],
+                   "result_kind": "purchase", "currency": "TWD", "attribution": "7d",
+                   "conditions": {"price_version": "queued-price",
+                                  "target_version": "queued-target",
+                                  "offers": [], "materials": [{"ad_id": "ad", "version": "old"}]}}
+        source = {"schema_version": 1, "source_kind": "campaign",
+                  "source_ref": {"trial_id": "old-trial"}, "source_version": "known-source",
+                  "provenance": "platform_observation", "direction": "support",
+                  "period": {"start": "2026-10-01", "end": "2026-10-02"},
+                  "scope": {"product_id": product["id"], "audience_key": "cold_unaware",
+                            "claim_key": "known-claim", "claim_family": "performance",
+                            "objective_family": "sales", "result_kind": "purchase",
+                            "currency": "TWD", "attribution": "7d"},
+                  "conditions": {"price_version": "queued-price", "target_version": "queued-target",
+                                 "offer_key": "none"}, "sample": {"result_events": 10}}
+        learning = brands.record_learning(
+            conn, brand, actor="test", product_id=product["id"],
+            learning_text="Historical proposition",
+            applicability_scope=encode_learning_scope("ads", source), source_track="ads",
+            confidence="validated", sample_size="10",
+        )
         creative = {
             "provenance": {
                 "state": "adopted",
@@ -125,6 +147,9 @@ class CreativeGatewayContractTest(unittest.TestCase):
                 "calendar": [{"id": "known-event", "name": "known period event"}],
                 "selected_offer": {"key": "none", "sentence": None},
                 "omitted": {"results": 18},
+                "learning_current": current,
+                "learning_min_result_events": 1,
+                "learnings": [{"id": learning["id"], "text": "Historical proposition"}],
             },
             "input_hash": "full-comparison-hash",
         }
@@ -138,6 +163,7 @@ class CreativeGatewayContractTest(unittest.TestCase):
                 "sets": [
                     {
                         "name": "Creative test",
+                        "product_id": product["id"],
                         "source_ref": {"fixture": "creative", "ad": "actual-ad"},
                         "required_outputs": {"copy": 1},
                         "request": {"copy_length": "short", "creative_brief": creative},
@@ -164,8 +190,14 @@ class CreativeGatewayContractTest(unittest.TestCase):
                 stop_reason="end_turn",
             )
         )
-        with patch.object(jobs, "PROVIDER", fake):
+        # Queued inputs cannot establish freshness after the owning ads conditions change.
+        current["conditions"]["target_version"] = "changed-after-enqueue"
+        current["conditions"]["materials"][0]["version"] = "changed-material"
+        with patch.object(jobs, "PROVIDER", fake), patch.object(
+            looks, "qualified_creative", wraps=looks.qualified_creative,
+        ) as qualify:
             jobs._run(conn, db.DEV_ORG_ID, brand, brief["id"], "copy", None)
+        self.assertEqual(qualify.call_args.args[3], product["id"])
         self.assertEqual(len(fake.calls), 1)
         prompt = fake.calls[0]["messages"][0]["content"]
         for expected in (
@@ -181,6 +213,13 @@ class CreativeGatewayContractTest(unittest.TestCase):
             self.assertIn(expected, prompt)
         self.assertEqual(prompt.count("exact original control"), 1)
         self.assertNotIn("full-comparison-hash", prompt)
+        refreshed = looks.qualified_creative(conn, db.DEV_ORG_ID, brand, product["id"], creative)
+        self.assertEqual(refreshed["comparison"]["learnings"][0]["evidence"]["allowed_uses"], [])
+        self.assertIn("Historical proposition", prompt)
+        self.assertIn(refreshed["comparison"]["learnings"][0]["evidence"]["support_label"], prompt)
+        self.assertEqual(repository.get_brief(conn, db.DEV_ORG_ID, brand, brief["id"])[
+            "request_json"]["creative_brief"]["comparison"]["learning_current"][
+                "conditions"]["target_version"], "queued-target")
         tasks = gateway.find_tasks_for_scope(
             conn,
             org_id=db.DEV_ORG_ID,

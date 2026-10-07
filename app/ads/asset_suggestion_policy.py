@@ -3,6 +3,7 @@
 import json
 import math
 import re
+from copy import deepcopy
 
 from app import workbench
 from app.brand_intelligence import repository as brands
@@ -184,3 +185,37 @@ def validate_reply(data, placements):
 
 def encode(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+
+
+def bounded_learning_input(value, max_chars):
+    """Bound model-only learning details; the full stored snapshot still defines its digest."""
+    result = deepcopy(value)
+    contexts, comparisons = [], []
+
+    def collect(node):
+        if isinstance(node, dict):
+            for key, item in node.items():
+                if key in {"evidence_context", "learning_context"} and isinstance(item, dict):
+                    if isinstance(item.get("items"), list):
+                        contexts.append((item, "items"))
+                elif key == "comparison" and isinstance(item, dict):
+                    # Owner-only freshness inputs travel to jobs, never to the model.
+                    item.pop("learning_current", None)
+                    item.pop("learning_min_result_events", None)
+                    comparisons.extend((item, key) for key in ("learnings", "results")
+                                       if isinstance(item.get(key), list))
+                collect(item)
+        elif isinstance(node, list):
+            for item in node:
+                collect(item)
+
+    collect(result)
+    for owner, key in [*contexts, *comparisons]:
+        while owner[key] and len(encode(result)) > max_chars:
+            owner[key].pop()
+            if key == "items":
+                owner["omitted"] = (owner.get("omitted") or 0) + 1
+            else:
+                omitted = owner.setdefault("omitted", {})
+                omitted[key] = (omitted.get(key) or 0) + 1
+    return result

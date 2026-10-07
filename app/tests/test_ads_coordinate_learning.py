@@ -11,6 +11,7 @@ them (`outcome_seed.bind_platform` + `external_repository.upsert_observation`).
 """
 
 import unittest
+from copy import deepcopy
 from datetime import UTC, date, datetime, timedelta
 from unittest.mock import patch
 
@@ -467,12 +468,13 @@ class RankedSectionTest(CoordinateLearningTestBase):
             "；其餘換掉",
         )
         self.assertEqual(
-            lines[4],
+            lines[4].split("｜歷史／待核對")[0],
             "- 三盒組・第一期第 1／4 名｜留下・相對最好，仍高於上限｜顧客群 1"
             "｜「考前一週・書包一盒」｜每筆 555｜賣 6 筆｜花 3,330｜cold（audience=cold）"
             "、熬夜讀不完（pain=effort）、書包裡放一盒（angle=box）、h1（hook=h1）"
             "、pr1（proof=pr1）、未設定（offer=none）、f1（format=f1）",
         )
+        self.assertIn("歷史／待核對，不能作本期市場支持：演練資料", lines[4])
         self.assertTrue(lines[5].startswith(
             "- 三盒組・第一期第 2／4 名｜換掉・樣本少｜顧客群 2｜「通勤族・地鐵十分鐘」"
             "｜每筆 1,643｜",
@@ -483,14 +485,14 @@ class RankedSectionTest(CoordinateLearningTestBase):
         ))
         self.assertEqual(set(ids), {row["id"] for row in self._coordinate_rows()})
 
-        # A campaign that does not list the group reads 「這期沒列」.
+        # An unselected product cannot borrow another product's ranked results.
         bare = ads_repo.create_campaign(self.conn, self.org_id, self.brand_id, {
             "name": "沒商品", "goal_text": "x", "objective": "購買", "status": "draft",
         }, created_by=ACTOR)
         self.conn.commit()
-        text, _ = coordinate_learning.ranked_section(self.conn, self.org_id, self.brand_id, bare)
-        self.assertIn("｜顧客群 這期沒列：學生備考｜「考前一週・書包一盒」", text)
-        self.assertIn("- 顧客群 這期沒列：學生備考｜", text)
+        text, ids = coordinate_learning.ranked_section(self.conn, self.org_id, self.brand_id, bare)
+        self.assertEqual(text, coordinate_learning.EMPTY_SECTION)
+        self.assertEqual(ids, [])
 
     def test_a_group_whose_campaigns_had_different_caps_prints_no_cap(self):
         """F51 (planning #16): a cross-campaign 每筆 is never set against one campaign's cap."""
@@ -501,7 +503,12 @@ class RankedSectionTest(CoordinateLearningTestBase):
         }
         view = {
             "campaigns": [{"campaign_name": "第二期", "cap": 300, "rule_text": "r",
-                           "empty_reason": None, "rows": [row]}],
+                           "sell_way_id": self.product_id, "currency": "TWD",
+                           "empty_reason": None, "rows": [row]},
+                          {"campaign_name": "第一期", "cap": 400, "rule_text": "r",
+                           "sell_way_id": self.product_id, "currency": "TWD",
+                           "empty_reason": None, "rows": [{**row, "learning_id": "lrn_2",
+                               "spend": 500, "cost_per_sale": 250}]}],
             "groups": [{"customer_group_id": "g1", "who": "學生備考", "ads": 2, "sales": 4,
                         "spend": 1100, "cost_per_sale": 275, "cap": None, "caps_differ": True}],
             "next": None,
@@ -516,10 +523,27 @@ class RankedSectionTest(CoordinateLearningTestBase):
 
 
 class GatePairsTest(CoordinateLearningTestBase):
+    def test_actual_simulation_rank_cannot_force_current_keep_or_replace(self):
+        campaign, _ads = self._drill_ten()
+        self._close(campaign)
+        view = coordinate_learning.prompt_view(self.conn, self.org_id, self.brand_id)
+        self.assertTrue(view["campaigns"][0]["rows"])
+        self.assertTrue(all(row["evidence"]["provenance"] == "simulation"
+                            and row["evidence"]["allowed_uses"] == []
+                            for row in view["campaigns"][0]["rows"]))
+        self.assertEqual(coordinate_learning.gate_pairs(view, {g["id"] for g in self.groups}),
+                         (set(), set()))
+
     def test_keep_and_replace_pairs_only_count_listed_groups(self):
         campaign, _ads = self._drill_ten()
         self._close(campaign)
         view = coordinate_learning.prompt_view(self.conn, self.org_id, self.brand_id)
+        # The gate's unit input is a qualified test projection; the actual simulation case
+        # above proves that the production source reader never emits this permission for it.
+        view = deepcopy(view)
+        for closed in view["campaigns"]:
+            for row in closed["rows"]:
+                row["evidence"] = {"use_state": "usable", "allowed_uses": ["test"]}
         students, commuters = self.groups[0]["id"], self.groups[1]["id"]
 
         keep, replace = coordinate_learning.gate_pairs(view, {students, commuters})
