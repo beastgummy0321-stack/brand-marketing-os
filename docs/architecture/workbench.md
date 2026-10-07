@@ -421,3 +421,33 @@ checks. Existing name stripping already implements this intent, so the drill12 �
 an exact contextual reproduction. No global token allowance, arbitrary alias generation or entire
 sentence exemption is permitted. Workbench warning and ads-slot refusal reuse the same verdict.
 Statutory reminders remain distinct from forbidden facts; this work supplies no legal clearance.
+
+
+### 5.19 First-release learning qualification (F53, planned 2026-10-07)
+
+Status: implementation proposal awaiting the plan/prototype checkpoint. The authoritative
+evidence schema, compatibility, support, current applicability and gates are
+[ads §6.55](ads.md#655-supervised-first-release-evidence-contract-f53-planned-2026-10-07).
+This changes evidence truth/usage, not F52 copy/image quality or its historical acceptance.
+
+The narrow pure `learning_evidence.py` helper is owned by workbench because creative and image
+consumers already read the ledger here; ads uses it only through `app.workbench`. It encodes
+the existing scope plus versioned trailer, decodes legacy rows, normalizes actual learning_text
+and qualifies prepared rows against explicit current inputs. No SQL/model/clock, ads import,
+new framework or second ledger. Public signatures are the three functions in ads §6.55.
+Source extraction, money and thresholds stay in ads; facade storage remains unchanged.
+
+`looks.visual_learnings` and `jobs` pass the actual brief product, frozen creative audience,
+current conditions and org day to this same qualifier. A same-audience learning from another
+product, simulation, an operation receipt, expired offer or changed material is not a visual
+winner. Unknown scope/provenance stays historical. Retain the existing 180-day visual horizon,
+caps, real-data comparisons, source IDs and association caveat. Compare the base visual scope
+only after decoding the trailer. Selected known brand facts may support creative propositions;
+they never become market proof. No reverse dependency or broad legacy migration.
+
+`planner_context.creative_projection` and the existing `prompts.creative_text` carry the
+normalized source/support/eligibility qualification into copy/review. Model-ready sections are
+capped, relevant and explicit about unknowns. Historical/control data may support a labelled
+test or faithful carry, not automatic promotion. Numbers, truth labels and suitability are
+prepared by code; judgment still uses the existing gateway. Preserve five copy candidates,
+explicit none offer, original carried creative, claims guard and accepted revision/receipt.

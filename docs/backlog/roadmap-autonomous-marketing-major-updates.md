@@ -2,6 +2,36 @@
 
 狀態：2026-09-18 dig 收尾。保存已確認方向及未定案候選；不是實作授權或執行佇列。近期工程獨立見 [既有 Campaign 與自帶素材](engineering-existing-campaigns-user-assets.md)，不以此文件擴張近期範圍。
 
+## First-release carve — 2026-10-07
+
+Status: concrete [F53 plan](../../.work/features/F53.md) and nine ordered issues are ready;
+implementation awaits the user's single plan/prototype checkpoint. The user selected this
+Windows host for local/private own-brand use. No issue has been started or authorized.
+
+The settled evidence/source/applicability/support/revision/wire contract, complete writer/reader
+inventory and frozen G1-G8 gates moved to [ads §6.55](../architecture/ads.md#655-supervised-first-release-evidence-contract-f53-planned-2026-10-07).
+Workbench ownership and copy/visual usage are in [workbench §5.19](../architecture/workbench.md#519-first-release-learning-qualification-f53-planned-2026-10-07).
+This replaces the earlier candidate plan rather than creating a parallel product specification.
+[Handoff](../drills/drill-12/first-release/Handoff.md) locates the current stop/resume boundary;
+[probe](../drills/drill-12/launch-direction-probe.md) preserves unique original counterexamples,
+and [cases](../drills/drill-12/first-release/cases.json) freezes expectations before code changes.
+
+The [HTML prototype](../../.harness/scratch/prototype/first-release-learning/index.html) remains
+proposed pending approval: strategy basis, brand learning and execution-confirmation learning
+card, with sources, cold start, failure/retry, contrary results and changed conditions. Its 27
+historical fake-data checks are not product acceptance. Workers read HTML and reference facts;
+final UI delivery requires fresh reference/build pairs at 1024 and 1920.
+
+First-release outcome remains defensible direction, faithful accepted execution and traceable
+next-period adaptation. Copy/image polish, simulated profit and optimal strategy are not gates;
+fabrication, wrong scope/money/bindings, input loss and unrecoverable supported flows are blockers.
+Bounded real-provider proof and genuine local auth/backup recovery are still unverified.
+No repair/readiness percentage follows from case/issue counts. F48-F52 remain open; F52's
+unchanged original final nine-dimension acceptance stays paused. Approval of F53 cannot close it.
+
+The later autonomous/multi-platform roadmap below is preserved and remains outside F53.
+Public deployment, push, paid calls and platform mutation are not authorized by this plan.
+
 ## 已確認方向
 
 - 平台未來像行銷公司：使用者提供產品、目標與預算後，系統建議平台、配置預算、準備內容、執行並持續優化。
