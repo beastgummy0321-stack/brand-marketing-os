@@ -6,7 +6,7 @@
  * period grade, the data-status chips, 重新讀取平台／結案這一期 opening the shared close dialog, closed／imported states)
  * and the two program lines under the ruler title (local ads never built, platform ads not built here). */
 import { ApiResponseError } from "@/lib/http";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -1039,6 +1039,33 @@ describe("served recent money units", () => {
     expect(ruler.textContent).toContain("已花 400 TWD／1,050 TWD");
     expect(ruler.textContent).toContain("38%");
   });
+});
+
+it("F52 makes initial and refreshed comparison reads explicit without presenting failed old data as current", async () => {
+  let first!: (data: AbPairsView) => void;
+  let fail!: (reason: Error) => void;
+  vi.mocked(getAbPairs).mockImplementationOnce(() => new Promise(resolve => {first = resolve;}))
+    .mockImplementationOnce(() => new Promise((_, reject) => {fail = reject;}))
+    .mockResolvedValueOnce(abView([judgedPair()]));
+  vi.mocked(getTriage).mockResolvedValue(triage(dailyAds()));
+  const ui = renderBody(campaignDetail(), {campaign: undefined});
+  expect(await screen.findByText("正在讀取兩則比較…")).toBeTruthy();
+  await act(async () => first(abView([judgedPair()])));
+  const element = await screen.findByTestId("ab-block");
+  const block = within(element);
+  const fold = block.getByRole("button", {name: "怎麼比的"});
+  fireEvent.click(fold);
+  ui.rerender({readGeneration: 1});
+  expect(await block.findByText("正在更新比較…")).toBeTruthy();
+  expect(screen.getByTestId("ab-block")).toBe(element);
+  expect(fold.getAttribute("aria-expanded")).toBe("true");
+  expect((block.getByRole("button", {name: "關掉輸家（A）→"}) as HTMLButtonElement).disabled).toBe(true);
+  await act(async () => fail(new Error("本次兩則比較尚未讀到")));
+  expect(await screen.findByText(/本次兩則比較尚未讀到/)).toBeTruthy();
+  expect(screen.queryByTestId("ab-block")).toBeNull();
+  fireEvent.click(screen.getByRole("button", {name: "重試"}));
+  expect(await screen.findByTestId("ab-block")).toBeTruthy();
+  expect(pauseAbLoser).not.toHaveBeenCalled();
 });
 
 it("F52 preserves the open actual row menu while its terminal-generation reread is pending", async () => {

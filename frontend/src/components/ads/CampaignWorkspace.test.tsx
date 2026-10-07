@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeCampaign, getCampaign, getPerformance, type CampaignDetail, type CampaignPerformance } from "@/lib/adsApi";
 import { ApiResponseError } from "@/lib/http";
 import { getTriage, getQueue, type CampaignTriage, type TriageItem } from "@/lib/adsTriageApi";
-import { getAbPairs } from "@/lib/adsAbApi";
+import { getAbPairs, type AbPair } from "@/lib/adsAbApi";
 import { listMaterialTasks } from "@/lib/adsMaterialApi";
 import { readComparison } from "@/lib/adsExperimentApi";
 import { completeExternalView, existingCampaigns, syncCampaign, syncJob, syncOutcome, type CampaignSyncOutcome } from "@/lib/adsExternalApi";
@@ -397,6 +397,56 @@ describe("F52 actual composed settlement", () => {
     expect(dialog.queryByText("已重新讀取；按「確認結案」再核對一次。")).toBeNull();
     expect((dialog.getByRole("button", {name: "確認結案"}) as HTMLButtonElement).disabled).toBe(true);
     expect(closeCampaign).toHaveBeenCalledTimes(1);
+  });
+  it("refreshes the real nonempty comparison metrics and winner action after terminal settlement", async () => {
+    vi.useFakeTimers({shouldAdvanceTime: true});
+    const trace: string[] = []; let terminal = false;
+    const pair = (fresh: boolean): AbPair => ({pair_id: "e1:e2", group_id: "g1", group_name: "實際比較組",
+      dimension: "hook", dimension_label: "開場",
+      a: {ad_id: "a1", entity_id: "e1", name: "開箱畫面", value_label: "開箱", thumbnail_url: null,
+        spend: fresh ? 560 : 330, results: fresh ? 10 : 6, cost_per_result: fresh ? 56 : 55},
+      b: {ad_id: "a2", entity_id: "e2", name: "出門情境", value_label: "出門", thumbnail_url: null,
+        spend: fresh ? 720 : 410, results: fresh ? 16 : 11, cost_per_result: fresh ? 45 : 37.27},
+      window: {start: "2026-09-17", end: "2026-09-23"}, days: 7,
+      rules: {min_days: 7, min_conversions_each: 10, relative_difference: 0.1}, state: fresh ? "judged" : "collecting",
+      missing: {days: 0, a_results: fresh ? 0 : 4, b_results: 0}, winner: fresh ? "b" : null,
+      difference_pct: fresh ? 19.6 : null, reason: fresh ? "出門情境每次轉換成本低 19.6%" : null, decision: null});
+    const c = detail({context_json: {}, asset_readiness: {ready_count: 2, total: 2},
+      lifecycle: {state: "live", label: "投放中", can_close: true}});
+    vi.mocked(getCampaign).mockResolvedValue(c);
+    vi.mocked(getTriage).mockImplementation(async () => {
+      const result = observed(terminal ? 380 : 400);
+      return {...result, items: [result.items[0], {...result.items[0], entity_id: "e2", native_id: "n2", name: "出門情境"}]};
+    });
+    vi.mocked(getPerformance).mockImplementation(async () => {
+      const result = period(terminal ? 22800 : 24000);
+      return {...result, totals: {...result.totals, purchases: 60, cpa: terminal ? 380 : 400, revenue: 48000,
+        roas_tracked_spend: 48000 / result.totals.spend!, roas_all_spend: 48000 / result.totals.spend!}};
+    });
+    vi.mocked(getAbPairs).mockImplementation(async () => {trace.push(`ab-pairs ${terminal ? "fresh" : "old"}`);
+      return {pairs: [pair(terminal)], unavailable: null};});
+    vi.mocked(syncCampaign).mockImplementation(async () => {trace.push("POST acknowledged");
+      return {job: {id: "aes_1", status: "pending", last_success_at: null}};});
+    vi.mocked(syncOutcome).mockImplementationOnce(async () => {trace.push("outcome running");
+      return {state: "running", code: null, text: "正在讀取平台資料", job_ids: ["aes_1"], last_success_at: null};})
+      .mockImplementationOnce(async () => {terminal = true; trace.push("outcome found");
+        return {state: "found", code: null, text: "已讀到平台資料", job_ids: ["aes_1"], last_success_at: "2026-09-24T04:30:00Z"};});
+    try {
+      renderAt("/brands/b/ads/campaigns/c?tab=perf");
+      const block = within(await screen.findByTestId("ab-block"));
+      expect(block.queryByRole("button", {name: "關掉輸家（A）→"})).toBeNull();
+      const fold = block.getByRole("button", {name: "怎麼比的"}); fireEvent.click(fold);
+      await act(async () => fireEvent.click(within(screen.getByTestId("period-status-row")).getByRole("button", {name: "重新讀取平台"})));
+      expect(trace).toContain("outcome running");
+      await act(async () => vi.advanceTimersByTimeAsync(3000));
+      await within(screen.getByTestId("period-status-row")).findByText("22,800 TWD");
+      console.info("F52 actual comparison settlement trace", JSON.stringify(trace));
+      expect(await block.findByRole("button", {name: "關掉輸家（A）→"})).toBeTruthy();
+      expect(block.getByText("56 元")).toBeTruthy();
+      expect(block.getByText("45 元")).toBeTruthy();
+      expect(block.getByText(/每筆便宜 19\.6%/)).toBeTruthy();
+      expect(fold.getAttribute("aria-expanded")).toBe("true");
+    } finally {vi.useRealTimers();}
   });
 });
 

@@ -333,7 +333,7 @@ export function CampaignPerfBody({ brandId, campaignId, origin, advanced, triage
             campaign={campaign}
             onAdClick={(id) => { const a = actions.get(id); if (a) navigate(a.href); }}
           />
-          {origin !== "imported" && <AbBlock brandId={brandId} campaignId={campaignId} breakEven={breakEven} />}
+          {origin !== "imported" && <AbBlock brandId={brandId} campaignId={campaignId} breakEven={breakEven} readGeneration={readGeneration} />}
           {queue.status === "error" && (
             <ReadFailed what={`決策進度讀不到（${queue.error}）；成績照常可看，哪幾則在清理提議或要處理暫時看不到。`} onRetry={queue.reload} />
           )}
