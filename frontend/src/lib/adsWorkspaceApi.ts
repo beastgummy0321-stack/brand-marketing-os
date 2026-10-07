@@ -26,7 +26,7 @@
  *   there are more); superseded and deferred sets are not listed. */
 import { apiFetch, readJson } from "./http";
 import { BASE, type CampaignLifecycle, type CampaignNextAction, type DeliveryState, type RunningAds } from "./adsApi";
-import type { TriageGrade, TriageSampleView } from "./adsTriageApi";
+import type { CapComparison, TriageGrade, TriageSampleView } from "./adsTriageApi";
 import type { SlotState } from "./adsSlotsApi";
 
 export type WorkspaceStageKey = "plan" | "assets" | "launch" | "read" | "decide" | "review";
@@ -123,6 +123,9 @@ export interface StructureAd {
   /** F48 Contract R: the graded window's sample size (shown as 「樣本少」 when `few`, never a gate); `null` without a grade. */
   sample: TriageSampleView | null;
   cost_per_result: number | null;
+  /** Exact triage window evidence; absent legacy fields remain unknown. */
+  currency?: string | null;
+  cap_comparison?: CapComparison | null;
   results: number | null;
   closing: boolean;
   /** Only on a planned ad not on a platform yet whose material is not ready. F49 Contract T: kept only as

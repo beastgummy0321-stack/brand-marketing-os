@@ -133,7 +133,7 @@ function Workspace({ brandId, campaignId }: { brandId: string; campaignId: strin
   }
 
   const campaign = state.status === "ready" ? state.campaign : null;
-  const ws = workspace.status === "ready" ? workspace.data : null;
+  const ws = workspace.status === "error" ? null : workspace.data;
   // Only a campaign not on a platform yet gets the publish page.
   const canPublish = campaign ? campaign.origin !== "imported" && !campaign.capabilities?.unavailable.publish && (campaign.status === "draft" || campaign.status === "ready") : false;
 
@@ -170,7 +170,7 @@ function Workspace({ brandId, campaignId }: { brandId: string; campaignId: strin
   } else if (tab === "overview") {
     const advanced = <OverviewTab campaign={campaign} onChangeTab={go} platformSync={campaign.origin === "imported" ? platformSync : undefined} />;
     body = ws
-      ? <OverviewBody brandId={brandId} campaign={campaign} workspace={ws} canPublish={canPublish} onGo={go} advanced={advanced} />
+      ? <OverviewBody brandId={brandId} campaign={campaign} workspace={ws} canPublish={canPublish} onGo={go} advanced={advanced} readGeneration={readGeneration} refreshing={workspace.status === "loading"} />
       : workspace.status === "loading" ? <Skeleton className="h-60 w-full" />
       // The head already shows the progress read's failure with 重試; the folded overview stays reachable.
       : <Disclosure label="進階：更多活動資訊">{advanced}</Disclosure>;

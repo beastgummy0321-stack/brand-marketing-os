@@ -56,9 +56,10 @@ export function CapChip({ campaign: c }: { campaign: CampaignDetail }) {
   const who = c.name.split("・")[0] || c.name;
   if (c.cap.value === null || c.cap.basis === null) return <Chip tone="warn">沒設上限</Chip>;
   const value = formatAmount(c.cap.value);
+  const currency = c.cap.cap_unit?.currency ?? "幣別未知";
   return c.cap.basis === "break_even"
-    ? <Chip tone="warn" className="max-w-[22rem]"><span className="truncate">{who}暫用</span><Term k="break_even" value={c.cap.value}>打平線</Term> {value}</Chip>
-    : <Chip tone="accent" className="max-w-[22rem]"><span className="truncate">{who}的</span><Term k="cap">上限</Term> {value}</Chip>;
+    ? <Chip tone="warn" className="max-w-[22rem]"><span className="truncate">{who}暫用</span><Term k="break_even" value={c.cap.value}>打平線</Term> {value} {currency}</Chip>
+    : <Chip tone="accent" className="max-w-[22rem]"><span className="truncate">{who}的</span><Term k="cap">上限</Term> {value} {currency}</Chip>;
 }
 
 /** A draft has no platform ads yet: the workspace says so (`draft` block); before it answers, the campaign's served
@@ -69,14 +70,19 @@ export function isDraftCampaign(c: CampaignDetail, ws: CampaignWorkspace | null)
   return c.origin !== "imported" && (c.status === "draft" || c.status === "ready");
 }
 
-/** 「在投 N 則」 from the served `running`, with 「（MM/DD HH:MM 讀取）」 when the count rests on a stale read and the
- * unknown ads apart; null before the workspace answers. */
-export function runningText(ws: CampaignWorkspace | null, timezone: string): string | null {
+/** Only a complete current read can claim current delivery. Other counts retain their
+ * observation time, or disclose an unknown read time; legacy absence never erases a count. */
+export function runningText(ws: Pick<CampaignWorkspace, "running"> | null, timezone: string, closed = false): string | null {
   if (!ws) return null;
   const r = ws.running;
-  if (!r) return `在投 ${ws.active_ads} 則`;
-  const when = r.stale ? (r.read_at ? `（${formatInstant(r.read_at, timezone, "md_hm")} 讀取）` : "（還沒讀到平台）") : "";
-  return `在投 ${r.count} 則${when}${r.unknown > 0 ? `・${r.unknown} 則狀態不明` : ""}`;
+  if (!r) return "平台投放狀態待確認";
+  const known = r.freshness === "read" && !r.stale && r.read_at !== null && r.state !== undefined && r.state !== "unknown";
+  const unknown = r.unknown > 0 ? `・${r.unknown} 則狀態不明` : "";
+  if (known) return closed ? r.count > 0 ? `平台上還開著 ${r.count} 則${unknown}` : `${r.label ?? "平台未在投放"}${unknown}`
+    : `${r.state === "running" ? "" : `${r.label ?? "平台未在投放"}・`}在投 ${r.count} 則${unknown}`;
+  const observed = r.read_at ? `・上次讀取${closed ? "平台開著" : "在投"} ${r.count} 則（${formatInstant(r.read_at, timezone, "md_hm")} 讀取）`
+    : `・紀錄中 ${r.count} 則標示${closed ? "開著" : "在投"}（完整讀取時間未知，還沒完整讀到平台）`;
+  return `${r.label ?? "平台投放狀態待確認"}${observed}${unknown}`;
 }
 
 export function WorkspaceHead({ brandId, campaign: c, workspace, tab, onTab, showTabs = true }: {
@@ -95,8 +101,7 @@ export function WorkspaceHead({ brandId, campaign: c, workspace, tab, onTab, sho
   const draft = c ? isDraftCampaign(c, ws) : false;
   const life = c?.lifecycle ?? ws?.lifecycle ?? null;
   const closed = life?.state === "closed";
-  const running = runningText(ws, timezone);
-  const stillOpen = ws ? (ws.running?.count ?? ws.active_ads) : 0;
+  const running = runningText(ws, timezone, closed);
   const pending = ws?.pending_count ?? null;
   const items = WORKSPACE_TABS.map((t) => (t.value === "overview" && pending !== null && pending > 0 ? { ...t, count: pending } : t));
 
@@ -114,15 +119,14 @@ export function WorkspaceHead({ brandId, campaign: c, workspace, tab, onTab, sho
               // An imported objective can be a whole sentence: only it truncates, 「・在投 N 則」 always shows.
               <Chip className="max-w-[26rem] gap-0">
                 <span className="min-w-0 truncate" title={c.objective || undefined}>{c.objective || "目標待確認"}</span>
-                {closed
-                  ? stillOpen > 0 && <span className="shrink-0">・平台上還開著 {stillOpen} 則</span>
-                  : running && <span className="shrink-0">・{running}</span>}
+                {running && <span className="shrink-0">・{running}</span>}
               </Chip>
             )}
             {ws && ws.daily_budget !== null && ws.daily_budget > 0 && <Chip>每日 {formatAmount(ws.daily_budget)}</Chip>}
             <Chip>{periodText(c)}</Chip>
             <CapChip campaign={c} />
           </div>
+          {ws?.running?.reason && <p className="mt-2 text-xs text-muted-foreground">{ws.running.reason}</p>}
         </div>
       ) : (
         <div className="mt-4 flex flex-col gap-2"><Skeleton className="h-8 w-80" /><Skeleton className="h-6 w-96" /></div>

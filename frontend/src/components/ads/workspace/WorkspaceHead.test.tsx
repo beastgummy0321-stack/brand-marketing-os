@@ -19,14 +19,16 @@ const LIFE = {
   closed: { state: "closed", label: "已結案", can_close: false },
   importedLive: { state: "live", label: "本期進行中", can_close: false },
 } as const;
-const CAP = { value: 450, basis: "own", own_value: 450, break_even: 520, price: 1580, product_id: null, result_kind: "purchase", result_label: "購買", missing: [], revision: 1 };
+const CAP = { value: 450, basis: "own", own_value: 450, break_even: 520, price: 1580, product_id: null, result_kind: "purchase", result_label: "購買", missing: [], revision: 1,
+  cap_unit: { basis: "own", currency: "TWD", source: "user", unit_basis: "manual_ntd_input" },
+  break_even_unit: { basis: "break_even", currency: "TWD", source: "product_economics", unit_basis: "confirmed_product_economics" } };
 function detail(o: Partial<CampaignDetail> = {}): CampaignDetail {
   return { id: "cmp_1", name: "日常商品推廣・轉換", objective: "購買", origin: "internal", status: "live", lifecycle: LIFE.live, cap: CAP,
     start_date: "2026-09-08", end_date: "2026-10-08", groups: [], ...o } as unknown as CampaignDetail;
 }
 function ws(o: Partial<CampaignWorkspace> = {}): CampaignWorkspace {
   return { stage: { key: "decide", done: ["plan", "assets", "launch", "read"] }, pending_count: 2, delivery: "live", daily_budget: 1200, active_ads: 8,
-    running: { count: 8, unknown: 0, read_at: "2026-09-23T04:40:00Z", stale: false },
+    running: { count: 8, unknown: 0, read_at: "2026-09-23T04:40:00Z", stale: false, state: "running", freshness: "read" },
     can_support: 6, next_sync_at: null, missing_days: [], totals: null, draft: null, ...o };
 }
 const ready = (data: CampaignWorkspace): ApiRead<CampaignWorkspace> => ({ status: "ready", data, error: null, reload: vi.fn() });
@@ -41,6 +43,25 @@ const chips = () => [...document.querySelectorAll("[data-slot=chip]")].map((e) =
 });
 
 describe("WorkspaceHead (F30-I07, v10 wsHead)", () => {
+  it("F52unread: public cache count remains visible without a successful read timestamp", () => {
+    // Captured real GET running shape; raw payload remains in the immutable evidence directory.
+    renderHead(detail(), ready(ws({ active_ads: 6, running: { count: 6, unknown: 0, not_running: 0, off: 0,
+      scheduled: 0, read_at: null, stale: false, freshness: "unread", state: "unknown",
+      label: "平台投放狀態待確認", reason: "還沒有成功讀取平台投放結構，不能確認目前投放狀態。" } })));
+    expect(chips().join("|")).toMatch(/紀錄中.*6 則/);
+    expect(chips().join("|")).toContain("完整讀取時間未知");
+    expect(chips().join("|")).toContain("平台投放狀態待確認");
+  });
+  it("F52: a failed read retains the observed count without claiming current running", () => {
+    renderHead(detail(), ready(ws({ delivery: "unknown", active_ads: 1, running: {
+      count: 1, unknown: 0, off: 0, not_running: 0, scheduled: 0,
+      read_at: "2026-09-20T06:00:00Z", stale: false, freshness: "failed", state: "unknown",
+      label: "平台投放狀態待確認", reason: "本次平台結構讀取失敗；保留上次成功讀取時間與已知廣告數量。",
+    } })));
+    expect(chips().join("|")).toContain("上次讀取在投 1 則");
+    expect(chips().join("|")).toContain("平台投放狀態待確認");
+    expect(screen.getByText(/本次平台結構讀取失敗/)).toBeTruthy();
+  });
   it("F52: known paused zero keeps the served period word and does not say the platform was unread", () => {
     renderHead(detail(), ready(ws({ delivery: "off", active_ads: 0, running: {
       count: 0, unknown: 0, off: 2, not_running: 0, scheduled: 0, read_at: "2026-10-01T00:00:00Z",
@@ -61,7 +82,7 @@ describe("WorkspaceHead (F30-I07, v10 wsHead)", () => {
   it("live: the served lifecycle word, objective・在投 N 則, 每日, period, the campaign's own cap; the rail marks done stations and the current one", () => {
     renderHead(detail(), ready(ws()));
     expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("日常商品推廣・轉換");
-    expect(chips()).toEqual(["本期進行中", "購買・在投 8 則", "每日 1,200", "09/08 – 10/08", "日常商品推廣的上限 450"]);
+    expect(chips()).toEqual(["本期進行中", "購買・在投 8 則", "每日 1,200", "09/08 – 10/08", "日常商品推廣的上限 450 TWD"]);
     expect(document.querySelector('[data-slot=chip][data-tone="accent"]')).toBeTruthy();
     const rail = screen.getByRole("navigation", { name: "活動進度" });
     const current = within(rail).getByRole("link", { current: "step" });
@@ -82,21 +103,24 @@ describe("WorkspaceHead (F30-I07, v10 wsHead)", () => {
     expect(screen.getByRole("button", { name: /^總覽/ }).textContent).toBe("總覽");
   });
 
-  it("F47-I08: a closed campaign never says 在投 — 已結案 and 平台上還開著 N 則, or 已結案 once every platform ad is closed", () => {
+  it("a closed legacy unread campaign never promotes retained counts to current platform proof", () => {
     const closed = detail({ status: "closed", lifecycle: LIFE.closed });
     const stage = { key: "review" as const, done: ["plan", "assets", "launch", "read", "decide"] as never };
     const { unmount } = render(<MemoryRouter><WorkspaceHead brandId="brd_1" campaign={closed}
       workspace={ready(ws({ stage, delivery: null, pending_count: 0, active_ads: 6, running: { count: 6, unknown: 0, read_at: null, stale: false } }))} tab="overview" onTab={vi.fn()} /></MemoryRouter>);
-    expect(chips().slice(0, 2)).toEqual(["已結案", "購買・平台上還開著 6 則"]);
+    expect(chips()[0]).toBe("已結案");
+    expect(chips()[1]).toContain("紀錄中 6 則標示開著");
+    expect(chips()[1]).toContain("完整讀取時間未知");
     unmount();
     renderHead(closed, ready(ws({ stage, delivery: null, pending_count: 0, active_ads: 0, running: { count: 0, unknown: 0, read_at: null, stale: false } })));
-    expect(chips().slice(0, 2)).toEqual(["已結案", "購買"]);
-    expect(document.body.textContent).not.toContain("在投");
+    expect(chips()[0]).toBe("已結案");
+    expect(chips()[1]).toContain("紀錄中 0 則標示開著");
+    expect(chips()[1]).toContain("平台投放狀態待確認");
   });
 
   it("a break-even cap reads 暫用打平線 in warn; an unknown daily budget and pending count print nothing", () => {
     renderHead(detail({ cap: { ...CAP, value: 520, basis: "break_even", own_value: null } as never }), ready(ws({ daily_budget: null, pending_count: null })));
-    expect(chips()).toEqual(["本期進行中", "購買・在投 8 則", "09/08 – 10/08", "日常商品推廣暫用打平線 520"]);
+    expect(chips()).toEqual(["本期進行中", "購買・在投 8 則", "09/08 – 10/08", "日常商品推廣暫用打平線 520 TWD"]);
     expect(document.querySelector('[data-slot=chip][data-tone="warn"]')?.textContent).toContain("打平線");
     expect(screen.getByRole("button", { name: /^總覽/ }).textContent).toBe("總覽");
   });
@@ -122,7 +146,7 @@ describe("WorkspaceHead (F30-I07, v10 wsHead)", () => {
     expect(reload).toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "成效" }));
     expect(onTab).toHaveBeenCalledWith("perf");
-    expect(chips()).toEqual(["本期進行中", "購買", "09/08 – 10/08", "日常商品推廣的上限 450"]);
+    expect(chips()).toEqual(["本期進行中", "購買", "09/08 – 10/08", "日常商品推廣的上限 450 TWD"]);
   });
 
   it("F49 Contract L (drill-11 p2): an ended campaign reads 已結束・待結案 (warn), never 投放中, even while its stored status is live", () => {
@@ -133,15 +157,15 @@ describe("WorkspaceHead (F30-I07, v10 wsHead)", () => {
     expect(word).toBe("已結束・待結案");
     expect(document.querySelector('[data-slot=chip][data-state="ended"]')!.getAttribute("data-tone")).toBe("warn");
     expect(chips().join("|")).not.toContain("本期進行中");
-    expect(chips()[1]).toBe("購買・在投 6 則");
+    expect(chips()[1]).toContain("購買・平台投放狀態待確認・上次讀取在投 6 則");
   });
 
   it("F49 Contract L (drill-11 E5): a stale read prints its time beside 在投, unknown ads apart; never a read stays honest", () => {
     renderHead(detail(), ready(ws({ active_ads: 0, running: { count: 0, unknown: 2, read_at: "2026-10-04T04:28:00Z", stale: true } })));
-    expect(chips()[1]).toMatch(/^購買・在投 0 則（10\/04 12:28 讀取）・2 則狀態不明$/);
+    expect(chips()[1]).toMatch(/^購買・平台投放狀態待確認・上次讀取在投 0 則（10\/04 12:28 讀取）・2 則狀態不明$/);
     cleanup();
     renderHead(detail(), ready(ws({ active_ads: 0, running: { count: 0, unknown: 0, read_at: null, stale: true } })));
-    expect(chips()[1]).toBe("購買・在投 0 則（還沒讀到平台）");
+    expect(chips()[1]).toContain("購買・平台投放狀態待確認・紀錄中 0 則標示在投");
   });
 
   it("the stage rail and the 總覽 badge are the served stage and pending_count: an approved, confirmed cleanup leaves no badge and the rail off 決策", () => {

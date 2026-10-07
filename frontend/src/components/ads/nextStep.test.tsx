@@ -106,10 +106,11 @@ describe("nextStep（F06-I01）", () => {
     expect(step).toMatchObject({ id: "performance", target: "perf", stageIndex: 5, label: "查看成效 →" });
   });
 
-  it("lifecycle live：id performance、stageIndex 4，句子提到「投放中」", () => {
+  it("legacy lifecycle live names the period without claiming platform delivery", () => {
     const step = nextStep(campaign({ status: "live", lifecycle: LIFE.live, budget_basis_json: WITH_STRATEGY, groups: [group({ ads: [ad()] })] }));
     expect(step).toMatchObject({ id: "performance", target: "perf", stageIndex: 4 });
-    expect(step.sentence).toContain("投放中");
+    expect(step.sentence).toContain("本期進行中");
+    expect(step.sentence).not.toContain("投放中");
   });
 
   it("lifecycle ended：id performance、stageIndex 4，句子提到「結束」", () => {
@@ -120,7 +121,26 @@ describe("nextStep（F06-I01）", () => {
 
   it("F49 Contract L: the served lifecycle decides, not the stored status — past its end date a stored live reads ended", () => {
     const step = nextStep(campaign({ status: "live", lifecycle: LIFE.ended, budget_basis_json: WITH_STRATEGY, groups: [group({ ads: [ad()] })] }));
-    expect(step.sentence).toBe("投放已結束，到成效看結果或結案。");
+    expect(step.sentence).toBe("本期已結束，到成效看結果或結案。");
+  });
+
+  it("imported ended public guidance sends the real button to perf without internal closeout", async () => {
+    const reason = "既有活動只支援查看、同步與自帶素材安排；不使用內部策略、預算、模擬發布或結案。";
+    const c = campaign({ origin: "imported", lifecycle: { state: "ended", label: "已結束", can_close: false },
+      next_action: { id: "review_period", label: "查看本期成效", target: { kind: "campaign", tab: "perf" }, reason } });
+    const step = nextStep(c);
+    expect(step).toMatchObject({ target: "perf", sentence: reason, label: "查看本期成效 →" });
+    const onChangeTab = vi.fn();
+    render(<NextStepButton step={step} onChangeTab={onChangeTab} />);
+    await userEvent.setup().click(screen.getByRole("button", { name: "查看本期成效 →" }));
+    expect(onChangeTab).toHaveBeenCalledWith("perf");
+  });
+  it("served failed-source guidance stays unknown while internal draft preparation keeps its own action", () => {
+    const action = { id: "read_platform", label: "查看平台讀取狀態", target: { kind: "campaign", tab: "perf" }, reason: "本次平台結構讀取失敗。" } as const;
+    expect(nextStep(campaign({ lifecycle: LIFE.live, next_action: action }))).toMatchObject({ target: "perf", sentence: action.reason });
+    expect(nextStep(campaign({ lifecycle: { state: "draft", label: "草稿", can_close: false }, next_action: {
+      id: "prepare_campaign", label: "安排素材", target: { kind: "campaign", tab: "assets" }, reason: "本期仍在準備。",
+    }, budget_basis_json: {} }))).toMatchObject({ id: "strategy_generate", target: "strategy" });
   });
 
   it("沒有策略：id strategy_generate、target strategy、stageIndex 0", () => {
