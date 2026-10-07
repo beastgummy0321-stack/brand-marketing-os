@@ -1,3 +1,19 @@
+import type { LearningEvidence } from "@/lib/adsLearningEvidence";
+
+function learningEvidence(id = "learning-fixture"): LearningEvidence {
+  return {
+    schema_version: 1, id, meaning_revision: "meaning-fixture", display_text: "歷史紀錄",
+    support_label: "來源尚未核實", provenance: "unknown",
+    sources: [{kind: null, id: null, version: null, period: {start: null, end: null}, label: null}],
+    scope: {product_id: null, product_label: null, audience_key: null, customer_group_id: null,
+      claim_key: null, claim_family: null, objective_family: null, result_kind: null, currency: null, attribution: null},
+    conditions: {price_version: null, offer_key: null, offer_version: null, material_version: null,
+      target_version: null, valid_until: null},
+    sample: {result_events: null, sufficient: null}, independent_count: 0, same_direction_count: 0,
+    contrary_count: 0, use_state: "history", reason_codes: ["unknown_source"],
+    reason_labels: ["來源尚未核實，保留為歷史"], allowed_uses: [], limits: ["conditions_unknown"],
+  };
+}
 /** frontend/src/components/ads/flow/AbFlow.test.tsx — F29-I14: the A/B "pause the loser" flow (Contract F,
  * `source: "ab"` change sets) on the existing `changes/:setId/{confirm,handoff,verify}` routes — prototype v10
  * `confirmBody()`／`stepPlat()`／`stepChk()` for kind `ab`. Fixtures are shaped like the real reads: the set view
@@ -62,7 +78,7 @@ function changeItem(overrides: Partial<ChangeItem> = {}): ChangeItem {
     target: { id: "aex_1", name: LOSER, platform: "meta", source_account: "acc_1", native_kind: "ad", native_id: "238500001" },
     before: { status: "ACTIVE" }, after: { status: "PAUSED" },
     reason: "A/B 比較：「開場」用「出門情境」比「開箱畫面」划算，暫停較貴的一則。",
-    verification_state: "pending", evidence_json: {}, reported_at: null, first_observed_at: null, verified_at: null, platform_url: null,
+    verification_state: "pending", evidence_json: {}, reported_at: null, first_observed_at: null, verified_at: null, learning: {recorded: false, confidence: null, count: 0, evidence: null}, platform_url: null,
     ...overrides,
   };
 }
@@ -223,7 +239,7 @@ describe("A/B 關掉輸家（F29-I14）到平台完成與核對", () => {
       targets: [], change_sets: [approved({
         verification_state: "confirmed", reported_at: "2026-09-23T02:10:00Z", verified_at: "2026-09-23T02:13:00Z",
         evidence_json: { observed_at: "2026-09-23T02:13:00Z", setting_matches: true },
-        learning: { recorded: true, confidence: "observed", count: 1 },
+        learning: { recorded: true, evidence: learningEvidence(), confidence: "observed", count: 1 },
         timeline: { spend_stopped: null, delivery_started: null, next_review_at: null },
       })],
     });

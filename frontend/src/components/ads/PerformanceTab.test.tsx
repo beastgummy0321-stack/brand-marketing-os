@@ -1,3 +1,23 @@
+import type { LearningEvidence, LearningEvidenceContext } from "@/lib/adsLearningEvidence";
+
+function learningEvidence(id = "learning-fixture"): LearningEvidence {
+  return {
+    schema_version: 1, id, meaning_revision: "meaning-fixture", display_text: "歷史紀錄",
+    support_label: "來源尚未核實", provenance: "unknown",
+    sources: [{kind: null, id: null, version: null, period: {start: null, end: null}, label: null}],
+    scope: {product_id: null, product_label: null, audience_key: null, customer_group_id: null,
+      claim_key: null, claim_family: null, objective_family: null, result_kind: null, currency: null, attribution: null},
+    conditions: {price_version: null, offer_key: null, offer_version: null, material_version: null,
+      target_version: null, valid_until: null},
+    sample: {result_events: null, sufficient: null}, independent_count: 0, same_direction_count: 0,
+    contrary_count: 0, use_state: "history", reason_codes: ["unknown_source"],
+    reason_labels: ["來源尚未核實，保留為歷史"], allowed_uses: [], limits: ["conditions_unknown"],
+  };
+}
+const evidenceContext: LearningEvidenceContext = {
+  schema_version: 1, revision: "context-fixture", scope_product_id: null, scope_label: null,
+  eligible_count: 0, items: [], omitted: 0,
+};
 /** frontend/src/components/ads/PerformanceTab.test.tsx — F04-I23: 結案卡片今天只在
  * `status === "ended"` 出現，但那個狀態沒有任何程式會寫——這支測試證明 `live` 也看得到
  * 結案卡、看得到提前結案的說明句，以及確認對話框裡同一句話也在。
@@ -81,21 +101,21 @@ const LEARNED_CAMPAIGN: LearningCampaign = {
     {
       rank: 1, of: 3, ad_id: "ada_1", ad_name: "備考生・讀到深夜", customer_group: { id: "pcg_study", who: "學生備考" },
       coordinates: [{ dimension: "angle", dimension_label: "角度", key: "late", label: "陪你撐完最後一章" }],
-      spend: 1160, sales: 4, cost_per_sale: 290, verdict: "keep", verdict_label: "留下", flags: ["樣本少"], learning_id: "lrn_1",
+      spend: 1160, sales: 4, cost_per_sale: 290, verdict: "keep", verdict_label: "留下", flags: ["樣本少"], evidence: learningEvidence(), learning_id: "lrn_1",
     },
     {
       rank: 2, of: 3, ad_id: "ada_2", ad_name: "考前一週・書包一盒", customer_group: { id: "pcg_study", who: "學生備考" },
       coordinates: [{ dimension: "angle", dimension_label: "角度", key: "box", label: "書包裡放一盒就好" }],
-      spend: 2226, sales: 7, cost_per_sale: 318, verdict: "keep", verdict_label: "留下", flags: [], learning_id: "lrn_2",
+      spend: 2226, sales: 7, cost_per_sale: 318, verdict: "keep", verdict_label: "留下", flags: [], evidence: learningEvidence(), learning_id: "lrn_2",
     },
     {
       rank: 3, of: 3, ad_id: "ada_3", ad_name: "會議前・午休五分鐘", customer_group: null,
-      coordinates: [], spend: 1420, sales: 2, cost_per_sale: 710, verdict: "replace", verdict_label: "換掉", flags: ["樣本少"], learning_id: "lrn_3",
+      coordinates: [], spend: 1420, sales: 2, cost_per_sale: 710, verdict: "replace", verdict_label: "換掉", flags: ["樣本少"], evidence: learningEvidence(), learning_id: "lrn_3",
     },
   ],
 };
 const LEARNED: CoordinateLearnings = {
-  campaigns: [LEARNED_CAMPAIGN],
+  evidence_context: evidenceContext, campaigns: [LEARNED_CAMPAIGN],
   groups: [{ customer_group_id: "pcg_study", who: "學生備考", ads: 2, spend: 3386, sales: 11, cap: 450, cost_per_sale: 307.8 }],
   next: { sell_way_id: "prd_box", new_campaign_href: "/brands/brd_1/ads/new?sell_way=prd_box" },
 };
@@ -756,7 +776,7 @@ describe("F46 結案對話框：結果與兩個出口", () => {
   it("an empty view (no ranked rows) prints its empty_reason and still offers both exits", async () => {
     vi.mocked(getCoordinateLearnings).mockResolvedValue({
       ...LEARNED,
-      campaigns: [{ ...LEARNED_CAMPAIGN, rows: [], counts: { keep: 0, replace: 0 }, spend: null, sales: null, cost_per_sale: null,
+      evidence_context: evidenceContext, campaigns: [{ ...LEARNED_CAMPAIGN, rows: [], counts: { keep: 0, replace: 0 }, spend: null, sales: null, cost_per_sale: null,
         rule_text: "", empty_reason: "資料缺天，這期沒有記學習" }],
       groups: [],
     });

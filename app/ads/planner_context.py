@@ -16,6 +16,7 @@ from copy import deepcopy
 
 from app import workbench
 from app.ads import (
+    ads_learnings as learning_service,
     budget,
     calendar_tw,
     coordinate_learning,
@@ -271,7 +272,7 @@ def newest_per_product(rows: list[dict]) -> list[dict]:
     seen: set = set()
     kept = []
     for row in rows:
-        if not (row.get("applicability_scope") or "").startswith(_EVENT_SCOPE_PREFIX):
+        if not workbench.base_learning_scope(row.get("applicability_scope")).startswith(_EVENT_SCOPE_PREFIX):
             if row.get("product_id") in seen:
                 continue
             seen.add(row.get("product_id"))
@@ -286,7 +287,14 @@ def ads_learnings(conn, brand_id: str, product_id: str | None = None) -> list[di
     rows = bi_repo.list_learnings(conn, brand_id, limit=_LEARNING_SCAN, source_track="ads")
     if product_id is not None:
         rows = [row for row in rows if row.get("product_id") in (product_id, None)]
-    return newest_per_product(rows)[:_MAX_LEARNINGS]
+    kept = newest_per_product(rows)[:_MAX_LEARNINGS]
+    if kept:
+        projected = learning_service.evidence_context(
+            conn, kept[0]["org_id"], brand_id, product_id, rows=rows, cap=_LEARNING_SCAN,
+        )
+        by_id = {item["id"]: item for item in projected["items"]}
+        kept = [{**row, "evidence": by_id[row["id"]]} for row in kept]
+    return kept
 
 
 def learnings_text(rows: list[dict]) -> str:
@@ -303,7 +311,7 @@ def learnings_text(rows: list[dict]) -> str:
 def learnings_basis(rows: list[dict]) -> list[dict]:
     return [
         {"id": row["id"], "text": row["learning_text"], "level": row["confidence"],
-         "needs_revalidation": row["needs_revalidation"]}
+         "needs_revalidation": row["needs_revalidation"], "evidence": row["evidence"]}
         for row in rows
     ]
 
@@ -431,6 +439,7 @@ def planner_context(conn, org_id: str, brand_id: str, product_id: str | None, *,
         conn, org_id, brand_id, scope, view=view, listed=listed,
     )
     rows = ads_learnings(conn, brand_id, known)
+    evidence = learning_service.evidence_context(conn, org_id, brand_id, known)
     cap = capacity = None
     if campaign is not None:
         cap = targets.resolve(conn, org_id, brand_id, campaign)["value"]
@@ -466,7 +475,7 @@ def planner_context(conn, org_id: str, brand_id: str, product_id: str | None, *,
         "offers": _offers(conn, brand_id, product_id, the_menu["rows"]),
         "customer_groups": listed,
         "customers_text": customers_text,
-        "learnings": {"ads": rows, "ranked": view},
+        "learnings": {"ads": rows, "ranked": view, "evidence_context": evidence},
         "ranked_text": ranked_text,
         "ranked_ids": ranked_ids,
         "previous": _previous(conn, org_id, brand_id, known),

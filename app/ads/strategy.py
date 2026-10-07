@@ -830,6 +830,7 @@ def generate(conn, org_id: str, brand_id: str, campaign_id: str, *, actor: str) 
 
     estimated_fields = ["daily", "total"] if scenario_result["mode"] == "cold_start" else []
     basis = {
+        "evidence_context": ctx["learnings"]["evidence_context"],
         "knowledge_item_ids": knowledge_item_ids, "llm_task_id": task_row["id"],
         "input_context_hash": task_row["input_context_hash"],
         "brand_facts": facts_basis, "prices": ctx["prices"],

@@ -50,6 +50,12 @@ from fastapi import FastAPI
 
 from app.shared.web import app_path
 
+from app.workbench.learning_evidence import (
+    base_learning_scope,
+    encode_learning_scope,
+    qualify_learning_evidence,
+)
+
 
 def prepare_material_pack(conn, org_id, brand_id, pack):
     from app.workbench.material_handoff import prepare

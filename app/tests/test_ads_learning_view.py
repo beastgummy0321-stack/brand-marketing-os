@@ -277,7 +277,12 @@ class EmptyAndFilterTest(LearningViewTestBase):
                          [self._view()["campaigns"][1]["rows"][0]["learning_id"]])
 
     def test_brand_without_closed_campaigns_is_empty(self):
-        self.assertEqual(self._view(), {"campaigns": [], "groups": [], "next": None})
+        view = self._view()
+        self.assertEqual({key: view[key] for key in ("campaigns", "groups", "next")},
+                         {"campaigns": [], "groups": [], "next": None})
+        self.assertEqual(view["evidence_context"]["items"], [])
+        self.assertEqual(view["evidence_context"]["eligible_count"], 0)
+        self.assertIsNone(view["evidence_context"]["scope_product_id"])
 
 
 if __name__ == "__main__":

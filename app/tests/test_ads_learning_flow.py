@@ -134,7 +134,8 @@ class AdsLearningFlowTest(unittest.TestCase):
         checked = self.confirm(approved, ad)
         self.assertEqual(checked["items"][0]["verification_state"], "confirmed")
         self.assertEqual(
-            checked["items"][0]["learning"], {"recorded": False, "confidence": None, "count": 0}
+            checked["items"][0]["learning"],
+            {"recorded": False, "confidence": None, "count": 0, "evidence": None}
         )
         self.assertEqual(self.learnings(), [])
 
@@ -146,9 +147,12 @@ class AdsLearningFlowTest(unittest.TestCase):
             checked = self.confirm(approved, ad)
             self.assertEqual(checked["items"][0]["verification_state"], "confirmed")
             self.assertEqual(
-                checked["items"][0]["learning"],
+                {key: checked["items"][0]["learning"][key]
+                 for key in ("recorded", "confidence", "count")},
                 {"recorded": True, "confidence": confidence, "count": count},
             )
+            self.assertEqual(checked["items"][0]["learning"]["evidence"]["provenance"], "unknown")
+            self.assertEqual(checked["items"][0]["learning"]["evidence"]["allowed_uses"], [])
         rows = self.learnings()
         self.assertEqual(len(rows), 3)
         self.assertTrue(all(r["learning_text"] == "「沒興趣的舊客」對這群受眾無效" for r in rows))
@@ -168,8 +172,11 @@ class AdsLearningFlowTest(unittest.TestCase):
         rows = self.learnings()
         self.assertEqual(len(rows), 1)
         self.assertEqual(
-            again["items"][0]["learning"], {"recorded": True, "confidence": "observed", "count": 1}
+            {key: again["items"][0]["learning"][key]
+             for key in ("recorded", "confidence", "count")},
+            {"recorded": True, "confidence": "observed", "count": 1}
         )
+        self.assertEqual(again["items"][0]["learning"]["evidence"]["id"], rows[0]["id"])
 
     def sell(self) -> str:
         """Give the campaign a sell-way (`context_json.product_ids`, `sell_way.of_campaign`)."""
