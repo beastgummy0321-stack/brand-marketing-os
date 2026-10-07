@@ -47,7 +47,7 @@ for (const width of [1024, 1920]) {
     data.evidence_context.items[0].scope.product_label = long;
     data.evidence_context.items[0].contrary_count = 1;
     data.evidence_context.items[0].use_state = "revalidation";
-    data.evidence_context.items[0].reason_labels = ["已有反向觀察，需重新核對。"]; 
+    data.evidence_context.items[0].reason_labels = ["已有反向觀察，需重新核對。"];
     const picks = structuredClone(libraryOptionsFixture);
     picks.products[0].name = long;
     picks.products.push({...picks.products[0], id: "prd_second", name: "第二商品 · 單件"});
