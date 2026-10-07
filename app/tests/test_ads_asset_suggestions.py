@@ -103,6 +103,131 @@ class SuggestionsTest(unittest.TestCase):
         suggestions.run(self.org, self.brand, self.campaign, batch["id"])
         return suggestions.get_batch(self.conn, self.org, self.brand, self.campaign, batch["id"])
 
+    def test_complete_comparison_hash_invalidates_changes_outside_prompt(self):
+        self.campaign = campaigns.create_campaign(
+            self.conn,
+            self.org,
+            self.brand,
+            {
+                "name": "Creative comparison",
+                "goal_text": "Buyer proposition",
+                "objective": "awareness",
+                "start_date": "2026-10-01",
+                "end_date": "2026-10-14",
+            },
+            created_by="test",
+        )["id"]
+        group = campaigns.create_group(
+            self.conn,
+            self.org,
+            self.brand,
+            self.campaign,
+            channel_key="meta",
+            name="Bound group",
+            role="explore",
+            daily_budget=100,
+        )
+        ad = campaigns.create_ad(
+            self.conn,
+            self.org,
+            self.brand,
+            self.campaign,
+            group["id"],
+            name="Bound ad",
+            coordinates={"offer": "none"},
+            scene="A buyer moment",
+            coordinates_snapshot={"strategy_slot": {"slot_id": "slot", "revision": "accepted"}},
+        )
+        receipt = {
+            "revision": "accepted",
+            "operation_id": "operation",
+            "slots": [
+                {
+                    "slot_id": "slot",
+                    "group_id": group["id"],
+                    "ad_id": ad["id"],
+                    "carry_from_ad_id": None,
+                }
+            ],
+        }
+        campaigns.save_strategy(
+            self.conn,
+            self.org,
+            self.brand,
+            self.campaign,
+            budget_basis_json={
+                "strategy": {
+                    "decision": {
+                        "schema_version": 1,
+                        "state": "adopted",
+                        "revision": "accepted",
+                        "receipt": receipt,
+                        "slots": [
+                            {
+                                "id": "slot",
+                                "role": "explore",
+                                "customer_group_id": None,
+                                "offer_key": "none",
+                                "carry_from_ad_id": None,
+                                "test_intent": "Test the buyer moment",
+                                "evidence_refs": [],
+                            }
+                        ],
+                    }
+                }
+            },
+        )
+        row = self.placement(ad_id=ad["id"])
+        ctx = {
+            "product": None,
+            "learnings": {
+                "ads": [],
+                "ranked": {
+                    "campaigns": [
+                        {
+                            "campaign_id": "prior",
+                            "sell_way_id": None,
+                            "rows": [
+                                {"ad_id": f"prior-{n}", "sales": n, "flags": ["small sample"]}
+                                for n in range(30)
+                            ],
+                        }
+                    ]
+                },
+            },
+            "offers": [],
+            "calendar_evidence": [],
+            "carried_candidates": [],
+            "previous": None,
+        }
+        basis = suggestions.planner_context.creative_basis(ctx)
+        with patch.object(suggestions.planner_context, "creative_basis", return_value=basis):
+            self.reply([row])
+            batch = self.run_batch(self.request([row]))
+            self.assertEqual(batch["status"], "succeeded", batch["error"])
+            data = batch["input_json"]
+            creative = data["placements"][0]["creative_brief"]
+            self.assertEqual(creative["provenance"]["accepted_receipt"], receipt)
+            self.assertEqual(creative["assignment"]["ad_id"], ad["id"])
+            self.assertEqual(creative["test_intent"], "Test the buyer moment")
+            self.assertEqual(creative["comparison"]["omitted"]["results"], 18)
+            before = suggestions.snapshot(
+                self.conn, self.org, self.brand, self.campaign, data["requested"], data["summary"]
+            )
+            messages = suggestions._messages(before)
+            self.assertNotIn("prior-29", messages[0]["content"])
+            self.assertNotIn("creative_input_basis", messages[0]["content"])
+            basis["results"][-1]["sales"] = 999
+            changed = suggestions.snapshot(
+                self.conn, self.org, self.brand, self.campaign, data["requested"], data["summary"]
+            )
+            self.assertEqual(messages, suggestions._messages(changed))
+            self.assertTrue(
+                suggestions.get_batch(self.conn, self.org, self.brand, self.campaign, batch["id"])[
+                    "stale"
+                ]
+            )
+
     def test_original_preserved_unknown_budget_allowed_and_success_reused(self):
         # F34 Contract S: a `food_tw` brand gets the 食安法 note in `notes` only (ruling 2B).
         brands.set_regulatory_regime(self.conn, self.brand, "food_tw", actor="test")

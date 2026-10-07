@@ -11,7 +11,10 @@ public entries — `pack_for_source`/`briefs_for_source`/`submit_pack` — never
 """
 
 import json
+import threading
+import time
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from unittest import mock
 
 from fastapi.testclient import TestClient
@@ -164,6 +167,294 @@ class AssetsTestBase(unittest.TestCase):
 
 
 # -- 案例 1：交棒建一個 pack、一支廣告一個 set，摘要的「情境」是一句非空的話 --------------------
+
+class CreativeBriefContractTest(AssetsTestBase):
+    def test_display_projection_cannot_change_the_stored_accepted_identity(self):
+        campaign = self._adopted_campaign()
+        decision = campaign["budget_basis_json"]["strategy"]["decision"]
+        original = ads_repo.campaign_detail
+
+        def displayed(*args):
+            detail = original(*args)
+            detail["budget_basis_json"]["strategy"]["decision"] = {
+                "state": "modified",
+                "revision": "display-only-label-version",
+                "receipt": {"revision": "display-only-receipt"},
+            }
+            return detail
+
+        with mock.patch.object(assets.ads_repo, "campaign_detail", side_effect=displayed):
+            creative = self._dispatched_set(campaign["id"])["request"]["creative_brief"]
+        self.assertEqual(creative["provenance"]["current_revision"], decision["revision"])
+        self.assertEqual(creative["provenance"]["accepted_receipt"], decision["receipt"])
+        self.assertTrue(creative["test_intent"])
+
+    def test_calendar_comparison_uses_this_delivery_groups_window(self):
+        campaign, group, ad = self._direct_campaign(
+            campaign_start="2026-10-01",
+            campaign_end="2026-10-31",
+            group_start="2026-10-01",
+            group_end="2026-10-07",
+        )
+        ctx = {
+            "product": None,
+            "learnings": {"ads": [], "ranked": {"campaigns": []}},
+            "calendar_evidence": [
+                {"id": "in-window", "start": "2026-10-02", "end": "2026-10-02"},
+                {"id": "later-event", "start": "2026-10-10", "end": "2026-10-10"},
+            ],
+        }
+        creative = assets.creative_brief(
+            ad, group, campaign, assets.planner_context.creative_basis(ctx)
+        )
+        self.assertEqual([e["id"] for e in creative["comparison"]["calendar"]], ["in-window"])
+        self.assertEqual(creative["comparison"]["omitted"]["calendar_outside_window"], 1)
+        self.assertEqual(
+            creative["comparison"]["calendar_window"], {"start": "2026-10-01", "end": "2026-10-07"}
+        )
+
+    def _wait_for_blocked_writer(self, pid):
+        until = time.monotonic() + 5
+        while time.monotonic() < until:
+            n = web.conn.execute(
+                "SELECT cardinality(pg_blocking_pids(%s)) AS n", (pid,)
+            ).fetchone()["n"]
+            if n:
+                return
+            time.sleep(0.01)
+        self.fail("The real competing writer did not wait on the dispatch locks")
+
+    def test_real_writers_wait_until_coherent_pack_is_committed(self):
+        for kind in ("ad_edit", "group_edit", "ad_insert", "group_insert"):
+            with self.subTest(kind=kind):
+                campaign = self._adopted_campaign()
+                detail = ads_repo.campaign_detail(
+                    web.conn, self.org_id, self.brand_id, campaign["id"]
+                )
+                group = detail["groups"][0]
+                ad = group["ads"][0]
+                web.conn.commit()
+                initial = ads_repo.dispatch_snapshot(
+                    web.conn, self.org_id, self.brand_id, campaign["id"]
+                )
+                started = threading.Event()
+                writer_pid = []
+
+                def write(
+                    kind=kind,
+                    campaign=campaign,
+                    group=group,
+                    ad=ad,
+                    writer_pid=writer_pid,
+                    started=started,
+                ):
+                    with coredb.connection() as conn:
+                        writer_pid.append(
+                            conn.execute("SELECT pg_backend_pid() AS pid").fetchone()["pid"]
+                        )
+                        started.set()
+                        if kind == "ad_edit":
+                            plan.update_ad(
+                                conn,
+                                self.org_id,
+                                self.brand_id,
+                                ad["id"],
+                                {"coordinates": {"angle": "after-dispatch"}},
+                                actor=ACTOR,
+                            )
+                        elif kind == "group_edit":
+                            plan.update_group(
+                                conn,
+                                self.org_id,
+                                self.brand_id,
+                                group["id"],
+                                {"role": "explore"},
+                                actor=ACTOR,
+                            )
+                        elif kind == "ad_insert":
+                            ads_repo.create_ad(
+                                conn,
+                                self.org_id,
+                                self.brand_id,
+                                campaign["id"],
+                                group["id"],
+                                name="Later ad",
+                                coordinates={},
+                                coordinates_snapshot={},
+                            )
+                        else:
+                            ads_repo.create_group(
+                                conn,
+                                self.org_id,
+                                self.brand_id,
+                                campaign["id"],
+                                channel_key="meta",
+                                name="Later group",
+                                role="explore",
+                                daily_budget=1,
+                            )
+
+                with ThreadPoolExecutor(max_workers=1) as pool:
+                    pending = pool.submit(write)
+                    try:
+                        self.assertTrue(started.wait(5))
+                        self._wait_for_blocked_writer(writer_pid[0])
+                        self.assertFalse(pending.done())
+                        with mock.patch.object(
+                            assets.workbench, "submit_pack", wraps=assets.workbench.submit_pack
+                        ) as submit:
+                            assets.dispatch_pack(
+                                web.conn, self.org_id, self.brand_id, campaign["id"]
+                            )
+                        prepared = submit.call_args.args[-1]["sets"]
+                        self.assertEqual(len(prepared), len(initial["groups"][0]["ads"]))
+                        own = next(s for s in prepared if s["source_ref"]["ads_ad_id"] == ad["id"])
+                        self.assertEqual(
+                            own["request"]["creative_brief"]["assignment"]["role"], group["role"]
+                        )
+                        self.assertEqual(own["coordinates"]["angle"], ad["angle_key"])
+                        self.assertEqual(
+                            own["request"]["creative_brief"]["provenance"]["current_revision"],
+                            campaign["budget_basis_json"]["strategy"]["decision"]["revision"],
+                        )
+                    finally:
+                        web.conn.rollback()
+                    pending.result(timeout=5)
+
+    def test_lock_refusal_preserves_caller_work_and_allows_reload_retry(self):
+        campaign = self._adopted_campaign()
+        detail = ads_repo.campaign_detail(web.conn, self.org_id, self.brand_id, campaign["id"])
+        ad = detail["groups"][0]["ads"][0]
+        other, _, _ = self._direct_campaign(campaign_start="2026-10-01", campaign_end="2026-10-02")
+        ads_repo.update_campaign(
+            web.conn, self.org_id, self.brand_id, other["id"], {"name": "Caller work"}
+        )
+        ready, release = threading.Event(), threading.Event()
+
+        def hold_edit():
+            with coredb.connection() as conn:
+                plan.update_ad(
+                    conn,
+                    self.org_id,
+                    self.brand_id,
+                    ad["id"],
+                    {"coordinates": {"angle": "completed-edit"}},
+                    actor=ACTOR,
+                )
+                ready.set()
+                if not release.wait(5):
+                    raise AssertionError("Writer release was not received")
+
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            pending = pool.submit(hold_edit)
+            try:
+                self.assertTrue(ready.wait(5))
+                with mock.patch.object(assets.workbench, "submit_pack") as submit:
+                    with self.assertRaisesRegex(ValueError, "campaign_changed"):
+                        assets.dispatch_pack(web.conn, self.org_id, self.brand_id, campaign["id"])
+                    submit.assert_not_called()
+                self.assertIsNone(
+                    assets.pack_id(web.conn, self.org_id, self.brand_id, campaign["id"])
+                )
+                self.assertEqual(
+                    ads_repo.get_campaign(web.conn, self.org_id, self.brand_id, other["id"])[
+                        "name"
+                    ],
+                    "Caller work",
+                )
+            finally:
+                release.set()
+            pending.result(timeout=5)
+        prepared = self._dispatched_set(campaign["id"])
+        self.assertEqual(prepared["request"]["creative_brief"]["provenance"]["state"], "modified")
+        self.assertEqual(
+            ads_repo.get_campaign(web.conn, self.org_id, self.brand_id, other["id"])["name"],
+            "Caller work",
+        )
+
+    def test_public_dispatch_collision_returns_reload_reason_without_a_pack(self):
+        campaign = self._adopted_campaign()
+        with mock.patch.object(
+            assets.ads_repo, "dispatch_snapshot", side_effect=ValueError("campaign_changed")
+        ):
+            response = self.client.post(
+                f"/api/ads/brands/{self.brand_id}/campaigns/{campaign['id']}/pack"
+            )
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()["error"]["code"], "campaign_changed")
+        self.assertIn("重新載入", response.json()["error"]["message"])
+        self.assertIsNone(assets.pack_id(web.conn, self.org_id, self.brand_id, campaign["id"]))
+
+    def test_accepted_receipt_and_slot_survive_dispatch_and_readback(self):
+        campaign = self._adopted_campaign()
+        decision = campaign["budget_basis_json"]["strategy"]["decision"]
+        receipt = decision["receipt"]
+        dispatched = self._dispatched_set(campaign["id"])
+        creative = dispatched["request"]["creative_brief"]
+        self.assertEqual(creative["provenance"]["accepted_receipt"], receipt)
+        self.assertEqual(creative["provenance"]["current_revision"], decision["revision"])
+        self.assertEqual(creative["provenance"]["slot_id"], receipt["slots"][0]["slot_id"])
+        self.assertEqual(creative["assignment"]["ad_id"], dispatched["source_ref"]["ads_ad_id"])
+        self.assertTrue(creative["test_intent"])
+        briefs = workbench.briefs_for_source(
+            web.conn,
+            self.org_id,
+            self.brand_id,
+            assets.PACK_SOURCE_KIND,
+            {"ads_campaign_id": campaign["id"]},
+        )
+        own = next(
+            b
+            for b in briefs
+            if b["source_ref"]["ads_ad_id"] == dispatched["source_ref"]["ads_ad_id"]
+        )
+        self.assertEqual(own["request_json"]["creative_brief"], creative)
+
+    def test_modified_arrangement_keeps_receipt_but_expires_old_intent(self):
+        campaign = self._adopted_campaign()
+        detail = ads_repo.campaign_detail(web.conn, self.org_id, self.brand_id, campaign["id"])
+        ad = detail["groups"][0]["ads"][0]
+        plan.update_ad(
+            web.conn,
+            self.org_id,
+            self.brand_id,
+            ad["id"],
+            {"coordinates": {"angle": "current-buyer-test"}},
+            actor=ACTOR,
+        )
+        creative = self._dispatched_set(campaign["id"])["request"]["creative_brief"]
+        self.assertEqual(creative["provenance"]["state"], "modified")
+        self.assertNotEqual(
+            creative["provenance"]["current_revision"],
+            creative["provenance"]["accepted_receipt"]["revision"],
+        )
+        self.assertEqual(creative["assignment"]["coordinates"]["angle"], "current-buyer-test")
+        self.assertIsNone(creative["test_intent"])
+        self.assertTrue(creative["expired_reason"])
+
+    def test_dispatch_rejects_an_edit_between_campaign_and_structure_reads(self):
+        campaign = self._adopted_campaign()
+        read_detail = ads_repo.campaign_detail
+
+        def edit_before_detail(*args):
+            detail = read_detail(*args)
+            ad = detail["groups"][0]["ads"][0]
+            plan.update_ad(
+                web.conn,
+                self.org_id,
+                self.brand_id,
+                ad["id"],
+                {"coordinates": {"angle": "concurrent-test"}},
+                actor=ACTOR,
+            )
+            return read_detail(*args)
+
+        with mock.patch.object(assets.ads_repo, "campaign_detail", side_effect=edit_before_detail):
+            with mock.patch.object(assets.workbench, "submit_pack") as submit:
+                with self.assertRaisesRegex(ValueError, "campaign_changed"):
+                    assets.dispatch_pack(web.conn, self.org_id, self.brand_id, campaign["id"])
+                submit.assert_not_called()
+
 
 class DispatchCreatesOneSetPerAdTest(AssetsTestBase):
     def test_dispatch_creates_one_pack_one_set_per_ad_with_sentence_summary(self):

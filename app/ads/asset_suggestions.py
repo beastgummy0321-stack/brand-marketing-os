@@ -6,7 +6,8 @@ import math
 
 from app import background, workbench
 from app.ads import asset_suggestion_policy as policy
-from app.ads import live_creative, sell_way, targets
+from app.ads import assets as dispatch_assets
+from app.ads import live_creative, planner_context, sell_way, targets
 from app.ads import repository as campaigns
 from app.ads import user_assets_repository as assets
 from app.core import db, settings
@@ -107,7 +108,24 @@ def _judged_against(conn, org, brand, campaign, ad_id):
 
 
 def snapshot(conn, org, brand, campaign_id, requested, summary):
-    campaign = campaigns.get_campaign(conn, org, brand, campaign_id)
+    """A coherent read which releases only its own new locks, preserving caller work."""
+    conn.execute("SAVEPOINT ads_suggestion_snapshot")
+    try:
+        return _snapshot(conn, org, brand, campaign_id, requested, summary)
+    except ValueError as exc:
+        if str(exc) == "campaign_changed":
+            raise ValueError("投放安排正在修改，請重新載入後再補文案。") from exc
+        if str(exc) == "campaign_unknown":
+            raise ValueError("活動不存在或已結案，只能查看歷史。") from exc
+        raise
+    finally:
+        conn.execute("ROLLBACK TO SAVEPOINT ads_suggestion_snapshot")
+        conn.execute("RELEASE SAVEPOINT ads_suggestion_snapshot")
+
+
+def _snapshot(conn, org, brand, campaign_id, requested, summary):
+    detail = campaigns.dispatch_snapshot(conn, org, brand, campaign_id, wait=True)
+    campaign = detail["campaign"]
     if campaign is None or campaign["status"] == "closed":
         raise ValueError("活動不存在或已結案，只能查看歷史。")
     if not isinstance(requested, list) or not 1 <= len(requested) <= 10:
@@ -115,6 +133,8 @@ def snapshot(conn, org, brand, campaign_id, requested, summary):
     if not isinstance(summary, str) or len(summary) > 2000:
         raise ValueError("整批說明最多 2,000 字元。")
     placements = []
+    ads_by_id = {ad["id"]: (ad, group) for group in detail["groups"] for ad in group["ads"]}
+    creative_inputs = {}
     for item in requested:
         if (
             not isinstance(item, dict)
@@ -150,6 +170,16 @@ def snapshot(conn, org, brand, campaign_id, requested, summary):
             }
             | _judged_against(conn, org, brand, campaign, row["ad_id"])
         )
+        actual = ads_by_id.get(row["ad_id"])
+        if actual is not None:
+            ad, group = actual
+            product_id = sell_way.of_ad(ad, campaign)
+            if product_id not in creative_inputs:
+                ctx = planner_context.planner_context(conn, org, brand, product_id,
+                                                       campaign=campaign)
+                creative_inputs[product_id] = planner_context.creative_basis(ctx)
+            placements[-1]["creative_brief"] = dispatch_assets.creative_brief(
+                ad, group, campaign, creative_inputs[product_id])
     if len({p["id"] for p in placements}) != len(placements):
         raise ValueError("本批素材不能重複。")
     placements.sort(key=lambda p: p["id"])
@@ -196,6 +226,10 @@ def snapshot(conn, org, brand, campaign_id, requested, summary):
         | {"sell_way": campaign_sell_way},
         "native": [dict(n) for n in native],
         "native_overflow": len(native) > 100,
+        # Hash the complete comparison inputs, not only prompt rows or source identifiers.
+        "creative_input_basis": [{"product_id": key, "basis": value}
+                                 for key, value in sorted(creative_inputs.items(),
+                                                          key=lambda item: item[0] or "")],
     }
 
 
@@ -286,6 +320,12 @@ def request(conn, org, brand, campaign, requested, key, summary=""):
 
 
 def _messages(data):
+    placements = [
+        {**p, **({"creative_brief": {k: v for k, v in p["creative_brief"].items()
+                                    if k != "input_hash"}}
+                if isinstance(p.get("creative_brief"), dict) else {})}
+        for p in data["placements"]
+    ]
     return [
         {
             "role": "user",
@@ -295,7 +335,7 @@ def _messages(data):
                     "confirmed_sources": data["sources"],
                     "forbidden": data["forbidden"],
                     "campaign": data["campaign"],
-                    "placements": data["placements"],
+                    "placements": placements,
                     "unverified_user_summary": data["summary"],
                     "media_analysis": "not_analyzed",
                 }

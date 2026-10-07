@@ -17,6 +17,8 @@ import statistics
 from datetime import date, timedelta
 from typing import cast
 
+from psycopg.errors import LockNotAvailable
+
 from app.ads import (
     budget,
     channels,
@@ -819,6 +821,64 @@ def _carried_fields(ad: dict) -> dict:
         "carried_label": CARRIED_LABEL if carried else None,
         "carry_note": CARRY_NOTE if carried and empty else None,
     }
+
+
+def dispatch_snapshot(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, *,
+                      wait: bool = False) -> dict:
+    """Lock the structure and decision until the existing submit-pack commit.
+
+    Structure edits write group/ad before invalidating the campaign. Preserve that order;
+    NOWAIT refuses a competing writer instead of introducing a reverse-order deadlock.
+    The campaign lock also excludes new children through their foreign-key parent lock.
+    A savepoint keeps a lock refusal from aborting the caller's surrounding transaction.
+    Read-only suggestion snapshots may wait at most two seconds in this same order;
+    their caller rolls back its own read savepoint after gathering all comparison inputs.
+    This entry never commits or rolls back the caller's work or leaves a changed timeout.
+    """
+    conn.execute("SAVEPOINT ads_dispatch_snapshot")
+    try:
+        timeout = None
+        if wait:
+            setting = conn.execute("SHOW lock_timeout").fetchone()
+            assert setting is not None
+            timeout = setting["lock_timeout"]
+            conn.execute("SET LOCAL lock_timeout = '2s'")
+        lock = " FOR UPDATE" + ("" if wait else " NOWAIT")
+        locked = {}
+        for table in ("ads_delivery_group", "ads_ad"):
+            rows = conn.execute(
+                f"SELECT id FROM {table} WHERE org_id=%s AND brand_id=%s AND campaign_id=%s"
+                " ORDER BY id" + lock, (org_id, brand_id, campaign_id),
+            ).fetchall()
+            locked[table] = {r["id"] for r in rows}
+        row = conn.execute(
+            "SELECT id FROM ads_campaign WHERE org_id=%s AND brand_id=%s AND id=%s"
+            + lock, (org_id, brand_id, campaign_id),
+        ).fetchone()
+        if row is None:
+            raise ValueError("campaign_unknown")
+        campaign = get_campaign(conn, org_id, brand_id, campaign_id)
+        detail = campaign_detail(conn, org_id, brand_id, campaign_id)
+        current = get_campaign(conn, org_id, brand_id, campaign_id)
+        if (campaign is None or detail is None
+                or current != campaign):
+            # Also refuse a reentrant edit on this connection while preparing the snapshot.
+            raise ValueError("campaign_changed")
+        if wait:
+            conn.execute("SELECT set_config('lock_timeout', %s, true)", (timeout,))
+        if (locked["ads_delivery_group"] != {g["id"] for g in detail["groups"]}
+                or locked["ads_ad"] != {a["id"] for g in detail["groups"] for a in g["ads"]}):
+            # A new child committed between the child locks and parent lock. Retry to lock it.
+            raise ValueError("campaign_changed")
+    except Exception as exc:
+        conn.execute("ROLLBACK TO SAVEPOINT ads_dispatch_snapshot")
+        conn.execute("RELEASE SAVEPOINT ads_dispatch_snapshot")
+        if isinstance(exc, LockNotAvailable):
+            raise ValueError("campaign_changed") from exc
+        raise
+    conn.execute("RELEASE SAVEPOINT ads_dispatch_snapshot")
+    # Served strategy labels/facts are not accepted identity. Keep the locked raw row.
+    return {"campaign": campaign, "groups": detail["groups"]}
 
 
 def campaign_detail(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str) -> dict | None:

@@ -52,6 +52,75 @@ def _reply(**overrides) -> dict:
     return reply
 
 
+class CreativeComparisonTest(unittest.TestCase):
+    def test_bounded_comparison_keeps_full_input_for_changes_outside_prompt(self):
+        ctx = {
+            "product": {"id": "own"},
+            "learnings": {
+                "ads": [],
+                "ranked": {
+                    "campaigns": [
+                        {
+                            "sell_way_id": "own",
+                            "campaign_id": "closed",
+                            "currency": "TWD",
+                            "rows": [
+                                {
+                                    "ad_id": f"a-{n}",
+                                    "rank": n + 1,
+                                    "flags": ["樣本少"],
+                                    "sales": n,
+                                    "spend": n * 10,
+                                }
+                                for n in range(30)
+                            ],
+                        },
+                        {
+                            "sell_way_id": "other",
+                            "campaign_id": "foreign",
+                            "rows": [{"ad_id": "other", "body": "other-product-secret"}],
+                        },
+                    ]
+                },
+            },
+            "carried_candidates": [
+                {
+                    "ad": {"id": "control"},
+                    "role": "new",
+                    "creative": {
+                        "asset_id": "original-image",
+                        "placement_id": "original-placement",
+                        "placement_revision": 3,
+                        "copy_fields": {"body": "exact original copy"},
+                    },
+                    "eligibility": {"state": "ready", "reasons": []},
+                },
+            ],
+            "calendar_evidence": [{"id": "event", "name": "exam week"}],
+            "offers": [
+                {"key": "discount", "sentence": "registered discount"},
+                {"key": "free_shipping", "sentence": "unselected offer"},
+            ],
+            "previous": {"learning_goals": ["test buyer situation"]},
+        }
+        full = planner_context.creative_basis(ctx)
+        shown = planner_context.creative_projection(full, "discount")
+        self.assertLess(len(shown["results"]), 30)
+        self.assertEqual(shown["omitted"]["results"], 30 - len(shown["results"]))
+        self.assertEqual(
+            shown["controls"][0]["creative"]["copy_fields"]["body"], "exact original copy"
+        )
+        self.assertEqual(shown["selected_offer"]["sentence"], "registered discount")
+        self.assertNotIn("other-product-secret", json.dumps(full))
+        self.assertNotIn("unselected offer", json.dumps(shown))
+        before = json.dumps(full, sort_keys=True)
+        ctx["learnings"]["ranked"]["campaigns"][0]["rows"][-1]["sales"] = 999
+        after = planner_context.creative_basis(ctx)
+        self.assertNotEqual(before, json.dumps(after, sort_keys=True))
+        self.assertEqual(shown, planner_context.creative_projection(after, "discount"))
+        self.assertEqual(full["results"][-1]["sales"], 29)
+
+
 class _Fixture(unittest.TestCase):
     """A brand with one sell-way 「夜跑背心 · 單件」 (NT$1000, list price 1200 -> a `discount`
     offer), one fact, one forbidden claim, one customer group, one 「優惠」 vocabulary row."""
