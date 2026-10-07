@@ -2487,11 +2487,20 @@ delete another task's data or expose backup secrets. Existing provider availabil
 No new backup service/framework or public deployment is planned. The user selected this Windows host for local/private use during carve. If its required
 capabilities are unavailable, record G7 unverified and do not call the release eligible.
 G8: On the final code tree, restart the matching backend, run the fixed cycle once and assemble
-source-matched G1-G7 receipts. Then run one clean Harness feature integration; its receipt-only
-verify uses --pre-integration and does not demand its own pending integration receipt. After
-integration succeeds, attach that receipt as G8 and seal the combined packet with the final
-receipt checker (no cycle/model/auth/restore rerun), with product hashes/source
-receipts, model limits, cleanup and fixed/remaining/unverified disposition. Manifest suites
+source-matched G1-G7 receipts. Commit the tracked packet and scoped documentation closeout
+before one clean Harness feature integration. The tracked packet contains only a pending G8
+pointer to the lead-owned ignored `.harness/scratch/F53/final/` sidecar, never a predicted
+integration HEAD, signature or pass. Its receipt-only verify uses --pre-integration and does
+not demand its own pending integration receipt. After integration succeeds, preserve its actual
+CLI result/exit and `.harness/runtime/integrations/F53.json` receipt with hashes and timestamps
+in that ignored sidecar. The final checker reads those receipts and seals an ignored combined
+packet without changing tracked files, Feature/Issue bytes or HEAD. It recomputes the installed
+Harness integration signature, checks the same successful run/required steps, relevant product
+and runtime/config fingerprints, source evidence and cleanup. Never invoke integrate as a read
+check. Seal before human close; a subsequent close changes HEAD and removes queue inputs, so
+the archived seal then represents its explicitly captured pre-close version. Human acceptance
+remains separate. No cycle/model/auth/restore rerun is performed during sealing. The combined
+packet includes model limits and fixed/remaining/unverified disposition. Manifest suites
 run once through integrate; affected failures may be corrected/rechecked within approved scope.
 Do not begin another full drill/repair campaign after the agreed report boundary. F52 remains
 open and its unrun original acceptance is explicitly recorded.
