@@ -193,6 +193,10 @@ def _conditions(evidence, current):
         old[key] is None for key in ("price_version", "offer_key", "target_version")
     ):
         reasons.append("conditions_unknown")
+    if evidence["scope"]["claim_family"] == "performance" and any(
+        evidence["scope"][key] is None for key in ("audience_key", "claim_key")
+    ):
+        reasons.append("conditions_unknown")
     for key, menu in (
         ("audience_key", "audience_keys"),
         ("customer_group_id", "customer_group_ids"),

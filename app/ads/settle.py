@@ -71,9 +71,8 @@ def effective_text(angle: str) -> str:
 
 
 def learning_text(fate: str, angle: str) -> str:
-    # Ineffective reuses the cleanup learning's own words (`ads_learnings._text`), so a settle and
-    # a confirmed cleanup that reach the same conclusion promote the same row text.
-    return effective_text(angle) if fate == "effective" else ads_learnings._text(angle)
+    comparison = "未超過" if fate == "effective" else "超過"
+    return f"「{angle}」本期每筆成本{comparison}宣告上限；僅表示相關"
 
 
 def _require_month(month) -> str:
@@ -127,7 +126,9 @@ def _written_view(written: dict):
     if not written:
         return None
     rows = sorted(written.values(), key=lambda row: row["created_at"])
-    effective = sum(1 for row in rows if row["learning_text"].endswith("有效"))
+    effective = sum(1 for row in rows if (
+        ads_learnings.stored_evidence(row).get("direction") == "support"
+        if ads_learnings.stored_evidence(row) else row["learning_text"].endswith("有效")))
     return {
         "at": rows[-1]["created_at"], "by": rows[-1]["created_by"], "count": len(rows),
         "effective": effective, "ineffective": len(rows) - effective,
@@ -316,6 +317,9 @@ def _angles(conn, org_id, brand_id, row, copy_text, *, needed):
 def _written_angle(learning) -> str | None:
     if learning is None:
         return None
+    claim = (ads_learnings.stored_evidence(learning).get("scope") or {}).get("claim_key")
+    if isinstance(claim, str) and claim.startswith("message_text:"):
+        return claim.removeprefix("message_text:")
     match = _TEXT_RE.match(learning["learning_text"])
     return match.group(1) if match else None
 
@@ -450,7 +454,6 @@ def write(conn, org_id, brand_id, month, picks, actor) -> dict:
     rows, _missing = _graded(conn, org_id, brand_id, start, end)
     chosen = _picked_angles(rows, written, picks)
     groups = _customer_groups(conn, org_id, brand_id, list(chosen))
-    texts = [row["learning_text"] for row in learnings]
     # F48 Contract W: entity -> its campaign -> that campaign's sell-way (`None` for an imported
     # campaign, which has none).
     sell_ways: dict = {}
@@ -461,15 +464,38 @@ def write(conn, org_id, brand_id, month, picks, actor) -> dict:
         campaign_id = row["campaign_id"]
         if campaign_id not in sell_ways:
             sell_ways[campaign_id] = sell_way.of_campaign_id(conn, org_id, brand_id, campaign_id)
-        text = learning_text(row["fate"], angle)
-        prior = texts.count(text)
+        within = row["cost_per_result"] is not None and row["cap"] is not None \
+            and row["cost_per_result"] <= row["cap"]
+        text = learning_text("effective" if within else "ineffective", angle)
+        detail = repository.campaign_detail(conn, org_id, brand_id, campaign_id)
+        if detail is None:
+            raise SettleError(409, "campaign_unknown", "來源活動已不存在，請重新讀取結算。")
+        from app.ads import live_creative
+
+        detail = live_creative.with_learning_coordinates(conn, org_id, brand_id, detail)
+        native = conn.execute(
+            "SELECT native_id FROM ads_external_entity WHERE org_id=%s AND brand_id=%s AND id=%s",
+            (org_id, brand_id, row["entity_id"]),
+        ).fetchone()
+        ad = next((a for g in detail.get("groups", []) for a in g.get("ads", [])
+                   if native and a.get("external_id") == native["native_id"]), None)
+        observations = [dict(r) for r in conn.execute(
+            "SELECT d.*,d.id AS observation_id FROM ads_external_daily d"
+            " WHERE org_id=%s AND brand_id=%s AND entity_id=%s AND metric_scope='ad'"
+            " AND day BETWEEN %s AND %s", (org_id, brand_id, row["entity_id"], start, end),
+        ).fetchall()]
+        evidence = ads_learnings.source_evidence(
+            conn, org_id, brand_id, detail, kind="settle",
+            window={"start": start.isoformat(), "end": end.isoformat()}, ad=ad,
+            members=[ad] if ad else [], observations=observations, entity_id=row["entity_id"],
+            claim_key="message_text:" + angle, direction="support" if within else "contrary",
+        )
         ads_learnings.write(
             conn, org_id, brand_id, actor=actor, product_id=sell_ways[campaign_id], text=text,
             scope=_scope(row, groups.get(row["entity_id"])),
-            confidence=ads_learnings._confidence_for_count(prior),
+            confidence="observed", evidence=evidence,
             sample_size=_sample_size(row["results"]),
             source_cycle_id=_cycle_id(month, row["entity_id"]), source_track="ads",
         )
-        texts.append(text)
     _resolve_queue_rows(conn, org_id, brand_id, end, actor)
     return view(conn, org_id, brand_id, month)

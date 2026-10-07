@@ -65,8 +65,15 @@ def record_launch(conn, org, brand, campaign_id, change_set_id, frozen) -> None:
     ad_ids = [ad["id"] for group in frozen.get("groups") or [] for ad in group.get("ads") or []]
     if not ad_ids:
         return
+    from app.ads import ads_learnings, repository, sell_way
+
+    campaign = repository.get_campaign(conn, org, brand, campaign_id) or {}
     by_ad, _ = _sets(conn, org, brand, campaign_id)
     for ad_id in ad_ids:
+        ad = repository.get_ad(conn, org, brand, ad_id) or {}
+        conditions = ads_learnings.condition_snapshot(
+            conn, org, brand, campaign, sell_way.of_ad(ad, campaign),
+        )
         brief = by_ad.get(ad_id)
         outputs = {}
         if brief is not None:
@@ -74,6 +81,10 @@ def record_launch(conn, org, brand, campaign_id, change_set_id, frozen) -> None:
                 part: _plain(workbench.adopted_output(conn, org, brand, brief["id"], part))
                 for part in (brief.get("parts") or {})
             }
+        conditions["material_version"] = ads_learnings.material_version(
+            {**ad, "material_evidence": ads_learnings.bound_material(conn, org, brand, ad)},
+            outputs,
+        )
         conn.execute(
             "UPDATE ads_ad SET live_creative_json=%s "
             "WHERE org_id=%s AND brand_id=%s AND campaign_id=%s AND id=%s",
@@ -83,6 +94,7 @@ def record_launch(conn, org, brand, campaign_id, change_set_id, frozen) -> None:
                         "change_set_id": change_set_id,
                         "set_id": brief["id"] if brief is not None else None,
                         "outputs": outputs,
+                        "evidence_conditions": conditions,
                     }
                 ),
                 org,

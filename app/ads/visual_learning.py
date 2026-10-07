@@ -202,38 +202,51 @@ def write_visual_learnings(conn: _AnyConn, org_id: str, brand_id: str, campaign_
                 sentence = f"{audience_label}：{dimension_name}這次看不出差別（{reason}）。"
                 sample_size = _smallest_bucket([b["sample_bucket"] for b in buckets.values()])
 
-            confidence = "observed"
-            if best_key is not None:
-                prior = [
-                    row for row in bi_repo.list_learnings(
-                        cast(Conn, conn), brand_id, source_track="visual", limit=500,
-                    )
-                    if row["applicability_scope"] == scope and row["source_cycle_id"] != campaign_id
-                ]
-                count = len(prior) + 1
-                confidence = "validated" if count >= 3 else "likely" if count >= 2 else "observed"
-
-                # 降級:這次贏的維度值,把之前贏過的別的值降下去(F07 決策 31)。
-                for other_key in comparable:
-                    if other_key == best_key:
+            observations = [r for a in stratum_ads for r in rows_by_entity.get(a["id"], [])]
+            claim = f"visual:{dimension}:{best_key}" if best_key is not None else None
+            evidence = ads_learnings.source_evidence(
+                conn, org_id, brand_id, detail, kind="visual", window=window,
+                members=stratum_ads, observations=observations, claim_key=claim,
+                direction="support" if best_key is not None else "inconclusive",
+            )
+            counts = [sum(float(r["result_count"]) for aid in ids
+                          for r in rows_by_entity.get(aid, []) if r.get("result_count") is not None)
+                      for ids in value_groups.values()]
+            evidence["sample"]["result_events"] = min(counts, default=None)
+            # Only a qualified comparable result can retire an opposing prior value. Legacy,
+            # other-product and changed-condition observations remain inspectable history.
+            prior = bi_repo.list_learnings(cast(Conn, conn), brand_id,
+                                          source_track="visual", limit=500)
+            candidate = {"id": "pending", "org_id": org_id, "brand_id": brand_id,
+                         "product_id": product_id, "applicability_scope":
+                         ads_learnings.workbench.encode_learning_scope(scope, evidence)}
+            context = ads_learnings.evidence_context(
+                conn, org_id, brand_id, product_id, rows=[*prior, candidate], cap=501,
+                current=ads_learnings.current_conditions(conn, org_id, brand_id, product_id,
+                                                        campaign=detail),
+            )
+            projected = {i["id"]: i for i in context["items"]}
+            if "market_support" in projected["pending"]["allowed_uses"]:
+                for previous in prior:
+                    old = ads_learnings.stored_evidence(previous)
+                    old_scope = old.get("scope") or {}
+                    old_claim = old_scope.get("claim_key")
+                    if old_claim not in {f"visual:{dimension}:{k}" for k in comparable
+                                         if k != best_key}:
                         continue
-                    other_scope = f"{scope_prefix}={other_key}"
-                    beaten = [
-                        row for row in bi_repo.list_learnings(
-                            cast(Conn, conn), brand_id, source_track="visual", limit=500,
-                        )
-                        if row["applicability_scope"] == other_scope
-                        and row["source_cycle_id"] != campaign_id
-                    ]
-                    if beaten:
-                        newest = max(beaten, key=lambda r: r["learned_at"])
+                    if (projected[previous["id"]]["use_state"] == "usable"
+                            and projected[previous["id"]]["sample"]["sufficient"]
+                            and old_scope == {**evidence["scope"], "claim_key": old_claim}
+                            and old.get("conditions") == evidence["conditions"]
+                            and old.get("provenance") == evidence["provenance"]
+                            and old.get("period", {}).get("end", "") < window["start"]):
                         bi_repo.expire_learning(
-                            cast(Conn, conn), brand_id, newest["id"], actor=actor,
+                            cast(Conn, conn), brand_id, previous["id"], actor=actor,
                         )
 
             written.append(ads_learnings.write(
                 conn, org_id, brand_id, actor=actor, product_id=product_id, text=sentence,
-                scope=scope, confidence=confidence, sample_size=sample_size,
+                scope=scope, confidence="observed", sample_size=sample_size, evidence=evidence,
                 source_cycle_id=campaign_id, needs_revalidation=needs_revalidation,
                 source_track="visual",
             ))

@@ -15,7 +15,7 @@ F51 Contract F: the campaign read serves the same sentence as `learning_sentence
 
 from typing import cast
 
-from app.ads import ads_learnings, live_creative, sell_way, targets, triage
+from app.ads import ads_learnings, live_creative, sell_way
 from app.brand_intelligence import repository as bi_repo
 from app.core.db import Conn, ConnProxy
 
@@ -105,40 +105,6 @@ def _needs_revalidation(conn: _AnyConn, brand_id: str, campaign: dict) -> bool:
     return str(econ["effective_from"]) > str(end_date)
 
 
-def _confidence(conn: _AnyConn, org_id: str, brand_id: str, campaign: dict, verdict: str,
-                verdict_json: dict) -> str:
-    """分級死規則（F03 決策 3，F28-I01 改分群）：1 個活動＝`observed`；同一品牌、同一種成果
-    （`targets.effective_result_kind`）、同方向（同一個 verdict）累計 ≥2＝`likely`；≥3＝
-    `validated`（另一條「同期對照」留給 F04 的人工勾）。`看不出` 不指向任何方向，永遠是
-    `observed`。系統自建的活動沒存 `result_kind` 時一律算購買——SQL 用同一條規則。
-
-    F48 Contract R: only a campaign whose `verdict_json.sample.purchases` reaches
-    `triage.MIN_RESULT_EVENTS` counts toward a direction -- this one included (below it the level
-    stays `observed`). The one place sample size changes a level; the verdict itself never moves."""
-    if verdict == "看不出":
-        return "observed"
-    purchases = (verdict_json.get("sample") or {}).get("purchases")
-    if purchases is None or purchases < triage.MIN_RESULT_EVENTS:
-        return "observed"
-    row = conn.execute(
-        "SELECT COUNT(*) AS n FROM ads_campaign WHERE org_id = %s AND brand_id = %s"
-        " AND id != %s AND verdict = %s"
-        " AND COALESCE(result_kind, CASE WHEN origin <> 'imported' THEN 'purchase' END)"
-        " IS NOT DISTINCT FROM %s"
-        " AND CASE WHEN jsonb_typeof(verdict_json->'sample'->'purchases') = 'number'"
-        " THEN (verdict_json->'sample'->>'purchases')::numeric END >= %s",
-        (org_id, brand_id, campaign["id"], verdict, targets.effective_result_kind(campaign),
-         triage.MIN_RESULT_EVENTS),
-    ).fetchone()
-    assert row is not None  # COUNT(*) 一定回一列
-    same_direction = row["n"] + 1  # +1 = 這個 Campaign 自己
-    if same_direction >= 3:
-        return "validated"
-    if same_direction >= 2:
-        return "likely"
-    return "observed"
-
-
 def write_learning(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, verdict: str,
                     verdict_json: dict, *, actor: str) -> dict:
     """結案（或自動結案）寫的那一條學習。`campaign_id` 而非整包 `campaign` dict：這裡自己
@@ -154,14 +120,23 @@ def write_learning(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str,
     detail = live_creative.with_learning_coordinates(conn, org_id, brand_id, detail)
 
     text = _ledger_text(detail, verdict, verdict_json)
-    confidence = _confidence(conn, org_id, brand_id, detail, verdict, verdict_json)
     needs_revalidation = _needs_revalidation(conn, brand_id, detail)
+    claims = {ads_learnings.message_claim(ad) for group in detail.get("groups", [])
+              for ad in group.get("ads", [])}
+    claim = next(iter(claims)) if len(claims) == 1 and None not in claims else None
+    evidence = ads_learnings.source_evidence(
+        conn, org_id, brand_id, detail, kind="campaign", window=verdict_json.get("window") or {},
+        claim_key=claim, direction={"達成": "support", "未達成": "contrary"}.get(
+            verdict, "inconclusive"),
+    )
+    if verdict_json.get("data_source") == "isolated_simulation":
+        evidence["provenance"] = "simulation"
 
     # F48 Contract W: the verdict belongs to the campaign's sell-way, so the strategy's one
     # verdict per product (`strategy._newest_per_product`) sees every sell-way.
     return ads_learnings.write(
         conn, org_id, brand_id, actor=actor, product_id=sell_way.of_campaign(detail),
-        text=text, scope=_applicability_scope(detail), confidence=confidence,
+        text=text, scope=_applicability_scope(detail), confidence="observed", evidence=evidence,
         sample_size=str(_bucket(verdict_json)), source_cycle_id=campaign_id,
         source_track="ads", needs_revalidation=needs_revalidation,
     )

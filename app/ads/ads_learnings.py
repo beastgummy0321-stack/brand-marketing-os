@@ -20,6 +20,8 @@ validated. `list_learnings` has no text filter, so this scans and filters in Pyt
 precedent as `app/ads/visual_learning.py`'s own promotion scan.
 """
 
+import hashlib
+import json
 from typing import cast
 
 from app import workbench
@@ -37,21 +39,231 @@ _AnyConn = Conn | ConnProxy
 _SCAN_LIMIT = 500
 
 
+def semantic_version(value) -> str:
+    """Hash relevant facts, excluding presentation names, labels and read timestamps."""
+    return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False,
+                                    separators=(",", ":"), default=str).encode()).hexdigest()
+
+
+def _one(values):
+    values = set(values)
+    return next(iter(values)) if len(values) == 1 and None not in values else None
+
+
+def condition_snapshot(conn, org, brand, campaign, product_id) -> dict:
+    """The conditions known now; only launch freezes can establish historical conditions."""
+    from app.ads import targets
+
+    economics = bi_repo.get_product_economics(conn, brand, product_id) if product_id else None
+    price = None
+    if economics and economics.get("status") == "confirmed":
+        price = semantic_version({k: economics.get(k) for k in (
+            "selling_price", "list_price", "currency", "effective_from", "effective_to",
+            "unit_variable_cost", "shipping_cost",
+        )})
+    sources = bi_repo.offer_sources(conn, brand, product_id)
+    policies = bi_repo.list_brand_policies(conn, brand)
+    offers = []
+    for key in sorted({s["offer_key"] for s in sources}):
+        terms = sorted(s["sentence"] for s in sources if s["offer_key"] == key)
+        supporting = [p for p in policies if p["status"] == "confirmed" and p["offer_key"] == key
+                      and p["sentence"] in terms]
+        ends = [(p.get("params") or {}).get("valid_until")
+                or (p.get("params") or {}).get("end_date") for p in supporting]
+        offers.append({"key": key, "version": semantic_version({
+            "terms": terms, "params": sorted((p.get("params") or {} for p in supporting),
+                                              key=lambda p: json.dumps(p, sort_keys=True)),
+        }), "valid_until": min((str(e) for e in ends if e), default=None)})
+    target = targets.resolve(conn, org, brand, campaign, product_id=product_id)
+    target_version = semantic_version({k: target.get(k) for k in ("value", "basis", "result_kind")})
+    if target.get("value") is None or target.get("result_kind") is None:
+        target_version = None
+    return {"price_version": price, "offers": offers, "target_version": target_version}
+
+
+def material_version(ad, outputs) -> str | None:
+    """Actual frozen creative content and placement revision, never selection/read times."""
+    parts = {part: {"body_json": row.get("body_json"), "rendered_text": row.get("rendered_text")}
+             for part, row in (outputs or {}).items() if isinstance(row, dict)}
+    material = ad.get("material_evidence")
+    return semantic_version({"parts": parts, "material": material}) if parts or material else None
+
+
+def bound_material(conn, org, brand, ad) -> dict | None:
+    """Content identity survives a carried placement; an unresolved binding stays unknown."""
+    from app.ads import asset_binding_repository as binding
+    from app.ads import user_assets_repository as assets
+
+    if not ad.get("material_placement_id"):
+        return None
+    try:
+        placement = assets.placement(
+            conn, org, brand, ad["campaign_id"], ad["material_placement_id"],
+            ad.get("material_placement_revision"),
+        )
+        asset = assets.get_asset(conn, org, brand, placement["asset_id"])
+    except ValueError:
+        return None
+    return {"sha256": asset["sha256"], "copy": binding.effective_copy(placement)}
+
+
+def _measurement(observations) -> tuple:
+    kind = _one(row.get("result_kind") for row in observations)
+    currency = _one(row.get("currency") for row in observations)
+    definitions = [(row.get("attribution_key"), row.get("result_action"),
+                    row.get("result_attribution")) for row in observations]
+    definition = _one(definitions)
+    if definition is None or any(v is None for v in definition):
+        return None, currency, None
+    attribution = json.dumps(dict(zip(("key", "action", "result_attribution"), definition,
+                                      strict=True)), sort_keys=True, separators=(",", ":"))
+    return kind, currency, attribution
+
+
+def current_conditions(conn, org, brand, product_id, *, campaign=None) -> dict:
+    """Explicit current scope for every ads qualifier; unknown measurement stays unknown."""
+    from app.ads import live_creative, outcome, targets
+
+    product = bi_repo.get_product(conn, brand, product_id) if product_id else None
+    selected = product_id if product else None
+    candidates = []
+    if selected:
+        candidates = [dict(row) for row in conn.execute(
+            "SELECT * FROM ads_campaign WHERE org_id=%s AND brand_id=%s"
+            " ORDER BY created_at DESC,id DESC", (org, brand),
+        ).fetchall() if sell_way.of_campaign(dict(row)) == selected]
+        if campaign is None:
+            campaign = candidates[0] if candidates else None
+    campaign = campaign or {}
+    snapshot = condition_snapshot(conn, org, brand, campaign, selected)
+    observations = (outcome.rows(conn, org, brand, campaign["id"], "ad")
+                    if campaign.get("id") else [])
+    # A new plan has no new outcome yet. Retained actual definitions, matching its explicitly
+    # requested kind, can establish the current measurement; origin never supplies a definition.
+    if not observations:
+        for previous in candidates:
+            if targets.effective_result_kind(previous) != targets.effective_result_kind(campaign):
+                continue
+            retained = outcome.rows(conn, org, brand, previous["id"], "ad")
+            if retained:
+                observations = retained
+                break
+    kind, currency, attribution = _measurement(observations)
+    if any(r.get("source") != "graph" or not r.get("observation_id") for r in observations):
+        kind = attribution = None
+    intended = targets.effective_result_kind(campaign) if campaign.get("id") else None
+    if kind != intended:
+        kind = None
+    materials = []
+    for source in candidates or ([campaign] if campaign.get("id") else []):
+        launched = live_creative.launched_outputs(conn, org, brand, source["id"])
+        ads = conn.execute("SELECT * FROM ads_ad"
+                           " WHERE org_id=%s AND brand_id=%s AND campaign_id=%s",
+                           (org, brand, source["id"])).fetchall()
+        materials.extend({"ad_id": ad["id"], "version": material_version(
+                         {**ad, "material_evidence": bound_material(conn, org, brand, ad)},
+                         (launched.get(ad["id"]) or {}).get("outputs"))} for ad in ads)
+    groups = bi_repo.list_customer_groups(conn, brand, selected) if selected else []
+    return {"org_id": org, "brand_id": brand, "product_id": selected,
+            "org_day": coresettings.today_for_org(conn, org_id=org).isoformat(),
+            "audience_keys": [r["key"] for r in ads_repo.coordinate_vocabulary(conn, org, brand)
+                              if r["dimension"] == "audience"],
+            "customer_group_ids": [g["id"] for g in groups], "result_kind": kind,
+            "currency": currency, "attribution": attribution, "mode": "real",
+            "conditions": {**snapshot, "materials": materials}}
+
+
+def source_evidence(conn, org, brand, campaign, *, kind, window, ad=None, observations=None,
+                    claim_key=None, direction="inconclusive", action_id=None, entity_id=None,
+                    trial_id=None, members=None) -> dict:
+    """Extract retained observations and immutable launch conditions without certifying origin."""
+    from app.ads import outcome, targets
+
+    product_id = sell_way.of_ad(ad, campaign) if ad else sell_way.of_campaign(campaign)
+    if observations is None:
+        observations = outcome.rows(conn, org, brand, campaign["id"], "ad")
+        if ad:
+            observations = [r for r in observations if r["entity_id"] == ad["id"]]
+        if window.get("start") and window.get("end"):
+            observations = [r for r in observations
+                            if str(window["start"]) <= str(r["day"]) <= str(window["end"])]
+        else:
+            observations = []
+    sources = {r.get("source") for r in observations}
+    provenance = "unknown"
+    if "simulated" in sources:
+        provenance = "simulation"
+    elif sources == {"graph"} and all(r.get("observation_id") for r in observations):
+        provenance = "platform_observation"
+    elif sources == {"user_report"}:
+        provenance = "user_report"
+    measurement, currency, attribution = _measurement(observations)
+    if measurement != targets.effective_result_kind(campaign):
+        measurement = None
+    snapshots = members if members is not None else [ad] if ad else [
+        a for g in campaign.get("groups", []) for a in g.get("ads", [])
+    ]
+    freezes = [a.get("live_creative_json") or {} for a in snapshots]
+    conditions = [f.get("evidence_conditions") or {} for f in freezes]
+    offer_key = _one(a.get("offer_key") for a in snapshots)
+    frozen = {key: _one(c.get(key) for c in conditions)
+              for key in ("price_version", "target_version")}
+    offer_versions = []
+    for c in conditions:
+        offer = next((o for o in c.get("offers", []) if o["key"] == offer_key), {})
+        offer_versions.append(offer)
+    price_conditions = {**frozen, "offer_key": offer_key,
+                        "offer_version": _one(o.get("version") for o in offer_versions),
+                        "valid_until": _one(o.get("valid_until") for o in offer_versions),
+                        "material_version": (conditions[0].get("material_version")
+                                             or material_version(ad, freezes[0].get("outputs")))
+                        if ad and freezes else None}
+    audience = _one(a.get("audience_key") for a in snapshots)
+    group = _one(a.get("customer_group_id") for a in snapshots)
+    known_events = [r.get("result_count") for r in observations]
+    events = sum(float(v) for v in known_events) if known_events and all(
+        v is not None for v in known_events) else None
+    facts = [{key: r.get(key) for key in ("observation_id", "entity_id", "day", "source", "spend",
+             "result_kind", "result_count", "currency", "attribution_key", "result_action",
+             "result_attribution")} for r in observations]
+    facts.sort(key=lambda r: json.dumps(r, sort_keys=True, default=str))
+    limits = []
+    if not conditions or any(not c.get("price_version") or not c.get("target_version")
+                             for c in conditions) or not audience or not claim_key:
+        limits.append("conditions_unknown")
+    if measurement is None or attribution is None:
+        limits.append("measurement_definition_unknown")
+    if not facts:
+        limits.append("unknown_source")
+    return {"schema_version": 1, "source_kind": kind,
+            "source_ref": {"campaign_id": campaign.get("id"), "ad_id": ad.get("id") if ad else None,
+                           "action_id": action_id, "entity_id": entity_id,
+                           "trial_id": trial_id or campaign.get("id")},
+            "source_version": semantic_version({"observations": facts,
+                                                "conditions": price_conditions}) if facts else None,
+            "provenance": provenance,
+            "period": {key: str(window[key]) if window.get(key) else None
+                       for key in ("start", "end")},
+            "scope": {"product_id": product_id, "audience_key": audience,
+                      "customer_group_id": group,
+                      "claim_key": claim_key, "claim_family": "performance",
+                      "objective_family": ads_repo.campaign_objective_family(
+                          conn, org, brand, campaign),
+                      "result_kind": measurement, "currency": currency, "attribution": attribution},
+            "conditions": price_conditions, "sample": {"result_events": events, "sufficient": None},
+            "direction": direction, "limits": limits}
+
+
 def evidence_context(conn: _AnyConn, org: str, brand: str, product_id: str | None,
-                     *, rows: list[dict] | None = None, cap: int = 30) -> dict:
+                     *, rows: list[dict] | None = None, cap: int = 30,
+                     current: dict | None = None) -> dict:
     """Conservative read projection; missing retained source conditions stay explicit unknowns."""
     from app.ads.triage import MIN_RESULT_EVENTS
 
     product = bi_repo.get_product(cast(Conn, conn), brand, product_id) if product_id else None
     selected = product_id if product else None
-    current = {
-        "org_id": org, "brand_id": brand, "product_id": selected,
-        "org_day": coresettings.today_for_org(conn, org_id=org).isoformat(),
-        "audience_keys": [], "customer_group_ids": [], "result_kind": None,
-        "currency": None, "attribution": None, "mode": "real",
-        "conditions": {"price_version": None, "offers": [], "materials": [],
-                       "target_version": None},
-    }
+    if current is None:
+        current = current_conditions(conn, org, brand, selected)
     if rows is None:
         rows = bi_repo.list_learnings(cast(Conn, conn), brand, limit=_SCAN_LIMIT)
     projected = workbench.qualify_learning_evidence(
@@ -66,12 +278,27 @@ def evidence_context(conn: _AnyConn, org: str, brand: str, product_id: str | Non
 def write(conn: _AnyConn, org_id: str, brand_id: str, *, product_id: str | None, text: str,
           scope: str, confidence: str, sample_size: str, source_cycle_id: str | None,
           source_track: str, needs_revalidation: bool = False, platform: str | None = None,
-          actor: str = "system") -> dict:
+          actor: str = "system", evidence: dict | None = None) -> dict:
     """F48 Contract W: write one learning-ledger row and return it. `product_id` is required: the
     sell-way the learning belongs to (`sell_way.of_campaign`／`of_ad`／`of_campaign_id`); pass
     `None` explicitly only for a campaign that has no sell-way (an imported campaign) -- that row
     is read as brand level. `org_id` names the caller's tenant; the ledger derives the org from
     the brand itself."""
+    evidence = evidence or {"scope": {"product_id": product_id}, "limits": ["unknown_source"]}
+    scope = workbench.encode_learning_scope(scope, evidence)
+    campaign_id = (evidence.get("source_ref") or {}).get("campaign_id")
+    campaign = ads_repo.get_campaign(cast(Conn, conn), org_id, brand_id, campaign_id) \
+        if campaign_id else None
+    current = current_conditions(conn, org_id, brand_id, product_id, campaign=campaign)
+    candidate = {"id": "pending", "org_id": org_id, "brand_id": brand_id,
+                 "product_id": product_id, "learning_text": text, "applicability_scope": scope,
+                 "needs_revalidation": needs_revalidation}
+    rows = bi_repo.list_learnings(cast(Conn, conn), brand_id, limit=_SCAN_LIMIT)
+    projected = evidence_context(conn, org_id, brand_id, product_id,
+                                 rows=[*rows, candidate], cap=_SCAN_LIMIT + 1, current=current)
+    item = next(i for i in projected["items"] if i["id"] == "pending")
+    count = item["same_direction_count"] if item["use_state"] == "usable" else 0
+    confidence = _confidence_for_count(max(count - 1, 0))
     return bi_repo.record_learning(
         cast(Conn, conn), brand_id, actor=actor, learning_text=text,
         applicability_scope=scope, confidence=confidence, sample_size=sample_size,
@@ -81,7 +308,26 @@ def write(conn: _AnyConn, org_id: str, brand_id: str, *, product_id: str | None,
 
 
 def _text(angle: str) -> str:
-    return f"「{angle}」對這群受眾無效"
+    return f"已暫停「{angle}」，操作已核對；成效原因未知"
+
+
+def stored_evidence(row: dict) -> dict:
+    """Read structured retained metadata; legacy text is never promoted into provenance."""
+    try:
+        value = json.loads((row.get("applicability_scope") or "").split("\n@evidence-v1:", 1)[1])
+    except (ValueError, IndexError, TypeError):
+        return {}
+    return value if isinstance(value, dict) and type(value.get("schema_version")) is int \
+        and value["schema_version"] == 1 else {}
+
+
+def message_claim(ad: dict) -> str | None:
+    """Message coordinates describe a claim; a name or free-form label cannot establish it."""
+    if not ad.get("angle_key"):
+        return None
+    return "message:" + semantic_version({k: ad.get(k) for k in (
+        "angle_key", "pain_key", "hook_key", "proof_key",
+    )})
 
 
 def _confidence_for_count(count: int) -> str:
@@ -131,10 +377,20 @@ def record_for_item(conn: _AnyConn, org: str, brand: str, campaign: str, set_id:
     if any(row["source_cycle_id"] == item_id for row in rows):
         return None
     text = _text(angle)
-    prior = sum(1 for row in rows if row["learning_text"] == text)
+    receipt = item.get("evidence_json") or {}
+    confirmed = receipt.get("setting_matches") is True
+    metadata = {"source_kind": "pause", "source_ref": {
+        "campaign_id": campaign, "action_id": item_id, "entity_id": item.get("target_id"),
+        "trial_id": item_id,
+    }, "source_version": semantic_version({"target": item.get("target_id"),
+                                           "after": item.get("after"), "setting_matches": True})
+       if confirmed else None, "provenance": "operation_readback" if confirmed else "unknown",
+       "scope": {"product_id": sell_way.of_campaign_id(conn, org, brand, campaign),
+                 "claim_family": "operation", "claim_key": "pause"},
+       "direction": "inconclusive", "limits": ["operation_only"]}
     return write(
         conn, org, brand, product_id=sell_way.of_campaign_id(conn, org, brand, campaign),
-        text=text, scope=f"ads;campaign={campaign}", confidence=_confidence_for_count(prior),
+        text=text, scope=f"ads;campaign={campaign}", confidence="observed", evidence=metadata,
         sample_size="1", source_cycle_id=item_id, source_track="ads",
     )
 
@@ -162,10 +418,12 @@ def record_for_ab_item(conn: _AnyConn, org: str, brand: str, campaign: str, chan
     if any(row["source_cycle_id"] == item_id for row in rows):
         return None
     text = ab_text(ab)
-    prior = sum(1 for row in rows if row["learning_text"] == text)
+    metadata = ab.get("evidence") or {"source_kind": "ab", "limits": ["unknown_source"]}
+    metadata = {**metadata, "source_ref": {**(metadata.get("source_ref") or {}),
+                                          "campaign_id": campaign, "action_id": item_id}}
     return write(
         conn, org, brand, product_id=sell_way.of_campaign_id(conn, org, brand, campaign),
-        text=text, scope=f"ads;campaign={campaign}", confidence=_confidence_for_count(prior),
+        text=text, scope=f"ads;campaign={campaign}", confidence="observed", evidence=metadata,
         sample_size="1", source_cycle_id=item_id, source_track="ads",
     )
 
