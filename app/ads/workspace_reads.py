@@ -11,7 +11,7 @@ Every number and state here comes from a function that already owns it, never a 
 - `next_sync_at`: `home_overview._sync_block` (the home's `sync.next_at`);
 - timeline states: the home row `_handoff` rule plus `change_control_launch.is_stale`;
 - `slot_state`／`slot_label` (F49 Contract T): `slots.read`, once per structure read;
-- `delivery` (F47 Contract E): `_delivery`, from the sync table's spend rows of this campaign.
+- `delivery` (F52 Contract L): the shared adapter-backed `lifecycle.running_view`.
 
 Unknown is null, never zero: each sub-read runs through `home_overview._guarded`, so a failed read
 nulls only its own field (and rolls the read transaction back for the next one).
@@ -23,6 +23,7 @@ from app.ads import (
     change_control_launch,
     coverage,
     customer_groups,
+    external_models,
     home_overview,
     lifecycle,
     month_summary,
@@ -151,33 +152,6 @@ def _totals(conn, org_id, brand_id, campaign) -> dict:
     }
 
 
-def _has_spent(conn, org_id, brand_id, campaign_id) -> bool:
-    """F47 Contract E: whether the sync table (the one performance source, F37) holds any day of
-    this campaign with spend > 0 -- any day, any scope. No row at all, or only zero／unknown-spend
-    rows, is "not spending yet"."""
-    row = conn.execute(
-        "SELECT EXISTS (SELECT 1 FROM ads_external_daily WHERE org_id=%s AND brand_id=%s "
-        "AND campaign_id=%s AND spend > 0) AS spent",
-        (org_id, brand_id, campaign_id),
-    ).fetchone()
-    return bool(row["spent"])
-
-
-def _delivery(conn, org_id, brand_id, campaign_id, *, draft, closed) -> str | None:
-    """F47 Contract E: `waiting` (on the platform, the sync table has no day with spend > 0) or
-    `live`; null for a draft, a closed campaign, or when the spend read failed -- unknown is never
-    promoted to either."""
-    if draft or closed:
-        return None
-    spent = home_overview._guarded(
-        conn, "workspace.delivery",
-        lambda: _has_spent(conn, org_id, brand_id, campaign_id),
-    )
-    if spent is None:
-        return None
-    return "live" if spent else "waiting"
-
-
 def _launch_counts(conn, org_id, brand_id, change_set_ids) -> dict:
     """launch set id -> `(checked, total)` over its handoff items (one per campaign／group／ad
     node the launch builds; `confirmed` is checked)."""
@@ -234,9 +208,10 @@ def _capacity(conn, org_id, brand_id, campaign, draft, triaged) -> dict:
 def workspace(conn, org_id: str, brand_id: str, campaign_id: str) -> dict:
     campaign = _campaign(conn, org_id, brand_id, campaign_id)
     entities = _entities(conn, org_id, brand_id, campaign_id)
+    today = coresettings.today_for_org(conn, org_id=org_id)
     state = lifecycle.view(
         campaign, root=lifecycle.root(conn, org_id, brand_id, campaign_id),
-        today=coresettings.today_for_org(conn, org_id=org_id),
+        today=today,
     )
     draft = state["state"] == "draft"
     closed = state["state"] == "closed"
@@ -245,6 +220,7 @@ def workspace(conn, org_id: str, brand_id: str, campaign_id: str) -> dict:
     running = lifecycle.running_view(
         campaign, [e for e in entities if e["native_kind"] == "ad"],
         lifecycle.newest_reported(conn, org_id, brand_id, campaign_id).get(campaign_id),
+        today=today,
     )
 
     triaged = None
@@ -284,14 +260,20 @@ def workspace(conn, org_id: str, brand_id: str, campaign_id: str) -> dict:
         conn, "workspace.draft",
         lambda: _draft_block(conn, org_id, brand_id, campaign, cap, launch),
     )
+    stage = campaign_stage.stage(
+        state=state["state"], launch_approved=launch is not None,
+        cap_set=cap["value"] is not None, data_ready=data_ready, open_items=pending,
+        can_close=state["can_close"],
+    )
     return {
-        "stage": campaign_stage.stage(
-            state=state["state"], launch_approved=launch is not None,
-            cap_set=cap["value"] is not None, data_ready=data_ready, open_items=pending,
+        "stage": stage,
+        "next_action": campaign_stage.next_action(
+            lifecycle=state, capabilities=external_models.capabilities(campaign["origin"]),
+            running=running, launch_approved=launch is not None, stage_key=stage["key"],
         ),
         "lifecycle": state,
         "pending_count": pending,
-        "delivery": _delivery(conn, org_id, brand_id, campaign_id, draft=draft, closed=closed),
+        "delivery": None if draft or closed else running["state"],
         **_capacity(conn, org_id, brand_id, campaign, draft, triaged),
         "active_ads": running["count"],
         "running": running,

@@ -278,19 +278,19 @@ describe("CampaignRows", () => {
     const d = new Date(readAt);
     const at = `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
     wrap(<CampaignRows brandId="b" state={ready(home({ campaigns: [
-      campaign({ lifecycle: { state: "live", label: "投放中", can_close: true }, active_ads: 0, daily_budget: null,
+      campaign({ lifecycle: { state: "live", label: "本期進行中", can_close: true }, active_ads: 0, daily_budget: null,
         running: { count: 0, unknown: 1, read_at: readAt, stale: true } }),
-      campaign({ campaign_id: "cmp_2", name: "第二個活動", lifecycle: { state: "live", label: "投放中", can_close: true }, active_ads: 3,
+      campaign({ campaign_id: "cmp_2", name: "第二個活動", lifecycle: { state: "live", label: "本期進行中", can_close: true }, active_ads: 3,
         running: { count: 3, unknown: 0, read_at: readAt, stale: false } }),
     ] }))} onRetry={vi.fn()} />);
     expect(screen.getByText(`在投 0 則・另有 1 則狀態不明・上次讀取 ${at}・每日 未知`)).toBeTruthy();
     expect(screen.getByText("在投 3 則・每日 1,200")).toBeTruthy();
-    expect(screen.getAllByText("投放中")).toHaveLength(2);
+    expect(screen.getAllByText("本期進行中")).toHaveLength(2);
   });
 
   it("a stale count never read yet says so instead of a time", () => {
     wrap(<CampaignRows brandId="b" state={ready(home({ campaigns: [
-      campaign({ lifecycle: { state: "live", label: "投放中", can_close: true }, active_ads: 0, running: { count: 0, unknown: 0, read_at: null, stale: true } }),
+      campaign({ lifecycle: { state: "live", label: "本期進行中", can_close: true }, active_ads: 0, running: { count: 0, unknown: 0, read_at: null, stale: true } }),
     ] }))} onRetry={vi.fn()} />);
     expect(screen.getByText("在投 0 則・還沒讀到平台上的廣告・每日 1,200")).toBeTruthy();
   });

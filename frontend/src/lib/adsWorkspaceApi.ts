@@ -25,7 +25,7 @@
  * - Timeline rows are newest first (`created_at DESC, id DESC`), at most 50 (`truncated` says
  *   there are more); superseded and deferred sets are not listed. */
 import { apiFetch, readJson } from "./http";
-import { BASE, type CampaignLifecycle, type RunningAds } from "./adsApi";
+import { BASE, type CampaignLifecycle, type CampaignNextAction, type DeliveryState, type RunningAds } from "./adsApi";
 import type { TriageGrade, TriageSampleView } from "./adsTriageApi";
 import type { SlotState } from "./adsSlotsApi";
 
@@ -66,13 +66,13 @@ export interface WorkspaceDraft {
   launch_total: number;
 }
 
-/** F47 Contract E: `waiting` = on the platform and the sync table has no day with spend > 0 for it (never synced
- * since launch included); `live` = some day spent; `null` for a draft, a closed campaign, or a failed read — unknown
- * is never promoted to either. */
-export type WorkspaceDelivery = "waiting" | "live";
+/** F52 Contract L: current served adapter state; legacy literals accepted only for older callers/fixtures.
+ * Historical spend never proves current delivery. Missing freshness fields remain unknown. */
+export type WorkspaceDelivery = DeliveryState | "waiting" | "live";
 
 export interface CampaignWorkspace {
   stage: WorkspaceStage;
+  next_action?: CampaignNextAction;
   /** This campaign's open decision-queue rows; 0 on a draft or a closed campaign. */
   pending_count: number | null;
   delivery: WorkspaceDelivery | null;

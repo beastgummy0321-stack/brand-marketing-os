@@ -681,8 +681,7 @@ class OneCutoffTest(unittest.TestCase):
 
 
 class DeliveryTest(_WithReader):
-    """F47 Contract E (drill-10 S3): `delivery` tells "on the platform, not spending yet" from
-    "spending"; a draft, a closed campaign or a failed read is null (never promoted)."""
+    """F52 Contract L: platform state and structure freshness, independent of any spend."""
 
     def setUp(self):
         super().setUp()
@@ -694,39 +693,51 @@ class DeliveryTest(_WithReader):
     def delivery(self, campaign_id=None):
         return self.workspace(self.brand, campaign_id or self.campaign)["delivery"]
 
+    def structure_read(self, campaign_id=None):
+        external.record_sync(self.conn, self.org, self.brand, campaign_id or self.campaign,
+                             section="structure",
+                             state={"status": "success", "last_success_at": _BASE.isoformat()})
+        self.conn.commit()
+
     def test_a_draft_is_null(self):
         self.assertIsNone(self.delivery(_draft(self.conn, self.org, self.brand)))
 
-    def test_never_synced_since_launch_is_waiting(self):
-        self.assertEqual(self.delivery(), "waiting")
+    def test_never_read_structure_is_unknown(self):
+        self.assertEqual(self.delivery(), "unknown")
 
-    def test_only_zero_spend_rows_is_waiting(self):
+    def test_zero_spend_does_not_override_read_active_state(self):
         _synced(self.conn, self.org, self.brand, self.campaign,
                 self.cutoff - timedelta(days=3), self.cutoff)
         for back in range(3):
             _obs(self.conn, self.org, self.brand, self.campaign, self.ad,
                  self.cutoff - timedelta(days=back), spend=0)
-        self.assertEqual(self.delivery(), "waiting")
+        self.structure_read()
+        self.assertEqual(self.delivery(), "running")
 
-    def test_any_day_with_spend_is_live_even_outside_the_totals_window(self):
+    def test_historical_spend_does_not_make_unread_structure_current(self):
         _obs(self.conn, self.org, self.brand, self.campaign, self.ad,
              self.cutoff - timedelta(days=60), spend=12)
-        self.assertEqual(self.delivery(), "live")
+        self.assertEqual(self.delivery(), "unknown")
 
-    def test_another_campaigns_spend_never_counts(self):
+    def test_another_campaigns_active_state_and_spend_never_counts(self):
         other = _imported(self.conn, self.org, self.brand, "別的", "c_dlv2", cap=100)
         other_ad = _ad(self.conn, self.org, self.brand, other, "a_dlv2", ("campaign", "c_dlv2"))
         _obs(self.conn, self.org, self.brand, other, other_ad, self.cutoff, spend=500)
-        self.assertEqual(self.delivery(), "waiting")
-        self.assertEqual(self.delivery(other), "live")
+        _entity(self.conn, self.org, self.brand, self.campaign, "ad", "a_dlv",
+                ("campaign", "c_dlv"), native_status="PAUSED")
+        self.structure_read()
+        self.structure_read(other)
+        self.assertEqual(self.delivery(), "off")
+        self.assertEqual(self.delivery(other), "running")
 
     def test_an_internal_campaign_on_the_platform_reads_its_own_rows(self):
         internal = _draft(self.conn, self.org, self.brand, name="自建活動")
         _entity(self.conn, self.org, self.brand, internal, "campaign", "c_int")
         ad = _ad(self.conn, self.org, self.brand, internal, "a_int", ("campaign", "c_int"))
-        self.assertEqual(self.delivery(internal), "waiting")
+        self.structure_read(internal)
+        self.assertEqual(self.delivery(internal), "running")
         _obs(self.conn, self.org, self.brand, internal, ad, self.cutoff, spend=30)
-        self.assertEqual(self.delivery(internal), "live")
+        self.assertEqual(self.delivery(internal), "running")
 
     def test_closed_is_null(self):
         _obs(self.conn, self.org, self.brand, self.campaign, self.ad, self.cutoff, spend=30)
@@ -735,10 +746,15 @@ class DeliveryTest(_WithReader):
         self.conn.commit()
         self.assertIsNone(self.delivery())
 
-    def test_a_failed_spend_read_is_null(self):
-        with mock.patch.object(workspace_reads, "_has_spent", side_effect=RuntimeError("boom")):
-            ws = self.workspace(self.brand, self.campaign)
-        self.assertIsNone(ws["delivery"])
+    def test_a_failed_structure_attempt_preserves_prior_count_and_is_unknown(self):
+        self.structure_read()
+        external.record_sync(self.conn, self.org, self.brand, self.campaign, section="structure",
+                             state={"status": "error", "error": "Fixture unavailable"})
+        self.conn.commit()
+        ws = self.workspace(self.brand, self.campaign)
+        self.assertEqual(ws["delivery"], "unknown")
+        self.assertEqual(ws["running"]["freshness"], "failed")
+        self.assertEqual(ws["running"]["read_at"], _BASE.isoformat())
         self.assertEqual(ws["active_ads"], 1)  # the other reads still answer
 
 
@@ -1210,6 +1226,305 @@ class TimelineTest(_WithReader):
 # ---------------------------------------------------------------------------
 
 
+class PeriodDeliveryContractTest(_WithReader):
+    """Actual public reads over isolated local entities, never live-platform evidence."""
+
+    def setUp(self):
+        super().setUp()
+        from fastapi.testclient import TestClient
+
+        from app import main
+
+        self.brand = _brand(self.conn, self.org, "Period versus platform delivery")
+        self.client = TestClient(main.app)
+        self.base = f"/api/ads/brands/{self.brand}/campaigns"
+
+    def public_workspace(self, campaign):
+        response = self.client.get(f"{self.base}/{campaign}/workspace")
+        self.assertEqual(response.status_code, 200, response.text)
+        print("F52-I12 public workspace:", response.text)
+        return response.json()
+
+    def test_public_paused_with_historical_spend_is_known_off(self):
+        campaign = _imported(
+            self.conn, self.org, self.brand, "Paused after spending", "period_root"
+        )
+        ad = _ad(
+            self.conn,
+            self.org,
+            self.brand,
+            campaign,
+            "period_ad",
+            ("campaign", "period_root"),
+            status="PAUSED",
+        )
+        _obs(
+            self.conn,
+            self.org,
+            self.brand,
+            campaign,
+            ad,
+            self.cutoff - timedelta(days=60),
+            spend=120,
+        )
+        external.record_sync(
+            self.conn,
+            self.org,
+            self.brand,
+            campaign,
+            section="structure",
+            state={"status": "success", "last_success_at": db.now_utc().isoformat()},
+        )
+        self.conn.commit()
+        workspace = self.public_workspace(campaign)
+        self.assertEqual(workspace["delivery"], "off")
+        self.assertEqual(workspace["running"]["count"], 0)
+        self.assertEqual(workspace["running"]["off"], 1)
+        self.assertEqual(workspace["running"]["freshness"], "read")
+        self.assertEqual(workspace["lifecycle"]["state"], "live")
+        self.assertEqual(workspace["lifecycle"]["label"], "本期進行中")
+
+    def test_public_unread_is_unknown_instead_of_waiting_to_spend(self):
+        campaign = _imported(self.conn, self.org, self.brand, "Unread structure", "unread_root")
+        workspace = self.public_workspace(campaign)
+        self.assertEqual(workspace["delivery"], "unknown")
+        self.assertEqual(workspace["running"]["freshness"], "unread")
+
+    def test_public_future_period_word_does_not_claim_platform_delivery(self):
+        today = self.cutoff + timedelta(days=1)
+        campaign = _draft(
+            self.conn,
+            self.org,
+            self.brand,
+            start_date=today + timedelta(days=5),
+            end_date=today + timedelta(days=12),
+        )
+        _entity(
+            self.conn,
+            self.org,
+            self.brand,
+            campaign,
+            "campaign",
+            "future_root",
+            native_status="ACTIVE",
+        )
+        self.conn.commit()
+        workspace = self.public_workspace(campaign)
+        self.assertEqual(workspace["lifecycle"]["state"], "live")
+        self.assertEqual(workspace["lifecycle"]["label"], "本期尚未開始")
+
+    def test_public_imported_ended_does_not_route_to_internal_closeout(self):
+        campaign = _imported(self.conn, self.org, self.brand, "Imported stopped", "ended_root")
+        _entity(
+            self.conn,
+            self.org,
+            self.brand,
+            campaign,
+            "campaign",
+            "ended_root",
+            native_status="PAUSED",
+        )
+        self.conn.commit()
+        workspace = self.public_workspace(campaign)
+        self.assertFalse(workspace["lifecycle"]["can_close"])
+        self.assertEqual(workspace["stage"]["key"], "read")
+        self.assertEqual(workspace["next_action"]["target"], {"kind": "campaign", "tab": "perf"})
+        self.assertNotIn("結案", workspace["next_action"]["label"])
+
+    def test_public_home_list_detail_workspace_share_adapter_counts_and_reason(self):
+        campaign = _imported(
+            self.conn, self.org, self.brand, "Known paused without spending", "shared_root"
+        )
+        _ad(
+            self.conn,
+            self.org,
+            self.brand,
+            campaign,
+            "shared_paused",
+            ("campaign", "shared_root"),
+            status="PAUSED",
+        )
+        external.record_sync(
+            self.conn,
+            self.org,
+            self.brand,
+            campaign,
+            section="structure",
+            state={"status": "success", "last_success_at": _BASE.isoformat()},
+        )
+        self.conn.commit()
+        workspace = self.public_workspace(campaign)
+        detail = self.client.get(f"{self.base}/{campaign}")
+        listing = self.client.get(self.base)
+        home = self.client.get(f"/api/ads/brands/{self.brand}/home")
+        for response in (detail, listing, home):
+            self.assertEqual(response.status_code, 200, response.text)
+        rows = [
+            detail.json()["campaign"],
+            next(row for row in listing.json()["campaigns"] if row["id"] == campaign),
+            next(row for row in home.json()["campaigns"] if row["campaign_id"] == campaign),
+        ]
+        for row in rows:
+            self.assertEqual(row["running"], workspace["running"])
+            self.assertEqual(row["lifecycle"], workspace["lifecycle"])
+            self.assertEqual(row["next_action"], workspace["next_action"])
+        self.assertEqual(
+            workspace["next_action"]["target"], {"kind": "campaign", "tab": "structure"}
+        )
+
+    def test_public_zero_partial_and_failed_preserve_distinct_read_evidence(self):
+        campaign = _imported(
+            self.conn, self.org, self.brand, "Empty completed structure", "empty_root"
+        )
+        external.record_sync(
+            self.conn,
+            self.org,
+            self.brand,
+            campaign,
+            section="structure",
+            state={"status": "success", "last_success_at": _BASE.isoformat()},
+        )
+        self.conn.commit()
+        known = self.public_workspace(campaign)
+        self.assertEqual(
+            (known["delivery"], known["running"]["freshness"], known["running"]["count"]),
+            ("off", "read", 0),
+        )
+        for status, freshness in (("partial", "partial"), ("error", "failed")):
+            external.record_sync(
+                self.conn,
+                self.org,
+                self.brand,
+                campaign,
+                section="structure",
+                state={
+                    "status": status,
+                    "last_success_at": "2099-01-01T00:00:00Z",
+                    "last_attempt_at": db.now_utc().isoformat(),
+                    "error": "Local fixture incomplete",
+                },
+            )
+            self.conn.commit()
+            current = self.public_workspace(campaign)
+            self.assertEqual(current["delivery"], "unknown")
+            self.assertEqual(current["running"]["read_at"], _BASE.isoformat())
+            self.assertEqual(current["running"]["freshness"], freshness)
+            self.assertEqual(current["next_action"]["id"], "read_platform")
+
+    def test_public_approved_draft_next_step_is_the_existing_checklist_not_activation(self):
+        campaign = _draft(self.conn, self.org, self.brand)
+        _launch(self.conn, self.org, self.brand, campaign)
+        workspace = self.public_workspace(campaign)
+        self.assertEqual(workspace["lifecycle"]["state"], "draft")
+        self.assertIsNone(workspace["delivery"])
+        self.assertEqual(workspace["next_action"]["id"], "review_checklist")
+        self.assertEqual(workspace["next_action"]["target"], {"kind": "flow", "parts": ["publish"]})
+        detail = self.client.get(f"{self.base}/{campaign}")
+        self.assertEqual(detail.status_code, 200, detail.text)
+        self.assertEqual(detail.json()["campaign"]["next_action"], workspace["next_action"])
+
+    def test_public_current_delivery_is_scoped_to_the_campaign_and_brand(self):
+        campaign = _imported(self.conn, self.org, self.brand, "Own empty structure", "own_root")
+        foreign_brand = _brand(self.conn, self.org, "Foreign delivery evidence")
+        foreign = _imported(self.conn, self.org, foreign_brand, "Foreign active", "foreign_root")
+        _ad(self.conn, self.org, foreign_brand, foreign, "foreign_ad", ("campaign", "foreign_root"))
+        external.record_sync(
+            self.conn,
+            self.org,
+            self.brand,
+            campaign,
+            section="structure",
+            state={"status": "success", "last_success_at": _BASE.isoformat()},
+        )
+        self.conn.commit()
+        self.assertEqual(self.public_workspace(campaign)["running"]["count"], 0)
+        self.assertEqual(self.client.get(f"{self.base}/{foreign}/workspace").status_code, 404)
+
+    def test_public_newer_report_preserves_count_and_requires_another_read(self):
+        campaign = _draft(self.conn, self.org, self.brand)
+        root = _entity(
+            self.conn,
+            self.org,
+            self.brand,
+            campaign,
+            "campaign",
+            "reported_root",
+            native_status="ACTIVE",
+        )
+        _ad(self.conn, self.org, self.brand, campaign, "reported_ad", ("campaign", "reported_root"))
+        launch = _launch(
+            self.conn,
+            self.org,
+            self.brand,
+            campaign,
+            handoff=[("campaign", campaign, "reported", root)],
+        )
+        self.conn.execute(
+            "UPDATE ads_handoff_item SET reported_at=%s WHERE org_id=%s AND brand_id=%s "
+            "AND change_set_id=%s",
+            (_BASE + timedelta(seconds=1), self.org, self.brand, launch),
+        )
+        external.record_sync(
+            self.conn,
+            self.org,
+            self.brand,
+            campaign,
+            section="structure",
+            state={"status": "success", "last_success_at": _BASE.isoformat()},
+        )
+        self.conn.commit()
+        workspace = self.public_workspace(campaign)
+        self.assertEqual(workspace["running"]["count"], 1)
+        self.assertTrue(workspace["running"]["stale"])
+        self.assertEqual(workspace["running"]["freshness"], "stale")
+        self.assertEqual(workspace["delivery"], "unknown")
+        self.assertEqual(workspace["running"]["read_at"], _BASE.isoformat())
+        self.assertEqual(workspace["next_action"]["id"], "read_platform")
+
+    def test_public_ended_and_closed_periods_keep_independent_native_active_evidence(self):
+        today = self.cutoff + timedelta(days=1)
+        campaign = _draft(
+            self.conn,
+            self.org,
+            self.brand,
+            start_date=today - timedelta(days=9),
+            end_date=today - timedelta(days=1),
+        )
+        _entity(
+            self.conn,
+            self.org,
+            self.brand,
+            campaign,
+            "campaign",
+            "past_root",
+            native_status="ACTIVE",
+        )
+        _ad(self.conn, self.org, self.brand, campaign, "past_active", ("campaign", "past_root"))
+        external.record_sync(
+            self.conn,
+            self.org,
+            self.brand,
+            campaign,
+            section="structure",
+            state={"status": "success", "last_success_at": _BASE.isoformat()},
+        )
+        self.conn.commit()
+        ended = self.public_workspace(campaign)
+        self.assertEqual(ended["lifecycle"]["state"], "ended")
+        self.assertEqual((ended["delivery"], ended["running"]["count"]), ("running", 1))
+        self.assertTrue(ended["lifecycle"]["can_close"])
+        self.conn.execute(
+            "UPDATE ads_campaign SET status='closed' WHERE org_id=%s AND brand_id=%s AND id=%s",
+            (self.org, self.brand, campaign),
+        )
+        self.conn.commit()
+        closed = self.public_workspace(campaign)
+        self.assertEqual(closed["lifecycle"]["state"], "closed")
+        self.assertEqual(closed["running"]["count"], 1)
+        self.assertIsNone(closed["delivery"])
+        self.assertFalse(closed["lifecycle"]["can_close"])
+
+
 class RouteTest(_WithReader):
     def test_routes_are_wired_and_an_unknown_campaign_is_404(self):
         from fastapi.testclient import TestClient
@@ -1225,6 +1540,7 @@ class RouteTest(_WithReader):
         self.assertEqual(set(ws.json()), {
             "stage", "pending_count", "delivery", "daily_budget", "active_ads", "can_support",
             "next_sync_at", "missing_days", "totals", "draft", "lifecycle", "running",
+            "next_action",
         })
         structure = client.get(f"{base}/{draft}/structure")
         self.assertEqual(structure.status_code, 200, structure.text)

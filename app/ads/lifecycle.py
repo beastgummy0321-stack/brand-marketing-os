@@ -30,7 +30,7 @@ from app.core import settings
 ENDED_GRACE_DAYS = 7
 STATES = ("draft", "live", "ended", "closed")
 NOT_CLOSED = frozenset({"draft", "live", "ended"})
-LABELS = {"draft": "草稿", "live": "投放中", "ended": "已結束・待結案", "closed": "已結案"}
+LABELS = {"draft": "草稿", "live": "本期進行中", "ended": "已結束・待結案", "closed": "已結案"}
 IMPORTED_LABELS = {**LABELS, "ended": "已結束"}
 _CLOSABLE = frozenset({"live", "ended"})
 
@@ -124,8 +124,13 @@ def can_close(campaign: dict, state_: str) -> bool:
 def view(campaign: dict, *, root: dict | None, today: date) -> dict:
     """The served `lifecycle {state, label, can_close}`."""
     current = state(campaign, root=root, today=today)
+    start = _as_date(
+        (root or {}).get("start_date") if _imported(campaign) else campaign.get("start_date"),
+    )
     return {
-        "state": current, "label": label(current, campaign.get("origin")),
+        "state": current,
+        "label": "本期尚未開始" if current == "live" and start is not None and start > today
+        else label(current, campaign.get("origin")),
         "can_close": can_close(campaign, current),
     }
 
@@ -349,15 +354,76 @@ def newest_reported(conn, org_id: str, brand_id: str, campaign_id: str | None = 
     return {row["campaign_id"]: row["at"] for row in rows}
 
 
-def running_view(campaign: dict, ads: list[dict], reported_at) -> dict:
+def running_view(campaign: dict, ads: list[dict], reported_at, *,
+                 today: date | None = None) -> dict:
     """`count` running ads and `unknown` ones among `ads` (the campaign's ad entities);
     `read_at` = the newest clean structure read; `stale` = that read is older than the newest
-    launch item the user reported done (`reported_at`), so the count may miss it (drill-11 E5)."""
+    launch item the user reported done (`reported_at`), so the count may miss it (drill-11 E5).
+    F52: current delivery and attempt freshness are separate from those preserved counts;
+    no clean read is unknown, while a clean empty structure is a known zero. Calendar dates
+    never replace the adapter running count; scheduled counts only known not-running ads.
+    """
     read_at = structure_read_at(campaign)
     read_time, reported = _as_time(read_at), _as_time(reported_at)
-    return {
-        "count": sum(1 for ad in ads if ad_running(ad) is True),
-        "unknown": sum(1 for ad in ads if ad_running(ad) is None),
-        "read_at": read_at,
-        "stale": reported is not None and (read_time is None or read_time < reported),
+    stale = reported is not None and (read_time is None or read_time < reported)
+    sync = (campaign.get("context_json") or {}).get("external_sync") or {}
+    section = sync.get("structure") or {}
+    status = section.get("status")
+    freshness = (
+        "partial" if status == "partial" else
+        "failed" if status in {"error", "failed", "unavailable"} or section.get("error") else
+        "syncing" if status == "syncing" else
+        "unread" if read_time is None else "stale" if stale else "read"
+    )
+    views = [delivery(ad) for ad in ads]
+    counts = {state_: sum(view["state"] == state_ for view in views)
+              for state_ in ("running", "not_running", "off", "unknown")}
+    current = (
+        "unknown" if freshness != "read" or counts["unknown"] else
+        "running" if counts["running"] else "not_running" if counts["not_running"] else "off"
+    )
+    reasons = {
+        "unread": "還沒有成功讀取平台投放結構，不能確認目前投放狀態。",
+        "failed": "本次平台結構讀取失敗；保留上次成功讀取時間與已知廣告數量。",
+        "partial": "本次只讀到部分平台結構；保留上次成功讀取時間，不能當成完整現況。",
+        "syncing": "平台結構仍在讀取；目前數量尚未經完整讀取確認。",
+        "stale": "上次完整讀取早於最新交棒回報，需重新讀取平台結構。",
     }
+    reason = reasons.get(freshness)
+    if reason is None:
+        reason = ("部分廣告的平台狀態不明。" if counts["unknown"] else
+                  "本次完整讀取沒有平台廣告。" if not ads else
+                  "、".join(dict.fromkeys(view["label"] for view in views)))
+    scheduled = sum(
+        view["state"] == "not_running" and today is not None
+        and (start := _as_date(ad.get("start_date"))) is not None and start > today
+        for ad, view in zip(ads, views, strict=True)
+    )
+    return {
+        "count": counts["running"], "unknown": counts["unknown"],
+        "not_running": counts["not_running"], "off": counts["off"], "scheduled": scheduled,
+        "read_at": read_at,
+        "stale": stale, "freshness": freshness, "state": current,
+        "label": {"running": "平台投放中", "not_running": "平台尚未投放",
+                  "off": "平台未在投放", "unknown": "平台投放狀態待確認"}[current],
+        "reason": reason,
+    }
+
+
+def running_views(conn, org_id: str, brand_id: str, campaigns: list[dict], *, today: date) -> dict:
+    """Shared list/detail projection; scoped batch reads retain the same adapter rule."""
+    ids = [campaign["id"] for campaign in campaigns]
+    if not ids:
+        return {}
+    rows = conn.execute(
+        "SELECT * FROM ads_external_entity WHERE org_id=%s AND brand_id=%s "
+        "AND campaign_id=ANY(%s) AND native_kind='ad' ORDER BY campaign_id,id",
+        (org_id, brand_id, ids),
+    ).fetchall()
+    by_campaign: dict[str, list] = {}
+    for row in rows:
+        by_campaign.setdefault(row["campaign_id"], []).append(dict(row))
+    reported = newest_reported(conn, org_id, brand_id)
+    return {campaign["id"]: running_view(
+        campaign, by_campaign.get(campaign["id"], []), reported.get(campaign["id"]), today=today,
+    ) for campaign in campaigns}

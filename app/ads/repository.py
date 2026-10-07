@@ -21,6 +21,7 @@ from psycopg.errors import LockNotAvailable
 
 from app.ads import (
     budget,
+    campaign_stage,
     channels,
     external_models,
     external_repository,
@@ -703,6 +704,9 @@ def list_campaigns(conn: _AnyConn, org_id: str, brand_id: str) -> list:
     # query-sharing shape `accounts_cache` already uses for sync state).
     owner_by_entity = triage_scale.owner_lookup(conn, org_id, brand_id)
     roots = lifecycle.roots(conn, org_id, brand_id)
+    running = lifecycle.running_views(
+        conn, org_id, brand_id, [dict(row) for row in rows], today=today,
+    )
     entries = []
     for row in rows:
         row = dict(row)
@@ -722,6 +726,10 @@ def list_campaigns(conn: _AnyConn, org_id: str, brand_id: str) -> list:
         entries.append({
             "id": row["id"], "name": row["name"], "status": row["status"],
             "lifecycle": state, "origin": row["origin"],
+            "running": running[row["id"]],
+            "next_action": campaign_stage.action_of(
+                conn, org_id, brand_id, row, state, running[row["id"]],
+            ),
             "capabilities": external_models.capabilities(row["origin"]),
             "start_date": row["start_date"], "end_date": row["end_date"],
             "objective": row["objective"],
@@ -954,6 +962,13 @@ def campaign_detail(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str
         campaign, root=lifecycle.root(conn, org_id, brand_id, campaign_id), today=today,
     )
     detail["capabilities"] = external_models.capabilities(campaign["origin"])
+    detail["running"] = lifecycle.running_views(
+        conn, org_id, brand_id, [campaign], today=today,
+    )[campaign_id]
+    detail["next_action"] = campaign_stage.action_of(
+        conn, org_id, brand_id, campaign, detail["lifecycle"], detail["running"],
+        stage_key="assets" if detail["cap"]["value"] is not None else None,
+    )
     if campaign["origin"] == "imported":
         from app.ads import outcome as performance
 

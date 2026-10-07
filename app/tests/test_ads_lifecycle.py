@@ -125,7 +125,7 @@ class StateTest(unittest.TestCase):
         )
         self.assertEqual(
             lifecycle.view(_internal("live"), root=ROOT, today=TODAY),
-            {"state": "live", "label": "投放中", "can_close": True},
+            {"state": "live", "label": "本期進行中", "can_close": True},
         )
         self.assertEqual(
             lifecycle.view(_internal("draft"), root=None, today=TODAY),
@@ -164,6 +164,90 @@ class StateTest(unittest.TestCase):
     def test_unknown_selector_state_is_refused(self):
         with self.assertRaises(ValueError):
             lifecycle._wanted({"live", "paused"})
+
+
+class RunningProjectionTest(unittest.TestCase):
+    def campaign(self, status="success", *, read_at="2000-01-01T00:00:00+00:00", **extra):
+        return {
+            "context_json": {
+                "external_sync": {
+                    "structure": {
+                        "status": status,
+                        "last_success_at": read_at,
+                        **extra,
+                    }
+                }
+            }
+        }
+
+    def test_a_clean_empty_structure_is_known_zero_without_an_age_cutoff(self):
+        view = lifecycle.running_view(self.campaign(), [], None)
+        self.assertEqual(
+            (view["count"], view["unknown"], view["state"], view["freshness"]),
+            (0, 0, "off", "read"),
+        )
+        self.assertFalse(view["stale"])
+        self.assertIn("沒有平台廣告", view["reason"])
+        unread = lifecycle.running_view({}, [], None)
+        self.assertEqual(
+            (unread["count"], unread["state"], unread["freshness"]), (0, "unknown", "unread")
+        )
+
+    def test_partial_failed_and_syncing_keep_the_success_time_without_current_claim(self):
+        for status, freshness in (
+            ("partial", "partial"),
+            ("error", "failed"),
+            ("failed", "failed"),
+            ("unavailable", "failed"),
+            ("syncing", "syncing"),
+        ):
+            with self.subTest(status=status):
+                view = lifecycle.running_view(
+                    self.campaign(status), [_meta("ACTIVE"), _meta("PAUSED")], None
+                )
+                self.assertEqual(
+                    (view["count"], view["off"], view["state"], view["freshness"]),
+                    (1, 1, "unknown", freshness),
+                )
+                self.assertEqual(view["read_at"], "2000-01-01T00:00:00+00:00")
+                self.assertFalse(
+                    view["stale"], "Attempt failure is separate from the launch-report stale rule"
+                )
+
+    def test_newer_report_is_stale_equal_report_is_current_and_missing_read_is_unknown(self):
+        read_at = "2026-10-01T12:00:00+00:00"
+        campaign = self.campaign(read_at=read_at)
+        for reported, stale in ((read_at, False), ("2026-10-01T12:00:01+00:00", True)):
+            view = lifecycle.running_view(campaign, [_meta("ACTIVE")], reported)
+            self.assertEqual(view["count"], 1)
+            self.assertEqual(view["stale"], stale)
+            self.assertEqual(view["freshness"], "stale" if stale else "read")
+            self.assertEqual(view["state"], "unknown" if stale else "running")
+        unread = lifecycle.running_view({}, [], read_at)
+        self.assertTrue(unread["stale"])
+        self.assertEqual(unread["freshness"], "unread")
+
+    def test_native_unknown_and_not_running_remain_distinct_from_paused(self):
+        for status, state, not_running, off in (
+            ("PAUSED", "off", 0, 1),
+            ("PENDING_REVIEW", "not_running", 1, 0),
+            ("SOME_FUTURE_STATUS", "unknown", 0, 0),
+        ):
+            with self.subTest(status=status):
+                view = lifecycle.running_view(self.campaign(), [_meta(status)], None)
+                self.assertEqual(
+                    (view["state"], view["not_running"], view["off"]), (state, not_running, off)
+                )
+
+    def test_future_dates_do_not_override_the_adapter_active_count(self):
+        future = TODAY + timedelta(days=5)
+        ads = [
+            {**_meta("ACTIVE"), "start_date": future},
+            {**_meta("PENDING_REVIEW"), "start_date": future},
+        ]
+        view = lifecycle.running_view(self.campaign(), ads, None, today=TODAY)
+        self.assertEqual((view["count"], view["not_running"], view["scheduled"]), (1, 1, 1))
+        self.assertEqual(view["state"], "running")
 
 
 class _Db(unittest.TestCase):

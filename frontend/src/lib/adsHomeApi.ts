@@ -13,7 +13,7 @@
  *   `previous_same_period.days` is that many days at the start of the previous month. */
 import { apiFetch, readJson } from "./http";
 import {
-  BASE, type CampaignLifecycle, type CampaignStatus, type CampaignSyncState, type RunningAds,
+  BASE, type CampaignLifecycle, type CampaignNextAction, type CampaignStatus, type CampaignSyncState, type RunningAds,
 } from "./adsApi";
 import type { CampaignDataStatus, CapBasis, TriageGrade } from "./adsTriageApi";
 
@@ -93,6 +93,7 @@ export interface HomeCampaign {
   /** F49 Contract L: the served lifecycle and 「在投」 (`active_ads` = `running.count`). */
   lifecycle?: CampaignLifecycle;
   running?: RunningAds;
+  next_action?: CampaignNextAction;
   month_spend: number | null;
   purchases: number | null;
   cost_per_purchase: number | null;
