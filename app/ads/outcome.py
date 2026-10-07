@@ -247,9 +247,8 @@ def native_period_view(conn: _AnyConn, org_id: str, brand_id: str, campaign: dic
     return view
 
 
-def cap_comparison(conn: _AnyConn, brand_id: str, cap: dict, currency: str | None,
-                   *, campaign: dict) -> dict:
-    """Compare only units supported by the cap's recorded source.
+def cap_unit(conn: _AnyConn, brand_id: str, cap: dict, *, campaign: dict) -> dict:
+    """Resolve only units supported by the cap's recorded source.
 
     The manual NT$ input records source=user. Other historical own sources lack a frozen
     unit; a current product/account cannot establish the unit of their stored value.
@@ -263,25 +262,55 @@ def cap_comparison(conn: _AnyConn, brand_id: str, cap: dict, currency: str | Non
         cap_currency, unit_basis = "TWD", "manual_ntd_input"
     if cap["basis"] == "break_even" and cap.get("product_id"):
         economics = bi_repo.get_product_economics(conn, brand_id, cap["product_id"])
-        cap_currency = (economics or {}).get("currency")
+        cap_currency = (
+            economics.get("currency") if economics and economics["status"] == "confirmed" else None
+        )
         unit_basis = "confirmed_product_economics" if cap_currency else None
+    return {"basis": cap["basis"], "currency": cap_currency,
+            "source": source, "unit_basis": unit_basis}
+
+
+def break_even_unit(conn: _AnyConn, brand_id: str, target: dict, *, campaign: dict) -> dict:
+    """The current computed break-even's independent confirmed economics unit.
+
+    A computable pending row does not establish a comparable money unit. This does not
+    reinterpret the stored own cap or change the existing scalar target resolver.
+    """
+    cap = {**target, "basis": "break_even"}
+    if target.get("break_even") is None:
+        cap["product_id"] = None
+    return {**cap_unit(conn, brand_id, cap, campaign=campaign), "source": "product_economics"}
+
+
+def price_unit(conn: _AnyConn, brand_id: str, target: dict, *, campaign: dict) -> dict:
+    """A known price may have a confirmed unit even while its cost/break-even is missing."""
+    cap = {**target, "basis": "break_even"}
+    if target.get("price") is None:
+        cap["product_id"] = None
+    return {**cap_unit(conn, brand_id, cap, campaign=campaign), "source": "product_economics"}
+
+
+def compare_cap_unit(unit: dict, currency: str | None) -> dict:
+    """Compare a recorded cap unit with one observed window; never convert money."""
     reason = None
-    if cap["basis"] in {"own", "break_even"}:
+    if unit["basis"] in {"own", "break_even"}:
         reason = (
             "cap_currency_unknown"
-            if cap_currency is None or currency is None
+            if unit["currency"] is None or currency is None
             else "cap_currency_mismatch"
-            if cap_currency != currency
+            if unit["currency"] != currency
             else None
         )
     return {
-        "basis": cap["basis"],
-        "currency": cap_currency,
-        "source": source,
-        "unit_basis": unit_basis,
+        **unit,
         "reason": reason,
         "message": "上限與本期成效的幣別不同或尚未核實，不能比較。" if reason else None,
     }
+
+
+def cap_comparison(conn: _AnyConn, brand_id: str, cap: dict, currency: str | None,
+                   *, campaign: dict) -> dict:
+    return compare_cap_unit(cap_unit(conn, brand_id, cap, campaign=campaign), currency)
 
 
 def roas_pair(rows: list) -> dict:

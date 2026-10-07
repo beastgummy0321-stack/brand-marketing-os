@@ -30,6 +30,11 @@ function cap(extra: Partial<CampaignCap>): CampaignCap {
 const OWN = cap({ value: 450, basis: "own", own_value: 450, break_even: 520, price: 1580 });
 const BE = cap({ value: 520, basis: "break_even", break_even: 520, price: 1580 });
 const NONE = cap({ price: 1280, missing: ["product_cost"] });
+/** Only the original same-TWD arithmetic controls declare current source evidence. */
+function knownCap(c: CampaignCap): CampaignCap {
+  const economics = {basis: "break_even", currency: "TWD", source: "product_economics", unit_basis: "confirmed_product_economics"};
+  return {...c, cap_unit: {basis: c.basis, currency: "TWD", source: c.basis === "own" ? "user" : "product_economics", unit_basis: c.basis === "own" ? "manual_ntd_input" : "confirmed_product_economics"}, break_even_unit: economics, price_unit: economics};
+}
 /** `GET .../target` of the 暫用打平 campaign: 成本含運 1,060 so 售價 1,580 − 1,060 = 打平 520. */
 function target(c: CapView, cost: number | null): CampaignTarget {
   return { ...c, campaign_id: "cmp_1", product_ids: ["prd_1"], result_kinds: [{ kind: "purchase", label: "購買" }], cost };
@@ -48,8 +53,8 @@ function item(id: string, grade: TriageItem["grade"], spend: number, results: nu
 
 function renderBlock(c: CampaignDetail) {
   const onCampaignChange = vi.fn();
-  render(<MemoryRouter><CapBlock brandId="brd_1" campaign={c} onCampaignChange={onCampaignChange} /></MemoryRouter>);
-  return { onCampaignChange };
+  const view = render(<MemoryRouter><CapBlock brandId="brd_1" campaign={c} onCampaignChange={onCampaignChange} /></MemoryRouter>);
+  return {...view, onCampaignChange};
 }
 
 describe("CapBlock", () => {
@@ -59,12 +64,34 @@ describe("CapBlock", () => {
     vi.mocked(getTarget).mockResolvedValue(target(BE, 1060));
   });
 
+  it.each(["USD", null])("never compares/fills a %s break-even into the manual TWD input", async (currency) => {
+    const user = userEvent.setup();
+    const c = knownCap(OWN);
+    c.break_even_unit = {basis: "break_even", currency, source: "product_economics", unit_basis: currency ? "confirmed_product_economics" : null};
+    c.price_unit = c.break_even_unit;
+    const {container} = renderBlock(campaign(c));
+    expect(container.textContent).not.toContain("ROAS");
+    expect(screen.getByText(`・打平 520 ${currency ?? "幣別未知"}・售價、打平線與上限的幣別不同或尚未核實，暫時不能比較。`)).toBeTruthy();
+    await user.click(screen.getByRole("button", {name: "修改"}));
+    await user.type(screen.getByLabelText("每賣一筆最多花多少（上限）"), "450");
+    expect(screen.getByRole("button", {name: `用打平 520 ${currency ?? "幣別未知"}`}).hasAttribute("disabled")).toBe(true);
+    expect(container.textContent).not.toContain("比打平");
+    expect(container.textContent).not.toContain("ROAS");
+    expect(putTarget).not.toHaveBeenCalled();
+  });
+
+  it("does not assign a unit to a legacy own cap while retaining its known scalar", async () => {
+    renderBlock(campaign(OWN));
+    expect(await screen.findByText("450 幣別未知")).toBeTruthy();
+    expect(screen.queryByText("450 TWD")).toBeNull();
+  });
+
   it("own cap: value, 自己填, ROAS 參考 = price ÷ cap and 打平; 修改 opens the input", async () => {
     const user = userEvent.setup();
-    renderBlock(campaign(OWN));
+    renderBlock(campaign(knownCap(OWN)));
     expect(await screen.findByText("450 TWD")).toBeTruthy();
     expect(screen.getByText("自己填")).toBeTruthy();
-    expect(screen.getByText(textIs("ROAS 3.51x 花到上限時・打平 520"))).toBeTruthy();
+    expect(screen.getByText(textIs("ROAS 3.51x 花到上限時・打平 520 TWD"))).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "修改" }));
     expect(screen.getByLabelText("每賣一筆最多花多少（上限）")).toBeTruthy();
     expect(screen.getByRole("button", { name: "取消" })).toBeTruthy();
@@ -91,8 +118,16 @@ describe("CapBlock", () => {
   });
 
   it("an own cap equal to break-even reads 打平值", async () => {
-    renderBlock(campaign(cap({ value: 520, basis: "own", own_value: 520, break_even: 520, price: 1580 })));
+    renderBlock(campaign(knownCap(cap({ value: 520, basis: "own", own_value: 520, break_even: 520, price: 1580 }))));
     expect(await screen.findByText("打平值")).toBeTruthy();
+  });
+
+  it("does not call equal scalar TWD own / USD break-even amounts a break-even value", async () => {
+    const c = knownCap(cap({value: 450, basis: "own", own_value: 450, break_even: 450, price: 620}));
+    c.break_even_unit = {...c.break_even_unit!, currency: "USD"};
+    renderBlock(campaign(c));
+    expect(screen.queryByText("打平值")).toBeNull();
+    expect(screen.getByText("自己填")).toBeTruthy();
   });
 
   it("typing previews against break-even and saves the integer as the own cap with the revision guard", async () => {
@@ -100,10 +135,10 @@ describe("CapBlock", () => {
     const reread = campaign(cap({ value: 460, basis: "own", own_value: 460, break_even: 520, price: 1580, revision: 5 }));
     vi.mocked(putTarget).mockResolvedValue({} as CampaignTarget);
     vi.mocked(getCampaign).mockResolvedValue(reread);
-    const { onCampaignChange } = renderBlock(campaign(OWN));
+    const { onCampaignChange } = renderBlock(campaign(knownCap(OWN)));
     await user.click(await screen.findByRole("button", { name: "修改" }));
     await user.type(screen.getByLabelText("每賣一筆最多花多少（上限）"), "460");
-    expect(screen.getByText(textIs("比打平 520 低 60・ROAS 3.43x 花到上限時"))).toBeTruthy();
+    expect(screen.getByText(textIs("比打平 520 TWD 低 60・ROAS 3.43x 花到上限時"))).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "儲存上限" }));
     expect(putTarget).toHaveBeenCalledWith("brd_1", "cmp_1", { basis: "own", value: 460, expected_revision: 4 });
     expect(onCampaignChange).toHaveBeenCalledWith(reread);
@@ -122,41 +157,42 @@ describe("CapBlock", () => {
     const user = userEvent.setup();
     vi.mocked(putTarget).mockResolvedValue({} as CampaignTarget);
     vi.mocked(getCampaign).mockResolvedValue(campaign(OWN));
-    renderBlock(campaign(BE));
+    vi.mocked(getTarget).mockResolvedValue(target(knownCap(BE), 1060));
+    renderBlock(campaign(knownCap(BE)));
     expect(await screen.findByText("暫用打平")).toBeTruthy();
-    expect(await screen.findByText(textIs("打平線 520：售價 1,580 − 成本含運 1,060・ROAS 3.04x 花到上限時"))).toBeTruthy();
+    expect(await screen.findByText(textIs("打平線 520 TWD・售價 1,580 TWD − 成本含運 1,060 TWD・ROAS 3.04x 花到上限時"))).toBeTruthy();
     expect(getTarget).toHaveBeenCalledWith("brd_1", "cmp_1");
     expect(putTarget).not.toHaveBeenCalled();
-    await user.click(screen.getByRole("button", { name: "就用 520" }));
+    await user.click(screen.getByRole("button", { name: "就用 520 TWD" }));
     expect(putTarget).toHaveBeenCalledWith("brd_1", "cmp_1", { basis: "own", value: 520, expected_revision: 4 });
   });
 
   it("暫用打平 without a known cost, or when the target read fails: price and ROAS only, never a made-up cost", async () => {
-    vi.mocked(getTarget).mockResolvedValue(target(BE, null));
-    const { unmount } = render(<MemoryRouter><CapBlock brandId="brd_1" campaign={campaign(BE)} onCampaignChange={vi.fn()} /></MemoryRouter>);
+    vi.mocked(getTarget).mockResolvedValue(target(knownCap(BE), null));
+    const { unmount } = render(<MemoryRouter><CapBlock brandId="brd_1" campaign={campaign(knownCap(BE))} onCampaignChange={vi.fn()} /></MemoryRouter>);
     await waitFor(() => expect(getTarget).toHaveBeenCalled());
-    expect(screen.getByText(textIs("打平線 520・售價 1,580・ROAS 3.04x 花到上限時"))).toBeTruthy();
+    expect(screen.getByText(textIs("打平線 520 TWD・售價 1,580 TWD・ROAS 3.04x 花到上限時"))).toBeTruthy();
     expect(screen.queryByText(/成本含運/)).toBeNull();
     unmount();
     vi.mocked(getTarget).mockRejectedValue(new Error("逾時"));
-    renderBlock(campaign(BE));
+    renderBlock(campaign(knownCap(BE)));
     await waitFor(() => expect(getTarget).toHaveBeenCalledTimes(2));
-    expect(screen.getByText(textIs("打平線 520・售價 1,580・ROAS 3.04x 花到上限時"))).toBeTruthy();
+    expect(screen.getByText(textIs("打平線 520 TWD・售價 1,580 TWD・ROAS 3.04x 花到上限時"))).toBeTruthy();
   });
 
   it("an own cap never reads the target for the 打平線 line", async () => {
-    renderBlock(campaign(OWN));
+    renderBlock(campaign(knownCap(OWN)));
     expect(await screen.findByText("450 TWD")).toBeTruthy();
     expect(getTarget).not.toHaveBeenCalled();
   });
 
   it("暫用打平: 設定自己的上限 opens the input with a 用打平 fill", async () => {
     const user = userEvent.setup();
-    renderBlock(campaign(BE));
+    renderBlock(campaign(knownCap(BE)));
     await user.click(await screen.findByRole("button", { name: "設定自己的上限" }));
-    await user.click(screen.getByRole("button", { name: "用打平 520" }));
+    await user.click(screen.getByRole("button", { name: "用打平 520 TWD" }));
     expect((screen.getByLabelText("每賣一筆最多花多少（上限）") as HTMLInputElement).value).toBe("520");
-    expect(screen.getByText(textIs("比打平 520 高 0・ROAS 3.04x 花到上限時"))).toBeTruthy();
+    expect(screen.getByText(textIs("比打平 520 TWD 高 0・ROAS 3.04x 花到上限時"))).toBeTruthy();
   });
 
   it("no cap and no product cost: the input is open, 沒有商品成本 links to the product's 賣法與價格 step, the ruler is empty", async () => {
@@ -196,11 +232,11 @@ describe("CapBlock", () => {
   it("the mid ruler places the campaign's graded ads from triage", async () => {
     vi.mocked(getTriage).mockResolvedValue({
       window_days: 14, closed: { groups: [], total: 0, items: [], truncated: false },
-      items: [item("a1", "on_target", 3600, 20), item("a2", "over", 6200, 10), item("a3", "wasted", 1600, 0)],
+      items: [item("a1", "on_target", 3600, 20), item("a2", "over", 6200, 10), item("a3", "wasted", 1600, 0)].map((row) => ({...row, current: {...row.current, currency: "TWD"}, cap_comparison: {basis: "own", currency: "TWD", reason: null, message: null}})),
     });
-    renderBlock(campaign(OWN));
-    expect(await screen.findByRole("button", { name: "廣告 a1｜每筆 180 元｜划算" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "廣告 a3｜花 1,600 元・0 筆購買｜沒賣出" })).toBeTruthy();
+    renderBlock(campaign(knownCap(OWN)));
+    expect(await screen.findByRole("button", { name: "廣告 a1｜每筆 180 TWD｜划算" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "廣告 a3｜花 1,600 TWD・0 筆購買｜沒賣出" })).toBeTruthy();
   });
 
   it("a failed triage read leaves the cap usable and offers a retry", async () => {

@@ -5,7 +5,7 @@
  * files (each keeps its own small copy, existing convention — see `adsChangeApi.ts`). */
 import { apiFetch, readJson } from "./http";
 import { BASE } from "./adsApi";
-import type { CampaignObjectiveFamily, RankedGrade, TriageGrade, TriageSampleView } from "./adsTriageApi";
+import type { CapComparison, CampaignObjectiveFamily, RankedGrade, TriageGrade, TriageSampleView } from "./adsTriageApi";
 
 export type MonthVerdict = "met" | "missed" | "unjudged";
 
@@ -47,17 +47,21 @@ export interface PeriodGradeRow {
    * on `grade_label`. `sample` = the window's shown sample size (never a gate). Always served; optional only for older
    * hand-written fixtures. */
   reason_code?: string | null; sample?: TriageSampleView | null;
+  cap_comparison?: CapComparison;
+  break_even_unit?: Omit<CapComparison, "reason" | "message">;
 }
 /** One grade's share of the window: `amount` is null when any ad's spend is unknown or the ads
  * span two currencies. Every grade is listed, empty ones with `count` 0. */
 export interface PeriodGradeBucket {
   grade: TriageGrade; amount: number | null; count: number;
+  currency?: string | null; reason_codes?: string[]; messages?: string[];
   ads: { entity_id: string; name: string | null; thumbnail_url: string | null; spend: number | null }[];
 }
 /** F29-I01 Contract C `grades`: 有效 is the `on_target` bucket only. `missing` lists campaigns
  * with unsynced days inside the month. */
 export interface MonthGrades {
   spent: number | null; buckets: PeriodGradeBucket[]; rows: PeriodGradeRow[];
+  currency?: string | null;
   missing: { campaign_id: string; name: string; missing_days: string[] }[];
 }
 /** F29-I01 Contract C `rejected`: cleanups the user said no to whose ads got worse since (only

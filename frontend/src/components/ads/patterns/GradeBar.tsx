@@ -4,7 +4,7 @@ import { gradeWord, useAdsRules } from "./rules";
 
 /** One bucket of spend per grade (Feature F29 Contract C/E `buckets`). `amount` null = unknown: it draws no
  * width and prints as unknown, never as 0. */
-export interface GradeBarBucket { grade: Grade | "ungraded"; amount: number | null; count: number }
+export interface GradeBarBucket { grade: Grade | "ungraded"; amount: number | null; count: number; currency?: string | null }
 
 const HATCH = "bg-[repeating-linear-gradient(45deg,var(--color-border)_0_4px,var(--color-background)_4px_8px)]";
 const ORDER = [
@@ -29,14 +29,21 @@ export function GradeBar({ buckets, withMoney = false, thinLabel, rules = true, 
   const merged = ORDER.map((o) => {
     const own = buckets.filter((b) => b.grade === o.key || (o.key === "no_target" && b.grade === "ungraded"));
     const known = own.filter((b) => b.amount !== null);
+    const units = new Set(own.filter((b) => b.count > 0 || (b.amount ?? 0) > 0).map((b) => b.currency ?? null));
+    const currency = units.size === 1 ? [...units][0] : null;
+    const amount = own.length === 1 ? own[0].amount
+      : own.length && known.length === own.length && currency ? known.reduce((s, b) => s + (b.amount as number), 0) : null;
     return {
       ...o,
       count: own.reduce((s, b) => s + b.count, 0),
-      amount: own.length && known.length === own.length ? known.reduce((s, b) => s + (b.amount as number), 0) : null,
-      width: known.reduce((s, b) => s + (b.amount as number), 0),
+      currency,
+      amount,
+      width: amount ?? 0,
     };
   }).filter((o) => o.count > 0 || o.width > 0);
-  const total = merged.reduce((s, o) => s + o.width, 0);
+  const units = new Set(merged.map((o) => o.currency));
+  const comparable = merged.length > 0 && units.size === 1 && !units.has(null) && merged.every((o) => o.amount !== null);
+  const total = comparable ? merged.reduce((s, o) => s + o.width, 0) : 0;
   const served = useAdsRules();
   // Served words (F48 Contract R-API); the thin bucket reads 剛開始、數字還不夠 unless the screen words it itself.
   const label = (key: (typeof ORDER)[number]["key"]) => (key === "insufficient" && thinLabel ? thinLabel : gradeWord(served, key) ?? "");
@@ -45,12 +52,15 @@ export function GradeBar({ buckets, withMoney = false, thinLabel, rules = true, 
       <div className="mt-1 mb-2 flex h-3 overflow-hidden rounded-md bg-muted" aria-hidden="true">
         {total > 0 && merged.map((o) => (o.width > 0 ? <i key={o.key} data-grade={o.key} className={`block ${o.fill}`} style={{ width: `${(o.width / total) * 100}%` }} /> : null))}
       </div>
+      {merged.length > 0 && !comparable && <p className="mb-2 text-xs text-muted-foreground">{units.size === 1 && !units.has(null)
+        ? "花費金額未知，不比較花費占比。"
+        : "幣別不同或尚未核實，不比較花費占比。"}</p>}
       <div className="flex flex-wrap gap-x-4 gap-y-1.5 text-xs text-muted-foreground">
         {merged.map((o) => (
           <span key={o.key} data-grade={o.key}>
             <i aria-hidden="true" className={`mr-[5px] inline-block size-2 rounded-[2px] ${o.fill}`} />
             {label(o.key)} {o.count} 則
-            {withMoney && (o.amount === null ? "・金額未知" : `・${formatAmount(o.amount)} 元`)}
+            {withMoney && (o.amount === null ? "・金額未知" : `・${formatAmount(o.amount)} ${o.currency ?? "幣別未知"}`)}
           </span>
         ))}
       </div>

@@ -159,7 +159,7 @@ export function PeriodStatusRow({ brandId, campaign: c, lastSuccessAt = null, on
           {c.start_date ? `${md(c.start_date)} 開始` : "還沒設開始日"}・{c.end_date ? `${md(c.end_date)} 結束` : "還沒設結束日"}・今天 {md(today)}
         </span>
       </div>
-      <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-5 max-md:grid-cols-1">
+      <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-5 max-xl:grid-cols-1">
         <div className="grid grid-cols-5 max-md:grid-cols-2">
           <Cell label="期間" size="text-lg"
             value={scope?.start && scope.end ? `${md(scope.start)}～${md(scope.end)}` : "未核實"}

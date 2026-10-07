@@ -39,15 +39,15 @@ export function groupOf(item: TriageItem): GroupKey {
 /** The summary's right-hand hint (prototype `tabPerf()`), from the cap T and the served grade bands the kit ruler
  * draws (偏貴 up to the served band, 沒賣出／剛開始 against the served spend line; F48 Contract R-API). No cap, rules not
  * loaded yet, or a reason that is not about the spend line (資料不足), prints no hint rather than an invented one. */
-function groupHint(key: GroupKey, cap: number | null, rules: AdsRules | null): string | null {
+function groupHint(key: GroupKey, cap: number | null, rules: AdsRules | null, currency: string | null): string | null {
   if (cap === null || rules === null) return null;
-  const f = (v: number) => formatAmount(v) as string;
+  const f = (v: number) => `${formatAmount(v)} ${currency ?? "幣別未知"}`;
   switch (key) {
-    case "wasted": return `花到 ${f(unsoldLine(rules, cap))} 元還沒賣出`;
-    case "over": return `每筆超過 ${f(watchLine(rules, cap))} 元`;
-    case "watch": return `每筆 ${f(cap)}–${f(watchLine(rules, cap))} 元`;
-    case "on_target": return `每筆不到 ${f(cap)} 元`;
-    case "thin": return `還沒花到 ${f(unsoldLine(rules, cap))} 元`;
+    case "wasted": return `花到 ${f(unsoldLine(rules, cap))}還沒賣出`;
+    case "over": return `每筆超過 ${f(watchLine(rules, cap))}`;
+    case "watch": return `每筆 ${f(cap)}–${f(watchLine(rules, cap))}`;
+    case "on_target": return `每筆不到 ${f(cap)}`;
+    case "thin": return `還沒花到 ${f(unsoldLine(rules, cap))}`;
     default: return null;
   }
 }
@@ -114,8 +114,8 @@ function AdThumb({ url }: { url: string | null }) {
   );
 }
 
-const money = (v: number | null) => (formatAmount(v) === null ? "未知" : `${formatAmount(v)} 元`);
-const perSale = (v: number | null) => (perSaleAmount(v) === null ? "未知" : `${perSaleAmount(v)} 元`);
+const money = (v: number | null, currency: string | null | undefined) => (formatAmount(v) === null ? "未知" : `${formatAmount(v)} ${currency ?? "幣別未知"}`);
+const perSale = (v: number | null, currency: string | null | undefined) => (perSaleAmount(v) === null ? "未知" : `${perSaleAmount(v)} ${currency ?? "幣別未知"}`);
 
 const isPurchase = (item: TriageItem) =>
   item.current.result_kind === "purchase" || (item.current.result_kind === null && item.target.result_kind === "purchase");
@@ -128,13 +128,16 @@ function ResultCell({ item, breakEven }: { item: TriageItem; breakEven: number |
   if (item.grade === "wasted") return <NumberCell label={m.result_label} value="0 筆" />;
   const purchase = isPurchase(item);
   const label = purchase ? "每賣一筆" : `每次${m.result_label}成本`;
-  if (item.grade === "insufficient") {
+  const capOnly = (item.reason_code === "cap_currency_mismatch" || item.reason_code === "cap_currency_unknown")
+    && m.cost_per_result !== null && Boolean(m.currency);
+  if (item.grade === "insufficient" && !capOnly) {
     const word = item.reason_code === "too_new" ? <Term k="thin">{item.grade_label}</Term> : item.grade_label;
     return <NumberCell label={label} value={<span className="text-[13px] font-medium text-muted-foreground">{word}</span>} />;
   }
   return (
-    <NumberCell label={label} value={perSale(m.cost_per_result)}>
-      {purchase && <MoneyTag cost={m.cost_per_result} breakEven={breakEven} className="block" />}
+    <NumberCell label={label} value={perSale(m.cost_per_result, m.currency)}>
+      {purchase && item.target.break_even_unit?.currency && item.target.break_even_unit.currency === m.currency
+        && <MoneyTag cost={m.cost_per_result} breakEven={breakEven} className="block" />}
     </NumberCell>
   );
 }
@@ -182,9 +185,10 @@ function AdRow({ item, action, breakEven, extras, highlighted, rowRef, pauseHref
           {sample.map((word) => <Chip key={word} data-part="sample" className="ml-1.5 py-0.5 align-middle">{word}</Chip>)}
           {extras?.requestOpen && <Chip tone="accent" className="ml-1.5 py-0.5 align-middle">換掉這一則・需求已開</Chip>}
         </p>
+        {item.cap_comparison?.message && <p className="text-[11.5px] text-muted-foreground">{item.cap_comparison.message}</p>}
         {extras?.error && <p role="alert" className="text-[11.5px] font-medium text-danger">{extras.error}</p>}
       </div>
-      <NumberCell label="花費" value={money(item.current.spend)} />
+      <NumberCell label="花費" value={money(item.current.spend, item.current.currency)} />
       <ResultCell item={item} breakEven={breakEven} />
       <div className="flex min-w-[92px] items-center justify-end gap-1.5">
         <DecisionLink action={action} />
@@ -259,7 +263,7 @@ export function GradeGroups({ items, cap, breakEven = null, dataReason = null, a
             swatch={GRADE_FILL[GROUP_GRADE[key]]}
             title={list[0].grade_label || gradeWord(rules, GROUP_GRADE[key], list[0].reason_code) || ""}
             count={list.length}
-            hint={key === "no_data" ? dataReason : groupHint(key, cap, rules)}
+            hint={key === "no_data" ? dataReason : groupHint(key, cap, rules, list[0].cap_comparison?.currency ?? null)}
             open={openGroups.has(key)}
             onToggle={(open) => onToggle(key, open)}
           >

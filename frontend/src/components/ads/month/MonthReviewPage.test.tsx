@@ -73,6 +73,15 @@ function gradesOf(rows: PeriodGradeRow[], overrides: Partial<MonthGrades> = {}):
   return { spent: sum(rows), buckets, rows, missing: [], ...overrides };
 }
 
+/** Only the six named same-TWD/sample controls opt into the current served metadata. */
+function servedGradesOf(rows: PeriodGradeRow[], thinIds = ["ad_thin"]): MonthGrades {
+  const servedRows = rows.map((r) => thinIds.includes(r.entity_id) ? {...r, reason_code: "too_new",
+    sample: {sales: r.results, few: true, too_new: true, spend_multiple: r.spend === null ? null : r.spend / 450, days_with_events: r.results ? 1 : 0}} : r);
+  const grades = gradesOf(servedRows);
+  return {...grades, currency: "TWD", buckets: grades.buckets.map((b) => ({...b, currency: "TWD",
+    reason_codes: servedRows.filter((r) => r.grade === b.grade && r.reason_code).map((r) => r.reason_code!)}))};
+}
+
 const MIXED_ROWS: PeriodGradeRow[] = [
   row({ entity_id: "ad_ok1", name: "通勤情境單圖", spend: 8000, results: 20, cost_per_result: 400 }),
   row({ entity_id: "ad_ok2", name: "早晨第一口影片", spend: 6300, results: 15, cost_per_result: 420 }),
@@ -160,19 +169,20 @@ beforeEach(() => {
 
 describe("MonthReviewPage — current month", () => {
   it("splits the spend by grade and counts only 划算 as 有效", async () => {
+    mockSummary.mockResolvedValue(summary({grades: servedGradesOf(MIXED_ROWS)}));
     renderPage();
     expect(await screen.findByRole("heading", { level: 1, name: `${N} 月回顧` })).toBeTruthy();
-    expect(await screen.findByText(`${N} 月已花 22,000 元，分到這幾格`)).toBeTruthy();
+    expect(await screen.findByText(`${N} 月已花 22,000 TWD，分到這幾格`)).toBeTruthy();
     expect(mockSummary).toHaveBeenCalledWith("brd_bughunt", THIS, expect.anything());
     expect(mockHome).toHaveBeenCalledWith("brd_bughunt", THIS, expect.anything());
 
     const good = bucket("有效（只算划算）");
     expect(within(good).getByText("2 則")).toBeTruthy();
-    expect(within(good).getByText("每筆在上限內・花 14,300 元")).toBeTruthy();
+    expect(within(good).getByText("每筆在上限內・花 14,300 TWD")).toBeTruthy();
     expect(within(bucket("偏貴")).getByText("1 則")).toBeTruthy();
     const bad = bucket("太貴・沒賣出");
     expect(within(bad).getByText("2 則")).toBeTruthy();
-    expect(within(bad).getByText(/花 3,950 元/)).toBeTruthy();
+    expect(within(bad).getByText(/花 3,950 TWD/)).toBeTruthy();
     expect(within(bucket("剛開始、數字還不夠")).getByText("1 則")).toBeTruthy();
 
     expect(screen.getByText("這個月關掉 6 則")).toBeTruthy();
@@ -268,15 +278,16 @@ describe("MonthReviewPage — current month", () => {
       row({ entity_id: "t1", spend: 300, results: 1, grade: "insufficient", grade_label: "剛開始、數字還不夠" }),
       row({ entity_id: "t2", spend: 120, results: 0, cost_per_result: null, grade: "insufficient", grade_label: "剛開始、數字還不夠" }),
     ];
-    mockSummary.mockResolvedValue(summary({ grades: gradesOf(thin), rejected: { worse: [], same_count: 0 } }));
+    mockSummary.mockResolvedValue(summary({ grades: servedGradesOf(thin, ["t1", "t2"]), rejected: { worse: [], same_count: 0 } }));
     renderPage();
     const good = await screen.findByRole("region", { name: "有效（只算划算）" });
     expect(within(good).getByText("0 則", { selector: "[data-slot=chip]" })).toBeTruthy();
     expect(within(bucket("剛開始、數字還不夠")).getByText("2 則")).toBeTruthy();
-    expect(within(bucket("剛開始、數字還不夠")).getByText("還沒花到上限 × 3・花 420 元")).toBeTruthy();
+    expect(within(bucket("剛開始、數字還不夠")).getByText("還沒花到上限 × 3・花 420 TWD")).toBeTruthy();
   });
 
   it("bucket titles and captions are the served grade words and bands (F48 Contract R-API), none written down", async () => {
+    mockSummary.mockResolvedValue(summary({grades: servedGradesOf(MIXED_ROWS)}));
     renderPage();
     const tenths = watchTenths(RULES_FIXTURE);
     const caption = (title: string) => within(bucket(title)).getByText((_, el) => el?.getAttribute("data-part") === "caption").textContent;
@@ -287,6 +298,7 @@ describe("MonthReviewPage — current month", () => {
   });
 
   it("a different served ruler changes the captions with no frontend edit", async () => {
+    mockSummary.mockResolvedValue(summary({grades: servedGradesOf(MIXED_ROWS)}));
     seedAdsRules({ ...RULES_FIXTURE, grade: { ...RULES_FIXTURE.grade, watch_band: 1.3, unsold_spend_multiple: 4 } });
     try {
       renderPage();
@@ -361,6 +373,7 @@ describe("MonthReviewPage — org clock", () => {
 
 describe("MonthReviewPage — read failures", () => {
   it("a failed month summary is its own state, not an empty month; the weekly spend still shows", async () => {
+    mockSummary.mockResolvedValue(summary({grades: servedGradesOf(MIXED_ROWS)}));
     mockSummary.mockRejectedValueOnce(new Error("伺服器忙碌"));
     renderPage();
     expect(await screen.findByText(/這個月的分級與建議讀不到/)).toBeTruthy();
@@ -368,14 +381,15 @@ describe("MonthReviewPage — read failures", () => {
     expect(await screen.findByRole("region", { name: "每週花費 vs 預算步調" })).toBeTruthy();
     expect((screen.getByRole("button", { name: "下載 CSV" }) as HTMLButtonElement).disabled).toBe(true);
     await userEvent.setup().click(screen.getByRole("button", { name: "重試" }));
-    expect(await screen.findByText(`${N} 月已花 22,000 元，分到這幾格`)).toBeTruthy();
+    expect(await screen.findByText(`${N} 月已花 22,000 TWD，分到這幾格`)).toBeTruthy();
   });
 
   it("a failed weekly read fails alone; the grades still show", async () => {
+    mockSummary.mockResolvedValue(summary({grades: servedGradesOf(MIXED_ROWS)}));
     mockHome.mockRejectedValue(new Error("逾時"));
     renderPage();
     expect(await screen.findByText(/每週花費讀不到/)).toBeTruthy();
-    expect(await screen.findByText(`${N} 月已花 22,000 元，分到這幾格`)).toBeTruthy();
+    expect(await screen.findByText(`${N} 月已花 22,000 TWD，分到這幾格`)).toBeTruthy();
     expect(screen.queryByText(/同期/)).toBeNull();
   });
 });

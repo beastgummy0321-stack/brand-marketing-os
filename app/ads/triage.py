@@ -78,6 +78,10 @@ def classify(conn, org_id: str, brand_id: str, campaign_id: str) -> dict:
     if campaign is None:
         raise ValueError("campaign_unknown")
     target = targets.resolve(conn, org_id, brand_id, campaign)
+    from app.ads import outcome
+
+    target["cap_unit"] = outcome.cap_unit(conn, brand_id, target, campaign=campaign)
+    target["break_even_unit"] = outcome.break_even_unit(conn, brand_id, target, campaign=campaign)
     cutoff = _judged_cutoff(conn, org_id, brand_id, campaign)
     read = _read_days(conn, org_id, brand_id, campaign, cutoff)
     ads = conn.execute(
@@ -139,6 +143,10 @@ def ad_item(conn, org_id, brand_id, campaign, entity) -> dict:
     read of this ad's own lookback rows. Never a second definition of a grade or a window."""
     campaign_id = campaign["id"]
     target = targets.resolve(conn, org_id, brand_id, campaign)
+    from app.ads import outcome
+
+    target["cap_unit"] = outcome.cap_unit(conn, brand_id, target, campaign=campaign)
+    target["break_even_unit"] = outcome.break_even_unit(conn, brand_id, target, campaign=campaign)
     cutoff = _judged_cutoff(conn, org_id, brand_id, campaign)
     read = _read_days(conn, org_id, brand_id, campaign, cutoff)
     rows_by_entity = _lookback_rows_by_entity(
@@ -464,6 +472,16 @@ def reasons() -> dict:
             "text": "這段期間的花費有兩種幣別，系統不會自己換算加總，所以先不判斷",
             "fix": None,
         },
+        "cap_currency_unknown": {
+            "title": "上限的幣別尚未核實",
+            "text": "舊上限的來源沒有原幣別，或這段資料的幣別未知；保留金額，先不比較。",
+            "fix": "cap",
+        },
+        "cap_currency_mismatch": {
+            "title": "上限與成效的幣別不同",
+            "text": "這段成效與上限使用不同幣別，系統不換算，也不比較便宜或昂貴。",
+            "fix": None,
+        },
         "mixed_result_definition": {
             "title": "成果的算法不一致",
             "text": (
@@ -637,6 +655,10 @@ def _classify_ad(entity, campaign_name, campaign_objective, target, cutoff, read
         "campaign_objective": campaign_objective,
         "thumbnail_url": _thumbnail_url(entity),
     }
+    from app.ads import outcome
+
+    def comparison(view):
+        return outcome.compare_cap_unit(target["cap_unit"], view["currency"] if view else None)
 
     def finish(cls, reason_code, grade, start, end, days, extended_from, view, spend,
                change_pct=None, previous=None):
@@ -644,10 +666,12 @@ def _classify_ad(entity, campaign_name, campaign_objective, target, cutoff, read
         if previous is None:
             previous = _ad_window(entity_rows, previous_start, previous_end)
         prev_view, prev_spend = previous
+        current_unit, previous_unit = comparison(view), comparison(prev_view)
         # F29-I01 Contract A: the previous equal-length window graded by the same ruler -- null
         # when it isn't fully synced, not graded (剛開始／資料不足), or when this ad isn't judged.
         previous_grade = None
-        if grade[0] != "no_target" and read.covered(previous_start, previous_end):
+        if (grade[0] != "no_target" and previous_unit["reason"] is None
+                and read.covered(previous_start, previous_end)):
             prev_grade = grade_window(prev_view, prev_spend, target["value"], days)[0]
             previous_grade = prev_grade if prev_grade in GRADED else None
         return {
@@ -658,7 +682,10 @@ def _classify_ad(entity, campaign_name, campaign_objective, target, cutoff, read
             "target": {**target, "result_label": result_kinds.label(target["result_kind"])},
             "current": _metrics_view(view, spend), "previous": _metrics_view(prev_view, prev_spend),
             "change_pct": change_pct,
-            "sample": _sample_view(spend, view, target["value"], days),
+            "sample": _sample_view(
+                spend, view, target["value"] if current_unit["reason"] is None else None, days,
+            ),
+            "cap_comparison": current_unit, "previous_cap_comparison": previous_unit,
         }
 
     if target["value"] is None:
@@ -695,6 +722,10 @@ def _classify_ad(entity, campaign_name, campaign_objective, target, cutoff, read
                 and (view is None or view["result_kind"] is None):
             return finish("no_target", "result_kind_unknown", _NOT_JUDGED, start, end, days,
                           extended_from, view, spend)
+        unit = comparison(view)
+        if view is not None and view["reason"] is None and unit["reason"] is not None:
+            return finish("insufficient", unit["reason"], _NO_DATA, start, end, days,
+                          extended_from, view, spend)
         graded = grade_window(view, spend, target["value"], days)
         if graded[0] == "wasted":
             return finish("stop_loss", graded[2], graded[:2], start, end, days, extended_from,
@@ -719,6 +750,11 @@ def _classify_ad(entity, campaign_name, campaign_objective, target, cutoff, read
                       extended_from, view, spend)
     prev_view, prev_spend = _ad_window(entity_rows, previous_start, previous_end)
     previous = (prev_view, prev_spend)
+    previous_unit = comparison(prev_view)
+    if (prev_view is not None and prev_view["reason"] is None
+            and previous_unit["reason"] is not None):
+        return finish("insufficient", previous_unit["reason"], grade, start, end, days,
+                      extended_from, view, spend, previous=previous)
     # A previous cost_per_result of 0 or None (no previous result known, or known zero results)
     # is never a divisor -- `no_previous_window`, never a ZeroDivisionError.
     if prev_view is None or prev_view["reason"] is not None or not prev_view["cost_per_result"]:

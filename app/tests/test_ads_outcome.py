@@ -80,7 +80,7 @@ class OutcomeTestBase(unittest.TestCase):
         plan.PROVIDER = self._orig_provider
 
     def _bound_campaign(self, *, start_date=None, end_date=None,
-                         cap=300, confirmed_cap=False, cap_source=None,
+                         cap=300, confirmed_cap=False, cap_source=None, pending_economics=False,
                          name=None) -> tuple[dict, str, str]:
         """回傳 (campaign_detail, group_external_id, ad_external_id)，campaign/group/ad 三層
         都已經綁定完成、Campaign 轉 `live`（F31-I08 起用上架回讀同一組 repository 綁定函式），
@@ -92,15 +92,21 @@ class OutcomeTestBase(unittest.TestCase):
         context = {}
         if cap_source is not None:
             context["field_sources"] = {"cap": cap_source}
-        if confirmed_cap:
+        if confirmed_cap or pending_economics:
             product = bi_repo.create_product(
                 web.conn, self.brand_id, name="Confirmed TWD period cap", actor=ACTOR,
             )
-            bi_repo.save_product_economics(
-                web.conn, self.brand_id, product["id"], selling_price=cap + 100,
-                currency="TWD", confirmed_by=ACTOR, actor=ACTOR, unit_variable_cost=100,
-            )
-            context = {"product_ids": [product["id"]]}
+            if pending_economics:
+                bi_repo.create_pending_product_economics(
+                    web.conn, self.brand_id, product["id"], selling_price=620,
+                    currency="USD", source_reference_id=None, actor=ACTOR,
+                )
+            else:
+                bi_repo.save_product_economics(
+                    web.conn, self.brand_id, product["id"], selling_price=cap + 100,
+                    currency="TWD", confirmed_by=ACTOR, actor=ACTOR, unit_variable_cost=100,
+                )
+            context = {**context, "product_ids": [product["id"]]}
         allocation = [{"role": "new", "label": "新客", "pct": 100, "rationale": None}]
         campaign = ads_repo.create_campaign(web.conn, self.org_id, self.brand_id, {
             "name": name or f"測試 Campaign {uuid.uuid4().hex[:6]}", "goal_text": "幫產品衝購買",
@@ -550,6 +556,148 @@ class PeriodProjectionPublicTest(OutcomeTestBase):
                         self.assertNotIn("NT$", value["judgment"]["detail"])
                         self.assertNotIn("快", value["judgment"]["text"])
                         self.assertNotIn("慢", value["judgment"]["text"])
+
+    def test_public_recent_grades_do_not_compare_usd_results_with_manual_twd_cap(self):
+        for currency in ("TWD", "USD"):
+            with self.subTest(currency=currency):
+                detail, _, _ = self._bound_campaign(
+                    start_date=date(2026, 10, 24), end_date=date(2026, 10, 30),
+                )
+                base = f"/api/ads/brands/{self.brand_id}/campaigns/{detail['id']}"
+                saved = self.client.put(
+                    f"{base}/target",
+                    json={"basis": "own", "value": 350, "expected_revision": 0},
+                )
+                self.assertEqual(saved.status_code, 200, saved.text)
+                ad = detail["groups"][0]["ads"][0]
+                for day in (24, 25, 26):
+                    row = outcome_seed.seed_day(
+                        web.conn, self.org_id, self.brand_id, detail["id"], "ad", ad["id"],
+                        date(2026, 10, day), spend=4000, purchases=10, revenue=5000,
+                        currency=currency,
+                    )
+                    external_repository.upsert_observation(
+                        web.conn, self.org_id, self.brand_id, detail["id"],
+                        {"entity_id": row["entity_id"], "day": date(2026, 10, day),
+                         "metric_scope": "ad", "attribution_key": outcome_seed.ATTRIBUTION_KEY,
+                         "currency": currency, "spend": 4000, "purchases": 10, "revenue": 5000,
+                         "source": "test"},
+                        result_kind="purchase", result_count=10, result_action="omni_purchase",
+                        result_attribution="7d_click+1d_view",
+                    )
+                outcome_seed.set_coverage(
+                    web.conn, self.org_id, self.brand_id, detail["id"],
+                    date(2026, 10, 24), date(2026, 10, 26),
+                )
+                web.conn.commit()
+                result = self.client.get(f"{base}/triage")
+                self.assertEqual(result.status_code, 200, result.text)
+                print("PUBLIC_RECENT_CAP_UNIT_RECEIPT", currency, json.dumps(result.json()))
+                items = result.json()["triage"]["items"]
+                self.assertEqual(len(items), 1)
+                self.assertEqual(items[0]["current"]["cost_per_result"], 400)
+                self.assertEqual(items[0]["current"]["result_count"], 30)
+                self.assertEqual(items[0]["current"]["currency"], currency)
+                with self.subTest(consumer="recent_grade"):
+                    self.assertEqual(
+                        items[0]["grade"], "watch" if currency == "TWD" else "insufficient",
+                    )
+                    comparison = items[0]["cap_comparison"]
+                    self.assertEqual(comparison["currency"], "TWD")
+                    self.assertEqual(comparison["source"], "user")
+                    self.assertEqual(
+                        comparison["reason"],
+                        None if currency == "TWD" else "cap_currency_mismatch",
+                    )
+                    if currency == "USD":
+                        self.assertEqual(items[0]["reason_code"], "cap_currency_mismatch")
+                        self.assertIsNone(items[0]["sample"]["spend_multiple"])
+                monthly = self.client.get(
+                    f"/api/ads/brands/{self.brand_id}/month-summary?month=2026-10",
+                )
+                self.assertEqual(monthly.status_code, 200, monthly.text)
+                print("PUBLIC_EXPLICIT_MONTH_CAP_UNIT_RECEIPT", currency, monthly.text)
+                grades = [row for row in monthly.json()["grades"]["rows"]
+                          if row["campaign_id"] == detail["id"]]
+                self.assertEqual(len(grades), 1)
+                with self.subTest(consumer="explicit_month_grade"):
+                    self.assertEqual(
+                        grades[0]["grade"], "watch" if currency == "TWD" else "insufficient",
+                    )
+                    self.assertEqual(grades[0]["spend"], 12000)
+                    self.assertEqual(grades[0]["cost_per_result"], 400)
+                    self.assertEqual(grades[0]["currency"], currency)
+                    self.assertEqual(grades[0]["cap_comparison"]["currency"], "TWD")
+                    self.assertEqual(
+                        grades[0]["cap_comparison"]["reason"],
+                        None if currency == "TWD" else "cap_currency_mismatch",
+                    )
+
+    def test_public_break_even_unit_is_independent_of_manual_own_unit(self):
+        for currency, status in (("TWD", "confirmed"), ("USD", "confirmed"),
+                                 ("USD", "pending"), (None, None)):
+            confirmed = status == "confirmed"
+            with self.subTest(break_even_currency=currency, economics_status=status):
+                detail, _, _ = self._bound_campaign(
+                    start_date=date(2026, 10, 24), end_date=date(2026, 10, 30),
+                    cap=520 if confirmed else 300, confirmed_cap=confirmed,
+                    pending_economics=status == "pending",
+                )
+                base = f"/api/ads/brands/{self.brand_id}/campaigns/{detail['id']}"
+                if confirmed:
+                    bi_repo.save_product_economics(
+                        web.conn, self.brand_id, detail["cap"]["product_id"],
+                        selling_price=620, unit_variable_cost=100, currency=currency,
+                        confirmed_by=ACTOR, actor=ACTOR,
+                    )
+                    web.conn.commit()
+                saved = self.client.put(
+                    f"{base}/target", json={"basis": "own", "value": 450, "expected_revision": 0},
+                )
+                self.assertEqual(saved.status_code, 200, saved.text)
+                ad = detail["groups"][0]["ads"][0]
+                for day in (24, 25, 26):
+                    row = outcome_seed.seed_day(
+                        web.conn, self.org_id, self.brand_id, detail["id"], "ad", ad["id"],
+                        date(2026, 10, day), spend=480, purchases=10, revenue=800,
+                    )
+                    external_repository.upsert_observation(
+                        web.conn, self.org_id, self.brand_id, detail["id"],
+                        {"entity_id": row["entity_id"], "day": date(2026, 10, day),
+                         "metric_scope": "ad", "attribution_key": outcome_seed.ATTRIBUTION_KEY,
+                         "currency": "TWD", "spend": 480, "purchases": 10, "revenue": 800,
+                         "source": "test"},
+                        result_kind="purchase", result_count=10, result_action="omni_purchase",
+                        result_attribution="7d_click+1d_view",
+                    )
+                outcome_seed.set_coverage(
+                    web.conn, self.org_id, self.brand_id, detail["id"],
+                    date(2026, 10, 24), date(2026, 10, 26),
+                )
+                web.conn.commit()
+                response = self.client.get(f"{base}/triage")
+                self.assertEqual(response.status_code, 200, response.text)
+                print("PUBLIC_INDEPENDENT_BREAK_EVEN_UNIT", currency, status, response.text)
+                item = response.json()["triage"]["items"][0]
+                self.assertEqual(item["target"]["basis"], "own")
+                self.assertEqual(item["target"]["value"], 450)
+                self.assertEqual(item["target"]["break_even"], 520 if confirmed else None)
+                self.assertEqual(item["current"]["cost_per_result"], 48)
+                self.assertEqual(item["target"]["cap_unit"]["currency"], "TWD")
+                self.assertEqual(
+                    item["target"]["break_even_unit"]["currency"], currency if confirmed else None,
+                )
+                self.assertEqual(item["target"]["break_even_unit"]["unit_basis"],
+                                 "confirmed_product_economics" if confirmed else None)
+                for path in (base, f"{base}/target"):
+                    read = self.client.get(path)
+                    self.assertEqual(read.status_code, 200, read.text)
+                    cap = read.json()["campaign"]["cap"] if path == base else read.json()["target"]
+                    self.assertEqual(cap.get("cap_unit", {}).get("currency"), "TWD")
+                    self.assertEqual(cap.get("break_even_unit", {}).get("currency"),
+                                     currency if confirmed else None)
+                    self.assertEqual(cap.get("price_unit", {}).get("currency"),
+                                     currency if confirmed else None)
 
     def test_public_manual_target_unit_uses_recorded_input_not_current_account(self):
         for source, value, currency in (

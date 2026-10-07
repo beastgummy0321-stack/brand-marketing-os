@@ -37,7 +37,7 @@ import { PeriodStatusRow, type SyncNote } from "./PeriodStatusRow";
 
 function capOf(target: TriageTargetView | undefined): RulerCap | null {
   if (!target || target.value === null || target.basis === null) return null;
-  return { value: target.value, basis: target.basis };
+  return { value: target.value, basis: target.basis, currency: target.cap_unit?.currency ?? null };
 }
 
 const md = (iso: string) => `${iso.slice(5, 7)}/${iso.slice(8, 10)}`;
@@ -88,7 +88,9 @@ function RulerCard({ items, status, strategyHref, assetsHref, campaign, onAdClic
   const { unbuilt, unmatched } = programLines(items, campaign);
   const target = items[0].target;
   const cap = capOf(target);
-  const breakEven = target.break_even ?? null;
+  // A scalar break-even alone is not evidence of its unit.
+  const breakEven = target.break_even_unit?.currency === cap?.currency && cap?.currency
+    ? target.break_even ?? null : null;
   const ads: RulerAd[] = items.map((item) => ({
     id: item.entity_id,
     name: item.name ?? "（未命名廣告）",
@@ -96,14 +98,17 @@ function RulerCard({ items, status, strategyHref, assetsHref, campaign, onAdClic
     gradeLabel: item.grade_label,
     costPerResult: item.current.cost_per_result,
     spend: item.current.spend,
+    currency: item.current.currency ?? null,
+    comparisonReason: item.cap_comparison?.reason ?? (item.cap_comparison ? null : "cap_currency_unknown"),
+    comparisonMessage: item.cap_comparison?.message ?? null,
     thumbnailUrl: item.thumbnail_url,
     note: trendNote(item),
   }));
   const title = !cap
     ? <>在投 {items.length} 則，沒設<Term k="cap">上限</Term></>
     : cap.basis === "break_even"
-      ? <>在投 {items.length} 則對照暫用<Term k="break_even" value={breakEven}>打平線</Term> {formatAmount(cap.value)}</>
-      : <>在投 {items.length} 則對照<Term k="cap">上限</Term> {formatAmount(cap.value)}</>;
+      ? <>在投 {items.length} 則對照暫用<Term k="break_even" value={breakEven}>打平線</Term> {formatAmount(cap.value)} {cap.currency ?? "幣別未知"}</>
+      : <>在投 {items.length} 則對照<Term k="cap">上限</Term> {formatAmount(cap.value)} {cap.currency ?? "幣別未知"}</>;
   // Prototype `beCap`: the dashed 打平 mark is drawn only beside an own cap that differs from it; this line names it.
   const beLine = cap && cap.basis === "own" && breakEven !== null && Math.abs(breakEven - cap.value) > 0.01;
   const statusChip = dataStatusChip(status);
@@ -135,7 +140,7 @@ function RulerCard({ items, status, strategyHref, assetsHref, campaign, onAdClic
           )}
         </div>
       )}
-      <TargetRuler ads={ads} cap={cap} breakEven={breakEven} size="full" onAdClick={onAdClick} />
+      <TargetRuler ads={ads} cap={cap} breakEven={breakEven} breakEvenCurrency={target.break_even_unit?.currency} size="full" onAdClick={onAdClick} />
       {beLine && (
         <div className="mt-0.5 text-[11.5px] text-muted-foreground">
           橘色虛線：<Term k="break_even" value={breakEven}>打平線</Term> {formatAmount(breakEven)}

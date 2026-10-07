@@ -330,8 +330,22 @@ def get_campaign_target(conn: _AnyConn, org_id: str, brand_id: str, campaign_id:
     campaign = get_campaign(conn, org_id, brand_id, campaign_id)
     if campaign is None:
         raise ValueError("campaign_unknown")
-    resolved = targets.resolve(conn, org_id, brand_id, campaign)
+    resolved = _target_units(
+        conn, brand_id, campaign, targets.resolve(conn, org_id, brand_id, campaign),
+    )
     return _campaign_target_view(campaign, resolved)
+
+
+def _target_units(conn: _AnyConn, brand_id: str, campaign: dict, resolved: dict) -> dict:
+    """Relay the same source-based unit evidence to the campaign and target read contracts."""
+    from app.ads import outcome as performance
+
+    return {
+        **resolved,
+        "cap_unit": performance.cap_unit(conn, brand_id, resolved, campaign=campaign),
+        "break_even_unit": performance.break_even_unit(conn, brand_id, resolved, campaign=campaign),
+        "price_unit": performance.price_unit(conn, brand_id, resolved, campaign=campaign),
+    }
 
 
 def save_campaign_target(
@@ -933,7 +947,9 @@ def campaign_detail(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str
     detail = dict(campaign)
     from app.ads import targets
 
-    detail["cap"] = targets.resolve(conn, org_id, brand_id, campaign)
+    detail["cap"] = _target_units(
+        conn, brand_id, campaign, targets.resolve(conn, org_id, brand_id, campaign),
+    )
     detail["lifecycle"] = lifecycle.view(
         campaign, root=lifecycle.root(conn, org_id, brand_id, campaign_id), today=today,
     )

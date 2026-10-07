@@ -79,7 +79,15 @@ const UNSOLD = formatAmount(CAP * RULES_FIXTURE.grade.unsold_spend_multiple);
 function renderGroups(items: TriageItem[], opts: {
   cap?: number | null; breakEven?: number | null; dataReason?: string | null; open?: GroupKey[];
   actions?: Map<string, RowAction>; extras?: (item: TriageItem) => RowExtras; pauseHref?: (item: TriageItem) => string;
+  knownUnits?: boolean;
 } = {}) {
+  // Only the named money controls opt into the actual public confirmed-unit contract.
+  if (opts.knownUnits) items = items.map((item) => ({
+    ...item, current: {...item.current, currency: "TWD"},
+    target: {...item.target, cap_unit: {basis: item.target.basis, currency: "TWD", source: "user", unit_basis: "manual_ntd_input"},
+      break_even_unit: {basis: "break_even", currency: opts.breakEven === null ? null : "TWD", source: "product_economics", unit_basis: "confirmed_product_economics"}},
+    cap_comparison: {basis: item.target.basis, currency: "TWD", reason: null, message: null, source: "user", unit_basis: "manual_ntd_input"},
+  }));
   const actions = opts.actions ?? adActions("brd_1", "cmp_1", items, []);
   const onToggle = vi.fn();
   const view = render(
@@ -116,15 +124,25 @@ describe("groupOf / trendNote", () => {
 });
 
 describe("GradeGroups", () => {
+  it.each(["cap_currency_mismatch", "cap_currency_unknown"])("keeps known observed CPA visible for %s", (reason) => {
+    const observed = item({grade: "insufficient", grade_label: "資料不足", reason_code: reason, cost: 400, spend: 12000});
+    observed.current.currency = "USD";
+    observed.cap_comparison = {basis: "own", currency: reason === "cap_currency_unknown" ? null : "TWD", reason, message: "上限與本期成效的幣別不同或尚未核實，不能比較。"};
+    const {container} = renderGroups([observed]);
+    expect(within(container.querySelector('[data-testid="ad-row-a1"]')!).getByText("400 USD")).toBeTruthy();
+    expect(screen.getByText(observed.cap_comparison.message!)).toBeTruthy();
+    expect(container.querySelector('[data-testid="ad-row-a1"]')!.textContent).not.toContain("獲利");
+  });
+
   it("orders groups 沒賣出 → 太貴 → 偏貴 → 划算 → 剛開始 → 資料不足, with the cap hints and counts", () => {
-    const { container } = renderGroups([ok, thin, watch, noData, over, wasted]);
+    const { container } = renderGroups([ok, thin, watch, noData, over, wasted], {knownUnits: true});
     const titles = [...container.querySelectorAll("summary b")].map((b) => b.textContent);
     expect(titles).toEqual(["沒賣出", "太貴", "偏貴", "划算", "剛開始、數字還不夠", "資料不足"]);
-    expect(within(detailsOf("沒賣出").querySelector("summary")!).getByText(`花到 ${UNSOLD} 元還沒賣出`)).toBeTruthy();
-    expect(screen.getByText(`每筆超過 ${WATCH} 元`)).toBeTruthy();
-    expect(screen.getByText(`每筆 450–${WATCH} 元`)).toBeTruthy();
-    expect(screen.getByText("每筆不到 450 元")).toBeTruthy();
-    expect(screen.getByText(`還沒花到 ${UNSOLD} 元`)).toBeTruthy();
+    expect(within(detailsOf("沒賣出").querySelector("summary")!).getByText(`花到 ${UNSOLD} TWD還沒賣出`)).toBeTruthy();
+    expect(screen.getByText(`每筆超過 ${WATCH} TWD`)).toBeTruthy();
+    expect(screen.getByText(`每筆 450 TWD–${WATCH} TWD`)).toBeTruthy();
+    expect(screen.getByText("每筆不到 450 TWD")).toBeTruthy();
+    expect(screen.getByText(`還沒花到 ${UNSOLD} TWD`)).toBeTruthy();
     // 資料不足 is not about the spend line: no invented hint.
     expect(detailsOf("資料不足").querySelector("summary")!.textContent).toBe("資料不足1 則");
   });
@@ -132,9 +150,9 @@ describe("GradeGroups", () => {
   it("the hints follow the served rules, and print nothing while the rules are not loaded (no literal fallback)", () => {
     seedAdsRules({ ...RULES_FIXTURE, grade: { ...RULES_FIXTURE.grade, watch_band: 1.5, unsold_spend_multiple: 4 } });
     try {
-      const { unmount } = renderGroups([over, wasted]);
-      expect(screen.getByText("每筆超過 675 元")).toBeTruthy();
-      expect(screen.getByText("花到 1,800 元還沒賣出")).toBeTruthy();
+      const { unmount } = renderGroups([over, wasted], {knownUnits: true});
+      expect(screen.getByText("每筆超過 675 TWD")).toBeTruthy();
+      expect(screen.getByText("花到 1,800 TWD還沒賣出")).toBeTruthy();
       unmount();
       seedAdsRules(null);
       const { container } = renderGroups([over, wasted, thin]);
@@ -173,16 +191,16 @@ describe("GradeGroups", () => {
   });
 
   it("rows: long name wraps (never truncated), spend and per-purchase cost in whole yuan, 沒賣出 prints 購買 0 筆, 剛開始 prints the word", () => {
-    renderGroups([ok, over, wasted, thin], { open: ["wasted", "over", "on_target", "thin"] });
+    renderGroups([ok, over, wasted, thin], { open: ["wasted", "over", "on_target", "thin"], knownUnits: true });
     const okRow = screen.getByTestId("ad-row-a2");
     const name = within(okRow).getByText(LONG_NAME);
     expect(name.className).not.toMatch(/truncate/);
-    expect(within(okRow).getByText("1,407 元")).toBeTruthy();
-    expect(within(okRow).getByText("50 元")).toBeTruthy();
+    expect(within(okRow).getByText("1,407 TWD")).toBeTruthy();
+    expect(within(okRow).getByText("50 TWD")).toBeTruthy();
 
     const overRow = screen.getByTestId("ad-row-a7");
     expect(within(overRow).getByText("每賣一筆")).toBeTruthy();
-    expect(within(overRow).getByText("618 元")).toBeTruthy();
+    expect(within(overRow).getByText("618 TWD")).toBeTruthy();
     expect(within(overRow).getByText("比前 14 天 ▲10%")).toBeTruthy();
 
     const wastedRow = screen.getByTestId("ad-row-a8");
@@ -192,11 +210,11 @@ describe("GradeGroups", () => {
     const thinRow = screen.getByTestId("ad-row-m2");
     // The too-new word is the glossary term (its sentence states the ruled gate).
     expect(within(thinRow).getByText("剛開始、數字還不夠").getAttribute("data-slot")).toBe("term");
-    expect(within(thinRow).getByText("120 元")).toBeTruthy();
+    expect(within(thinRow).getByText("120 TWD")).toBeTruthy();
   });
 
   it("money tags against break-even beside every cost per purchase: 有賺／剛好打平／在虧; none on 沒賣出 and 剛開始", () => {
-    renderGroups([ok, watch, over, wasted, thin], { open: ["wasted", "over", "watch", "on_target", "thin"] });
+    renderGroups([ok, watch, over, wasted, thin], { open: ["wasted", "over", "watch", "on_target", "thin"], knownUnits: true });
     const tag = (id: string) => screen.getByTestId(`ad-row-${id}`).querySelector("[data-slot=money-tag]");
     expect(tag("a2")?.getAttribute("data-variant")).toBe("gain");
     expect(tag("a2")?.textContent).toMatch(/有賺.*（打平 520）$/);
@@ -211,11 +229,11 @@ describe("GradeGroups", () => {
       entity_id: "c1", cost: 3.456,
       current: { spend: 34.56, result_count: 10, cost_per_result: 3.456, result_kind: "link_click", result_label: "連結點擊", derived_zero_days: 0, reason: null },
     });
-    const { unmount } = renderGroups([ok], { breakEven: null, open: ["on_target"] });
-    expect(screen.getByText("50 元")).toBeTruthy();
+    const { unmount } = renderGroups([ok], { breakEven: null, open: ["on_target"], knownUnits: true });
+    expect(screen.getByText("50 TWD")).toBeTruthy();
     expect(document.querySelector("[data-slot=money-tag]")).toBeNull();
     unmount();
-    renderGroups([clicks], { open: ["on_target"] });
+    renderGroups([clicks], { open: ["on_target"], knownUnits: true });
     expect(screen.getByText("每次連結點擊成本")).toBeTruthy();
     expect(document.querySelector("[data-slot=money-tag]")).toBeNull();
   });
@@ -251,11 +269,11 @@ describe("GradeGroups", () => {
       current: { spend: null, result_count: 10, cost_per_result: 3.456, result_kind: "link_click", result_label: "連結點擊", derived_zero_days: 0, reason: null },
       target: { value: null, basis: null, result_kind: "link_click", result_label: "連結點擊", missing: [] },
     });
-    renderGroups([clicks], { cap: null, open: ["no_target"] });
+    renderGroups([clicks], { cap: null, open: ["no_target"], knownUnits: true });
     const row = screen.getByTestId("ad-row-c1");
     expect(within(row).getByText("未知")).toBeTruthy();
     expect(within(row).getByText("每次連結點擊成本")).toBeTruthy();
-    expect(within(row).getByText("3 元")).toBeTruthy();
+    expect(within(row).getByText("3 TWD")).toBeTruthy();
     // No cap: the group is 未判斷 and carries no hint.
     expect(detailsOf("未判斷").querySelector("summary")!.textContent).toBe("未判斷1 則");
   });
