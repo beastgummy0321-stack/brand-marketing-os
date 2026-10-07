@@ -73,9 +73,10 @@ def creative_brief(ad: dict, group: dict, campaign: dict, basis: dict) -> dict:
     )
     state = decision.get("state") or "legacy_unbound"
     active_slot = slot if current and slot is not None else {}
-    window = (group.get("start_date"), group.get("end_date"))
-    if window[0] is None or window[1] is None:
-        window = (campaign.get("start_date"), campaign.get("end_date"))
+    window = (
+        group.get("start_date") or campaign.get("start_date"),
+        group.get("end_date") or campaign.get("end_date"),
+    )
     start, end = (plan._parse_date(value) for value in window)
     eligible = []
     if start is not None and end is not None:
@@ -263,9 +264,10 @@ def _ad_set(
     customer_group = (customer_groups_by_id or {}).get(ad.get("customer_group_id") or "")
     if customer_group is not None:
         request["customer_group"] = customer_groups.brief_text(customer_group)
-    window = (group.get("start_date"), group.get("end_date"))
-    if window[0] is None or window[1] is None:  # same fallback as `_variant_count`
-        window = (campaign.get("start_date"), campaign.get("end_date"))
+    window = (
+        group.get("start_date") or campaign.get("start_date"),
+        group.get("end_date") or campaign.get("end_date"),
+    )
     start: date | None = plan._parse_date(window[0])
     end: date | None = plan._parse_date(window[1])
     if start is not None and end is not None:

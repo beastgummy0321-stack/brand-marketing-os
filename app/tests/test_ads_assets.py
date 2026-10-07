@@ -213,6 +213,103 @@ class CreativeBriefContractTest(AssetsTestBase):
             creative["comparison"]["calendar_window"], {"start": "2026-10-01", "end": "2026-10-07"}
         )
 
+    def test_calendar_partial_group_dates_fall_back_per_field_and_unknown_stays_unknown(self):
+        events = [
+            {"id": day, "start": day, "end": day}
+            for day in ("2026-10-06", "2026-10-07", "2026-10-10", "2026-10-14", "2026-10-15")
+        ]
+        cases = (
+            (
+                "2026-10-10",
+                None,
+                "2026-10-07",
+                "2026-10-14",
+                "2026-10-10",
+                "2026-10-14",
+                ["2026-10-10", "2026-10-14"],
+            ),
+            (
+                None,
+                "2026-10-10",
+                "2026-10-07",
+                "2026-10-14",
+                "2026-10-07",
+                "2026-10-10",
+                ["2026-10-07", "2026-10-10"],
+            ),
+            (
+                None,
+                None,
+                "2026-10-07",
+                "2026-10-14",
+                "2026-10-07",
+                "2026-10-14",
+                ["2026-10-07", "2026-10-10", "2026-10-14"],
+            ),
+            (None, None, None, None, None, None, []),
+        )
+        for group_start, group_end, campaign_start, campaign_end, start, end, eligible in cases:
+            with self.subTest(
+                group_start=group_start,
+                group_end=group_end,
+                campaign_start=campaign_start,
+                campaign_end=campaign_end,
+            ):
+                campaign, group, ad = self._direct_campaign(
+                    campaign_start=campaign_start,
+                    campaign_end=campaign_end,
+                    group_start=group_start,
+                    group_end=group_end,
+                )
+                basis = assets.planner_context.creative_basis(
+                    {
+                        "product": None,
+                        "learnings": {"ads": [], "ranked": {"campaigns": []}},
+                        "calendar_evidence": events,
+                    }
+                )
+                comparison = assets.creative_brief(ad, group, campaign, basis)["comparison"]
+                self.assertEqual(comparison["calendar_window"], {"start": start, "end": end})
+                self.assertEqual([e["id"] for e in comparison["calendar"]], eligible)
+                self.assertEqual(
+                    comparison["omitted"]["calendar_outside_window"], len(events) - len(eligible)
+                )
+
+    def test_public_dispatch_calendar_note_matches_partial_group_comparison_window(self):
+        for group_start, group_end, start, end, selected, excluded in (
+            ("2026-10-12", None, "2026-10-12", "2026-10-14", "國高中第一次段考週", "國慶日"),
+            (None, "2026-10-11", "2026-10-01", "2026-10-11", "國慶日", "國高中第一次段考週"),
+        ):
+            with self.subTest(group_start=group_start, group_end=group_end):
+                campaign, _group, ad = self._direct_campaign(
+                    campaign_start="2026-10-01",
+                    campaign_end="2026-10-14",
+                    group_start=group_start,
+                    group_end=group_end,
+                )
+                response = self.client.post(
+                    f"/api/ads/brands/{self.brand_id}/campaigns/{campaign['id']}/pack"
+                )
+                self.assertEqual(response.status_code, 200)
+                self.assertTrue(response.json()["pack_id"])
+                briefs = workbench.briefs_for_source(
+                    web.conn,
+                    self.org_id,
+                    self.brand_id,
+                    assets.PACK_SOURCE_KIND,
+                    {"ads_campaign_id": campaign["id"]},
+                )
+                request = next(
+                    b["request_json"] for b in briefs if b["source_ref"]["ads_ad_id"] == ad["id"]
+                )
+                comparison = request["creative_brief"]["comparison"]
+                self.assertEqual(comparison["calendar_window"], {"start": start, "end": end})
+                self.assertEqual([e["name"] for e in comparison["calendar"]], [selected])
+                self.assertEqual(comparison["omitted"]["calendar_outside_window"], 1)
+                self.assertIn(selected, request["calendar_note"])
+                self.assertNotIn(excluded, request["calendar_note"])
+                self.assertEqual(len(request["calendar_note"].splitlines()), 1)
+
     def _wait_for_blocked_writer(self, pid):
         until = time.monotonic() + 5
         while time.monotonic() < until:
