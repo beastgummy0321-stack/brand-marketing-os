@@ -111,6 +111,30 @@ class LearningViewTestBase(unittest.TestCase):
 
 
 class ViewShapeTest(LearningViewTestBase):
+    def test_ranked_row_keeps_its_evidence_when_newer_other_tracks_fill_the_scan(self):
+        campaign = self._closed("Retained period", datetime(2026, 9, 19, tzinfo=UTC))
+        self._ranked(campaign, "Retained original", verdict="keep", rank=1, of=1,
+                     sales=10, spend=2000, group=self.groups[0]["id"])
+        original = bi_repo.list_learnings(self.conn, self.brand_id, source_track="coordinate")[0]
+        for n in range(500):
+            bi_repo.record_learning(
+                self.conn, self.brand_id, actor=ACTOR, learning_text=f"Newer event {n}",
+                applicability_scope="ads", confidence="observed", sample_size="1",
+                source_cycle_id=f"new-{n}", source_track="ads" if n % 2 else "visual",
+            )
+        newest = bi_repo.list_learnings(self.conn, self.brand_id, limit=500)
+        self.assertEqual(len(newest), 500)
+        self.assertNotIn(original["id"], {row["id"] for row in newest})
+        view = self._view()
+        [served] = view["campaigns"][0]["rows"]
+        self.assertEqual((served["rank"], served["spend"], served["sales"]), (1, 2000, 10))
+        self.assertEqual(served["learning_id"], original["id"])
+        self.assertEqual(served["evidence"]["id"], original["id"])
+        self.assertEqual(served["evidence"]["display_text"], "Retained original")
+        self.assertEqual(served["evidence"]["provenance"], "unknown")
+        self.assertEqual(len(view["evidence_context"]["items"]), 30)
+        self.assertEqual(view["evidence_context"]["omitted"], 471)
+
     def test_campaigns_rows_totals_and_groups_come_from_the_stored_scope(self):
         students, commuters = self.groups[0]["id"], self.groups[1]["id"]
         older = self._closed("三盒組・第一期", datetime(2026, 9, 19, 2, 0, tzinfo=UTC))

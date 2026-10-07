@@ -23,6 +23,7 @@ from app.ads import repository as ads_repo
 from app.ads import strategy as ads_strategy
 from app.brand_intelligence import repository as bi_repo
 from app.llm import providers
+from app.tests.test_ads_strategy_decision import fixture_provider
 
 from .identity_test_helpers import flatten_routes, mint_hs256
 
@@ -266,10 +267,7 @@ class NameMatchBindRemovedTest(unittest.TestCase):
 
 
 def _fake(rendered_output: str) -> providers.FakeProvider:
-    return providers.FakeProvider(response=providers.ProviderResponse(
-        output_text=rendered_output, structured=None,
-        usage=providers.Usage(input_tokens=100, output_tokens=50), stop_reason="end_turn",
-    ))
+    return fixture_provider(rendered_output)
 
 
 _BRIEF_REPLY = json.dumps({
@@ -397,8 +395,25 @@ class AdsRoutesShapeStaysConsistentTest(unittest.TestCase):
         )
         self._assert_shape(allocation)
 
+        # The original 28,000 custom branch is already covered above. The three explicit
+        # fixture slots need enough daily budget before their confirmed adoption.
+        feasible_scenario = self.client.post(
+            f"/api/ads/brands/{self.brand_id}/campaigns/{campaign_id}/strategy/scenario",
+            json={"scenario_key": "custom", "custom_total": 93000}, headers=self.headers,
+        )
+        self._assert_shape(feasible_scenario)
+        # Structure edits invalidate the previous Contract S proposal. Display a fresh
+        # revision and explicitly confirm it before testing the adoption response shape.
+        regenerated = self.client.post(
+            f"/api/ads/brands/{self.brand_id}/campaigns/{campaign_id}/strategy",
+            headers=self.headers,
+        )
+        self._assert_shape(regenerated)
+        revision = regenerated.json()["campaign"]["budget_basis_json"]["strategy"]["decision"]["revision"]
         adopt = self.client.post(
-            f"/api/ads/brands/{self.brand_id}/campaigns/{campaign_id}/plan", headers=self.headers,
+            f"/api/ads/brands/{self.brand_id}/campaigns/{campaign_id}/plan",
+            json={"expected_revision": revision, "operation_id": "route-shape-adopt"},
+            headers=self.headers,
         )
         self._assert_shape(adopt)
 

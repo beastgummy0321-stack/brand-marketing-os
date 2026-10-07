@@ -65,7 +65,7 @@ def _stored_rows(conn: _AnyConn, brand_id: str) -> dict:
         if parsed is None or cycle is None:
             continue
         by_campaign.setdefault(cycle[0], {})[cycle[1]] = {
-            **parsed, "learning_id": row["id"], "ad_id": cycle[1],
+            **parsed, "learning_id": row["id"], "ad_id": cycle[1], "ledger_row": dict(row),
         }
     return {cid: list(ads.values()) for cid, ads in by_campaign.items()}
 
@@ -207,7 +207,17 @@ def learnings_view(conn: _AnyConn, org_id: str, brand_id: str, *, campaign_id: s
     next_sell_way = sell_way_id
     if next_sell_way is None and campaigns:
         next_sell_way = campaigns[0]["sell_way_id"]
-    all_context = ads_learnings.evidence_context(conn, org_id, brand_id, next_sell_way, cap=SCAN_LIMIT)
+    # The all-track cap can omit older coordinate rows still represented by the ranked view.
+    # Qualify every represented row from its retained ledger record, without dropping ranks.
+    evidence_rows = {row["id"]: row for row in bi_repo.list_learnings(
+        cast(Conn, conn), brand_id, limit=SCAN_LIMIT,
+    )}
+    for campaign in campaigns:
+        for row in stored.get(campaign["campaign_id"], []):
+            evidence_rows[row["learning_id"]] = row["ledger_row"]
+    all_context = ads_learnings.evidence_context(
+        conn, org_id, brand_id, next_sell_way, rows=list(evidence_rows.values()), cap=len(evidence_rows),
+    )
     context = {**all_context, "items": all_context["items"][:30],
                "omitted": max(len(all_context["items"]) - 30, 0)}
     by_id = {item["id"]: item for item in all_context["items"]}
