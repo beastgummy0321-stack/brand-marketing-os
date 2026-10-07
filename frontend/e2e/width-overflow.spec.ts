@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { strategyFixture } from "../src/components/ads/strategy/strategyEvidence.fixtures";
 
 /** 殼寬回歸閘門（票 u2-fluid-shell-to-1920，ADR 0051 rule 4／Consequences）：16 條路由
  * 在 1280 寬時，殼不能橫向溢出視窗——這是 ADR 0051 量過的那件事（固定 1440px 殼在
@@ -215,3 +216,82 @@ test("15 條路由（扣 /accept-invite）在 1280 寬不橫向溢出", async ({
   await page.goto("/app/settings");
   await assertNoOverflow("/settings");
 });
+
+/** Local fixture receipts: all product writes are intercepted before the real API. */
+for (const width of [1024, 1920]) {
+  test(`F53 strategy basis ${width}: long names, source focus, null/zero and guarded approval`, async ({page}, info) => {
+    await page.setViewportSize({width, height: 1200});
+    await page.goto("/app/login");
+    await page.getByLabel("Email").fill("123@example.com");
+    await page.getByLabel("密碼").fill("123456");
+    await page.getByRole("button", {name: "登入", exact: true}).click();
+    await page.waitForURL(url => !url.pathname.includes("login"));
+    const c = strategyFixture();
+    const long = "下班後直接出門夜跑與步行通勤、需要反光及輕量穿著的上班族".repeat(4);
+    c.budget_basis_json.strategy!.decision!.slots[0].display!.customer_group_label = long;
+    c.budget_basis_json.basis!.evidence_context.scope_label = "反光夜跑背心・長商品名稱與賣法完整保留".repeat(5);
+    c.budget_basis_json.basis!.learnings[0].evidence.sample = {result_events: null, sufficient: null};
+    c.budget_basis_json.basis!.learnings[1].evidence.sample = {result_events: 0, sufficient: false};
+    const errors: string[] = [];
+    const requests: {expected_revision: string; operation_id: string}[] = [];
+    page.on("pageerror", error => errors.push(error.message));
+    await page.route("**/api/**", route => route.request().method() === "GET" ? route.continue() : route.abort());
+    await page.route("**/api/dashboard/overview", route => route.fulfill({json: {data: [{brand_id: "brd_f53_ui", brand_name: "夜行裝備", health: "green", revenue_this_month: null, revenue_mom_pct: null, next_step: null}], generated_at: "2026-10-08T00:00:00Z"}}));
+    await page.route("**/api/jobs/active", route => route.fulfill({json: {data: [], total: 0, other_count: 0, done_today: 0, failed_today: 0, generated_at: "2026-10-08T00:00:00Z", worker_alive: true, stalled: false}}));
+    await page.route("**/api/ads/brands/brd_f53_ui/campaigns/cmp_f53_ui", route => route.fulfill({json: {campaign: c}}));
+    await page.route("**/api/ads/brands/brd_f53_ui/campaigns/cmp_f53_ui/workspace", route => route.fulfill({json: {stage: {key: "plan", done: []}, pending_count: 0, delivery: null, daily_budget: null, active_ads: 0, can_support: null, next_sync_at: null, missing_days: [], totals: null, draft: {cap_set: true, budget_set: true, slots_ready: 0, slots_total: 0, launch_checked: 0, launch_total: 0}}}));
+    await page.route("**/api/ads/brands/brd_f53_ui/campaigns/cmp_f53_ui/plan", async route => {
+      requests.push(route.request().postDataJSON());
+      await route.fulfill({status: 502, json: {error: {message: "尚未收到可確認的結果，請沿用原操作重試。", code: "unknown_result"}}});
+    });
+    await page.goto("/app/brands/brd_f53_ui/ads/campaigns/cmp_f53_ui?tab=strategy");
+    await expect(page.getByRole("heading", {name: "這期怎麼安排", exact: true})).toBeVisible();
+    await expect(page.getByText(long, {exact: true})).toBeVisible();
+    const rootWidth = await page.locator("#root").evaluate(root => root.scrollWidth);
+    expect(rootWidth).toBeLessThanOrEqual(width);
+    const scene = page.locator("[data-slot=strategy-screen]");
+    const body = scene.locator("[data-slot=strategy-body]");
+    expect(await page.locator("body").evaluate(node => node.scrollWidth)).toBeLessThanOrEqual(width);
+    expect(await page.locator("html").evaluate(node => node.scrollWidth)).toBeLessThanOrEqual(width);
+    expect(await body.evaluate(node => node.scrollWidth)).toBeLessThanOrEqual(await body.evaluate(node => node.clientWidth));
+    const bounds = await scene.evaluate(node => {
+      const sceneRect = node.getBoundingClientRect();
+      const bar = node.querySelector("[data-slot=action-bar]")!;
+      const barRect = bar.getBoundingClientRect();
+      return {sceneLeft: sceneRect.left, sceneRight: sceneRect.right, barLeft: barRect.left, barRight: barRect.right,
+        cards: Array.from(node.querySelectorAll(".surface, [data-slot=allocation-row]")).map(card => {
+          const r = card.getBoundingClientRect(); return {left: r.left, right: r.right};
+        })};
+    });
+    // The shared bar intentionally fills the parent's 22px/28px padding, within the viewport.
+    const inset = width >= 1280 ? 28 : 22;
+    expect(bounds.barLeft).toBeGreaterThanOrEqual(bounds.sceneLeft - inset - 1);
+    expect(bounds.barRight).toBeLessThanOrEqual(bounds.sceneRight + inset + 1);
+    expect(bounds.barLeft).toBeGreaterThanOrEqual(0); expect(bounds.barRight).toBeLessThanOrEqual(width);
+    for (const card of bounds.cards) {
+      expect(card.left).toBeGreaterThanOrEqual(bounds.sceneLeft - 1);
+      expect(card.right).toBeLessThanOrEqual(bounds.sceneRight + 1);
+    }
+    for (const label of ["這輪想確認什麼", "還有哪些未知", "未用於提案的資料"]) await expect(page.getByRole("button", {name: label, exact: true})).toHaveAttribute("aria-expanded", "false");
+    const trigger = page.getByRole("button", {name: "查看依據 →", exact: true});
+    await trigger.focus(); await page.keyboard.press("Enter");
+    await expect(page.getByRole("dialog", {name: "策略依據", exact: true})).toBeVisible();
+    await page.getByRole("button", {name: "查看來源與限制 →", exact: true}).first().click();
+    const source = page.getByRole("dialog", {name: "經驗來源與適用範圍", exact: true});
+    await expect(source.getByText("樣本尚未完整核實", {exact: true})).toBeVisible();
+    await expect(source.getByText(long, {exact: true})).toBeVisible();
+    for (let i = 0; i < 8; i++) { await page.keyboard.press("Tab"); expect(await source.evaluate(dialog => dialog.contains(document.activeElement))).toBe(true); }
+    expect(await source.evaluate(node => node.scrollWidth)).toBeLessThanOrEqual(await source.evaluate(node => node.clientWidth));
+    await page.screenshot({path: info.outputPath(`source-${width}.png`), fullPage: true});
+    await page.keyboard.press("Escape"); await expect(source).not.toBeVisible(); await expect(trigger).toBeFocused();
+    await trigger.click(); await page.getByRole("button", {name: "查看來源與限制 →", exact: true}).nth(1).click();
+    await expect(page.getByRole("dialog").getByText("0 筆", {exact: true})).toBeVisible();
+    await page.keyboard.press("Escape");
+    const confirm = page.getByRole("button", {name: "確認策略，查看投放結構 →", exact: true});
+    await confirm.click(); await expect(page.getByText("尚未收到可確認的結果，請沿用原操作重試。", {exact: true})).toBeVisible();
+    await confirm.click(); await expect.poll(() => requests.length).toBe(2);
+    expect(requests[0]).toEqual(requests[1]); expect(requests[0].expected_revision).toBe("decision-fixture");
+    expect(requests[0].operation_id).toMatch(/^[0-9a-f-]{36}$/);
+    await expect(page).toHaveURL(/tab=strategy/); expect(errors).toEqual([]);
+  });
+}

@@ -19,7 +19,7 @@ const evidenceContext: LearningEvidenceContext = {
   eligible_count: 0, items: [], omitted: 0,
 };
 vi.mock("@/lib/figures", async (actual) => ({ ...await actual<typeof import("@/lib/figures")>(), useFigureBases: () => ({roas_at_cap: {label: "花到上限時", formula: "售價 ÷ 每筆上限", unit: "ratio"}, roas_all_spend: {label: "保守", formula: "營收 ÷ 全部花費", unit: "ratio"}, roas_tracked_spend: {label: "樂觀", formula: "營收 ÷ 有追到營收的那部分花費", unit: "ratio"}}) }));
-/** frontend/src/components/ads/StrategyTab.test.tsx — F28-I09: the strategy tab is 一個上限 → 這一期的總預算 → 預算怎麼分
+/** frontend/src/components/ads/StrategyTab.test.tsx — F28-I09: the strategy tab is 一個上限 → 這一期的總預算 → 這期怎麼安排
  * → two folds, with one bottom bar. These tests pin the bar's order of precedence (open over-cap sheet > unsaved pick >
  * adopt > the workspace's next step), that nothing is chosen or saved for the user, and the imported campaign's shape. */
 import { ApiResponseError } from "@/lib/http";
@@ -35,6 +35,7 @@ import { getTriage, type CapView } from "@/lib/adsTriageApi";
 import type { CoordinateLearnings } from "@/lib/adsLearningsApi";
 import { getLaunchSettings, type LaunchSettingsValues, type LaunchSettingsView } from "@/lib/adsLaunchSettingsApi";
 import { StrategyTab } from "./StrategyTab";
+import { strategyFixture } from "./strategy/strategyEvidence.fixtures";
 
 vi.mock("@/lib/adsApi", async () => {
   const actual = await vi.importActual<typeof import("@/lib/adsApi")>("@/lib/adsApi");
@@ -114,7 +115,7 @@ function renderTab(c: CampaignDetail, launchApproved: boolean | null = false) {
   return { onCampaignChange, onChangeTab, ...render(<MemoryRouter>{ui}</MemoryRouter>) };
 }
 
-const bar = () => screen.getByRole("button", { name: /照這個方式進行|儲存預算|下一步：素材/ });
+const bar = () => screen.getByRole("button", { name: /確認策略，查看投放結構|儲存預算|下一步：素材/ });
 const barEl = () => document.querySelector("[data-slot=action-bar]") as HTMLElement;
 
 /** `GET …/launch-settings` in its real shape: recommended values, a two-pixel account. */
@@ -145,7 +146,7 @@ describe("StrategyTab (F28-I09)", () => {
   it("shows the three cards in prototype order; the folds start closed", async () => {
     renderTab(campaign());
     const headings = (await screen.findAllByRole("heading", { level: 2 })).map((h) => h.textContent);
-    expect(headings).toEqual(["一個上限", "這一期的總預算", "預算怎麼分"]);
+    expect(headings).toEqual(["這期策略", "這期怎麼安排", "為什麼這樣安排", "一個上限", "這一期的總預算"]);
     for (const label of ["為什麼是這幾個數字", "自己填總額", "為什麼這樣建議", "進階設定"]) {
       expect(screen.getByRole("button", { name: label }).getAttribute("aria-expanded")).toBe("false");
     }
@@ -155,7 +156,7 @@ describe("StrategyTab (F28-I09)", () => {
     renderTab(campaign());
     await screen.findByText("一個上限");
     expect(screen.getAllByRole("radio").every((r) => r.getAttribute("aria-checked") === "false")).toBe(true);
-    expect(bar().textContent).toBe("照這個方式進行 →");
+    expect(bar().textContent).toBe("確認策略，查看投放結構 →");
     expect(bar().hasAttribute("disabled")).toBe(true);
     expect(screen.getByText("先選一個預算")).toBeTruthy();
     expect(screen.getByText("選好預算後算金額")).toBeTruthy();
@@ -170,7 +171,7 @@ describe("StrategyTab (F28-I09)", () => {
 
   it.each([0, -1])("a nonpositive cap (%s) never permits adoption", async (value) => {
     renderTab(campaign({cap: cap(value), budget_planned: 30000, budget_scenario: "cap"}));
-    expect((await screen.findByRole("button", {name: "照這個方式進行 →"})).hasAttribute("disabled")).toBe(true);
+    expect((await screen.findByRole("button", {name: "確認策略，查看投放結構 →"})).hasAttribute("disabled")).toBe(true);
     expect(within(barEl()).getByText("先設上限")).toBeTruthy();
   });
 
@@ -218,8 +219,8 @@ describe("StrategyTab (F28-I09)", () => {
     const adopted = campaign({ budget_planned: 30000, budget_scenario: "cap", groups: [group()] });
     vi.mocked(adoptStrategy).mockResolvedValue(adopted);
     const { onChangeTab } = renderTab(campaign({ budget_planned: 30000, budget_scenario: "cap" }));
-    expect(await screen.findByText("確認後建立投放結構")).toBeTruthy();
-    await user.click(await screen.findByRole("button", { name: "照這個方式進行 →" }));
+    expect(await screen.findByText("確認後會建立以上安排；不會操作廣告平台。")).toBeTruthy();
+    await user.click(await screen.findByRole("button", { name: "確認策略，查看投放結構 →" }));
     expect(adoptStrategy).toHaveBeenCalledWith("brd_1", "cmp_1", {
       expected_revision: "displayed-revision", operation_id: expect.any(String),
     });
@@ -231,9 +232,9 @@ describe("StrategyTab (F28-I09)", () => {
     const user = userEvent.setup();
     vi.mocked(adoptStrategy).mockRejectedValue(new Error("Connection lost"));
     renderTab(campaign({ budget_planned: 30000, budget_scenario: "cap" }));
-    await user.click(await screen.findByRole("button", { name: "照這個方式進行 →" }));
+    await user.click(await screen.findByRole("button", { name: "確認策略，查看投放結構 →" }));
     await screen.findByText("Connection lost");
-    await user.click(screen.getByRole("button", { name: "照這個方式進行 →" }));
+    await user.click(screen.getByRole("button", { name: "確認策略，查看投放結構 →" }));
     expect(adoptStrategy).toHaveBeenCalledTimes(2);
     expect(vi.mocked(adoptStrategy).mock.calls[0][2]).toEqual(vi.mocked(adoptStrategy).mock.calls[1][2]);
     expect(getCampaign).not.toHaveBeenCalled();
@@ -245,13 +246,13 @@ describe("StrategyTab (F28-I09)", () => {
     const initial = campaign({ budget_planned: 30000, budget_scenario: "cap" });
     const callbacks = { onCampaignChange: vi.fn(), onChangeTab: vi.fn() };
     const view = render(<MemoryRouter><StrategyTab brandId="brd_1" campaign={initial} {...callbacks} launchApproved={false} /></MemoryRouter>);
-    await user.click(await screen.findByRole("button", { name: "照這個方式進行 →" }));
+    await user.click(await screen.findByRole("button", { name: "確認策略，查看投放結構 →" }));
     await screen.findByText("Connection lost");
     const changed = { ...initial, budget_basis_json: { ...initial.budget_basis_json, strategy: {
       ...initial.budget_basis_json.strategy!, decision: { ...initial.budget_basis_json.strategy!.decision!, revision: "changed-revision" },
     } } };
     view.rerender(<MemoryRouter><StrategyTab brandId="brd_1" campaign={changed} {...callbacks} launchApproved={false} /></MemoryRouter>);
-    await user.click(screen.getByRole("button", { name: "照這個方式進行 →" }));
+    await user.click(screen.getByRole("button", { name: "確認策略，查看投放結構 →" }));
     const first = vi.mocked(adoptStrategy).mock.calls[0][2];
     const second = vi.mocked(adoptStrategy).mock.calls[1][2];
     expect(second.expected_revision).toBe("changed-revision");
@@ -264,7 +265,7 @@ describe("StrategyTab (F28-I09)", () => {
     const initial = campaign({ budget_planned: 30000, budget_scenario: "cap" });
     initial.budget_basis_json.strategy!.decision = undefined;
     renderTab(initial);
-    expect((await screen.findByRole("button", { name: "照這個方式進行 →" })).hasAttribute("disabled")).toBe(true);
+    expect((await screen.findByRole("button", { name: "確認策略，查看投放結構 →" })).hasAttribute("disabled")).toBe(true);
     vi.mocked(generateStrategy).mockResolvedValue(campaign());
     await user.click(screen.getByRole("button", { name: "重新產生策略" }));
     expect(generateStrategy).toHaveBeenCalledWith("brd_1", "cmp_1");
@@ -278,7 +279,7 @@ describe("StrategyTab (F28-I09)", () => {
       {code: "capacity_exceeded", message: "目前預算無法容納這份安排，請調整預算或重新產生。", slot_ids: ["slot-new"]},
     ]};
     renderTab(c);
-    expect((await screen.findByRole("button", { name: "照這個方式進行 →" })).hasAttribute("disabled")).toBe(true);
+    expect((await screen.findByRole("button", { name: "確認策略，查看投放結構 →" })).hasAttribute("disabled")).toBe(true);
     expect(screen.getByText("目前預算無法容納這份安排，請調整預算或重新產生。")).toBeTruthy();
     await user.click(screen.getByRole("radio", {name: /最低/}));
     expect(screen.getByRole("button", {name: "儲存預算 27,900"}).hasAttribute("disabled")).toBe(false);
@@ -291,7 +292,7 @@ describe("StrategyTab (F28-I09)", () => {
     c.budget_basis_json.strategy!.decision!.state = "modified";
     c.budget_basis_json.strategy!.rationale_state = "stale";
     renderTab(c);
-    expect((await screen.findByRole("button", {name: "照這個方式進行 →"})).hasAttribute("disabled")).toBe(true);
+    expect((await screen.findByRole("button", {name: "確認策略，查看投放結構 →"})).hasAttribute("disabled")).toBe(true);
     expect(screen.getAllByText("安排或預算已修改，原建議理由已失效。請重新產生策略。").length).toBeGreaterThan(0);
     expect(screen.queryByText("依登記事實提出假設，尚無投放樣本。")).toBeNull();
     await user.click(screen.getByRole("button", {name: "為什麼這樣建議"}));
@@ -308,12 +309,14 @@ describe("StrategyTab (F28-I09)", () => {
         evidence: [{kind: "result", id: "original", label: "上期／健身原版"}], evidence_omitted: 0},
     });
     renderTab(c);
-    await screen.findByText("通勤者・免運：三盒以上免運");
-    expect(screen.getByText("比例是本輪建議；有限樣本與相對成績不能證明最佳分配，仍有不確定性。")).toBeTruthy();
+    await screen.findByText("通勤者");
+    expect(screen.getByText("免運：三盒以上免運")).toBeTruthy();
+    expect(screen.getByText("新提案仍待驗證，不代表已證明有效。")).toBeTruthy();
     const rows = Array.from(document.querySelectorAll("[data-slot=strategy-commitment]"));
     expect(rows[0].textContent).toContain("新測試：測試通勤者的購買理由");
     expect(rows[0].textContent).not.toContain("健身者");
-    expect(rows[1].textContent).toContain("健身者・不使用優惠");
+    expect(rows[1].textContent).toContain("健身者");
+    expect(within(rows[1] as HTMLElement).getByText("不使用優惠")).toBeTruthy();
     expect(rows[1].textContent).toContain("保留原廣告：健身原版");
     await user.click(screen.getByRole("button", {name: "為什麼這樣建議"}));
     expect(screen.getByText("依據：上期／健身原版")).toBeTruthy();
@@ -339,7 +342,7 @@ describe("StrategyTab (F28-I09)", () => {
     const c = campaign({budget_planned: 30000, budget_scenario: "cap"});
     const callbacks = {onCampaignChange: vi.fn(), onChangeTab: vi.fn()};
     const view = render(<MemoryRouter><StrategyTab brandId="brd_1" campaign={c} {...callbacks} launchApproved={false} /></MemoryRouter>);
-    await user.click(await screen.findByRole("button", {name: "照這個方式進行 →"}));
+    await user.click(await screen.findByRole("button", {name: "確認策略，查看投放結構 →"}));
     await screen.findByText("安排已更新，請重新確認。");
     expect(bar().hasAttribute("disabled")).toBe(true);
     view.rerender(<MemoryRouter><StrategyTab brandId="brd_1" campaign={{...c}} {...callbacks} launchApproved={false} /></MemoryRouter>);
@@ -354,7 +357,7 @@ describe("StrategyTab (F28-I09)", () => {
   it("on a platform (live) the bar has no next step here and the allocation is no longer editable", async () => {
     renderTab(campaign({ status: "live", budget_planned: 30000, budget_scenario: "cap", groups: [group()] }));
     expect(await screen.findByText("以 30,000 計")).toBeTruthy();
-    expect(barEl().textContent).toBe("← 總覽");
+    expect(barEl().textContent).toBe("← 總覽查看品牌學習");
     expect(screen.queryByRole("button", { name: "調整比例" })).toBeNull();
   });
 
@@ -440,20 +443,21 @@ describe("StrategyTab (F28-I09)", () => {
         coordinates: [{ dimension: "format", dimension_label: "格式", label: "輪播" }],
       },
     ];
-    const VERDICT = { id: "lrn_1", text: "綜合維他命軟糖：新客在通勤情境划算", level: "product", evidence: learningEvidence(), needs_revalidation: false };
+    const VERDICT = { id: "lrn_1", text: "綜合維他命軟糖：新客在通勤情境划算", level: "product", evidence: {...learningEvidence("lrn_1"), display_text: "綜合維他命軟糖：新客在通勤情境划算"}, needs_revalidation: false };
 
     it("each role row prints its percent, amount and the planner's reason; a null reason leaves no empty line", async () => {
       renderTab(withReasons());
       const rows = await screen.findAllByRole("listitem");
       const byRole = (role: string) => document.querySelector(`[data-slot=allocation-row][data-role=${role}]`) as HTMLElement;
       expect(rows.length).toBeGreaterThanOrEqual(3);
-      expect(byRole("new").textContent).toContain("60%・18,000 元");
+      expect(within(byRole("new")).getByText("60%")).toBeTruthy();
+      expect(within(byRole("new")).getByText("18,000 元")).toBeTruthy();
       expect(within(byRole("new")).getByText("沿用上一期划算的「高強度日程中的輕鬆準備」，新客預算大多給它。")).toBeTruthy();
-      expect(byRole("retarget").textContent).toBe("再行銷30%・9,000 元");
+      expect(byRole("retarget").textContent).toBe("再行銷30%9,000 元");
       expect(byRole("retarget").querySelector("p")).toBeNull();
       expect(within(byRole("explore")).getByText("試「三盒 NT$999 另送一盒」，看優惠拉不拉得動新客。")).toBeTruthy();
       // The bar is the thin one: no legend line repeating the rows.
-      expect(document.querySelector("[data-slot=allocation-bar]")?.textContent).toBe("");
+      expect(document.querySelector("[data-slot=allocation-bar]")).toBeNull();
     });
 
     it("F48 Contract M: each row prints the payload's own amount — never total × pct priced in the browser", async () => {
@@ -466,9 +470,9 @@ describe("StrategyTab (F28-I09)", () => {
       renderTab(c);
       const byRole = (role: string) => document.querySelector(`[data-slot=allocation-row][data-role=${role}]`) as HTMLElement;
       expect((await screen.findByText("以 30,001 計"))).toBeTruthy();
-      expect(byRole("new").textContent).toContain("60%・18,001 元");
-      expect(byRole("retarget").textContent).toContain("30%・9,000 元");
-      expect(byRole("explore").textContent).toContain("10%・3,000 元");
+      expect(within(byRole("new")).getByText("18,001 元")).toBeTruthy();
+      expect(within(byRole("retarget")).getByText("9,000 元")).toBeTruthy();
+      expect(within(byRole("explore")).getByText("3,000 元")).toBeTruthy();
     });
 
     it("an unsaved pick is not priced in the browser: the rows print the percent only until it is saved", async () => {
@@ -592,7 +596,7 @@ describe("StrategyTab (F28-I09)", () => {
       await user.click(screen.getByRole("button", { name: /查看策略依據/ }));
       const panel = screen.getByRole("dialog", { name: "策略依據" });
       // Prototype order: 用到的學習 first, then 品牌事實, 商品價格.
-      expect(within(panel).getAllByRole("heading", { level: 4 }).map((h) => h.textContent)).toEqual(["用到的學習", "品牌事實", "商品價格"]);
+      expect(within(panel).getAllByRole("heading", { level: 4 }).map((h) => h.textContent)).toEqual(["用到的學習", "未用於提案的資料", "品牌事實", "商品價格"]);
       expect(within(panel).getByText("和品牌智庫「投放學到的」同一份排名")).toBeTruthy();
       const groups = within(panel).getByRole("list", { name: "各顧客群每筆成本" });
       expect(within(groups).getAllByRole("listitem").map((li) => li.getAttribute("data-group"))).toEqual(["pcg_study", "pcg_commute"]);
@@ -664,8 +668,11 @@ describe("StrategyTab (F28-I09)", () => {
     const row = () => document.querySelector("[data-slot=materials-used]") as HTMLElement | null;
 
     it("one chip per offer 「label：sentence」, per proof its label (text in title and name), then the media chip — above the bar", async () => {
+      const user = userEvent.setup();
       renderTab(campaign({ materials: MATERIALS }));
-      const section = (await screen.findByRole("heading", { name: "預算怎麼分" })).closest("section") as HTMLElement;
+      const fold = await screen.findByRole("button", {name: "為什麼這樣建議"});
+      await user.click(fold);
+      const section = document.getElementById(fold.getAttribute("aria-controls")!)!;
       const used = row();
       expect(used && section.contains(used)).toBe(true);
       expect(used!.compareDocumentPosition(section.querySelector("[data-slot=allocation-bar]")!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -678,17 +685,22 @@ describe("StrategyTab (F28-I09)", () => {
     });
 
     it("photo and video reads 照片和影片; media never asked (null) leaves no media chip", async () => {
+      const user = userEvent.setup();
       const { unmount } = renderTab(campaign({ materials: { ...MATERIALS, media: "photo_video" } }));
+      await user.click(screen.getByRole("button", {name: "為什麼這樣建議"}));
       expect(await screen.findByText("照片和影片")).toBeTruthy();
       unmount();
       renderTab(campaign({ materials: { ...MATERIALS, media: null } }));
+      await user.click(screen.getByRole("button", {name: "為什麼這樣建議"}));
       await screen.findByText("組合加贈：三盒 NT$999 另送一盒");
       expect(row()!.querySelector("[data-kind=media]")).toBeNull();
     });
 
     it("nothing registered: one muted chip says the ads talk about the product only, beside the media chip", async () => {
+      const user = userEvent.setup();
       renderTab(campaign({ materials: { offers: [], proof: [], media: "photo" } }));
-      await screen.findByRole("heading", { name: "預算怎麼分" });
+      await user.click(screen.getByRole("button", {name: "為什麼這樣建議"}));
+      await screen.findByRole("heading", { name: "這期怎麼安排" });
       const chips = Array.from(row()!.querySelectorAll("[data-slot=chip]"));
       expect(chips.map((el) => el.textContent)).toEqual(["沒有登記優惠與證據，廣告只講產品本身", "只排照片（單圖、輪播）"]);
       expect(chips[0].getAttribute("data-tone")).toBe("neutral");
@@ -696,7 +708,7 @@ describe("StrategyTab (F28-I09)", () => {
 
     it("materials absent (imported, or null from the API) → no row", async () => {
       renderTab(campaign({ materials: null }));
-      await screen.findByRole("heading", { name: "預算怎麼分" });
+      await screen.findByRole("heading", { name: "這期怎麼安排" });
       expect(row()).toBeNull();
       expect(screen.queryByText("可用素材：")).toBeNull();
     });
@@ -709,9 +721,9 @@ describe("StrategyTab (F28-I09)", () => {
     const { onCampaignChange } = renderTab(imported);
     expect(await screen.findByText("一個上限")).toBeTruthy();
     expect(screen.queryByText("這一期的總預算")).toBeNull();
-    expect(screen.queryByText("預算怎麼分")).toBeNull();
+    expect(screen.queryByText("這期怎麼安排")).toBeNull();
     expect(screen.queryByText("改預算上限")).toBeNull();
-    expect(barEl().textContent).toBe("← 總覽");
+    expect(barEl().textContent).toBe("← 總覽查看品牌學習");
     await user.click(screen.getByRole("button", { name: "進階設定" }));
     await user.clear(screen.getByLabelText("內部活動目標"));
     await user.type(screen.getByLabelText("內部活動目標"), "內部管理目標");
@@ -725,7 +737,7 @@ describe("StrategyTab (F28-I09)", () => {
     renderTab(campaign({ budget_basis_json: {} }));
     expect(await screen.findByText("這個活動還沒有策略建議")).toBeTruthy();
     expect(screen.getByText("一個上限")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /照這個方式進行/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /確認策略，查看投放結構/ })).toBeNull();
   });
 });
 
@@ -754,7 +766,7 @@ describe("F50 Contract J (R7 B4／B3): a running planner call survives a reload;
     mount(running);
     const pressed = await screen.findByRole("button", { name: "處理中…" });
     expect((pressed as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.queryByRole("button", { name: /照這個方式進行/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /確認策略，查看投放結構/ })).toBeNull();
     await tick(); // still running
     expect(getCampaign).toHaveBeenCalledTimes(1);
     expect(screen.getByRole("button", { name: "處理中…" })).toBeTruthy();
@@ -774,7 +786,7 @@ describe("F50 Contract J (R7 B4／B3): a running planner call survives a reload;
     const generating = await screen.findByRole("button", { name: "產生中…" });
     expect((generating as HTMLButtonElement).disabled).toBe(true);
     await tick();
-    expect(await screen.findByRole("heading", { name: "預算怎麼分" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "這期怎麼安排" })).toBeTruthy();
     expect(screen.queryByText("這個活動還沒有策略建議")).toBeNull();
     expect(generateStrategy).not.toHaveBeenCalled();
   });
@@ -808,12 +820,144 @@ describe("F50 Contract J (R7 B4／B3): a running planner call survives a reload;
     expect(getCampaign).not.toHaveBeenCalled();
   });
 
-  it("a 502 on 照這個方式進行 prints the served message with its reason in the bar", async () => {
+  it("a 502 on 確認策略，查看投放結構 prints the served message with its reason in the bar", async () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     const served = "展開投放結構失敗，請稍後再試。（有一組沒有綁定顧客群）";
     vi.mocked(adoptStrategy).mockRejectedValue(new ApiResponseError(served, 502, {}, { code: "plan_failed" }));
     mount(campaign({ budget_planned: 30000, budget_scenario: "cap" }));
-    await user.click(await screen.findByRole("button", { name: "照這個方式進行 →" }));
+    await user.click(await screen.findByRole("button", { name: "確認策略，查看投放結構 →" }));
     expect(await screen.findByText(served)).toBeTruthy();
+  });
+});
+
+
+describe("F53 strategy basis interaction", () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  function mount(initial = strategyFixture()) {
+    const onChangeTab = vi.fn();
+    function Host() {
+      const [value, setValue] = useState(initial);
+      return <StrategyTab brandId="brd_f53_ui" campaign={value} onCampaignChange={setValue} onChangeTab={onChangeTab} launchApproved={false} />;
+    }
+    render(<MemoryRouter><Host /></MemoryRouter>);
+    return {onChangeTab};
+  }
+
+  it("renders the served eligible count rather than counting the visible rows", async () => {
+    const c = strategyFixture();
+    c.budget_basis_json.basis!.evidence_context.eligible_count = 99;
+    mount(c);
+    expect(await screen.findByText("99 條可參考經驗")).toBeTruthy();
+    expect(screen.getByText("單次觀察 · 樣本少")).toBeTruthy();
+    expect(screen.getByText("重複觀察 · 未證明因果")).toBeTruthy();
+    expect(generateStrategy).not.toHaveBeenCalled();
+  });
+
+  it("keyboard source drilldown traps focus and Escape returns to the original trigger", async () => {
+    const user = userEvent.setup();
+    mount();
+    const trigger = await screen.findByRole("button", {name: "查看依據 →"});
+    trigger.focus();
+    await user.keyboard("{Enter}");
+    const basis = await screen.findByRole("dialog", {name: "策略依據"});
+    expect(basis.contains(document.activeElement)).toBe(true);
+    await user.click(within(basis).getAllByRole("button", {name: "查看來源與限制 →"})[0]);
+    const source = await screen.findByRole("dialog", {name: "經驗來源與適用範圍"});
+    expect(within(source).getByText("2026/09/01 至 2026/09/30")).toBeTruthy();
+    for (let i = 0; i < 8; i++) { await user.tab(); expect(source.contains(document.activeElement)).toBe(true); }
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+    await user.click(trigger);
+    expect(await screen.findByRole("dialog", {name: "策略依據"})).toBeTruthy();
+    expect(screen.queryByRole("dialog", {name: "經驗來源與適用範圍"})).toBeNull();
+  });
+
+  it("failed reread keeps previous evidence and budget, blocks confirmation, and explicitly retries", async () => {
+    const user = userEvent.setup();
+    const fresh = strategyFixture();
+    fresh.budget_basis_json.strategy!.decision!.revision = "fresh-revision";
+    vi.mocked(getCampaign).mockRejectedValueOnce(new Error("Read unavailable")).mockResolvedValueOnce(fresh);
+    const {onChangeTab} = mount();
+    await user.click(await screen.findByRole("button", {name: "查看依據 →"}));
+    await user.click(screen.getByRole("button", {name: "重新讀取依據"}));
+    await user.keyboard("{Escape}");
+    expect(await screen.findByText("最新依據讀不到，保留上次內容。")).toBeTruthy();
+    expect(screen.getByText("單次觀察 · 樣本少")).toBeTruthy();
+    expect(bar().hasAttribute("disabled")).toBe(true);
+    expect(screen.getByText("以 30,000 計")).toBeTruthy();
+    expect(onChangeTab).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", {name: "重新讀取"}));
+    expect(await screen.findByRole("button", {name: "查看依據 →"})).toBeTruthy();
+    expect(screen.queryByText("最新依據讀不到，保留上次內容。")).toBeNull();
+    expect(bar().hasAttribute("disabled")).toBe(false);
+    expect(getCampaign).toHaveBeenCalledTimes(2);
+    expect(adoptStrategy).not.toHaveBeenCalled();
+  });
+
+  it("loading and changed conditions preserve dirty allocation and custom total across reread", async () => {
+    const user = userEvent.setup();
+    let finishRead!: (value: CampaignDetail) => void;
+    vi.mocked(getCampaign).mockImplementationOnce(() => new Promise(resolve => { finishRead = resolve; }));
+    mount();
+    await user.click(await screen.findByRole("button", {name: "調整比例"}));
+    const inputs = screen.getAllByRole("spinbutton");
+    await user.clear(inputs[0]); await user.type(inputs[0], "57.5");
+    await user.click(screen.getByRole("button", {name: "自己填總額"}));
+    await user.type(screen.getByLabelText("自己填這一期的總預算"), "12345");
+    await user.click(screen.getByRole("button", {name: "查看依據 →"}));
+    await user.click(screen.getByRole("button", {name: "重新讀取依據"}));
+    await user.keyboard("{Escape}");
+    expect(await screen.findByText("正在重新讀取依據，保留原內容與尚未儲存的輸入。")).toBeTruthy();
+    expect(bar().hasAttribute("disabled")).toBe(true);
+    const fresh = strategyFixture();
+    fresh.budget_basis_json.strategy!.rationale_state = "stale";
+    fresh.budget_basis_json.strategy!.decision!.feasibility = {state: "blocked", reasons: [{code: "strategy_changed", message: "優惠條件已改變", slot_ids: []}]};
+    await act(async () => finishRead(fresh));
+    expect(await screen.findByText("原策略需更新後再確認；目前預算與尚未儲存的輸入仍保留。")).toBeTruthy();
+    expect(screen.getByText("優惠條件已改變")).toBeTruthy();
+    expect((screen.getAllByRole("spinbutton")[0] as HTMLInputElement).value).toBe("57.5");
+    expect((screen.getByLabelText("自己填這一期的總預算") as HTMLInputElement).value).toBe("12345");
+    expect(bar().hasAttribute("disabled")).toBe(true);
+    expect(screen.getByRole("button", {name: "重新產生策略"})).toBeTruthy();
+    expect(adoptStrategy).not.toHaveBeenCalled();
+  });
+
+  it("contrary observations keep the backend support level and disclose the reverse count", async () => {
+    const user = userEvent.setup();
+    const c = strategyFixture();
+    const evidence = c.budget_basis_json.basis!.learnings[0].evidence;
+    evidence.contrary_count = 1; evidence.same_direction_count = 1; evidence.independent_count = 3;
+    evidence.support_label = "一次可比觀察";
+    mount(c);
+    expect(await screen.findByText("依據含反向觀察，請連同來源與限制判讀。")).toBeTruthy();
+    expect(screen.getByText("一次可比觀察")).toBeTruthy();
+    await user.click(screen.getByRole("button", {name: "查看依據 →"}));
+    await user.click(screen.getAllByRole("button", {name: "查看來源與限制 →"})[0]);
+    const source = screen.getByRole("dialog", {name: "經驗來源與適用範圍"});
+    expect(within(source).getByText("3 次")).toBeTruthy();
+    const reverse = within(source).getByText("反向觀察").parentElement!;
+    expect(within(reverse).getByText("1 次")).toBeTruthy();
+  });
+
+  it("cold history still allows a proposed hypothesis and a declined confirmation never navigates", async () => {
+    const user = userEvent.setup();
+    const c = strategyFixture();
+    c.budget_basis_json.basis!.learnings = [];
+    c.budget_basis_json.basis!.evidence_context = {...c.budget_basis_json.basis!.evidence_context, eligible_count: 0, items: []};
+    vi.mocked(adoptStrategy).mockRejectedValue(new Error("Unknown result; retry original operation"));
+    const {onChangeTab} = mount(c);
+    expect(await screen.findByText("0 條可參考經驗")).toBeTruthy();
+    expect(screen.getByText("尚無可用歷史")).toBeTruthy();
+    await user.click(bar());
+    await screen.findByText("Unknown result; retry original operation");
+    await user.click(bar());
+    const requests = vi.mocked(adoptStrategy).mock.calls;
+    expect(requests).toHaveLength(2);
+    expect(requests[0][2]).toEqual(requests[1][2]);
+    expect(requests[0][2].expected_revision).toBe("decision-fixture");
+    expect(requests[0][2].operation_id).toMatch(/^[0-9a-f-]{36}$/);
+    expect(onChangeTab).not.toHaveBeenCalled();
   });
 });

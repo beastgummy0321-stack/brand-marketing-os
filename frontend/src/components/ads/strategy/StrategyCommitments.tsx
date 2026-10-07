@@ -1,4 +1,5 @@
 import type { StrategyDecision, StrategyRole } from "@/lib/adsStrategyTypes";
+import { Chip } from "../patterns/Chip";
 
 /** Bindings and counts are served together; the browser neither pairs names nor estimates capacity. */
 export function StrategyCommitments({ decision, role, stale, details = false }: {
@@ -6,10 +7,11 @@ export function StrategyCommitments({ decision, role, stale, details = false }: 
 }) {
   const slots = decision?.slots.filter((slot) => slot.role === role) ?? [];
   return (
-    <ul className="mt-2 space-y-2">
+    <ul className="space-y-3">
       {slots.map((slot) => (
-        <li key={slot.id} data-slot="strategy-commitment" className="border-l-2 border-border pl-3 text-[13px] [overflow-wrap:anywhere]">
-          <p className="font-medium">{slot.display?.customer_group_label ?? "顧客群名稱未提供"}・{slot.display?.offer_label ?? "優惠名稱未提供"}</p>
+        <li key={slot.id} data-slot="strategy-commitment" className="text-[13px] [overflow-wrap:anywhere]">
+          <p className="text-[15px] font-semibold">{slot.display?.customer_group_label ?? "顧客群名稱未提供"}</p>
+          <div className="mt-2"><Chip>{slot.display?.offer_label ?? "優惠名稱未提供"}</Chip></div>
           {!details && <p className="text-muted-foreground">
             {slot.carry_from_ad_id === null ? `新測試：${slot.test_intent ?? "測試目的未提供"}` : `保留原廣告：${slot.display?.carried_ad_label ?? "原廣告名稱未提供"}`}
           </p>}

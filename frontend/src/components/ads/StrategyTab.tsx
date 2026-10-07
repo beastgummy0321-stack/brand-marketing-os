@@ -26,9 +26,9 @@ import {
   type StrategyRole,
 } from "@/lib/adsApi";
 import { cn } from "@/lib/utils";
-import { ActionBar, AllocationBar, Chip, Disclosure, GradeChip, formatAmount } from "./patterns";
-// `patterns/index.ts` does not re-export the part fills; same feature folder, so the direct path is allowed.
-import { allocationFills } from "./patterns/ScenarioBars";
+import { ActionBar, AllocationBar, Chip, Disclosure, GradeChip, formatAmount, LearningEvidenceCard, LearningEvidenceSource } from "./patterns";
+import type { LearningEvidence } from "@/lib/adsLearningEvidence";
+import { StrategyEvidence, citedEvidence } from "./strategy/StrategyEvidence";
 import { perSaleAmount } from "./patterns/csv";
 import { nextStep, type StepTarget } from "./nextStep";
 import { CapBlock } from "./strategy/CapBlock";
@@ -174,6 +174,11 @@ export function StrategyTab({
   const [picked, setPicked] = useState<string | null>(null);
   const [pending, setPending] = useState<OverCapPending | null>(null);
   const [basisOpen, setBasisOpen] = useState(false);
+  const [sourceEvidence, setSourceEvidence] = useState<LearningEvidence | null>(null);
+  const [basisReading, setBasisReading] = useState(false);
+  const [basisReadError, setBasisReadError] = useState<string | null>(null);
+  const basisTitle = useRef<HTMLHeadingElement>(null);
+  useEffect(() => { if (basisOpen) basisTitle.current?.focus(); }, [basisOpen, sourceEvidence?.id]);
   const [allocationPct, setAllocationPct] = useState<Record<string, string> | null>(null);
   const [allocationSaving, setAllocationSaving] = useState(false);
   const [allocationError, setAllocationError] = useState<string | null>(null);
@@ -229,6 +234,7 @@ export function StrategyTab({
       onCampaignChange(await generateStrategy(brandId, c.id));
       setRejectedRevision(null);
       adoption.current = null;
+      setBasisReadError(null);
     } catch (err) {
       // A 502 carries the served sentence with the refusal reason; a 409 `campaign_busy` its served sentence.
       setGenerateError(errorText(err, "產生策略失敗，請稍後再試。"));
@@ -236,6 +242,23 @@ export function StrategyTab({
     } finally {
       setGenerating(false);
     }
+  }
+
+  async function rereadBasis() {
+    setBasisReading(true);
+    setBasisReadError(null);
+    try {
+      onCampaignChange(await getCampaign(brandId, c.id));
+    } catch (err) {
+      setBasisReadError(errorText(err, "最新依據讀取失敗。"));
+    } finally {
+      setBasisReading(false);
+    }
+  }
+
+  function closeBasis() {
+    setBasisOpen(false);
+    setSourceEvidence(null);
   }
 
   async function run(action: () => Promise<void>, fallback: string) {
@@ -266,7 +289,7 @@ export function StrategyTab({
 
   const adopt = () => run(async () => {
     const revision = strategy?.decision?.revision;
-    if (!revision || decisionBlocker || allocationPct !== null) throw new Error(decisionBlocker || "先套用或取消比例調整。");
+    if (!revision || decisionBlocker || allocationPct !== null || basisReading || basisReadError) throw new Error(decisionBlocker || basisReadError || "先套用或取消比例調整。");
     if (adoption.current?.revision !== revision) {
       adoption.current = { revision, operationId: crypto.randomUUID() };
     }
@@ -315,8 +338,8 @@ export function StrategyTab({
     const blocker = c.cap.value === null || c.cap.value <= 0 ? "先設上限" :
       c.budget_planned === null || c.budget_planned <= 0 ? "先選一個預算" :
       decisionBlocker || (allocationPct !== null ? "先套用或取消比例調整" : "");
-    primary = { label: "照這個方式進行 →", onClick: () => void adopt(), disabled: blocker !== "" };
-    hint = blocker || "確認後建立投放結構";
+    primary = { label: "確認策略，查看投放結構 →", onClick: () => void adopt(), disabled: blocker !== "" };
+    hint = blocker || "確認後會建立以上安排；不會操作廣告平台。";
   } else if (draft && step.id !== "strategy_generate") {
     // Prototype `tabStrategy()`: a draft goes on to its material; a campaign already on a platform has no next step here.
     primary = { label: "下一步：素材 →", onClick: () => onChangeTab("assets"), disabled: c.cap.value === null };
@@ -328,7 +351,6 @@ export function StrategyTab({
   // shown only for the saved budget: generating fills `amount` from the recommended total before the user chose
   // anything, and an unsaved pick is not split until it is saved (percent only until then).
   const showAmounts = c.budget_planned !== null && pickedRow === null;
-  const fills = strategy ? allocationFills(strategy.allocation.map((item) => ({ key: item.role, pct: item.pct }))) : {};
   const coordinateLearnings = basis?.coordinate_learnings ?? [];
   const rankedLearnings = basis?.ranked_learnings;
   const usedLearnings = hasUsedLearnings(rankedLearnings, coordinateLearnings);
@@ -336,9 +358,24 @@ export function StrategyTab({
   const beforeAdoption = step.id === "strategy_adopt";
 
   return (
-    <div className="flex flex-col">
-      <div className="flex max-w-[1260px] flex-col gap-4">
-        <CapBlock brandId={brandId} campaign={c} onCampaignChange={onCampaignChange} />
+    <div data-slot="strategy-screen" className="flex min-w-0 flex-col">
+      <div data-slot="strategy-body" className="flex min-w-0 flex-col gap-5">
+        {strategy && <>
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div><h2 className="text-[25px] font-semibold">這期策略</h2><p className="mt-1 text-sm text-muted-foreground">確認受眾與訊息安排，再查看投放結構。</p></div>
+            <Chip tone={stale ? "warn" : decision?.state === "adopted" ? "ok" : "accent"}>{stale ? "需更新" : decision?.state === "adopted" ? "已確認" : "待你確認"}</Chip>
+          </div>
+          <dl data-slot="strategy-summary" className="surface grid grid-cols-3 gap-5 px-[22px] py-5 text-sm">
+            <div className="min-w-0"><dt className="text-xs text-muted-foreground">這期商品</dt><dd className="mt-1 font-semibold [overflow-wrap:anywhere]">{basis?.evidence_context?.scope_label ?? basis?.prices[0]?.sell_way_name ?? "商品名稱尚未提供"}</dd></div>
+            <div className="min-w-0"><dt className="text-xs text-muted-foreground">目標</dt><dd className="mt-1 font-semibold [overflow-wrap:anywhere]">{c.objective}</dd></div>
+            <div><dt className="text-xs text-muted-foreground">可參考歷史</dt><dd className="mt-1 font-semibold">{basis?.evidence_context ? `${formatAmount(basis.evidence_context.eligible_count)} 條可參考經驗` : "歷史適用性尚未核實"}</dd></div>
+          </dl>
+          {(basisReading || waiting) && <p role="status" className="text-sm text-muted-foreground">{basisReading ? "正在重新讀取依據，保留原內容與尚未儲存的輸入。" : "策略背景工作處理中，完成後會重新讀取。"}</p>}
+          {basisReadError && <div role="alert" className="surface flex flex-wrap items-center justify-between gap-3 p-4"><div><p className="text-sm">最新依據讀不到，保留上次內容。</p><p className="mt-1 text-xs text-muted-foreground">{basisReadError}</p></div><Button variant="outline" busy={basisReading} onClick={() => void rereadBasis()}>重新讀取</Button></div>}
+          {stale && <p role="status" className="text-sm text-warning">原策略需更新後再確認；目前預算與尚未儲存的輸入仍保留。</p>}
+          {basis?.evidence_context?.items.some((row) => row.contrary_count > 0) && <p role="status" className="text-sm text-warning">依據含反向觀察，請連同來源與限制判讀。</p>}
+        </>}
+        {!strategy && <CapBlock brandId={brandId} campaign={c} onCampaignChange={onCampaignChange} />}
 
         {!imported && !strategy && (
           <EmptyState
@@ -352,21 +389,10 @@ export function StrategyTab({
 
         {strategy && (
           <>
-            <BudgetScenarios
-              brandId={brandId}
-              campaign={c}
-              picked={picked}
-              onPick={setPicked}
-              pending={pending}
-              onPending={setPending}
-              onCampaignChange={onCampaignChange}
-              onBudgetSaved={budgetSaved}
-              resplit={resplit}
-            />
-
-            <section className="surface px-[22px] py-5" aria-labelledby="allocation-title">
+            <div className="grid min-w-0 grid-cols-1 items-start gap-5 min-[1101px]:grid-cols-[minmax(0,1.35fr)_minmax(250px,.8fr)]">
+            <section className="surface min-w-0 px-[22px] py-5" aria-labelledby="allocation-title">
               <div className="mb-3.5 flex flex-wrap items-center justify-between gap-3">
-                <h2 id="allocation-title" className="text-[15px] font-semibold">預算怎麼分</h2>
+                <h2 id="allocation-title" className="text-base font-semibold">這期怎麼安排</h2>
                 <div className="flex flex-wrap items-center gap-3">
                   <span className="text-sm text-muted-foreground">{allocationTotal !== null ? `以 ${formatAmount(allocationTotal)} 計` : "選好預算後算金額"}</span>
                   {beforeAdoption && allocationPct === null && (
@@ -374,13 +400,10 @@ export function StrategyTab({
                   )}
                 </div>
               </div>
-              {c.materials && <MaterialsRow materials={c.materials} />}
-              <StrategyAssignmentSummary decision={decision} />
-              <p className="mb-3 text-xs text-muted-foreground">{stale ? "目前比例已修改，原建議理由已失效。" : "比例是本輪建議；有限樣本與相對成績不能證明最佳分配，仍有不確定性。"}</p>
               {decisionBlocker && <div className="mb-3 rounded-md border border-border p-3 text-sm">
                 <p>{decisionBlocker}</p>
                 <ul className="mt-1 space-y-1 text-[13px] text-muted-foreground">
-                  {decision?.feasibility.reasons.filter((reason) => reason.code !== "strategy_changed").map((reason, i) => <li key={`${reason.code}-${i}`}>{reason.message}</li>)}
+                  {decision?.feasibility.reasons.map((reason, i) => <li key={`${reason.code}-${i}`}>{reason.message}</li>)}
                 </ul>
                 {draft && <Button variant="outline" size="sm" className="mt-2" busy={generating}
                   disabledReason={waiting || primaryBusy || allocationSaving ? "背景工作還在處理，請稍候" : undefined}
@@ -389,22 +412,18 @@ export function StrategyTab({
               </div>}
               {allocationPct === null ? (
                 <>
-                  <AllocationBar parts={strategy.allocation.map((item) => ({ key: item.role, label: item.label, pct: item.pct }))} legend={false} />
                   {/* Prototype F41 ② `.why`: one row per role — swatch, label, 「N%・M 元」, and the planner's reason. */}
                   <ul>
                     {strategy.allocation.map((item) => {
                       const amount = showAmounts ? formatAmount(item.amount) : null;
                       return (
-                        <li key={item.role} data-slot="allocation-row" data-role={item.role} className="flex items-start gap-2.5 border-t border-border py-3 first:border-t-0">
-                          <i className={cn("mt-1.5 size-2.5 shrink-0 rounded-[3px]", fills[item.role] ?? "bg-muted")} aria-hidden="true" />
-                          <div className="min-w-0 flex-1">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <b className="text-sm font-semibold">{item.label}</b>
-                              <span className="numeric text-sm">{item.pct}%{amount !== null && `・${amount} 元`}</span>
-                            </div>
-                            {!stale && item.rationale?.trim() && <p className="mt-0.5 text-[13px] [overflow-wrap:anywhere]">{item.rationale}</p>}
+                        <li key={item.role} data-slot="allocation-row" data-role={item.role} className="grid min-w-0 grid-cols-[70px_minmax(0,1fr)_65px] items-start gap-3 border-t border-border py-[22px] first:border-t-0">
+                          <div><Chip tone={item.role === "new" ? "accent" : "neutral"}>{item.label}</Chip></div>
+                          <div className="min-w-0">
                             <StrategyCommitments decision={decision} role={item.role} stale={stale} />
+                            {!stale && item.rationale?.trim() && <p className="mt-1 text-[13px] text-muted-foreground [overflow-wrap:anywhere]">{item.rationale}</p>}
                           </div>
+                          <div className="numeric text-right"><span className="text-[23px] text-primary">{formatAmount(item.pct)}%</span>{amount !== null && <span className="mt-1 block text-xs text-muted-foreground">{amount} 元</span>}</div>
                         </li>
                       );
                     })}
@@ -434,7 +453,26 @@ export function StrategyTab({
                   </div>
                 </div>
               )}
+            <div className="-mx-[22px] mt-2">
+              <Disclosure label="這輪想確認什麼"><ul className="space-y-2 text-[13px]">{!stale && (strategy.learning_goals ?? []).map((line, i) => <li key={i}>{line}</li>)}</ul>{(stale || !strategy.learning_goals?.length) && <p className="text-[13px] text-muted-foreground">{stale ? "原測試方向需隨策略更新後再確認。" : "這份策略尚未列出測試方向。"}</p>}</Disclosure>
+              <Disclosure label="還有哪些未知"><ul className="space-y-2 text-[13px]">{strategy.unknowns.map((line, i) => <li key={i}>{line}</li>)}</ul>{strategy.unknowns.length === 0 && <p className="text-[13px] text-muted-foreground">沒有另列未知；觀察仍不是效果保證。</p>}</Disclosure>
+            </div>
             </section>
+            <StrategyEvidence basis={basis} onBasis={() => setBasisOpen(true)} />
+            </div>
+
+            <CapBlock brandId={brandId} campaign={c} onCampaignChange={onCampaignChange} />
+            <BudgetScenarios
+              brandId={brandId}
+              campaign={c}
+              picked={picked}
+              onPick={setPicked}
+              pending={pending}
+              onPending={setPending}
+              onCampaignChange={onCampaignChange}
+              onBudgetSaved={budgetSaved}
+              resplit={resplit}
+            />
           </>
         )}
 
@@ -453,6 +491,9 @@ export function StrategyTab({
         {strategy && (
           <Disclosure label="為什麼這樣建議">
             <div className="flex flex-col gap-3 text-sm">
+              <StrategyAssignmentSummary decision={decision} />
+              {c.materials && <MaterialsRow materials={c.materials} />}
+              <AllocationBar parts={strategy.allocation.map((item) => ({ key: item.role, label: item.label, pct: item.pct }))} legend={false} />
               {/* F48 Contract S: the program's facts first; the model's prose below them has no numbers of its own. */}
               {(strategy.facts ?? []).length > 0 && <StrategyFacts facts={strategy.facts ?? []} />}
               {strategy.allocation.filter((item) => decision?.slots.some((slot) => slot.role === item.role)).map((item) => <section key={item.role} aria-label={`${item.label}安排依據`}>
@@ -518,11 +559,11 @@ export function StrategyTab({
       </div>
 
       <ActionBar
-        back={<Button variant="ghost" onClick={() => onChangeTab("overview")}>← 總覽</Button>}
+        back={<div className="flex flex-wrap items-center gap-2"><Button variant="ghost" onClick={() => onChangeTab("overview")}>← 總覽</Button><Button variant="outline" asChild><Link to={`/brands/${brandId}/library?tab=ads-learnings`}>查看品牌學習</Link></Button></div>}
         hint={primaryError ?? (primary?.disabled ? undefined : hint)}
       >
         {primary && (
-          <Button busy={primaryBusy} disabledReason={waiting || generating ? "背景工作還在處理，請稍候" : primary.disabled ? hint : undefined} onClick={primary.onClick}>
+          <Button busy={primaryBusy} disabledReason={basisReading ? "先完成依據讀取" : basisReadError && step.id === "strategy_adopt" ? "先讀取最新依據，才能確認這份策略" : waiting || generating ? "背景工作還在處理，請稍候" : primary.disabled ? hint : undefined} onClick={primary.onClick}>
             {primaryBusy || waiting ? "處理中…" : primary.label}
           </Button>
         )}
@@ -530,25 +571,24 @@ export function StrategyTab({
 
       {basisOpen && basis && (
         // Prototype f46-learnings `#/strategy` `.sp`: 用到的學習 first, then the brand facts and prices it used.
-        <SidePanel ariaLabel="策略依據" onClose={() => setBasisOpen(false)} widthClassName="w-[600px]">
+        <SidePanel ariaLabel={sourceEvidence ? "經驗來源與適用範圍" : "策略依據"} onClose={closeBasis} widthClassName="w-[600px]">
           <div className="flex flex-col gap-5">
-            <h3 className="text-lg font-semibold">策略依據</h3>
+            <h3 ref={basisTitle} tabIndex={-1} className="text-lg font-semibold outline-none">{sourceEvidence ? "經驗來源與適用範圍" : "這份策略用了哪些依據"}</h3>
+            {stale && <p className="text-sm text-warning">這是原策略引用的依據；需更新策略後核對適用條件。</p>}
+            {sourceEvidence ? <><LearningEvidenceSource evidence={sourceEvidence} audienceLabel={decision?.slots.find((slot) => slot.customer_group_id !== null && slot.customer_group_id === sourceEvidence.scope.customer_group_id)?.display?.customer_group_label} /><Button variant="outline" className="w-fit" onClick={() => setSourceEvidence(null)}>返回策略依據</Button></> : <>
             <section>
               <h4 className="mb-2 text-sm font-semibold">用到的學習</h4>
               {usedLearnings && <UsedLearnings brandId={brandId} ranked={rankedLearnings} rows={coordinateLearnings} />}
               {basis.learnings.length === 0 ? (
                 !usedLearnings && <p className="text-sm text-muted-foreground">沒有可用的學習紀錄。</p>
               ) : (
-                <ul className={cn("space-y-2 text-sm", usedLearnings && "mt-2 border-t border-border pt-2.5")}>
-                  {basis.learnings.map((l) => (
-                    <li key={l.id}>
-                      <p>{l.text}</p>
-                      <p className="text-xs text-muted-foreground">{l.level}{l.needs_revalidation ? "・需要重新驗證" : ""}</p>
-                    </li>
-                  ))}
-                </ul>
+                <div className={cn(usedLearnings && "mt-2 border-t border-border pt-2.5")}>
+                  {citedEvidence(basis).map((row) => <LearningEvidenceCard key={row.id} evidence={row} onSource={setSourceEvidence} />)}
+                  {basis.learnings.filter((row) => !row.evidence).map((row) => <div key={row.id} className="py-2 text-sm"><p>{row.text}</p><p className="text-xs text-muted-foreground">歷史適用性尚未核實</p></div>)}
+                </div>
               )}
             </section>
+            <section><h4 className="mb-2 text-sm font-semibold">未用於提案的資料</h4>{(basis.evidence_context?.items ?? []).filter((row) => !citedEvidence(basis).some((cited) => cited.id === row.id)).map((row) => <LearningEvidenceCard key={row.id} evidence={row} onSource={setSourceEvidence} />)}</section>
             <section>
               <h4 className="mb-2 text-sm font-semibold">品牌事實</h4>
               {basis.brand_facts.length === 0 ? (
@@ -589,6 +629,9 @@ export function StrategyTab({
               )}
               {basis.assumption_note && <p className="mt-2 text-sm text-warning">{basis.assumption_note}</p>}
             </section>
+            {basis.evidence_context?.omitted ? <p className="text-xs text-muted-foreground">另有 {basis.evidence_context.omitted} 條紀錄未列出，請到品牌學習查看。</p> : null}
+            <div className="flex flex-wrap gap-2"><Button variant="outline" onClick={closeBasis}>返回策略</Button><Button variant="ghost" busy={basisReading} onClick={() => void rereadBasis()}>重新讀取依據</Button></div>
+            </>}
           </div>
         </SidePanel>
       )}
