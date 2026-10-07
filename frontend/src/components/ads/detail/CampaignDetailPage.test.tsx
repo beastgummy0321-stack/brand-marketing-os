@@ -829,7 +829,7 @@ describe("這期狀態列 (F40-I06, prototype #/perf)", () => {
     rerender({ syncing: true });
     expect((within(row()).getByRole("button", { name: "讀取中…" }) as HTMLButtonElement).disabled).toBe(true);
     vi.mocked(getPerformance).mockResolvedValue(perf({}, { spend: 11581, purchases: 21 }));
-    rerender({ syncing: false });
+    rerender({ syncing: false, readGeneration: 1 });
     expect(await within(row()).findByText("11,581 TWD")).toBeTruthy();
     expect(getPerformance).toHaveBeenCalledTimes(2);
   });
@@ -1039,6 +1039,25 @@ describe("served recent money units", () => {
     expect(ruler.textContent).toContain("已花 400 TWD／1,050 TWD");
     expect(ruler.textContent).toContain("38%");
   });
+});
+
+it("F52 preserves the open actual row menu while its terminal-generation reread is pending", async () => {
+  let answer!: (data: CampaignTriage) => void;
+  const pending = new Promise<CampaignTriage>(resolve => {answer = resolve;});
+  const old = triage([ad("e1", "保留這列與展開內容", "watch", 12000, 30, {value: 350, basis: "own"})]);
+  vi.mocked(getTriage).mockResolvedValueOnce(old).mockImplementationOnce(() => pending);
+  const ui = renderBody(campaignDetail(), {campaign: undefined});
+  const row = await screen.findByTestId("ad-row-e1");
+  fireEvent.click(within(row).getByText("⋯"));
+  const menu = within(row).getByText("⋯").closest("details")!;
+  expect(menu.open).toBe(true);
+  ui.rerender({readGeneration: 1});
+  await vi.waitFor(() => expect(getTriage).toHaveBeenCalledTimes(2));
+  expect(screen.getByTestId("ad-row-e1")).toBe(row);
+  expect(menu.open).toBe(true);
+  answer(triage([ad("e1", "保留這列與展開內容", "watch", 11400, 30, {value: 350, basis: "own"})]));
+  expect(await within(row).findByText("380 TWD")).toBeTruthy();
+  expect(menu.open).toBe(true);
 });
 
 vi.mock("@/lib/figures", async (importOriginal) => ({

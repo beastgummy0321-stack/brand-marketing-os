@@ -58,6 +58,7 @@ function Workspace({ brandId, campaignId }: { brandId: string; campaignId: strin
     { status: "loading" } | { status: "error"; message: string } | { status: "ready"; campaign: CampaignDetail }
   >({ status: "loading" });
   const workspace = useApiRead((signal) => getCampaignWorkspace(brandId, campaignId, signal), [brandId, campaignId]);
+  const [readGeneration, setReadGeneration] = useState(0);
   const navigate = useNavigate();
   const request = useRef<AbortController | null>(null);
   // The platform read: posting the request, then following its outcome (`watch` = the request number while it runs).
@@ -116,6 +117,8 @@ function Workspace({ brandId, campaignId }: { brandId: string; campaignId: strin
   const settle = useCallback((note: SyncNote) => {
     setWatch(null);
     setSyncNote(note);
+    // A served terminal outcome, not POST acknowledgement, invalidates this campaign's visible reads.
+    if (note.state !== "error") setReadGeneration((current) => current + 1);
     load(true);
     reloadWorkspace();
   }, [load, reloadWorkspace]);
@@ -184,7 +187,7 @@ function Workspace({ brandId, campaignId }: { brandId: string; campaignId: strin
       <Disclosure label="進階：每日資料、次要指標與舊版檢討" defaultOpen={searchParams.has("ad") || searchParams.has("review")}>
         <div className="flex flex-col gap-4">
           <ReviewPanel brandId={brandId} campaignId={campaign.id} onGoal={() => changeTab("strategy")} />
-          <PerformanceTab {...slot} onSync={() => void refreshPlatform()} syncing={syncing} syncError={syncError} syncNote={syncNote} />
+          <PerformanceTab {...slot} onSync={() => void refreshPlatform()} syncing={syncing} syncError={syncError} syncNote={syncNote} readGeneration={readGeneration} />
         </div>
       </Disclosure>
     );
@@ -192,7 +195,7 @@ function Workspace({ brandId, campaignId }: { brandId: string; campaignId: strin
       ? <DraftPerf brandId={brandId} campaign={campaign} onGo={go} advanced={advanced} />
       : <CampaignPerfBody brandId={brandId} campaignId={campaign.id} origin={campaign.origin} advanced={advanced}
           campaign={campaign} onCampaignChange={updateCampaign} onSync={() => void refreshPlatform()} syncing={syncing} syncError={syncError}
-          syncNote={syncNote} />;
+          syncNote={syncNote} readGeneration={readGeneration} />;
   } else {
     body = SLOTS[tab](slot);
   }
