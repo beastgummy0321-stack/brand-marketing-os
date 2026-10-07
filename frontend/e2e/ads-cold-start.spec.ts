@@ -1,5 +1,6 @@
 import { expect, test, type Page, type Response } from "@playwright/test";
 import { execFileSync } from "node:child_process";
+import { writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 /** Cold start, self-seeding (2026-09-26 ruling: runs in the normal `npm run e2e`, no context file, no `/__f13`).
@@ -7,7 +8,9 @@ import { fileURLToPath } from "node:url";
  * wizard create with an own PNG uploaded in 進階 (its preview made by the worker's task body, below) → 系統這樣理解 →
  * 產生策略 → 自己填總額 → cap → 照這個方式進行 → placement revised and confirmed → the confirmed version placed into
  * every planned ad (one per group; the scripted provider follows the roles the prompt offers) through the slot upload
- * (F41-I01: each ad gets its own placement of that original, confirmed and assigned) → reload and re-read.
+ * (F41-I01: each ad gets its own placement of that original, confirmed and assigned) → reload and re-read →
+ * confirm a real local month envelope → first publish list without editing launch settings. A disconnected
+ * fresh brand remains blocked by the real month rule; if the real reader proves the month, one click approves.
  * The webServer's scripted provider answers brief／strategy／delivery plan; no live model or platform account. */
 
 type ApiHeaders = Record<string, string>;
@@ -48,7 +51,7 @@ async function successful(pending: Promise<Response>) {
   return response;
 }
 
-test("冷啟動：建立精靈帶自己的圖 → 策略 → 自己填總額 → 展開結構 → 確認素材安排 → 指派每則廣告 → 重新整理還在", async ({ page }) => {
+test("冷啟動：建立精靈帶自己的圖 → 策略 → 自己填總額 → 展開結構 → 確認素材安排 → 指派每則廣告 → 重新整理還在 → 首次核准", async ({ page }, testInfo) => {
   test.setTimeout(180_000);
   const stamp = Date.now();
   const errors: string[] = [];
@@ -202,5 +205,87 @@ test("冷啟動：建立精靈帶自己的圖 → 策略 → 自己填總額 →
     const count = [...placedByAd.values()].filter(p => p.revision === revision).length;
     await expect(assignments.getByText(`已指派確認版本 · ${filename} · 版本 ${revision}`, { exact: true })).toHaveCount(count);
   }
+
+  // F52-I08: use the real month rule and local confirmation; no platform account or guard is mocked.
+  const monthlyPath = `/api/ads/brands/${brandId}/monthly-budget`;
+  const envelope = await api<{ budget: { month: string; revision: number } }>(page, headers, "GET", monthlyPath);
+  await api(page, headers, "PUT", monthlyPath, {
+    month: envelope.budget.month, currency: "TWD", amount: 90000, expected_revision: envelope.budget.revision,
+  });
+  const launchPath = `/api/ads/brands/${brandId}/campaigns/${created.id}`;
+  const reads: { path: string; method: string; status: number; body: unknown }[] = [];
+  const pendingReads: Promise<void>[] = [];
+  const writes: unknown[] = [];
+  page.on("request", request => {
+    if (new URL(request.url()).pathname === `${launchPath}/publish` && request.method() === "POST") writes.push(request.postDataJSON());
+  });
+  page.on("response", response => {
+    const path = new URL(response.url()).pathname;
+    if (response.request().method() === "GET" && [`${launchPath}/publish`, `${launchPath}/launch`, `${launchPath}/launch-settings`].includes(path)) {
+      pendingReads.push(response.json().then(body => { reads.push({ path, method: "GET", status: response.status(), body }); }));
+    }
+  });
+  await page.goto(`/app/brands/${brandId}/ads/campaigns/${created.id}/publish/list`);
+  await expect(page.getByRole("heading", { name: "確認上架清單", exact: true })).toBeVisible();
+  const approveFirst = page.getByRole("button", { name: "核准上架清單 →", exact: true });
+  await expect.poll(() => reads.filter(r => r.path.endsWith("/launch")).length).toBeGreaterThanOrEqual(2);
+  await expect(page.getByText("讀取投放設定…", { exact: true })).toHaveCount(0);
+  await Promise.all(pendingReads);
+  const latestPublish = reads.filter(r => r.path.endsWith("/publish")).at(-1)?.body as { describe: { content_hash: string; launch_settings: unknown } };
+  const latestLaunch = reads.filter(r => r.path.endsWith("/launch")).at(-1)?.body as { content_hash: string; launch_settings: unknown; month_budget: { blocker_text: string | null } };
+  expect(latestPublish.describe.content_hash).toBe(latestLaunch.content_hash);
+  expect(latestPublish.describe.launch_settings).toEqual(latestLaunch.launch_settings);
+  expect(writes).toEqual([]);
+  for (const width of [1024, 1920]) {
+    await page.setViewportSize({ width, height: 1080 });
+    await page.screenshot({ path: testInfo.outputPath(`real-first-list-${width}.png`) });
+    await page.screenshot({ path: testInfo.outputPath(`real-first-list-${width}-full.png`), fullPage: true });
+  }
+  // This account has no bound platform. An uncertain month is a real refusal, not a test bypass or zero spend.
+  if (latestLaunch.month_budget.blocker_text !== null) {
+    await expect(approveFirst).toBeDisabled();
+    await expect(page.getByText(latestLaunch.month_budget.blocker_text, { exact: true }).first()).toBeVisible();
+    expect(latestLaunch.month_budget.blocker_text).toContain("餘額尚不確定");
+    await approveFirst.click({ force: true });
+    expect(writes).toEqual([]);
+    const guarded = JSON.stringify({ brandId, campaignId: created.id, reads, writes, text: await page.locator("main").innerText() }, null, 2);
+    writeFileSync(testInfo.outputPath("real-first-list-month-guard.json"), guarded);
+    await testInfo.attach("real-first-list-month-guard", { body: Buffer.from(guarded), contentType: "application/json" });
+    expect(errors).toEqual([]);
+    return;
+  }
+  try {
+    await expect(approveFirst).toBeEnabled();
+  } catch (error) {
+    await Promise.all(pendingReads);
+    await page.screenshot({ path: testInfo.outputPath("first-list-refused-full.png"), fullPage: true });
+    const refusal = JSON.stringify({ reads, writes, text: await page.locator("main").innerText() }, null, 2);
+    writeFileSync(testInfo.outputPath("first-list-refusal.json"), refusal);
+    await testInfo.attach("first-list-refusal", {
+      body: Buffer.from(refusal),
+      contentType: "application/json",
+    });
+    throw error;
+  }
+  await Promise.all(pendingReads);
+  expect(latestLaunch.month_budget.blocker_text).toBeNull();
+  const firstPublish = responseFor(page, `${launchPath}/publish`);
+  await approveFirst.click();
+  const published = await successful(firstPublish);
+  expect(published.status()).toBe(200);
+  expect(writes).toHaveLength(1);
+  expect(writes[0]).toMatchObject({ adapter: "manual", content_hash: latestLaunch.content_hash });
+  expect(published.request().postDataJSON().operation_id).toBeTruthy();
+  await expect(page).toHaveURL(/\/publish\/platform$/);
+  await expect(page.getByRole("heading", { name: "到平台完成", exact: true })).toBeVisible();
+  const approvedLaunch = await api<{ version: number; step: string }>(page, headers, "GET", `${launchPath}/launch`);
+  expect(approvedLaunch.version).toBe(1);
+  expect(approvedLaunch.step).toBe("platform");
+  const receipt = JSON.stringify({ brandId, campaignId: created.id, reads, writes, response: await published.json(), approvedLaunch }, null, 2);
+  writeFileSync(testInfo.outputPath("real-first-publish-receipt.json"), receipt);
+  await testInfo.attach("real-first-publish-receipt", {
+    body: Buffer.from(receipt),
+    contentType: "application/json",
+  });
   expect(errors).toEqual([]);
 });

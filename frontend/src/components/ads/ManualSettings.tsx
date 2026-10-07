@@ -31,13 +31,19 @@ function clearManualDraft(key: string) {
   try { sessionStorage.removeItem(key); } catch { /* Storage unavailable. */ }
 }
 
-export function ManualSettings({ draftScope, brandId, campaign, onSaved, onDirtyChange, embedded = false, groupId }: {
+export function ManualSettings(props: Parameters<typeof ManualSettingsBody>[0]) {
+  return <ManualSettingsBody key={JSON.stringify([props.draftScope, props.brandId, props.campaign.id, props.groupId])} {...props} />;
+}
+
+function ManualSettingsBody({ draftScope, brandId, campaign, onSaved, onDirtyChange, onBlockerChange, embedded = false, groupId }: {
   draftScope: string;
   brandId: string;
   /** F49 Contract L: edits lock on the served lifecycle (`closed`), never the stored status. */
   campaign: Pick<CampaignDetail, "id" | "lifecycle" | "manual_handoff">;
   onSaved: (c: CampaignDetail) => void;
   onDirtyChange?: (dirty: boolean) => void;
+  /** Pending write/read, failure or an unsent draft that prevents publishing this list. */
+  onBlockerChange?: (blocker: string | null) => void;
   /** F29 Unresolved 5: inside the launch settings' 「進階設定」 fold (publish list stage) — the per-ad-set free-text
    * fields only, without this panel's own surface, summary and outer fold (the host's fold is the one fold). */
   embedded?: boolean;
@@ -56,9 +62,16 @@ export function ManualSettings({ draftScope, brandId, campaign, onSaved, onDirty
     }),
   ));
   const [focusRequests, setFocusRequests] = useState<Record<string, FocusRequest>>({});
+  const [blockers, setBlockers] = useState<Record<string, string | null>>({});
   const dirty = Object.values(dirtyGroups).some(Boolean);
 
   useEffect(() => onDirtyChange?.(dirty), [dirty, onDirtyChange]);
+  const blocker = (handoff?.groups ?? []).map((group) => blockers[group.id]).find(Boolean)
+    ?? (dirty ? "人工設定有尚未儲存的變更" : null);
+  useEffect(() => onBlockerChange?.(blocker), [blocker, onBlockerChange]);
+  const setGroupBlocker = useCallback((id: string, value: string | null) => {
+    setBlockers((current) => current[id] === value ? current : { ...current, [id]: value });
+  }, []);
 
   const setGroupDirty = useCallback((groupId: string, next: boolean) => {
     setDirtyGroups((current) => current[groupId] === next ? current : { ...current, [groupId]: next });
@@ -88,11 +101,12 @@ export function ManualSettings({ draftScope, brandId, campaign, onSaved, onDirty
         <Disclosure key={group.id} label={`${groupId !== undefined ? "人工上架設定" : group.name} · ${dirtyGroups[group.id] ? "有未儲存變更" : group.status}`}
           open={Boolean(openGroups[group.id])}
           onOpenChange={(next) => setOpenGroups((current) => ({ ...current, [group.id]: next }))}>
-          <GroupSettings brandId={brandId} campaignId={campaign.id} fields={handoff.fields} group={group}
+          <GroupSettings key={`${draftScope}:${brandId}:${campaign.id}:${group.id}`} brandId={brandId} campaignId={campaign.id} fields={handoff.fields} group={group}
             locked={campaign.lifecycle?.state === "closed"} onSaved={onSaved}
             draftKey={`brand-os:ads:manual-draft:v1:${draftScope}:${brandId}:${campaign.id}:${group.id}`}
             focusRequest={focusRequests[group.id] ?? null}
-            onDirtyChange={(next) => setGroupDirty(group.id, next)} />
+            onDirtyChange={(next) => setGroupDirty(group.id, next)}
+            onBlockerChange={(next) => setGroupBlocker(group.id, next)} />
         </Disclosure>
       ))}
     </div>
@@ -165,7 +179,7 @@ export function ManualSettings({ draftScope, brandId, campaign, onSaved, onDirty
   );
 }
 
-function GroupSettings({ brandId, campaignId, fields, group, locked, onSaved, draftKey, focusRequest, onDirtyChange }: {
+function GroupSettings({ brandId, campaignId, fields, group, locked, onSaved, draftKey, focusRequest, onDirtyChange, onBlockerChange }: {
   brandId: string;
   campaignId: string;
   fields: ManualHandoff["fields"];
@@ -175,6 +189,7 @@ function GroupSettings({ brandId, campaignId, fields, group, locked, onSaved, dr
   draftKey: string;
   focusRequest: FocusRequest;
   onDirtyChange: (dirty: boolean) => void;
+  onBlockerChange: (blocker: string | null) => void;
 }) {
   const restoredValues = useRef((() => {
     const stored = readManualDraft(draftKey);
@@ -186,6 +201,11 @@ function GroupSettings({ brandId, campaignId, fields, group, locked, onSaved, dr
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const [written, setWritten] = useState(false);
+  const writtenValues = useRef<string | null>(null);
+  const inFlight = useRef(false);
+  const alive = useRef(true);
+  useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
   const requestedField = fields.find((field) => field.key === focusRequest?.key);
   const [section, setSection] = useState(requestedField?.section ?? fields[0]?.section ?? "受眾");
   const fieldRefs = useRef<Record<string, HTMLInputElement | HTMLTextAreaElement | null>>({});
@@ -203,6 +223,10 @@ function GroupSettings({ brandId, campaignId, fields, group, locked, onSaved, dr
   }, [incomingSignature, group.values]);
 
   useEffect(() => onDirtyChange(dirty), [dirty, onDirtyChange]);
+  const blocker = busy ? "人工設定還在儲存或重新讀取"
+    : error ? "人工設定還沒核對完成，先按重試"
+    : dirty ? "人工設定有尚未儲存的變更" : null;
+  useEffect(() => onBlockerChange(blocker), [blocker, onBlockerChange]);
 
   useEffect(() => {
     if (dirty) saveManualDraft(draftKey, values);
@@ -226,28 +250,41 @@ function GroupSettings({ brandId, campaignId, fields, group, locked, onSaved, dr
   }, [focusRequest, requestedField, section]);
 
   async function save() {
+    if (inFlight.current || locked) return;
+    inFlight.current = true;
     setBusy(true);
     setError(null);
     setSaved(false);
     try {
-      await saveManualSettings(brandId, campaignId, group.id, values);
+      if (writtenValues.current !== JSON.stringify(values)) {
+        await saveManualSettings(brandId, campaignId, group.id, values);
+        if (!alive.current) return;
+        writtenValues.current = JSON.stringify(values); setWritten(true);
+      }
+      const next = await getCampaign(brandId, campaignId);
+      if (!alive.current) return;
       clearManualDraft(draftKey);
       setBaseline({ ...values });
       setRestored(false);
-      onSaved(await getCampaign(brandId, campaignId));
+      onSaved(next);
       setSaved(true);
+      writtenValues.current = null; setWritten(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "儲存失敗，已填內容保留在此。");
+      if (alive.current) setError(writtenValues.current
+        ? `設定已寫入，但活動資料讀不到：${err instanceof Error ? err.message : "請重試讀取。"}`
+        : err instanceof Error ? err.message : "儲存失敗，已填內容保留在此。");
     } finally {
-      setBusy(false);
+      inFlight.current = false; if (alive.current) setBusy(false);
     }
   }
 
   function cancel() {
+    if (writtenValues.current) return;
     setValues({ ...group.values });
     setBaseline({ ...group.values });
     setError(null);
     setSaved(false);
+    writtenValues.current = null; setWritten(false);
     setRestored(false);
     clearManualDraft(draftKey);
   }
@@ -298,9 +335,11 @@ function GroupSettings({ brandId, campaignId, fields, group, locked, onSaved, dr
       </p>}
       <div className="flex flex-wrap gap-2">
         <Button className="w-fit" busy={busy} disabledReason={locked ? "活動已結案，不能修改設定" : !dirty ? "設定沒有變更" : undefined} onClick={() => void save()}>
-          {busy ? "儲存中…" : "儲存這組設定"}
+          {busy ? "儲存中…" : written ? "重新讀取設定" : "儲存這組設定"}
         </Button>
-        {dirty && <Button type="button" variant="outline" busy={busy} onClick={cancel}>取消變更</Button>}
+        {dirty && <Button type="button" variant="outline" busy={busy}
+          disabledReason={written ? "設定已寫入，先重新讀取後再決定" : undefined}
+          onClick={cancel}>取消變更</Button>}
       </div>
     </div>
   );

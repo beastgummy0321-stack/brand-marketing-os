@@ -37,7 +37,12 @@ const SHORT: Record<LaunchSettingsError["code"], string> = {
 /** A typed amount as sent: empty = unset, anything else the number typed (never clamped or rounded). */
 const typedAmount = (text: string) => (text.trim() === "" ? null : Number(text));
 
-export function LaunchSettingsCard({ brandId, campaign, locked, onSaved, onCampaignSaved, onBlockerChange }: {
+export function LaunchSettingsCard(props: Parameters<typeof LaunchSettingsCardBody>[0]) {
+  const { scope } = useWorkspace();
+  return <LaunchSettingsCardBody key={JSON.stringify([scope, props.brandId, props.campaign.id])} {...props} />;
+}
+
+function LaunchSettingsCardBody({ brandId, campaign, locked, onSaved, onCampaignSaved, onBlockerChange, revision }: {
   brandId: string;
   campaign: Pick<CampaignDetail, "id" | "status" | "manual_handoff">;
   /** The launch is approved: every field is read only. */
@@ -47,13 +52,16 @@ export function LaunchSettingsCard({ brandId, campaign, locked, onSaved, onCampa
   onCampaignSaved: (campaign: CampaignDetail) => void;
   /** What keeps 核准上架清單 disabled right now, or null. */
   onBlockerChange?: (blocker: string | null) => void;
+  /** The list's coherent approval revision, never just a separately refreshed hash. */
+  revision?: { hash: string; values: Values };
 }) {
   const { scope } = useWorkspace();
-  const read = useApiRead((signal) => getLaunchSettings(brandId, campaign.id, signal), [brandId, campaign.id]);
+  const read = useApiRead((signal) => getLaunchSettings(brandId, campaign.id, signal), [brandId, campaign.id, revision?.hash]);
   const [view, setView] = useState<LaunchSettingsView | null>(null);
   const [draft, setDraft] = useState<Values | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [manualBlocker, setManualBlocker] = useState<string | null>(null);
   const latest = useRef<Values | null>(null);
   const inFlight = useRef(false);
   const again = useRef(false);
@@ -65,11 +73,16 @@ export function LaunchSettingsCard({ brandId, campaign, locked, onSaved, onCampa
 
   useEffect(() => {
     if (read.status !== "ready") return;
+    // A revision/options refresh cannot discard a newer unsent or failed user draft.
+    if (inFlight.current || (latest.current && view && !same(latest.current, view.values))) return;
     setView(read.data); setDraft(read.data.values); latest.current = read.data.values; setSaveError(null);
+    // view is the draft baseline, not another trigger to consume this response.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [read.status, read.data]);
 
   async function flush() {
     window.clearTimeout(timer.current);
+    timer.current = undefined;
     const sent = latest.current;
     if (!sent) return;
     if (inFlight.current) { again.current = true; return; }
@@ -103,10 +116,12 @@ export function LaunchSettingsCard({ brandId, campaign, locked, onSaved, onCampa
   const serverErrors = (view?.errors ?? []).filter((e) => e.field !== "utm");
   const headerError = utmBad ? "UTM 格式不對" : serverErrors[0] ? SHORT[serverErrors[0].code] : null;
   const blocker = read.status === "error" ? "投放設定讀不到，先按重試"
-    : !view || !draft ? "投放設定還在讀取"
+    : read.status === "loading" || !view || !draft ? "投放設定還在讀取"
     : headerError ? `${headerError}，先在「投放設定」改好`
     : saveError ? "投放設定還沒存好，先按重試"
-    : pending || saving ? "投放設定還在儲存" : null;
+    : pending || saving ? "投放設定還在儲存"
+    : revision && !same(draft, revision.values) ? "正在取得本版投放設定"
+    : manualBlocker;
   const report = useRef(onBlockerChange);
   report.current = onBlockerChange;
   useEffect(() => { report.current?.(blocker); }, [blocker]);
@@ -118,7 +133,7 @@ export function LaunchSettingsCard({ brandId, campaign, locked, onSaved, onCampa
     </div>
   );
 
-  if (read.status === "error") {
+  if (read.status === "error" && (!view || !draft)) {
     return <section aria-label="投放設定" className="surface px-[22px] py-5">{header()}
       <ReadFailed what={`投放設定讀不到：${read.error}。先不要核准，重試後再看一次。`} onRetry={read.reload} /></section>;
   }
@@ -142,6 +157,7 @@ export function LaunchSettingsCard({ brandId, campaign, locked, onSaved, onCampa
   return (
     <section aria-label="投放設定" data-slot="launch-settings-card" className="surface px-[22px] py-5">
       {header(right, !locked && headerError ? "error" : undefined)}
+      {read.status === "error" && <ReadFailed what={`投放設定讀不到：${read.error}。已填內容保留，先重試。`} onRetry={read.reload} />}
       <fieldset disabled={locked} className="contents">
         <SettingsGrid>
           <SettingField label="優化事件" htmlFor="set-optimization_event" tag={tag(draft.optimization_event, r.optimization_event)}
@@ -231,7 +247,8 @@ export function LaunchSettingsCard({ brandId, campaign, locked, onSaved, onCampa
                 {utmBad ? "格式不對：要像 utm_source=來源&utm_campaign=名稱，要有 utm_source，不能有空格" : "✓ 格式正確"}
               </p>
             </SettingField>
-            <ManualSettings embedded draftScope={scope} brandId={brandId} campaign={campaign} onSaved={onCampaignSaved} />
+            <ManualSettings embedded draftScope={scope} brandId={brandId} campaign={campaign}
+              onSaved={onCampaignSaved} onBlockerChange={setManualBlocker} />
           </fieldset>
         </Disclosure>
       </div>

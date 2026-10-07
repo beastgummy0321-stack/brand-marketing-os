@@ -5,6 +5,8 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getCampaign, getPublish, publishCampaign, type CampaignDetail } from "@/lib/adsApi";
+import { ApiResponseError } from "@/lib/http";
+import type { LaunchSettingsValues } from "@/lib/adsLaunchSettingsApi";
 import { reportHandoff } from "@/lib/adsHandoffApi";
 import {
   confirmAllLaunchFields, confirmLaunchItemField, fetchChannels, fetchLaunchView, readbackLaunch, unreportLaunchItem,
@@ -52,8 +54,16 @@ const ITEMS: LaunchItem[] = [
     { key: "name", label: "名稱", value: LONG }, { key: "group", label: "放在", value: "A・廣泛受眾" },
     { key: "material", label: "素材", value: "已確認版本・圖片 1 張" }] }),
 ];
+const EFFECTIVE: LaunchSettingsValues = {
+  optimization_event: "purchase", bid_strategy: "lowest_cost", placement: { mode: "auto", positions: [] },
+  audience: { age_min: 18, age_max: 65, gender: "all", countries: ["TW"] }, pixel_id: null,
+  utm: "utm_source=meta&utm_campaign=fall",
+};
+const publishRevision = (hash = "hash_1") => ({ adapters: [], adapter: "manual" as const,
+  describe: { adapter: "manual" as const, message: null, checklist: [], content_hash: hash, launch_settings: EFFECTIVE } });
 function view(o: Partial<LaunchView> = {}): LaunchView {
   return {
+    content_hash: "hash_1", launch_settings: EFFECTIVE,
     step: "list", version: null, approved_at: null,
     summary: { campaigns: 1, groups: 1, ads: 1, daily_total: 1500.5, start: "2026-10-01", end: "2026-10-31", cap: null, slots_ready: 1, slots_total: 2 },
     items: ITEMS, deferred_ads: [{ ad_id: "ad_9", name: "秋季新色預告・直式 9:16", group_name: "A・廣泛受眾" }],
@@ -94,7 +104,7 @@ beforeEach(() => {
   sessionStorage.clear();
   vi.mocked(getCampaign).mockResolvedValue(CAMPAIGN);
   vi.mocked(fetchChannels).mockResolvedValue([{ key: "meta", label: "Meta", connected: true, state_text: "已接上" }]);
-  vi.mocked(getPublish).mockResolvedValue({ adapters: [], adapter: "manual", describe: { adapter: "manual", message: null, checklist: [], content_hash: "hash_1" } } as never);
+  vi.mocked(getPublish).mockResolvedValue(publishRevision());
 });
 
 describe("確認上架清單", () => {
@@ -121,7 +131,7 @@ describe("確認上架清單", () => {
   });
 
   it("approves the content on screen once, then moves to 到平台完成 only after the server answered", async () => {
-    vi.mocked(fetchLaunchView).mockResolvedValueOnce(view()).mockResolvedValueOnce(approvedView());
+    vi.mocked(fetchLaunchView).mockResolvedValueOnce(view()).mockResolvedValueOnce(view()).mockResolvedValueOnce(approvedView());
     vi.mocked(publishCampaign).mockResolvedValue({ adapter: "manual", message: null, checklist: [] });
     renderAt("list");
     const approve = await screen.findByRole("button", { name: "核准上架清單 →" });
@@ -149,7 +159,8 @@ describe("確認上架清單", () => {
     const approve = await screen.findByRole("button", { name: "核准上架清單 →" });
     await waitFor(() => expect((approve as HTMLButtonElement).disabled).toBe(false));
     const reads = vi.mocked(getPublish).mock.calls.length;
-    vi.mocked(getPublish).mockResolvedValue({ adapters: [], adapter: "manual", describe: { adapter: "manual", message: null, checklist: [], content_hash: "hash_2" } } as never);
+    vi.mocked(getPublish).mockResolvedValue(publishRevision("hash_2"));
+    vi.mocked(fetchLaunchView).mockResolvedValue(view({ content_hash: "hash_2" }));
     fireEvent.click(screen.getByRole("button", { name: "存各廣告組的其他設定" }));
     await waitFor(() => expect(vi.mocked(getPublish).mock.calls.length).toBe(reads + 1));
     vi.mocked(publishCampaign).mockResolvedValue({ adapter: "manual", message: null, checklist: [] });
@@ -160,13 +171,14 @@ describe("確認上架清單", () => {
 
   it("F47-I06 (Q5): a 409 because the content moved says the settings just changed and reads it again", async () => {
     vi.mocked(fetchLaunchView).mockResolvedValue(view());
-    vi.mocked(publishCampaign).mockRejectedValueOnce(new Error("計畫、素材或月份已改變，請重新檢視後核准。"));
+    vi.mocked(publishCampaign).mockRejectedValueOnce(new ApiResponseError("計畫、素材或月份已改變，請重新檢視後核准。", 409));
     renderAt("list");
     const approve = await screen.findByRole("button", { name: "核准上架清單 →" });
     await waitFor(() => expect((approve as HTMLButtonElement).disabled).toBe(false));
-    vi.mocked(getPublish).mockResolvedValue({ adapters: [], adapter: "manual", describe: { adapter: "manual", message: null, checklist: [], content_hash: "hash_2" } } as never);
+    vi.mocked(getPublish).mockResolvedValue(publishRevision("hash_2"));
+    vi.mocked(fetchLaunchView).mockResolvedValue(view({ content_hash: "hash_2" }));
     fireEvent.click(approve);
-    expect((await screen.findByRole("alert")).textContent).toBe("設定剛改過，已重新讀取，請再按一次核准");
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toBe("設定剛改過，已重新讀取，請再按一次核准"));
     vi.mocked(publishCampaign).mockResolvedValue({ adapter: "manual", message: null, checklist: [] });
     await waitFor(() => expect((approve as HTMLButtonElement).disabled).toBe(false));
     fireEvent.click(approve);

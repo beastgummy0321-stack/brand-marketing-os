@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, Navigate, useNavigate } from "react-router-dom";
 import { Breadcrumb } from "@/components/layout/Breadcrumb";
+import { useWorkspace } from "@/components/layout/WorkspaceContext";
 import { Skeleton } from "@/components/layout/Skeleton";
 import { Button } from "@/components/layout/ui/button";
 import { getCampaign, type CampaignDetail } from "@/lib/adsApi";
@@ -20,6 +21,11 @@ import { PublishCampaignContext, allowsStep, campaignPath, launchLabel, launchPl
  * The campaign, the launch view and the channel list are separate reads that fail on their own. Nothing on this page
  * writes to a platform. */
 export function PublishPage({ brandId, campaignId, step }: { brandId: string; campaignId: string; step?: string }) {
+  const { scope } = useWorkspace();
+  return <PublishPageBody key={JSON.stringify([scope, brandId, campaignId])} brandId={brandId} campaignId={campaignId} step={step} />;
+}
+
+function PublishPageBody({ brandId, campaignId, step }: { brandId: string; campaignId: string; step?: string }) {
   const navigate = useNavigate();
   const campaignRead = useApiRead(() => getCampaign(brandId, campaignId), [brandId, campaignId]);
   const channels = useApiRead(() => fetchChannels(brandId), [brandId]);
@@ -32,6 +38,8 @@ export function PublishPage({ brandId, campaignId, step }: { brandId: string; ca
   const [moving, setMoving] = useState(false);
   const [staleOutcome, setStaleOutcome] = useState<LaunchOutcome | null>(null);
   const [moveError, setMoveError] = useState<string | null>(null);
+  const alive = useRef(true);
+  useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
 
   const home = `/brands/${encodeURIComponent(brandId)}/ads`;
   const name = campaign?.name ?? view?.items.find((i) => i.kind === "campaign")?.name ?? "活動";
@@ -41,9 +49,9 @@ export function PublishPage({ brandId, campaignId, step }: { brandId: string; ca
   // Approval and the batch readback move the page on only once the server answered with the new step.
   const moveTo = useCallback(async (read: () => Promise<LaunchView>, target: "platform" | "verify") => {
     setMoving(true); setMoveError(null);
-    try { setView(await read()); navigate(publishPath(brandId, campaignId, target)); }
-    catch (err) { setMoveError(err instanceof Error ? err.message : "讀取上架清單失敗。"); }
-    finally { setMoving(false); }
+    try { const next = await read(); if (alive.current) { setView(next); navigate(publishPath(brandId, campaignId, target)); } }
+    catch (err) { if (alive.current) setMoveError(err instanceof Error ? err.message : "讀取上架清單失敗。"); }
+    finally { if (alive.current) setMoving(false); }
   }, [brandId, campaignId, navigate]);
 
   const wrap = (body: ReactNode) => (
@@ -81,7 +89,11 @@ export function PublishPage({ brandId, campaignId, step }: { brandId: string; ca
       {moveNote}
       <PublishList brandId={brandId} campaignId={campaignId} name={name} campaign={campaign} campaignFailed={campaignFailed}
         onCampaignRetry={campaignRead.reload} onCampaignSaved={(c) => { setCampaign(c); launchRead.reload(); }}
+        pendingReason={campaignRead.status === "loading" ? "活動資料還在讀取"
+          : launchRead.status === "loading" ? "上架清單還在讀取"
+          : launchRead.status === "error" ? "上架清單讀不到，先按重試" : null}
         view={view} onApproved={() => void moveTo(() => fetchLaunchView(brandId, campaignId), "platform")} />
+      {launchRead.status === "error" && <ReadFailed what={`上架清單讀不到：${launchRead.error}`} onRetry={launchRead.reload} />}
     </>);
   }
   if (step === "platform" && view.step === "stale") {

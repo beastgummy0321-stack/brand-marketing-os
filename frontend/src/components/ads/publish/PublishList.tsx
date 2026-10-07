@@ -1,9 +1,11 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { Button } from "@/components/layout/ui/button";
 import { getPublish, publishCampaign, type CampaignDetail } from "@/lib/adsApi";
+import { useWorkspace } from "@/components/layout/WorkspaceContext";
+import { ApiResponseError } from "@/lib/http";
 import type { MonthlyBudget } from "@/lib/adsChangeApi";
-import type { LaunchMonthBudget, LaunchView } from "@/lib/adsLaunchApi";
+import { fetchLaunchView, type LaunchMonthBudget, type LaunchView } from "@/lib/adsLaunchApi";
 import { getOrgId } from "@/lib/auth";
 import { useApiRead, type ApiRead } from "@/lib/useApiRead";
 import { cn } from "@/lib/utils";
@@ -46,7 +48,12 @@ function monthRead(block: LaunchMonthBudget): ApiRead<MonthlyBudget | null> {
   return { status: "ready", data: block, error: null, reload: () => {} };
 }
 
-export function PublishList({ brandId, campaignId, name, campaign, campaignFailed, onCampaignRetry, onCampaignSaved, view, onApproved }: {
+export function PublishList(props: Parameters<typeof PublishListBody>[0]) {
+  const { scope } = useWorkspace();
+  return <PublishListBody key={JSON.stringify([scope, props.brandId, props.campaignId])} {...props} />;
+}
+
+function PublishListBody({ brandId, campaignId, name, campaign, campaignFailed, onCampaignRetry, onCampaignSaved, view: initialView, onApproved, pendingReason }: {
   brandId: string;
   campaignId: string;
   name: string;
@@ -58,33 +65,59 @@ export function PublishList({ brandId, campaignId, name, campaign, campaignFaile
   view: LaunchView;
   /** The server confirmed the approval; the page reads the launch again and moves on. */
   onApproved: () => void;
+  pendingReason?: string | null;
 }) {
+  // The hash cannot move independently of the complete displayed list and effective settings.
+  const initialApproved = initialView.step !== "list";
+  const revisionRead = useApiRead(async (signal) => {
+    if (initialApproved) return null;
+    const described = (await getPublish(brandId, campaignId, "manual")).describe;
+    if (signal.aborted) throw new DOMException("The old list read was aborted", "AbortError");
+    const next = await fetchLaunchView(brandId, campaignId);
+    if (!described.content_hash || !described.launch_settings ||
+      described.content_hash !== next.content_hash ||
+      JSON.stringify(described.launch_settings) !== JSON.stringify(next.launch_settings)) {
+      throw new Error("清單在讀取時又改過，請重新讀取後再核准。");
+    }
+    return { view: next, settings: described.launch_settings, hash: described.content_hash };
+  }, [brandId, campaignId, initialApproved]);
+  const [lastRevision, setLastRevision] = useState<typeof revisionRead.data>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  useEffect(() => {
+    if (revisionRead.status === "ready") { setLastRevision(revisionRead.data); setRefreshing(false); }
+  }, [revisionRead.status, revisionRead.data]);
+  const revision = revisionRead.data ?? lastRevision;
+  const view = revision?.view ?? initialView;
   const approved = view.step !== "list";
   const { summary: s } = view;
-  // The approval hash is read with the list, and again after every settings save — the launch settings and 「各廣告組
-  // 的其他設定」 alike (F47-I06, Q5) — so the approval freezes what is on screen (a save changes the launch content).
-  const [hashSeq, setHashSeq] = useState(0);
-  const hashRead = useApiRead(
-    () => (approved ? Promise.resolve(null) : getPublish(brandId, campaignId, "manual").then((r) => r.describe.content_hash ?? null)),
-    [brandId, campaignId, approved, hashSeq],
-  );
+  const refresh = () => { setRefreshing(true); revisionRead.reload(); };
+  const pendingWrite = useRef(false);
+  const alive = useRef(true);
+  useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
+  const [refusedHash, setRefusedHash] = useState<string | null>(null);
+  const hash = !refreshing && revisionRead.status === "ready" ? revision?.hash ?? null : null;
   const [settingsBlocker, setSettingsBlocker] = useState<string | null>("投放設定還在讀取");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  const hash = hashRead.status === "ready" ? hashRead.data : null;
+  useEffect(() => {
+    if (refusedHash && revisionRead.status === "ready" && revision && revision.hash !== refusedHash) {
+      setError("設定剛改過，已重新讀取，請再按一次核准");
+      setRefusedHash(null);
+    }
+  }, [refusedHash, revisionRead.status, revision]);
   const month = approved ? null : view.month_budget ?? null;
   const pageBlocker = campaignFailed ? "活動資料讀不到，先按重試"
-    : settingsBlocker
+    : pendingReason ?? settingsBlocker
     ?? (s.ads === 0 ? "還沒有任何一則廣告的素材就緒，先到素材補圖"
-      : hashRead.status === "error" ? "核准內容讀不到，請重新開啟本頁"
+      : revisionRead.status === "error" ? "核准內容讀不到，先按重試"
       : !hash ? "正在取得本版核准內容" : null);
   // F41-I05: the month rule has one owner (the backend's launch preflight); its reason is printed verbatim, last.
   const monthBlocker = month?.blocker_text ?? null;
   const blocker = pageBlocker ?? monthBlocker;
 
   async function approve() {
-    if (busy || blocker || !hash) return;
+    if (pendingWrite.current || busy || blocker || !hash) return;
+    pendingWrite.current = true;
     setBusy(true); setError(null);
     try {
       // One operation per approved content: a retried click reuses it, so the server never records two approvals.
@@ -92,14 +125,15 @@ export function PublishList({ brandId, campaignId, name, campaign, campaignFaile
       const operation = sessionStorage.getItem(key) ?? crypto.randomUUID();
       sessionStorage.setItem(key, operation);
       await publishCampaign(brandId, campaignId, "manual", { content_hash: hash, operation_id: operation });
-      onApproved();
+      if (alive.current) onApproved();
     } catch (err) {
       // F47-I06 (Q5): when the content moved under the click (a setting saved a moment ago), the approval hash is
       // read again and the sentence says so; any other refusal keeps the server's own sentence.
-      const fresh = await getPublish(brandId, campaignId, "manual").then((r) => r.describe.content_hash ?? null).catch(() => null);
-      setError(fresh && fresh !== hash ? "設定剛改過，已重新讀取，請再按一次核准" : err instanceof Error ? err.message : "核准失敗，請稍後再試。");
-      setHashSeq((n) => n + 1);
-    } finally { setBusy(false); }
+      if (!alive.current) return;
+      setError(err instanceof Error ? err.message : "核准失敗，請稍後再試。");
+      if (err instanceof ApiResponseError && err.status === 409) setRefusedHash(hash);
+      onCampaignRetry(); refresh();
+    } finally { pendingWrite.current = false; if (alive.current) setBusy(false); }
   }
 
   const cap = campaign ? capTile(campaign) : null;
@@ -128,8 +162,9 @@ export function PublishList({ brandId, campaignId, name, campaign, campaignFaile
 
       {campaign ? (
         <LaunchSettingsCard brandId={brandId} campaign={campaign} locked={approved}
-          onSaved={() => setHashSeq((n) => n + 1)} onBlockerChange={setSettingsBlocker}
-          onCampaignSaved={(saved) => { onCampaignSaved(saved); setHashSeq((n) => n + 1); }} />
+          revision={revision ? { hash: revision.hash, values: revision.settings } : undefined}
+          onSaved={refresh} onBlockerChange={setSettingsBlocker}
+          onCampaignSaved={(saved) => { onCampaignSaved(saved); refresh(); }} />
       ) : campaignFailed ? (
         <section aria-label="投放設定" className="surface px-[22px] py-5">
           <h2 className="mb-3.5 text-base font-semibold">投放設定</h2>
@@ -162,6 +197,7 @@ export function PublishList({ brandId, campaignId, name, campaign, campaignFaile
       </section>
 
       {error && <p role="alert" className="text-sm text-danger">{error}</p>}
+      {revisionRead.status === "error" && <ReadFailed what={`核准內容讀不到：${revisionRead.error}`} onRetry={refresh} />}
       {approved ? (
         <ActionBar back={{ label: "素材", to: `${campaignPath(brandId, campaignId)}?tab=assets` }}>
           <Button asChild><Link to={publishPath(brandId, campaignId, "platform")}>到平台完成 →</Link></Button>

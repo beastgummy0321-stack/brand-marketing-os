@@ -2,15 +2,16 @@
  * reported one, earlier steps stay reachable, a stale launch is decided on the platform step (F28 panel), an imported
  * campaign has no publish page, and a failed read is its own state with 重試. Step bodies are covered in
  * `publish/PublishFlow.test.tsx`. */
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useLocation, useParams } from "react-router-dom";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { getCampaign, type CampaignDetail } from "@/lib/adsApi";
 import { getHandoff } from "@/lib/adsHandoffApi";
 import { fetchChannels, fetchLaunchView, type LaunchStep, type LaunchView } from "@/lib/adsLaunchApi";
 import { PublishPage } from "./PublishPage";
+const workspace = vi.hoisted(() => ({ scope: "user:org" }));
 // F50 Contract K: the org clock reads the workspace org zone; dates assert Asia/Taipei output, never the runner's.
-vi.mock("@/components/layout/WorkspaceContext", () => ({ useWorkspace: () => ({ scope: "user:org", identity: { user: { id: "u", email: "a@example.com" }, org: { id: "o", name: "測試", kind: "personal", role: "owner", timezone: "Asia/Taipei", today: "2026-10-01" }, orgs: [] } }) }));
+vi.mock("@/components/layout/WorkspaceContext", () => ({ useWorkspace: () => ({ scope: workspace.scope, identity: { user: { id: "u", email: "a@example.com" }, org: { id: "o", name: "測試", kind: "personal", role: "owner", timezone: "Asia/Taipei", today: "2026-10-01" }, orgs: [] } }) }));
 
 vi.mock("@/lib/adsApi", async () => {
   const actual = await vi.importActual<typeof import("@/lib/adsApi")>("@/lib/adsApi");
@@ -55,9 +56,16 @@ function renderAt(path: string) {
 const where = () => screen.getByTestId("where").textContent;
 const base = "/brands/brd_1/ads/campaigns/cmp_1/publish";
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
 afterEach(cleanup);
 beforeEach(() => {
   vi.clearAllMocks();
+  workspace.scope = "user:org";
   vi.mocked(getCampaign).mockResolvedValue(CAMPAIGN);
   vi.mocked(fetchChannels).mockResolvedValue([{ key: "meta", label: "Meta", connected: true, state_text: "已接上" }]);
 });
@@ -135,4 +143,25 @@ it("F47-I06: the crumb says 首次上架 only for a first launch — a later per
   vi.mocked(fetchLaunchView).mockResolvedValue({ ...view("platform"), version: 2 });
   renderAt(`${base}/platform`);
   expect(await screen.findByText("第 2 版上架", { exact: true })).toBeTruthy();
+});
+
+it("workspace changes discard both late campaign and launch reads from the previous owner", async () => {
+  const oldCampaign = deferred<CampaignDetail>();
+  const oldLaunch = deferred<LaunchView>();
+  vi.mocked(getCampaign).mockReturnValueOnce(oldCampaign.promise).mockResolvedValue({ ...CAMPAIGN, name: "目前組織的活動" });
+  vi.mocked(fetchLaunchView).mockReturnValueOnce(oldLaunch.promise).mockResolvedValue(view("platform"));
+  const element = () => <MemoryRouter><PublishPage brandId="brd_1" campaignId="cmp_1" step="platform" /></MemoryRouter>;
+  const rendered = render(element());
+  await waitFor(() => expect(getCampaign).toHaveBeenCalledTimes(1));
+  workspace.scope = "other-user:other-org";
+  rendered.rerender(element());
+  expect(await screen.findByRole("heading", { name: "到平台完成" })).toBeTruthy();
+  expect(screen.getAllByText("目前組織的活動").length).toBeGreaterThan(0);
+  await act(async () => {
+    oldCampaign.resolve({ ...CAMPAIGN, origin: "imported", name: "先前組織的活動" });
+    oldLaunch.resolve(view("verify"));
+  });
+  expect(screen.getByRole("heading", { name: "到平台完成" })).toBeTruthy();
+  expect(screen.queryByText("先前組織的活動")).toBeNull();
+  expect(screen.queryByRole("link", { name: "前往自帶素材安排" })).toBeNull();
 });
