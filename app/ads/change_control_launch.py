@@ -578,9 +578,31 @@ def _rows(original, current):
                           "slot_id": "策略位置", "carry_from_ad_id": "沿用廣告"}
                 changed = [label for key, label in labels.items()
                            if assignment_before.get(key) != assignment_after.get(key)]
+                changed_keys = [key for key in labels
+                                if assignment_before.get(key) != assignment_after.get(key)]
+                before_value, after_value = "核准時的指派", "指派已修改，需重新核准"
+                if changed_keys == ["scene"]:
+                    before_value = assignment_before.get("scene")
+                    after_value = assignment_after.get("scene")
+                elif changed_keys == ["role"]:
+                    role_labels = {"new": "新客", "retarget": "再行銷", "explore": "探索"}
+                    before_value = role_labels.get(str(assignment_before.get("role") or ""),
+                                                   "角色未讀到")
+                    after_value = role_labels.get(str(assignment_after.get("role") or ""),
+                                                  "角色未讀到")
+                elif changed_keys == ["customer_group_id"]:
+                    before_value = ("已指定顧客群（名稱未讀到）" if assignment_before.get(
+                        "customer_group_id") else "未指定顧客群")
+                    after_value = ("已改用顧客群（名稱未讀到）" if assignment_after.get(
+                        "customer_group_id") else "未指定顧客群")
+                elif ("offer_key" in changed_keys
+                      and set(changed_keys) <= {"offer_key", "coordinates"}):
+                    before_value = ("沒有優惠" if assignment_before.get("offer_key") == "none"
+                                    else "原優惠名稱未讀到")
+                    after_value = ("沒有優惠" if assignment_after.get("offer_key") == "none"
+                                   else "已修改優惠（名稱未讀到）")
                 add("ad", ad_id, ad_name, "strategy_assignment",
-                    "策略指派（" + "、".join(changed) + "）", "核准時的指派",
-                    "指派已修改，需重新核准")
+                    "策略指派（" + "、".join(changed) + "）", before_value, after_value)
             text_changed = False
             for key, label in _AD_FIELDS:
                 if ad_before.get(key) != ad_after.get(key):

@@ -401,13 +401,15 @@ class LaunchStaleTest(unittest.TestCase):
         self.assertEqual(ad_proof["status"], "confirmed", ad_proof["evidence_json"])
         self.assertEqual(ad_proof["evidence_json"]["material_evidence"], "unknown")
         material_before = items["ad"]["expected_json"]
-        self.sql("UPDATE ads_ad SET scene='Changed actual situation',updated_at=now() WHERE id=%s",
+        self.sql("UPDATE ads_ad SET scene='下班在健身房門口準備今天的訓練補給',"
+                 "updated_at=now() WHERE id=%s",
                  self.ad)
         stale = self.workspace()["launch_stale"]
         self.assertEqual([row["field"] for row in stale["diff"]], ["strategy_assignment"])
         self.assertIn("讀者情境", stale["diff"][0]["field_label"])
-        self.assertIsInstance(stale["diff"][0]["before"], str)
+        self.assertIsNone(stale["diff"][0]["before"])
         self.assertIsInstance(stale["diff"][0]["after"], str)
+        self.assertEqual(stale["diff"][0]["after"], "下班在健身房門口準備今天的訓練補給")
         self.assertFalse(stale["revertible"])
         with patch.object(change_control_launch.month_budget, "preflight",
                           return_value={"can_increase": True}):
@@ -420,7 +422,7 @@ class LaunchStaleTest(unittest.TestCase):
                          material_before["asset_sha256"])
         self.assertEqual(now["ad"]["expected_json"]["copy_hash"], material_before["copy_hash"])
         self.assertEqual(now["ad"]["expected_json"]["strategy_assignment"]["scene"],
-                         "Changed actual situation")
+                         "下班在健身房門口準備今天的訓練補給")
         self.assertEqual(now["ad"]["status"], "confirmed")
         self.assertEqual(now["ad"]["entity_id"], ad_proof["entity_id"])
         self.assertEqual(now["ad"]["evidence_json"], ad_proof["evidence_json"])
