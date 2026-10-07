@@ -2155,7 +2155,10 @@ Audit W15, W16, W18, W19; W18's wizard contract is in `intake.md` under F51. Rul
 
 ### 6.54 Drill 12 remediation contracts (F52, planned 2026-10-06)
 
-Status: execution plan approved by the user on 2026-10-06; implementation and verification pending.
+Status (2026-10-07): all 24 F52 repair issues are implemented and locally merged with scoped
+checks and independent reviews. Final integration/drill/human acceptance is deferred by the
+user's pause instruction. The heading retains its planning date and link anchor; it is not a
+claim that all acceptance scenarios or quality thresholds have passed.
 [F52](../../.work/features/F52.md) owns the queue;
 [finding disposition](../drills/drill-12/remediation-findings.md) owns evidence reconciliation;
 [acceptance A01–A14](../drills/drill-12/acceptance.md) owns executable examples and final gates.

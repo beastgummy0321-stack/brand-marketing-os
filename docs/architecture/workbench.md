@@ -385,7 +385,10 @@ pack, and `free_parse` returns its fallback `reason` and `error_code` (「AI 這
 
 ### 5.18 Drill 12 creative and control contracts (F52, planned 2026-10-06)
 
-Status: execution plan approved by the user on 2026-10-06; implementation and independent quality proof are outstanding.
+Status (2026-10-07): the F52 repair queue is implemented and locally merged with scoped checks
+and independent reviews. Fresh integrated creative quality and human acceptance remain
+unverified; the user requested a pause before the next full round. The historical heading/link
+anchor is retained, and the quality contract below is not waived.
 [F52](../../.work/features/F52.md), [findings](../drills/drill-12/remediation-findings.md) and
 [acceptance A02/A03/A10](../drills/drill-12/acceptance.md) define ownership and verification.
 

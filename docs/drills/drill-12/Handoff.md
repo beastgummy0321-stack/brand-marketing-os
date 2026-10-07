@@ -1,24 +1,27 @@
 # 演練 12 修復交接
 
-## Execution update — 2026-10-06
+## Execution update — 2026-10-07
 
-The user approved the supervisor's presented F52 scope, 24-ticket order, delegation and acceptance
-with "開始". Harness execution authorization is recorded and the feature branch has started.
-The planning-only statements below describe the original handoff, not the current authorization.
-Implementation and acceptance remain pending; original evidence and F48–F51 stay unchanged/open.
+All 24 F52 repair issues are DONE and locally merged on `codex/drill12-system-contracts`.
+Latest repair merge HEAD: `2559254e1bc63c5594f2b67d508897aefecf9c86`.
+The newest user instruction is to pause after repairs and report progress, without beginning
+the next complete test round. Harness F52 authorization is revoked at this safe point.
+Repair queue progress is 24/24 (100%); final integration, independent three-period/control/fault/
+quality acceptance and human acceptance remain deferred. F52 and F48–F51 stay open.
 
-Beast，這份交接只完成系統規劃；尚未開始施工、監工、產品測試或審核。
+24 張修復票已完成施工、必要檢查、獨立審查與本機合併，目前暫停。
+這個 100% 只代表已規劃修復票全部完成；完整驗證尚未執行，原演練不能改判通過。
 
 ## 下一個 session 先讀
 
-1. [F52 計畫書](../../../.work/features/F52.md)：範圍、24 張工作票、先後順序與未授權狀態。
+1. [F52 計畫書](../../../.work/features/F52.md)：範圍、24 張已完成工作票與目前暫停邊界。
 2. [問題核對表](remediation-findings.md)：36 個項目的證據、糾錯與負責票號。
 3. [驗收標準](acceptance.md)：A01–A14，包含完整三期、數字對帳、故障復原與畫面驗收。
 4. 只按接手工作閱讀領域規格：[投放中心](../../architecture/ads.md#654-drill-12-remediation-contracts-f52-planned-2026-10-06)、
    [素材工作檯](../../architecture/workbench.md#518-drill-12-creative-and-control-contracts-f52-planned-2026-10-06)、
    [建檔](../../architecture/intake.md#f52-drill-12-policy-and-source-attribution-contracts-planned-2026-10-06)。
 
-工作票已寫在 `.work/ready/F52-I01.md` 至 `F52-I24.md`。
+工作票在 `.work/done/F52-I01.md` 至 `F52-I24.md`；沒有待做或施工中的 F52 修復票。
 規劃文件與票使用英文，方便其他 Agent 依同一份明確規格施工。
 
 ## 核心修復方向
@@ -45,23 +48,33 @@ Beast，這份交接只完成系統規劃；尚未開始施工、監工、產品
 
 接手 Agent 擔任監工，按票分配 Coding、檢驗與獨立審核 Agent。
 施工者不能兼任自己重要變更的獨立審核者。監工維護票與範圍、安排隔離環境、
-合併與完整整合；最後將所有畫面並排與新演練結果一次交給使用者。
+合併與證據保存。未來獲得明確恢復指示後，才進行完整整合與新演練。
 
-本次只授權規劃。貼上下面的開場後，才由新 session 按其中的明確指示啟動。
-若只請接手者讀文件，不能把文件中的 ready 狀態當成開工許可。
+先前的「開始」已授權並完成整批修復；使用者後來要求修完即停。
+不能沿用舊的整批授權，自動啟動下一輪完整驗證。只讀交接不等於恢復執行。
 F48–F51 保持未結案；F52 也不代替它們的人工驗收。
 
-## 開工前確認
+## 恢復完整驗證前確認
 
-- 規劃基準：`84a5640a`；所在分支：`feature/audit-d-http-figures-wizard-platform`。
-- 預定施工分支：`codex/drill12-system-contracts`，此 session 尚未建立。
+- 歷史規劃基準：`84a5640a`；目前分支：`codex/drill12-system-contracts`。
+- 修復合併版本：`2559254e1bc63c5594f2b67d508897aefecf9c86`；其後只更新這次暫停交接。
 - 重新查看 Git 現況、現有工作與服務擁有者；不要直接使用舊報告的程序編號。
 - Harness 使用本 session 主機載入的插件位置。沒有狀態注入才依 CLAUDE.md 查狀態。
-- 未改產品程式、資料庫、服務或舊演練證據；未 commit、merge、push。
+- 修復已在本機 commit、merge；未 push，未操作真實投放，原演練證據未改。
+- 修復預覽已停止。完整整合、新三期演練、真正登入過期、控制項與故障驗收仍待恢復後執行。
 - 最後門檻仍是九項各至少 7 分、擋路缺陷 0 個；未達即保留開啟，
   不用平均分數、局部補測或佇列完成冒充結案。
 - 不操作真實投放、不要求使用者花錢跑廣告、不啟用付費圖片服務。
 
 ## 可直接貼到新 session 的開場
 
-> 讀取 D:\0UserProfile\Desktop\marketing\docs\drills\drill-12\Handoff.md 與其指向的 F52 計畫。我核准這份 F52 的範圍、24 張票順序與驗收標準。由你擔任監工，安排其他 Agent 分別施工、檢驗與獨立審核，依 Harness 執行整批；不要讓施工者自審。保留演練 12 原始證據與 F48–F51 未結案狀態，完成後交付整合結果、畫面並排及新的九面向演練報告。不得 push、操作真實投放或以未測項目冒充通過；只有會改變產品決策或擴大範圍的事項才回來問我。
+> 讀取 D:\0UserProfile\Desktop\marketing\docs\drills\drill-12\Handoff.md 與其指向的 F52 計畫。24 張修復票已完成，目前暫停。先核對目前版本與未驗證清單並回報，不重做已完成修復，也不啟動完整整合或新演練；等待我明確要求恢復。保留原始證據與 F48–F52 未結案狀態，不 push、不操作真實投放。
+
+## 最後一張修復的交件位置
+
+- 最後修復來源：`87d67a54`；必要檢查為資料端 69 項與 5 子案例、前端 131 項，以及程式與建置檢查。
+- 獨立審查：`.harness/scratch/f52/reviews/I14-87d67a54.json`，兩軸皆 CLEAR、0 項問題。
+- 固定來源、原始紀錄、畫面與並排：`.harness/scratch/f52/tests/I14-87d67a54-receipts/`。
+- 本張合併檢查：`.harness/scratch/f52/tests/I14-87d67a54-merge/`，8 項通過。
+- 畫面證據是本機隔離資料與登入替身；一般對照為資料缺漏畫面，完整 Live 金額分支另有元件檢查。
+  不能宣稱真正 Auth、Meta、模型、三期品質、完整控制項或人工驗收已通過。

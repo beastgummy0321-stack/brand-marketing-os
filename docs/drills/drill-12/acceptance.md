@@ -1,13 +1,16 @@
 # F52 acceptance specification
 
-Status: planned, not executed. This is the acceptance contract for the drill-12 remediation,
-not a revision to drill-12 scores. Product contract choices live in the domain architecture
-pages; this file owns test scenarios and evidence requirements.
+Status (2026-10-07): the 24-ticket repair queue is implemented and locally merged with scoped
+checks, independent reviews and bounded UI evidence. The user requested pausing after repairs;
+final integrated acceptance and the next three-period/control/fault/quality round are deferred.
+No A01–A14 whole-clause pass or revised drill-12 score is implied. This remains the mandatory
+acceptance contract; product choices live in domain architecture pages.
 
 ## Roles and admission
 
-The next session supplies a supervisor, implementation workers, a verifier and an independent
-reviewer. The strategic planner of this session performs none of those runtime roles.
+The authorized repair execution used a supervisor, implementation workers and independent
+reviewers. Resuming final acceptance requires an explicit new instruction and these separated
+roles; the latest pause overrides the earlier whole-queue/drill approval.
 Workers may not approve their own material money/interface/security changes. The supervisor
 owns queue metadata, merges, scope adjustments and one combined acceptance presentation.
 
@@ -243,4 +246,3 @@ and human approval must be labelled separately. All acceptance clauses link to e
 failure. F48–F51 retain their existing open/human items; F52 does not close them by implication.
 Only explicit user acceptance of the combined result can satisfy human items. No push, real
 platform writes, paid service activation or request for the user to run live ads.
-

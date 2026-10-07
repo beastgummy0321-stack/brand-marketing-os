@@ -265,7 +265,9 @@ regressions and the frontend figure guard cover this drill-12 money-stop repair;
 
 ### F52 Drill 12 policy and source attribution contracts (planned 2026-10-06)
 
-Status: execution plan approved by the user on 2026-10-06; implementation and verification pending.
+Status (2026-10-07): the F52 repair queue is implemented and locally merged with scoped checks
+and independent reviews. Integrated/fault/human acceptance remains unverified, and the user
+requested a pause before the next full round. The historical heading/link anchor is retained.
 [F52](../../.work/features/F52.md) and [acceptance A11/A12](../drills/drill-12/acceptance.md)
 are the queue and evidence criteria. Existing user confirmation and claim decisions remain.
 

@@ -8,6 +8,12 @@ This ledger reconciles the four drill-12 documents with their linked operator, p
 and fault records. Historical observations remain immutable. F52 owns the follow-up, not a
 retroactive pass for drill 12. Issue numbers below mean F52-Ixx.
 
+Repair execution update — 2026-10-07: all 24 F52 repair issues were locally merged at
+`2559254e1bc63c5594f2b67d508897aefecf9c86` with scoped checks and independent reviews.
+The ledger classifications below remain the original evidence dispositions, not fresh acceptance
+verdicts. The user requested a pause after repairs: full integration and the next independent
+three-period/control/fault/quality round are deferred. F52 and F48–F51 remain open.
+
 Classification: **O** observed unresolved defect; **C** source-confirmed mechanism;
 **H** hypothesis requiring a discriminating reproduction; **R** repaired in the baseline,
 regression only; **V** verification gap; **X** tool/fixture limit or explicitly unsupported capability.
@@ -72,4 +78,3 @@ Raw root: `.harness/scratch/drill12/`. Read `B/run_1.md`, `run_2.md`, `run_3.md`
 `operator/{p2-strategy-root-cause,prefill-root-cause}.md`; `blind/verdict.md`.
 The originals, fake state, scores and exports must not be edited to make F52 pass.
 The 143-file / 113-JPEG integrity receipt is historical evidence, not a new check by this planning session.
-
