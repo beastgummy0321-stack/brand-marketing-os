@@ -265,3 +265,50 @@ it("queued edits stay visible while earlier PUT and revision reads settle; only 
   await user.click(approve());
   expect(publishCampaign).toHaveBeenCalledWith("brd", "cmp", "manual", expect.objectContaining({ content_hash: "last-revision" }));
 });
+
+it.each(["newer", "older"])("a later successful child read has a visible read-only exit to a complete current pair before a new click (%s child)", async (direction) => {
+  const child = deferred<LaunchSettingsView>();
+  vi.mocked(getLaunchSettings).mockReturnValue(child.promise);
+  if (direction === "older") {
+    const newer = { ...VALUES, pixel_id: "px2" };
+    vi.mocked(getPublish).mockResolvedValue(publish("newer-pair", newer));
+    vi.mocked(fetchLaunchView).mockResolvedValue(launch("newer-pair", newer));
+  }
+  renderList(); const user = userEvent.setup();
+  await waitFor(() => expect(fetchLaunchView).toHaveBeenCalledTimes(1));
+  const laterValues = direction === "newer" ? { ...VALUES, pixel_id: "px2" } : VALUES;
+  await act(async () => child.resolve(settings(laterValues)));
+  await waitFor(() => expect((screen.getByLabelText(/像素/) as HTMLSelectElement).value).toBe(laterValues.pixel_id));
+  expect(approve().disabled).toBe(true);
+  expect(screen.getByText("投放設定與清單不是同一版，請重新讀取後再核准。")).toBeTruthy();
+  expect(publishCampaign).not.toHaveBeenCalled();
+  vi.mocked(getPublish).mockResolvedValue(publish("later-revision", laterValues));
+  vi.mocked(fetchLaunchView).mockResolvedValue({ ...launch("later-revision", laterValues), summary: { ...launch().summary, daily_total: 600 } });
+  vi.mocked(getLaunchSettings).mockResolvedValue(settings(laterValues));
+  await user.click(screen.getByRole("button", { name: "重新讀取本版清單" }));
+  await waitFor(() => expect(approve().disabled).toBe(false));
+  expect(screen.getByRole("region", { name: "上架摘要" }).textContent).toContain("600");
+  expect(publishCampaign).not.toHaveBeenCalled();
+  await user.click(approve());
+  expect(publishCampaign).toHaveBeenCalledWith("brd", "cmp", "manual", expect.objectContaining({ content_hash: "later-revision" }));
+});
+
+it("an explicit revision reread cannot discard a newer unsent draft while its child read is pending", async () => {
+  const laterValues = { ...VALUES, pixel_id: "px2" };
+  vi.mocked(getLaunchSettings).mockResolvedValue(settings(laterValues));
+  renderList(); const user = userEvent.setup();
+  const retry = await screen.findByRole("button", { name: "重新讀取本版清單" });
+  const pendingRead = deferred<LaunchSettingsView>();
+  vi.mocked(getLaunchSettings).mockReturnValue(pendingRead.promise);
+  vi.mocked(getPublish).mockResolvedValue(publish("later-revision", laterValues));
+  vi.mocked(fetchLaunchView).mockResolvedValue(launch("later-revision", laterValues));
+  await user.click(retry);
+  await user.click(screen.getByRole("button", { name: /進階設定/ }));
+  const utm = screen.getByLabelText(/UTM 追蹤參數/);
+  fireEvent.change(utm, { target: { value: "utm_source=meta&utm_campaign=unsent" } });
+  await act(async () => pendingRead.resolve(settings(laterValues)));
+  expect((utm as HTMLInputElement).value).toBe("utm_source=meta&utm_campaign=unsent");
+  expect(approve().disabled).toBe(true);
+  expect(saveLaunchSettings).not.toHaveBeenCalled();
+  expect(publishCampaign).not.toHaveBeenCalled();
+});

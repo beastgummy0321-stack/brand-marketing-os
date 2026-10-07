@@ -42,7 +42,7 @@ export function LaunchSettingsCard(props: Parameters<typeof LaunchSettingsCardBo
   return <LaunchSettingsCardBody key={JSON.stringify([scope, props.brandId, props.campaign.id])} {...props} />;
 }
 
-function LaunchSettingsCardBody({ brandId, campaign, locked, onSaved, onCampaignSaved, onBlockerChange, revision }: {
+function LaunchSettingsCardBody({ brandId, campaign, locked, onSaved, onCampaignSaved, onBlockerChange, revision, onRevisionRetry }: {
   brandId: string;
   campaign: Pick<CampaignDetail, "id" | "status" | "manual_handoff">;
   /** The launch is approved: every field is read only. */
@@ -54,6 +54,8 @@ function LaunchSettingsCardBody({ brandId, campaign, locked, onSaved, onCampaign
   onBlockerChange?: (blocker: string | null) => void;
   /** The list's coherent approval revision, never just a separately refreshed hash. */
   revision?: { hash: string; values: Values };
+  /** Read the whole current approval revision again without sending any write. */
+  onRevisionRetry?: () => void;
 }) {
   const { scope } = useWorkspace();
   const read = useApiRead((signal) => getLaunchSettings(brandId, campaign.id, signal), [brandId, campaign.id, revision?.hash]);
@@ -112,6 +114,7 @@ function LaunchSettingsCardBody({ brandId, campaign, locked, onSaved, onCampaign
   }
 
   const pending = Boolean(view && draft && draft !== view.values);
+  const revisionMismatch = Boolean(revision && draft && !same(draft, revision.values));
   const utmBad = draft ? !utmValid(draft.utm) : false;
   const serverErrors = (view?.errors ?? []).filter((e) => e.field !== "utm");
   const headerError = utmBad ? "UTM 格式不對" : serverErrors[0] ? SHORT[serverErrors[0].code] : null;
@@ -120,7 +123,7 @@ function LaunchSettingsCardBody({ brandId, campaign, locked, onSaved, onCampaign
     : headerError ? `${headerError}，先在「投放設定」改好`
     : saveError ? "投放設定還沒存好，先按重試"
     : pending || saving ? "投放設定還在儲存"
-    : revision && !same(draft, revision.values) ? "正在取得本版投放設定"
+    : revisionMismatch ? "投放設定與清單不是同一版，先重新讀取"
     : manualBlocker;
   const report = useRef(onBlockerChange);
   report.current = onBlockerChange;
@@ -158,6 +161,12 @@ function LaunchSettingsCardBody({ brandId, campaign, locked, onSaved, onCampaign
     <section aria-label="投放設定" data-slot="launch-settings-card" className="surface px-[22px] py-5">
       {header(right, !locked && headerError ? "error" : undefined)}
       {read.status === "error" && <ReadFailed what={`投放設定讀不到：${read.error}。已填內容保留，先重試。`} onRetry={read.reload} />}
+      {!locked && read.status === "ready" && revisionMismatch && !pending && !saving && !saveError && onRevisionRetry && (
+        <div role="status" className="mb-3 flex flex-wrap items-center gap-3 text-sm text-warning">
+          <p className="min-w-0 flex-1">投放設定與清單不是同一版，請重新讀取後再核准。</p>
+          <Button size="sm" variant="outline" onClick={() => { read.reload(); onRevisionRetry(); }}>重新讀取本版清單</Button>
+        </div>
+      )}
       <fieldset disabled={locked} className="contents">
         <SettingsGrid>
           <SettingField label="優化事件" htmlFor="set-optimization_event" tag={tag(draft.optimization_event, r.optimization_event)}

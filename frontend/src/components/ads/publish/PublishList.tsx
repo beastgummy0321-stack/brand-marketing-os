@@ -163,6 +163,7 @@ function PublishListBody({ brandId, campaignId, name, campaign, campaignFailed, 
       {campaign ? (
         <LaunchSettingsCard brandId={brandId} campaign={campaign} locked={approved}
           revision={revision ? { hash: revision.hash, values: revision.settings } : undefined}
+          onRevisionRetry={refresh}
           onSaved={refresh} onBlockerChange={setSettingsBlocker}
           onCampaignSaved={(saved) => { onCampaignSaved(saved); refresh(); }} />
       ) : campaignFailed ? (
