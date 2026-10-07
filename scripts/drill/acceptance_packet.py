@@ -31,7 +31,7 @@ import hashlib
 import json
 import re
 import secrets
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal, localcontext
 from pathlib import Path
 
@@ -275,6 +275,9 @@ def control_coverage(events, *, run_id, head, previous=None, inventory_complete=
         row["obligations"] = list(
             dict.fromkeys([*row["obligations"], *event.get("obligations", [])])
         )
+        # Built-in IDs are distinct required branches, not human label aliases.
+        if len(set(row["obligations"]) & set(REQUIRED_CONTROLS)) > 1:
+            raise PacketError("obligation_mapping")
         fresh = (
             event.get("scope") == "fresh"
             and event.get("run_id") == run_id
@@ -290,9 +293,12 @@ def control_coverage(events, *, run_id, head, previous=None, inventory_complete=
     mapped = {key for row in rows.values() for key in row["obligations"]}
     resolved = {
         key
-        for row in rows.values()
-        if row["verdict"] in {"pass", "inapplicable", "unsupported"}
-        for key in row["obligations"]
+        for key in mapped
+        if all(
+            row["verdict"] in {"pass", "inapplicable", "unsupported"}
+            for row in rows.values()
+            if key in row["obligations"]
+        )
     }
     gaps = [key for key in REQUIRED_CONTROLS if key not in resolved]
     placeholders = [
@@ -333,10 +339,12 @@ def control_coverage(events, *, run_id, head, previous=None, inventory_complete=
 
 def _sources(spec, source_root):
     result = {}
+    folded_ids = set()
     for row in spec.get("sources", []):
         identity = row["id"]
-        if not re.fullmatch(r"[A-Za-z0-9_-]{1,120}", identity) or identity in result:
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,120}", identity) or identity.casefold() in folded_ids:
             raise PacketError("source_id")
+        folded_ids.add(identity.casefold())
         path = (source_root / row["path"]).resolve()
         if not path.is_relative_to(source_root) or not path.is_file():
             raise PacketError("source_boundary")
@@ -566,6 +574,15 @@ def prepare_packet(input_file, *, source_root, fresh_root, output):
         if key[2] == "actual" and plan != original:
             raise PacketError("actual_plan_changed")
         names = {ad["name"] for group in plan["groups"] for ad in group.get("ads", [])}
+        try:
+            start = date.fromisoformat(plan["start_date"])
+            end = date.fromisoformat(plan["end_date"])
+            if start.isoformat() != plan["start_date"] or end.isoformat() != plan["end_date"]:
+                raise ValueError("noncanonical date")
+        except (ValueError, TypeError) as exc:
+            raise PacketError("variant_window") from exc
+        if end < start:
+            raise PacketError("variant_window")
         if not isinstance(rows, list) or any(
             (row.get("side"), row.get("period")) != key[:2]
             or row.get("ad_name") not in names
@@ -573,14 +590,22 @@ def prepare_packet(input_file, *, source_root, fresh_root, output):
             for row in rows
         ):
             raise PacketError("row_identity")
-        start = date.fromisoformat(plan["start_date"])
-        end = date.fromisoformat(plan["end_date"])
-        if end < start:
-            raise PacketError("variant_window")
+        try:
+            if any(date.fromisoformat(row["date"]).isoformat() != row["date"] for row in rows):
+                raise ValueError("noncanonical date")
+        except (ValueError, TypeError) as exc:
+            raise PacketError("row_identity") from exc
         identities = [(row["ad_name"], row["date"]) for row in rows]
         if len(set(identities)) != len(identities) or len(identities) != len(names) * (
             (end - start).days + 1
         ):
+            raise PacketError("row_coverage")
+        expected_identities = {
+            (name, (start + timedelta(days=day)).isoformat())
+            for name in names
+            for day in range((end - start).days + 1)
+        }
+        if set(identities) != expected_identities:
             raise PacketError("row_coverage")
         expected = [
             variants[(key[0], p, key[2], key[3])]["rows"]

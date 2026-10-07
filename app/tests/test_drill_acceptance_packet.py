@@ -448,3 +448,86 @@ def test_existing_ledger_cannot_credit_an_orphaned_evidence_reference(inputs):
     spec["previous_controls"] = add("old-controls", ledger)
     with pytest.raises(packet.PacketError, match="source_reference"):
         prepare()
+
+
+@pytest.mark.parametrize("middle", ["2026-10-02x", "2026-10-02"])
+def test_multiday_rows_require_canonical_calendar_dates(inputs, middle):
+    source, spec, add, prepare = inputs
+    variant = next(
+        row
+        for row in spec["variants"]
+        if row["side"] == "Product"
+        and row["period"] == 3
+        and row["date_mode"] == "aligned"
+        and row["audience_mode"] == "group"
+    )
+    plan = json.loads((source / (variant["plan"] + ".json")).read_text(encoding="utf-8"))
+    plan["end_date"] = "2026-10-03"
+    variant["plan"] = add("three-day-plan", plan)
+    row = json.loads((source / (variant["rows"] + ".json")).read_text(encoding="utf-8"))[0]
+    variant["rows"] = add(
+        "three-day-rows", [{**row, "date": day} for day in ("2026-10-01", middle, "2026-10-03")]
+    )
+    if middle.endswith("x"):
+        with pytest.raises(packet.PacketError, match="row_identity"):
+            prepare()
+    else:
+        result = prepare()
+        assert result["variants"][-1]["window_days"] == 3
+
+
+def test_windows_casefold_source_ids_cannot_overwrite_distinct_original_bytes(inputs):
+    _, spec, add, prepare = inputs
+    add("distinct-payload", None, raw=b"different source bytes")
+    spec["sources"][-1]["id"] = "Evidence"
+    with pytest.raises(packet.PacketError, match="source_id"):
+        prepare()
+
+
+@pytest.mark.parametrize("verdict", ["fail", "partial", "unknown"])
+def test_required_obligation_needs_every_distinct_mapped_branch(verdict):
+    result = coverage(
+        [
+            control(obligations=["A216"]),
+            control("warning", event="other", verdict=verdict, obligations=["A216"]),
+        ],
+        inventory_complete=True,
+    )
+    assert "A216" in result["required_gaps"]
+    assert result["passed"] == 1
+    assert len([row for row in result["rows"] if row["route"] == "/app/workbench"]) == 2
+    assert result["acceptance_95"] is False
+
+
+def test_one_semantic_control_cannot_replace_multiple_required_branches():
+    with pytest.raises(packet.PacketError, match="obligation_mapping"):
+        coverage([control(obligations=list(packet.REQUIRED_CONTROLS))], inventory_complete=True)
+
+
+def test_canonical_branch_deduplicates_same_key_but_preserves_nonrequired_aliases():
+    result = coverage([control(obligations=["A216", "A216", "refresh-label", "source-A216"])])
+    row = next(row for row in result["rows"] if row["route"] == "/app/workbench")
+    assert row["obligations"] == ["A216", "refresh-label", "source-A216"]
+    assert "A216" not in result["required_gaps"]
+    with pytest.raises(packet.PacketError, match="obligation_mapping"):
+        coverage([control(obligations=["A216"]), control(event="other", obligations=["A247"])])
+
+
+def test_unknown_fit_and_missing_complete_layer_reference_remain_missing(inputs):
+    _, spec, add, prepare = inputs
+    last = spec["periods"][-1]
+    last["fit"] = add("unknown-fit", {"ads": {"exact-Product-ad-3": {"fit": None}}})
+    result = prepare(
+        layers={
+            "human_approval": {
+                "ref": None,
+                "status": "complete",
+                "head": "fixture-head",
+                "run_id": "fixture-run",
+            }
+        }
+    )
+    assert result["copy_fit"]["mean"] is None
+    assert result["copy_fit"]["threshold_met"] is None
+    assert result["copy_fit"]["missing"] == 1
+    assert {"layer": "human_approval", "reason": "not_supplied"} in result["missing"]
