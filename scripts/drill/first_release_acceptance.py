@@ -1647,6 +1647,29 @@ def fixture_provider(context):
     return FrozenProvider()
 
 
+def install_owned_outcome_reader(context):
+    """Only metadata for outcome_seed's owned test binding; preserve other source readers."""
+    from app.ads import channels
+    from app.tests.fixtures.ads_external import outcome_seed
+
+    original_reader = channels.external_reader
+
+    class OwnedOutcomeMetadata:
+        def accounts(self, conn, org, brand):
+            if org != context["org_id"] or brand != context["brand_id"]:
+                return []
+            return [{
+                "account_id": outcome_seed.SOURCE_ACCOUNT,
+                "currency": "TWD",
+                "timezone_name": "Asia/Taipei",
+            }]
+
+    reader = OwnedOutcomeMetadata()
+    channels.external_reader = lambda platform: (
+        reader if platform == outcome_seed.PLATFORM else original_reader(platform)
+    )
+
+
 def first_release_child(context_path, port):
     """Existing F13 source/network guard with an owned clock and nonce-only fixture endpoints."""
     import uvicorn
@@ -1662,6 +1685,7 @@ def first_release_child(context_path, port):
     thread, stopped, stats = cast(
         tuple[Thread, Event, dict[str, Any]], assembly.install_assembly(context)
     )
+    install_owned_outcome_reader(context)
     import app.main
     from app.ads import planner_context
     from app.core import db
@@ -2913,6 +2937,12 @@ import fs from "node:fs";
 const cfg = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
 const { chromium } = createRequire(cfg.frontend_package)("@playwright/test");
 const hash = s => crypto.createHash("sha256").update(s).digest("hex");
+let stage = "containment", browser = null;
+const diagnostic = (status, errorType = null) => fs.writeFileSync(
+  cfg.directory + "/auth-browser-stage.json",
+  JSON.stringify({status, stage, at:Date.now(), error_type:errorType}));
+try {
+diagnostic("running");
 const containmentDeadline = Date.now() + 10000;
 while (!fs.existsSync(cfg.directory + "/browser-contained.json")) {
   if (Date.now() > containmentDeadline) throw Error("Owned containment was not established");
@@ -2920,7 +2950,8 @@ while (!fs.existsSync(cfg.directory + "/browser-contained.json")) {
 }
 const containment = JSON.parse(fs.readFileSync(cfg.directory + "/browser-contained.json"));
 if (containment.pid !== process.pid) throw Error("Browser launcher ownership mismatch");
-const browser = await chromium.launch({headless:true});
+stage = "browser-launch"; diagnostic("running");
+browser = await chromium.launch({headless:true});
 const page = await browser.newPage();
 const events = [], issuances = [], productRequests = [];
 let latest = null;
@@ -2947,16 +2978,17 @@ page.on("response", async response => {
   }
 });
 const login = async () => {
+  stage = stage === "relogin" ? "relogin" : "initial-login"; diagnostic("running");
   await page.goto(cfg.origin + "/app/login");
-  await page.locator('input[type=email]').fill(cfg.email);
+  await page.getByLabel('Email', {exact:true}).fill(cfg.email);
   await page.locator('input[type=password]').fill(cfg.password);
   await page.locator('button[type=submit]').click();
   await page.waitForURL(url => !url.pathname.endsWith("/login"), {timeout:15000});
   await page.waitForFunction(() => [...Array(localStorage.length)].some((_, i) =>
     localStorage.key(i)?.endsWith("-auth-token")), {timeout:10000});
 };
-try {
   await login();
+  stage = "saved-work-before-expiry"; diagnostic("running");
   if (!latest) throw Error("No actual issuer response observed");
   const headers = () => ({Authorization:"Bearer " + latest.access_token, "X-Org-Id":cfg.org});
   const issued = latest;
@@ -2965,16 +2997,19 @@ try {
     {headers:{Authorization:"Bearer " + issued.access_token, "X-Org-Id":cfg.org}});
   if (before.status() !== 200) throw Error("Saved work unavailable before expiry");
   const saved = await before.json(), savedHash = hash(JSON.stringify(saved)), beforeAt = Date.now();
+  stage = "session-revocation"; diagnostic("running");
   const revoke = await page.request.post(cfg.origin + "/auth/v1/logout?scope=local",
     {headers:{Authorization:"Bearer " + issued.access_token}});
   if (revoke.status() !== 204) throw Error("Owned session revocation failed");
   const revokedAt = Date.now();
+  stage = "refresh-rejection"; diagnostic("running");
   const refused = await page.request.post(cfg.origin + "/auth/v1/token?grant_type=refresh_token",
     {data:{refresh_token:issued.refresh_token}});
   const refusal = await refused.json();
   if (![400,401,403,422].includes(refused.status()))
     throw Error("Refresh was not genuinely refused");
   // SDK auto-refresh stays unchanged. Wait on wall time; never modify browser/token clocks.
+  stage = "issuer-expiry-wait"; diagnostic("running");
   const deadline = Date.now() + 75000;
   while (Date.now() <= claims.exp * 1000) {
     if (Date.now() > deadline) throw Error("Genuine issuer expiry exceeded bounded wait");
@@ -2985,11 +3020,14 @@ try {
   if (expired.status() !== 401)
     throw Error("Same genuinely issued token was not expired by server");
   const expiryAt = Date.now();
+  stage = "expired-work-login-guard"; diagnostic("running");
   await page.goto(cfg.origin + cfg.work_route);
   await page.waitForURL(/\/app\/login/, {timeout:15000});
   await page.screenshot({path:cfg.directory + "/auth-expired.png", fullPage:true});
   const loginAt = Date.now();
+  stage = "relogin"; diagnostic("running");
   await login();
+  stage = "saved-work-recovery"; diagnostic("running");
   await page.goto(cfg.origin + cfg.work_route);
   const recovered = await page.request.get(cfg.origin + cfg.work_path, {headers:headers()});
   const restored = await recovered.json();
@@ -3012,7 +3050,11 @@ try {
     product_requests:productRequests,
     requests_after_relogin:productRequests.filter(r => r.at >= loginAt)};
   fs.writeFileSync(cfg.directory + "/auth-browser-receipt.json", JSON.stringify(receipt,null,2));
-} finally { await browser.close(); }
+  stage = "complete"; diagnostic("pass");
+} catch (error) {
+  diagnostic("unverified", error?.name === "TimeoutError" ? "TimeoutError" : "Error");
+  throw Error("Owned Auth browser failed at finite stage: " + stage);
+} finally { if (browser) await browser.close(); }
 """
 
 
@@ -3364,6 +3406,9 @@ def auth_probe(context_path, auth_port, web_port):
             )
             receipt["browser_exit"] = browser.returncode
             receipt["browser_output_hash"] = sha(browser.stdout + browser.stderr)
+            stage_path = directory / "auth-browser-stage.json"
+            if stage_path.exists():
+                receipt["browser_stage"] = reference(stage_path)
             if browser.returncode:
                 raise ReceiptError("UNVERIFIED: genuine ordinary browser recovery failed")
             receipt["browser"] = reference(directory / "auth-browser-receipt.json")

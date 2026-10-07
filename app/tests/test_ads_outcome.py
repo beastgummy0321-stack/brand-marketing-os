@@ -13,6 +13,7 @@ import uuid
 from datetime import UTC, date, datetime, timedelta
 from unittest.mock import patch
 
+import pytest
 from fastapi.testclient import TestClient
 
 import app.main as main
@@ -1377,6 +1378,81 @@ class PeriodProjectionPublicTest(OutcomeTestBase):
         self.assertEqual(
             len(outcome.rows(web.conn, self.org_id, self.brand_id, detail["id"], "group")), 3
         )
+
+
+def test_owned_metadata_reaches_real_coverage_and_keeps_frozen_last_day(monkeypatch):
+    from datetime import UTC, date, datetime
+    from types import SimpleNamespace
+    from typing import Any, cast
+    from zoneinfo import ZoneInfo
+
+    from app.ads import channels, external_sync, outcome
+    from app.core import db, settings
+    from app.tests.fixtures.ads_external import outcome_seed
+    from scripts.drill import first_release_acceptance as runner
+
+    context = {"org_id": "owned-org", "brand_id": "owned-brand"}
+    original = object()
+    monkeypatch.setattr(
+        channels, "external_reader", lambda platform: original if platform == "meta" else None
+    )
+    monkeypatch.setattr(db, "now_utc", lambda: datetime(2026, 8, 1, 4, tzinfo=UTC))
+    monkeypatch.setattr(settings, "org_timezone", lambda *a, **k: ZoneInfo("Asia/Taipei"))
+
+    class Connection:
+        def execute(self, query, parameters):
+            assert parameters == ("owned-org", "owned-brand", "campaign")
+            return SimpleNamespace(fetchone=lambda: {
+                "platform": outcome_seed.PLATFORM, "source_account": outcome_seed.SOURCE_ACCOUNT,
+            })
+
+    conn = cast(Any, Connection())
+    campaign = {"id": "campaign", "start_date": date(2026, 7, 1), "end_date": date(2026, 7, 31)}
+    observation = {
+        "day": date(2026, 7, 31), "spend": 400, "purchases": 2, "revenue": None,
+        "impressions": 1000, "clicks": 30, "currency": "TWD",
+        "attribution_key": "fixed-known-fixture",
+    }
+    before = outcome.period_projection(
+        conn, "owned-org", "owned-brand", campaign, [observation], []
+    )
+    assert before["scope"]["end"] == "2026-07-30"
+    assert before["scope"]["day_basis"] == "conservative_org_fallback"
+    assert before["scope"]["account_timezone"] is None
+    assert before["totals"]["spend"] is None
+    runner.install_owned_outcome_reader(context)
+    reader, account = external_sync.account_reader(
+        conn, "owned-org", "owned-brand", outcome_seed.PLATFORM, outcome_seed.SOURCE_ACCOUNT
+    )
+    assert account == {"account_id": "test", "currency": "TWD", "timezone_name": "Asia/Taipei"}
+    assert not hasattr(reader, "read_observations")
+    assert channels.external_reader("meta") is original
+    assert channels.external_reader("unknown") is None
+    after = outcome.period_projection(conn, "owned-org", "owned-brand", campaign, [observation], [])
+    assert after["scope"]["end"] == "2026-07-31"
+    assert after["scope"]["day_basis"] == "account_timezone"
+    assert after["scope"]["account_timezone"] == "Asia/Taipei"
+    assert after["scope"]["account_currency"] == "TWD"
+    assert after["totals"]["spend"] == 400
+    assert after["totals"]["purchases"] == 2
+    assert after["totals"]["cpa"] == 200
+    assert observation["day"] == date(2026, 7, 31)
+
+
+@pytest.mark.parametrize("org,brand,account", [
+    ("other-org", "owned-brand", "test"),
+    ("owned-org", "other-brand", "test"),
+    ("owned-org", "owned-brand", "other-account"),
+])
+def test_owned_metadata_refuses_foreign_account_binding(monkeypatch, org, brand, account):
+    from app.ads import channels, external_sync
+    from app.ads.adapters.external import SourceReadError
+    from scripts.drill import first_release_acceptance as runner
+
+    monkeypatch.setattr(channels, "external_reader", lambda platform: None)
+    runner.install_owned_outcome_reader({"org_id": "owned-org", "brand_id": "owned-brand"})
+    with pytest.raises(SourceReadError):
+        external_sync.account_reader(None, org, brand, "test", account)
 
 
 if __name__ == "__main__":
