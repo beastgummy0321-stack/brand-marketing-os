@@ -150,7 +150,9 @@ def media_files(directory, remaining):
     return {"image": str(image), "video": str(video), "corrupt": str(corrupt)}
 
 
-def create_schema(settings, schema, org, brands, remaining):
+def create_schema(
+    settings, schema, org, brands, remaining, *, f53_schema_only=False, auth_identity=None
+):
     import psycopg
     from psycopg.conninfo import conninfo_to_dict, make_conninfo
 
@@ -161,6 +163,13 @@ def create_schema(settings, schema, org, brands, remaining):
     admin_dsn = make_conninfo(**params)
     if not re.fullmatch(r"f13_runtime_[a-f0-9]{12}", schema):
         raise RuntimeError("Unsafe schema name")
+    migrations = sorted((ROOT / "supabase/migrations").glob("*.sql"))
+    if f53_schema_only:
+        from scripts.drill.first_release_acceptance import migration_audit
+
+        audit = migration_audit(ROOT)  # Admit exact bytes before connecting or creating anything.
+        included = {entry["path"] for entry in audit["included"]}
+        migrations = [path for path in migrations if path.name in included]
     with psycopg.connect(
         admin_dsn, autocommit=True, connect_timeout=max(1, int(remaining()))
     ) as conn:
@@ -172,20 +181,35 @@ def create_schema(settings, schema, org, brands, remaining):
             )
             return conn.execute(query, parameters)
 
-        user = execute("SELECT id FROM auth.users WHERE email=%s", ("123@example.com",)).fetchone()
+        email = auth_identity["email"] if auth_identity else "123@example.com"
+        if auth_identity:
+            uuid.UUID(auth_identity["id"])
+            user = execute(
+                "SELECT id FROM auth.users WHERE id=%s AND email=%s", (auth_identity["id"], email)
+            ).fetchone()
+        else:
+            user = execute("SELECT id FROM auth.users WHERE email=%s", (email,)).fetchone()
         if not user:
             raise RuntimeError(
                 "Existing normal-login test account 123@example.com is required; "
                 "runtime never creates Auth users"
             )
+        if f53_schema_only:
+            if auth_identity:
+                if not re.fullmatch(r"f53_auth_[a-f0-9]{12}", params.get("dbname", "")):
+                    raise RuntimeError("Auth fixture requires its own disposable database")
+            else:
+                bucket = execute(
+                    "SELECT public,file_size_limit FROM storage.buckets WHERE id='assets'"
+                )
+                row = bucket.fetchone()
+                if not row or row[0] is not False or row[1] != 52428800:
+                    raise RuntimeError("F53 requires the existing private 50MB assets bucket")
         execute("SELECT pg_advisory_lock(913042027)")
         try:
             execute(
                 f'CREATE SCHEMA "{schema}"; SET search_path TO "{schema}";'
-                + "\n".join(
-                    p.read_text("utf-8")
-                    for p in sorted((ROOT / "supabase/migrations").glob("*.sql"))
-                )
+                + "\n".join(p.read_text("utf-8") for p in migrations)
             )
         finally:
             execute("SELECT pg_advisory_unlock(913042027)")
@@ -194,7 +218,7 @@ def create_schema(settings, schema, org, brands, remaining):
             "INSERT INTO organisation(id,name,kind) VALUES(%s,%s,'company')",
             (org, "F13 isolated runtime"),
         )
-        execute("INSERT INTO app_user(id,email) VALUES(%s,%s)", (user[0], "123@example.com"))
+        execute("INSERT INTO app_user(id,email) VALUES(%s,%s)", (user[0], email))
         execute("INSERT INTO membership(org_id,user_id,role) VALUES(%s,%s,'owner')", (org, user[0]))
         for index, brand in enumerate(brands):
             execute(
@@ -369,27 +393,30 @@ def main(args):
         )
         result = runtime_flow(client, context, remaining)
         context.update(imported_campaign_id=result["campaign_id"])
-        # Persist a queued descriptor before restart, without marking any job successful.
-        client.post("/__f13/state", json={"paused": True}, timeout=remaining()).raise_for_status()
-        queued = client.post(
-            f"/api/ads/brands/{brands[0]}/campaigns/{result['campaign_id']}/sync",
-            json={},
-            timeout=remaining(),
-        )
-        queued.raise_for_status()
-        stop_process(process, context["base_url"])
-        write_json(
-            context["state_file"], {"creative_revision": 1, "fail_next": False, "paused": False}
-        )
-        process = start_server()
-        wait_job(client, brands[0], queued.json()["job"]["id"], remaining)
-        for asset, path in result["originals"]:
-            response = client.get(
-                f"/api/ads/brands/{brands[0]}/user-assets/{asset}/download", timeout=remaining()
+        if getattr(args, "runtime_restart", True):
+            # Persist a queued descriptor before restart, without marking any job successful.
+            client.post(
+                "/__f13/state", json={"paused": True}, timeout=remaining()
+            ).raise_for_status()
+            queued = client.post(
+                f"/api/ads/brands/{brands[0]}/campaigns/{result['campaign_id']}/sync",
+                json={},
+                timeout=remaining(),
             )
-            assert response.content == Path(path).read_bytes(), "Original changed after restart"
+            queued.raise_for_status()
+            stop_process(process, context["base_url"])
+            write_json(
+                context["state_file"], {"creative_revision": 1, "fail_next": False, "paused": False}
+            )
+            process = start_server()
+            wait_job(client, brands[0], queued.json()["job"]["id"], remaining)
+            for asset, path in result["originals"]:
+                response = client.get(
+                    f"/api/ads/brands/{brands[0]}/user-assets/{asset}/download", timeout=remaining()
+                )
+                assert response.content == Path(path).read_bytes(), "Original changed after restart"
         result.update(
-            restarted=True,
+            restarted=getattr(args, "runtime_restart", True),
             elapsed_seconds=round(time.monotonic() - started, 2),
             context_path=str(context_path),
         )

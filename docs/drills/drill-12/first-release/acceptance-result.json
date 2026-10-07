@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "feature": "F53",
+  "status": "tooling-only-no-actual-probes",
+  "cases_sha256": "48ada4e752fa4c2e5848b7b986e3af7146c9ede0aa712b7a72460b5d53505339",
+  "gates": {
+    "G1": {"status": "unverified"},
+    "G2": {"status": "unverified"},
+    "G3": {"status": "unverified"},
+    "G4": {"status": "unverified"},
+    "G5": {"status": "unverified"},
+    "G6": {"status": "unverified"},
+    "G7": {"status": "unverified"}
+  },
+  "G8": {"status": "pending", "sidecar": ".harness/scratch/F53/final"},
+  "human_acceptance": "pending",
+  "release_eligible": false,
+  "disposition": {
+    "fixed": [],
+    "remaining": ["F48-F52 remain open; original F52 drill remains paused"],
+    "unverified": ["G1", "G2", "G3", "G4", "G5", "G6", "G7", "G8"]
+  },
+  "provenance": "I07 tests are synthetic/mocked tooling contracts. No provider/Auth/restore probe or combined fixed cycle has run."
+}
