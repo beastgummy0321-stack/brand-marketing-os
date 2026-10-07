@@ -69,7 +69,7 @@ export function syncNoteTone(note: SyncNote): string {
   return note.state === "failed" || note.state === "error" ? "text-danger" : note.state === "partial" ? "text-warning" : "text-muted-foreground";
 }
 
-export function PeriodStatusRow({ brandId, campaign: c, lastSuccessAt = null, onCampaignChange, onSync, syncing = false, syncError = "", syncNote = null }: {
+export function PeriodStatusRow({ brandId, campaign: c, lastSuccessAt = null, onCampaignChange, onSync, syncing = false, syncError = "", syncNote = null, readGeneration = 0 }: {
   brandId: string;
   campaign: CampaignDetail;
   /** The triage read's `data.sync.last_success_at` (the 「最新 …」 fallback for an internal campaign). */
@@ -80,6 +80,7 @@ export function PeriodStatusRow({ brandId, campaign: c, lastSuccessAt = null, on
   syncError?: string;
   /** F49 Contract O: the outcome of the workspace's last platform read, null before one finished. */
   syncNote?: SyncNote | null;
+  readGeneration?: number;
 }) {
   const { today, timezone } = useOrgClock();
   const imported = c.origin === "imported";
@@ -117,13 +118,13 @@ export function PeriodStatusRow({ brandId, campaign: c, lastSuccessAt = null, on
     [brandId, c.id, closed, imported],
   );
 
-  // The workspace's platform read ended (syncing true → false): the row re-reads its numbers.
-  const wasSyncing = useRef(syncing);
+  // The workspace supplies a terminal generation; posting false alone proves no completed read.
+  const previousRead = useRef(readGeneration);
   const reload = perf.reload;
   useEffect(() => {
-    if (wasSyncing.current && !syncing) reload();
-    wasSyncing.current = syncing;
-  }, [syncing, imported, reload]);
+    if (previousRead.current !== readGeneration) reload();
+    previousRead.current = readGeneration;
+  }, [readGeneration, reload]);
 
   const data = perf.status === "ready" ? perf.data : null;
   const internal = data && "totals" in data ? data : null;
@@ -213,7 +214,7 @@ export function PeriodStatusRow({ brandId, campaign: c, lastSuccessAt = null, on
       <p className="mt-2 text-[11.5px] text-muted-foreground">整期＝活動期間的合計；每月回顧只算當月天數，同一則廣告兩邊數字會不同。</p>
       {closeOpen && (
         <CloseCampaignDialog brandId={brandId} campaign={c} onClose={closeDialog}
-          onCampaignChange={onCampaignChange} onSync={onSync} syncing={syncing} syncError={syncError} />
+          onCampaignChange={onCampaignChange} onSync={onSync} syncing={syncing} syncError={syncError} readGeneration={readGeneration} />
       )}
     </section>
   );

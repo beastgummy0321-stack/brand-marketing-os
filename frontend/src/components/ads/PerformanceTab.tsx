@@ -170,6 +170,7 @@ export function PerformanceTab({
   syncing = false,
   syncError = "",
   syncNote = null,
+  readGeneration = 0,
 }: {
   brandId: string;
   campaign: CampaignDetail;
@@ -181,6 +182,8 @@ export function PerformanceTab({
   syncError?: string;
   /** F49 Contract O: the outcome of the workspace's last platform read. */
   syncNote?: SyncNote | null;
+  /** The workspace's terminal platform-read generation, scoped to its campaign. */
+  readGeneration?: number;
 }) {
   const { scope: draftScope } = useWorkspace();
   const [searchParams] = useSearchParams();
@@ -194,11 +197,12 @@ export function PerformanceTab({
   const { today } = useOrgClock(); // F36-I09 (ruling G): org calendar, not the browser's
 
   const [state, setState] = useState<
-    | { status: "loading" }
+    | { status: "loading"; data?: CampaignPerformance | ImportedCampaignPerformance }
     | { status: "error"; message: string }
     | { status: "ready"; data: CampaignPerformance | ImportedCampaignPerformance }
   >({ status: "loading" });
-  const nativeView = state.status === "ready" && "external_view" in state.data ? state.data.external_view : undefined;
+  const performanceData = state.status === "ready" || state.status === "loading" ? state.data : undefined;
+  const nativeView = performanceData && "external_view" in performanceData ? performanceData.external_view : undefined;
   const scopes = useMemo(() => nativeMetricScopes(nativeView), [nativeView]);
   const [scopeKey, setScopeKey] = useState<string>();
   const selectedScope = scopes.find(scope => scope.key === scopeKey) ?? (highlightAd ? scopes.find(scope => scope.metricScope === "ad") : undefined) ?? scopes[0];
@@ -206,29 +210,37 @@ export function PerformanceTab({
   const [comparisonRefresh, setComparisonRefresh] = useState(0);
   // F40-I06: the dialog itself is `CloseCampaignDialog` (shared with the 這期狀態列); mounted only while open.
   const [closeOpen, setCloseOpen] = useState(false);
+  const requestGeneration = useRef(0);
+  const readOwner = useRef<string | null>(null);
 
   const load = useCallback(() => {
+    const request = ++requestGeneration.current;
     if (!published && !imported) return;
-    setState({ status: "loading" });
+    const owner = `${brandId}:${c.id}:${imported}`;
+    const sameOwner = readOwner.current === owner;
+    readOwner.current = owner;
+    setState((previous) => ({status: "loading", data: sameOwner && previous.status !== "error" ? previous.data : undefined}));
     (imported ? getPerformance(brandId, c.id, true) : getPerformance(brandId, c.id))
-      .then((data) => setState({ status: "ready", data }))
-      .catch((err: unknown) =>
-        setState({ status: "error", message: err instanceof Error ? err.message : "讀取成效失敗。" }),
-      );
+      .then((data) => { if (request === requestGeneration.current) setState({ status: "ready", data }); })
+      .catch((err: unknown) => {
+        if (request === requestGeneration.current) setState({ status: "error", message: err instanceof Error ? err.message : "讀取成效失敗。" });
+      });
   }, [brandId, c.id, published, imported]);
 
-  useEffect(load, [load]);
-
-  // The workspace's platform read ended (syncing true → false): reload the numbers and the opened
-  // comparison (the open close dialog releases its own held 確認結案).
-  const wasSyncing = useRef(syncing);
   useEffect(() => {
-    if (wasSyncing.current && !syncing) {
+    load();
+    return () => { requestGeneration.current += 1; };
+  }, [load]);
+
+  // Refresh the mounted view after a terminal outcome; a rejected POST is not a completed read.
+  const previousRead = useRef(readGeneration);
+  useEffect(() => {
+    if (previousRead.current !== readGeneration) {
       load();
       setComparisonRefresh((current) => current + 1);
     }
-    wasSyncing.current = syncing;
-  }, [syncing, load]);
+    previousRead.current = readGeneration;
+  }, [readGeneration, load]);
 
   const comparison = imported ? <Disclosure label="成效比較"><p className="text-sm text-muted-foreground">{c.capabilities?.unavailable.comparison ?? "既有平台活動不支援內部成效比較。"}</p></Disclosure> : <ExperimentPlan key={`${draftScope}:${brandId}:${c.id}`} draftScope={draftScope} brandId={brandId} campaignId={c.id}
     hasSavedComparison={hasSavedComparison(c)} refreshToken={`${c.status}:${comparisonRefresh}`}
@@ -255,22 +267,23 @@ export function PerformanceTab({
   }
 
   return (
-    <div className="flex flex-col gap-4">
-      {state.status === "ready" && imported && nativeView ? (
+    <div className="flex flex-col gap-4" aria-busy={state.status === "loading"}>
+      {state.status === "loading" && performanceData && <p role="status" className="text-sm text-muted-foreground">正在更新成效…</p>}
+      {imported && nativeView ? (
         <PerformanceReady simulated={false} native data={nativeData} labels={labels} refreshing={syncing}
           onRefresh={() => onSync?.()} refreshDisabled={!onSync} currency={selectedScope?.currency ?? null} note={syncNote}
           scopeCaption={`${selectedScope?.label ?? "尚無資料範圍"} · ${nativeView.window.start ?? "未知"} ～ ${nativeView.window.end ?? "未知"}`}
           scopeControl={scopes.length > 0 ? <label className="flex flex-col gap-1 text-sm">資料範圍<select className="input-field" value={selectedScope?.key} onChange={event => setScopeKey(event.target.value)}>{scopes.map(scope => <option key={scope.key} value={scope.key}>{scope.label}</option>)}</select></label> : null}
           highlightAd={highlightAd} />
-      ) : state.status === "loading" ? (
+      ) : state.status === "loading" && !performanceData ? (
         <div className="surface">
           <div className="surface-body py-10 text-center text-sm text-muted-foreground">讀取中…</div>
         </div>
       ) : state.status === "error" ? (
         <EmptyState title="讀取失敗" description={state.message} onAction={load} actionLabel="重新載入" />
-      ) : state.status === "ready" && "totals" in state.data ? (
+      ) : performanceData && "totals" in performanceData ? (
         <PerformanceReady simulated={!!c.simulation_mode || c.external_id?.startsWith("sim_") === true}
-          data={state.data} labels={labels} refreshing={syncing} onRefresh={() => onSync?.()} refreshDisabled={!onSync} note={syncNote}
+          data={performanceData} labels={labels} refreshing={syncing} onRefresh={() => onSync?.()} refreshDisabled={!onSync} note={syncNote}
           highlightAd={highlightAd} />
       ) : <EmptyState title="讀取失敗" description="成效資料範圍不符，請重新載入。" onAction={load} actionLabel="重新載入" />}
 
@@ -304,7 +317,7 @@ export function PerformanceTab({
 
       {closeOpen && (
         <CloseCampaignDialog brandId={brandId} campaign={c} onClose={() => setCloseOpen(false)}
-          onCampaignChange={onCampaignChange} onSync={onSync} syncing={syncing} syncError={syncError} />
+          onCampaignChange={onCampaignChange} onSync={onSync} syncing={syncing} syncError={syncError} readGeneration={readGeneration} />
       )}
     </div>
   );

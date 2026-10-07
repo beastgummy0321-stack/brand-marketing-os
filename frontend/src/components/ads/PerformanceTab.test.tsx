@@ -3,7 +3,7 @@
  * 結案卡、看得到提前結案的說明句，以及確認對話框裡同一句話也在。
  * F40-I06: the dialog itself now lives in `CloseCampaignDialog.tsx` (shared with the 成效分頁's 這期狀態列); the
  * 立即結案 cases below prove the folded old panel still opens it, and the F37 cases prove its behaviour is unchanged. */
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
@@ -383,9 +383,9 @@ describe("PerformanceTab 結案卡片（F04-I23）", () => {
     const user = userEvent.setup();
     const sync = vi.fn();
     const c = campaign({ status: "live" });
-    const view = (syncing: boolean) => (
+    const view = (syncing: boolean, readGeneration = 0) => (
       <MemoryRouter>
-        <PerformanceTab brandId="brd_1" campaign={c} onCampaignChange={vi.fn()} onChangeTab={vi.fn()} onSync={sync} syncing={syncing} />
+        <PerformanceTab brandId="brd_1" campaign={c} onCampaignChange={vi.fn()} onChangeTab={vi.fn()} onSync={sync} syncing={syncing} readGeneration={readGeneration} />
       </MemoryRouter>
     );
     const { rerender } = render(view(false));
@@ -400,7 +400,7 @@ describe("PerformanceTab 結案卡片（F04-I23）", () => {
     await waitFor(() => expect(readComparison).toHaveBeenCalledTimes(1));
     rerender(view(true));
     expect((screen.getByRole("button", { name: /讀取中/ }) as HTMLButtonElement).disabled).toBe(true);
-    rerender(view(false));
+    rerender(view(false, 1));
     await waitFor(() => expect(getPerformance).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(readComparison).toHaveBeenCalledTimes(2));
   });
@@ -450,13 +450,13 @@ describe("F37 結案對話框：缺日不放行，重讀仍失敗才可跳過", 
   function renderClose(onSync = vi.fn(), syncing = false, extra: Partial<CampaignDetail> = {}) {
     const c = campaign({ status: "ended", ...extra });
     const onCampaignChange = vi.fn();
-    const view = (s: boolean) => (
+    const view = (s: boolean, readGeneration = 0) => (
       <MemoryRouter>
-        <PerformanceTab brandId="brd_1" campaign={c} onCampaignChange={onCampaignChange} onChangeTab={vi.fn()} onSync={onSync} syncing={s} />
+        <PerformanceTab brandId="brd_1" campaign={c} onCampaignChange={onCampaignChange} onChangeTab={vi.fn()} onSync={onSync} syncing={s} readGeneration={readGeneration} />
       </MemoryRouter>
     );
     const utils = render(view(syncing));
-    return { c, onCampaignChange, rerenderSyncing: (s: boolean) => utils.rerender(view(s)) };
+    return { c, onCampaignChange, rerenderSyncing: (s: boolean, readGeneration = 0) => utils.rerender(view(s, readGeneration)) };
   }
   const gap = (can_skip: boolean) => new ApiResponseError("有 2 天還沒讀到平台資料，先重新讀取平台。", 409, {}, {
     code: "coverage_missing", details: { missing_days: ["2026-09-27", "2026-09-28"], never_synced: false, can_skip },
@@ -487,7 +487,7 @@ describe("F37 結案對話框：缺日不放行，重讀仍失敗才可跳過", 
     expect(sync).toHaveBeenCalledOnce();
     rerenderSyncing(true);
     expect((screen.getByRole("button", { name: "確認結案" }) as HTMLButtonElement).disabled).toBe(true);
-    rerenderSyncing(false);
+    rerenderSyncing(false, 1);
     await waitFor(() => expect((screen.getByRole("button", { name: "確認結案" }) as HTMLButtonElement).disabled).toBe(false));
   });
 
@@ -907,4 +907,102 @@ it("actual closed verdict preserves distinct saved cap and result currencies", a
   const card = within(heading.closest("div.surface")!);
   expect(card.getByText("350 TWD")).toBeTruthy();
   expect(card.getByText("400 USD")).toBeTruthy();
+});
+
+describe("F52 current performance request generation", () => {
+  function deferred<T>() {
+    let resolve!: (value: T) => void;
+    let reject!: (reason: Error) => void;
+    const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
+    return { promise, resolve, reject };
+  }
+  function scoped(spend: number): CampaignPerformance {
+    return {...performance(), totals: {...performance().totals, spend},
+      scope: {basis: "campaign_window", start: "2026-10-24", end: "2026-10-26", days: 3,
+        state: "ready", last_complete_day: "2026-10-26", incomplete_day_policy: "excluded",
+        day_basis: "account_timezone", account_timezone: "Asia/Taipei", currency: "TWD",
+        caption: "本期 2026-10-24 ～ 2026-10-26；只計完整帳戶日。"}};
+  }
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(readComparison).mockResolvedValue({proposal: null, missing: "缺少合格對照", stale: false,
+      closed: false, simulation: false, confirmed: null, result: {verdict: "看不出", reason: "缺資料", values: []}});
+  });
+  it.each(["success", "rejection"] as const)("ignores an older %s after newer displayed performance", async (answer) => {
+    const old = deferred<CampaignPerformance>(); const fresh = deferred<CampaignPerformance>();
+    const trace: string[] = [];
+    vi.mocked(getPerformance).mockImplementationOnce(() => {trace.push("start old"); return old.promise;})
+      .mockImplementationOnce(() => {trace.push("start fresh"); return fresh.promise;});
+    const c = campaign();
+    const view = (syncing: boolean, readGeneration = 0) => <MemoryRouter><PerformanceTab brandId="brd_1" campaign={c}
+      onCampaignChange={vi.fn()} onChangeTab={vi.fn()} syncing={syncing} readGeneration={readGeneration} /></MemoryRouter>;
+    const ui = render(view(false));
+    await waitFor(() => expect(getPerformance).toHaveBeenCalledTimes(1));
+    ui.rerender(view(true)); ui.rerender(view(false, 1));
+    await waitFor(() => expect(getPerformance).toHaveBeenCalledTimes(2));
+    await act(async () => {trace.push("resolve fresh 1200 TWD"); fresh.resolve(scoped(1200));});
+    expect(await screen.findByText("1,200 TWD")).toBeTruthy();
+    await act(async () => {
+      trace.push(`resolve old ${answer}`);
+      if (answer === "success") old.resolve(scoped(900)); else old.reject(new Error("obsolete performance error"));
+    });
+    console.info("F52 performance request trace", JSON.stringify(trace));
+    expect(screen.getByText("1,200 TWD")).toBeTruthy();
+    expect(screen.queryByText("900 TWD")).toBeNull();
+    expect(screen.queryByText("obsolete performance error")).toBeNull();
+  });
+  it("keeps the new campaign when the old campaign returns later", async () => {
+    const old = deferred<CampaignPerformance>(); const fresh = deferred<CampaignPerformance>();
+    vi.mocked(getPerformance).mockImplementationOnce(() => old.promise).mockImplementationOnce(() => fresh.promise);
+    const view = (id: string) => <MemoryRouter><PerformanceTab brandId="brd_1" campaign={campaign({id})}
+      onCampaignChange={vi.fn()} onChangeTab={vi.fn()} /></MemoryRouter>;
+    const ui = render(view("old"));
+    ui.rerender(view("new"));
+    await act(async () => fresh.resolve(scoped(1200)));
+    expect(await screen.findByText("1,200 TWD")).toBeTruthy();
+    await act(async () => old.resolve(scoped(900)));
+    expect(screen.getByText("1,200 TWD")).toBeTruthy();
+  });
+  it("keeps the opened daily fold mounted during a same-owner reread", async () => {
+    const fresh = deferred<CampaignPerformance>();
+    vi.mocked(getPerformance).mockResolvedValueOnce(scoped(900)).mockImplementationOnce(() => fresh.promise);
+    const c = campaign();
+    const view = (readGeneration: number) => <MemoryRouter><PerformanceTab brandId="brd_1" campaign={c}
+      onCampaignChange={vi.fn()} onChangeTab={vi.fn()} readGeneration={readGeneration} /></MemoryRouter>;
+    const ui = render(view(0));
+    await screen.findByText("900 TWD");
+    const fold = screen.getByRole("button", {name: "查看每日資料、次要指標與公式"});
+    await userEvent.click(fold);
+    ui.rerender(view(1));
+    await waitFor(() => expect(getPerformance).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole("button", {name: "查看每日資料、次要指標與公式"})).toBe(fold);
+    expect(fold.getAttribute("aria-expanded")).toBe("true");
+    await act(async () => fresh.resolve(scoped(1200)));
+    expect(await screen.findByText("1,200 TWD")).toBeTruthy();
+    expect(fold.getAttribute("aria-expanded")).toBe("true");
+  });
+  it("posting true-to-false without a served terminal generation does not reread", async () => {
+    vi.mocked(getPerformance).mockResolvedValue(scoped(900));
+    const c = campaign();
+    const view = (syncing: boolean) => <MemoryRouter><PerformanceTab brandId="brd_1" campaign={c}
+      onCampaignChange={vi.fn()} onChangeTab={vi.fn()} syncing={syncing} /></MemoryRouter>;
+    const ui = render(view(false)); await screen.findByText("900 TWD");
+    ui.rerender(view(true)); ui.rerender(view(false));
+    await act(async () => {});
+    expect(getPerformance).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("900 TWD")).toBeTruthy();
+  });
+  it.each(["success", "rejection"] as const)("does not replace the remounted owner after dismissed %s", async (answer) => {
+    const old = deferred<CampaignPerformance>();
+    vi.mocked(getPerformance).mockImplementationOnce(() => old.promise).mockResolvedValue(scoped(1200));
+    const ui = renderTab(campaign()); ui.unmount();
+    renderTab(campaign({id: "new"}));
+    await screen.findByText("1,200 TWD");
+    await act(async () => {
+      if (answer === "success") old.resolve(scoped(900)); else old.reject(new Error("dismissed owner error"));
+    });
+    expect(screen.getByText("1,200 TWD")).toBeTruthy();
+    expect(screen.queryByText("dismissed owner error")).toBeNull();
+    expect(screen.queryByText("900 TWD")).toBeNull();
+  });
 });

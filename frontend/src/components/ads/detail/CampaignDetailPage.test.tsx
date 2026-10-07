@@ -6,7 +6,7 @@
  * period grade, the data-status chips, 重新讀取平台／結案這一期 opening the shared close dialog, closed／imported states)
  * and the two program lines under the ruler title (local ads never built, platform ads not built here). */
 import { ApiResponseError } from "@/lib/http";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -222,7 +222,7 @@ describe("CampaignDetailPage (F28-I10, v10 tabPerf F29-I13)", () => {
     vi.mocked(getTriage).mockResolvedValue(triage(dailyAds()));
     const { container } = renderPage();
 
-    expect(await rulerTitle()).toBe("在投 8 則對照上限 450 TWD");
+    expect(await rulerTitle()).toBe("8 則對照上限 450 TWD");
     expect(screen.getByRole("heading", { level: 1, name: CAMPAIGN_NAME })).toBeTruthy();
     // The legend and the money rule print once per screen; the dashed 打平 mark is named under the ruler.
     expect(container.querySelectorAll("[data-slot=grade-rules]").length).toBe(1);
@@ -294,7 +294,7 @@ describe("CampaignDetailPage (F28-I10, v10 tabPerf F29-I13)", () => {
     vi.mocked(getTriage).mockResolvedValue(triage(dailyAds(be)));
     renderPage();
 
-    expect(await rulerTitle()).toBe("在投 8 則對照暫用打平線 520 TWD");
+    expect(await rulerTitle()).toBe("8 則對照暫用打平線 520 TWD");
     expect(screen.getByText("暫用打平 520", { selector: "[data-slot=chip]" }).getAttribute("data-tone")).toBe("warn");
     expect(screen.queryByText("打平 520")).toBeNull();
     expect(screen.queryByText(/^橘色虛線：/)).toBeNull();
@@ -343,7 +343,7 @@ describe("CampaignDetailPage (F28-I10, v10 tabPerf F29-I13)", () => {
     ]));
     const { container } = renderPage();
 
-    expect(await rulerTitle()).toBe("在投 2 則，沒設上限");
+    expect(await rulerTitle()).toBe("2 則，沒設上限");
     expect(screen.getByText("沒設上限", { selector: "[data-slot=chip]" }).getAttribute("data-tone")).toBe("warn");
     expect(container.querySelector('[data-slot=target-ruler][data-variant="empty"]')).toBeTruthy();
     expect(screen.getByText("沒設上限，先不分等級", { selector: "div" })).toBeTruthy();
@@ -387,7 +387,7 @@ describe("CampaignDetailPage (F28-I10, v10 tabPerf F29-I13)", () => {
     renderPage();
 
     expect(await screen.findByText(/^決策進度讀不到（佇列讀取失敗）/)).toBeTruthy();
-    expect(await rulerTitle()).toBe("在投 8 則對照上限 450 TWD");
+    expect(await rulerTitle()).toBe("8 則對照上限 450 TWD");
     expect(within(screen.getByTestId("ad-row-a8")).queryByRole("link", { name: "在清理提議" })).toBeNull();
     // 「暫停」 needs no queue: the pause page reads the ad itself (F45-I06).
     expect(within(screen.getByTestId("ad-row-a8")).getByRole("link", { name: "暫停" })).toBeTruthy();
@@ -410,7 +410,7 @@ describe("CampaignDetailPage (F28-I10, v10 tabPerf F29-I13)", () => {
 
     vi.mocked(getTriage).mockResolvedValue(triage(dailyAds()));
     await userEvent.click(screen.getByRole("button", { name: "重試" }));
-    expect(await rulerTitle()).toBe("在投 8 則對照上限 450 TWD");
+    expect(await rulerTitle()).toBe("8 則對照上限 450 TWD");
     expect(listCampaigns).toHaveBeenCalledTimes(1);
   });
 
@@ -543,7 +543,7 @@ describe("A/B block (F29-I13, v10 abBlock)", () => {
     await userEvent.click(await screen.findByRole("button", { name: "關掉輸家（A）→" }));
     expect(await screen.findByText("關掉輸家沒建立成：輸家那則還沒對應到平台上的廣告，先完成上架核對。")).toBeTruthy();
     expect(screen.queryByTestId("where")).toBeNull();
-    expect(await rulerTitle()).toBe("在投 8 則對照上限 450 TWD");
+    expect(await rulerTitle()).toBe("8 則對照上限 450 TWD");
 
     vi.mocked(pauseAbLoser).mockResolvedValue({ id: "set_ab" } as ChangeSet);
     await userEvent.click(screen.getByRole("button", { name: "關掉輸家（A）→" }));
@@ -660,7 +660,7 @@ describe("換掉這一則 (F29-I13, v10 row menu)", () => {
     await userEvent.click(within(inUse).getByRole("button", { name: "取消換掉這一則" }));
     expect((await within(inUse).findByRole("alert")).textContent).toBe("取消換掉這一則沒成功：此素材需求已被核准的變更清單採用，不能取消。");
     expect(within(inUse).getByText("換掉這一則・需求已開")).toBeTruthy();
-    expect(await rulerTitle()).toBe("在投 8 則對照上限 450 TWD");
+    expect(await rulerTitle()).toBe("8 則對照上限 450 TWD");
   });
 
   it("the material list fails: its own failure with retry; the rows and their decisions stay", async () => {
@@ -829,7 +829,7 @@ describe("這期狀態列 (F40-I06, prototype #/perf)", () => {
     rerender({ syncing: true });
     expect((within(row()).getByRole("button", { name: "讀取中…" }) as HTMLButtonElement).disabled).toBe(true);
     vi.mocked(getPerformance).mockResolvedValue(perf({}, { spend: 11581, purchases: 21 }));
-    rerender({ syncing: false });
+    rerender({ syncing: false, readGeneration: 1 });
     expect(await within(row()).findByText("11,581 TWD")).toBeTruthy();
     expect(getPerformance).toHaveBeenCalledTimes(2);
   });
@@ -977,7 +977,7 @@ describe("在投 N 則 counts platform ads only (F40-I06, prototype #/detail)", 
   it("unbuilt local ads: the 缺圖 line names them with 到素材補圖 → the assets tab; the title still counts the platform ads", async () => {
     vi.mocked(getTriage).mockResolvedValue(triage(built));
     renderBody(withAds([localAd("l1", "運動後與忙碌日常", "bound"), localAd("l5", "週末補眠", "unbound"), localAd("l6", "考前衝刺", "unbound")]));
-    expect(await rulerTitle()).toBe("在投 2 則對照上限 450 TWD");
+    expect(await rulerTitle()).toBe("2 則對照上限 450 TWD");
     expect(screen.getByTestId("unbuilt-line").textContent).toBe("另有 2 則沒建到平台（缺圖），不算在投：週末補眠、考前衝刺");
     expect(screen.getByRole("link", { name: "到素材補圖 →" }).getAttribute("href")).toBe(`${WS}?tab=assets`);
     expect(screen.queryByTestId("unmatched-line")).toBeNull();
@@ -986,7 +986,7 @@ describe("在投 N 則 counts platform ads only (F40-I06, prototype #/detail)", 
   it("platform ads not built here (bound_ad_id null): their own line; an older item without the field is not counted", async () => {
     vi.mocked(getTriage).mockResolvedValue(triage([...built, ad("a4", "上班日午休（平台手動建）", "wasted", 1600, 0, OWN_450, { bound_ad_id: null }), ad("a5", "舊工廠沒帶欄位", "on_target", 900, 3)]));
     renderBody(withAds([localAd("l1", "運動後與忙碌日常", "bound")]));
-    expect(await rulerTitle()).toBe("在投 4 則對照上限 450 TWD");
+    expect(await rulerTitle()).toBe("4 則對照上限 450 TWD");
     expect(screen.getByTestId("unmatched-line").textContent).toBe("平台上另有 1 則不是這裡建的：上班日午休（平台手動建）");
     expect(screen.queryByTestId("unbuilt-line")).toBeNull();
   });
@@ -1039,6 +1039,66 @@ describe("served recent money units", () => {
     expect(ruler.textContent).toContain("已花 400 TWD／1,050 TWD");
     expect(ruler.textContent).toContain("38%");
   });
+});
+
+it("F52 does not call unknown platform rows running in the ruler heading", async () => {
+  // Projection of the actual native empty response: two platform rows, unknown delivery and unknown money.
+  const unknown = ["empty-a", "empty-b"].map(id => {
+    const item = ad(id, "還沒有讀到成效的廣告", "insufficient", null, null, {value: 350, basis: "own"});
+    return {...item, reason_code: "no_data", delivery: {state: "unknown" as const, label: "平台狀態不明"},
+      current: {...item.current, currency: null}};
+  });
+  vi.mocked(getTriage).mockResolvedValue(triage(unknown));
+  renderBody(campaignDetail(), {campaign: undefined});
+  const title = await rulerTitle();
+  expect(title).toBe("2 則對照上限 350 TWD");
+  expect(title).not.toContain("在投");
+});
+
+it("F52 makes initial and refreshed comparison reads explicit without presenting failed old data as current", async () => {
+  let first!: (data: AbPairsView) => void;
+  let fail!: (reason: Error) => void;
+  vi.mocked(getAbPairs).mockImplementationOnce(() => new Promise(resolve => {first = resolve;}))
+    .mockImplementationOnce(() => new Promise((_, reject) => {fail = reject;}))
+    .mockResolvedValueOnce(abView([judgedPair()]));
+  vi.mocked(getTriage).mockResolvedValue(triage(dailyAds()));
+  const ui = renderBody(campaignDetail(), {campaign: undefined});
+  expect(await screen.findByText("正在讀取兩則比較…")).toBeTruthy();
+  await act(async () => first(abView([judgedPair()])));
+  const element = await screen.findByTestId("ab-block");
+  const block = within(element);
+  const fold = block.getByRole("button", {name: "怎麼比的"});
+  fireEvent.click(fold);
+  ui.rerender({readGeneration: 1});
+  expect(await block.findByText("正在更新比較…")).toBeTruthy();
+  expect(screen.getByTestId("ab-block")).toBe(element);
+  expect(fold.getAttribute("aria-expanded")).toBe("true");
+  expect((block.getByRole("button", {name: "關掉輸家（A）→"}) as HTMLButtonElement).disabled).toBe(true);
+  await act(async () => fail(new Error("本次兩則比較尚未讀到")));
+  expect(await screen.findByText(/本次兩則比較尚未讀到/)).toBeTruthy();
+  expect(screen.queryByTestId("ab-block")).toBeNull();
+  fireEvent.click(screen.getByRole("button", {name: "重試"}));
+  expect(await screen.findByTestId("ab-block")).toBeTruthy();
+  expect(pauseAbLoser).not.toHaveBeenCalled();
+});
+
+it("F52 preserves the open actual row menu while its terminal-generation reread is pending", async () => {
+  let answer!: (data: CampaignTriage) => void;
+  const pending = new Promise<CampaignTriage>(resolve => {answer = resolve;});
+  const old = triage([ad("e1", "保留這列與展開內容", "watch", 12000, 30, {value: 350, basis: "own"})]);
+  vi.mocked(getTriage).mockResolvedValueOnce(old).mockImplementationOnce(() => pending);
+  const ui = renderBody(campaignDetail(), {campaign: undefined});
+  const row = await screen.findByTestId("ad-row-e1");
+  fireEvent.click(within(row).getByText("⋯"));
+  const menu = within(row).getByText("⋯").closest("details")!;
+  expect(menu.open).toBe(true);
+  ui.rerender({readGeneration: 1});
+  await vi.waitFor(() => expect(getTriage).toHaveBeenCalledTimes(2));
+  expect(screen.getByTestId("ad-row-e1")).toBe(row);
+  expect(menu.open).toBe(true);
+  answer(triage([ad("e1", "保留這列與展開內容", "watch", 11400, 30, {value: 350, basis: "own"})]));
+  expect(await within(row).findByText("380 TWD")).toBeTruthy();
+  expect(menu.open).toBe(true);
 });
 
 vi.mock("@/lib/figures", async (importOriginal) => ({

@@ -1,5 +1,5 @@
 import { campaignFlowPath } from "@/lib/adsRoutes";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Button } from "@/components/layout/ui/button";
 import { getAbPairs, pauseAbLoser, type AbPair as AbPairView } from "@/lib/adsAbApi";
@@ -41,8 +41,14 @@ function Decided({ brandId, campaignId, pair, loser }: { brandId: string; campai
   );
 }
 
-export function AbBlock({ brandId, campaignId, breakEven }: { brandId: string; campaignId: string; breakEven: number | null }) {
+export function AbBlock({ brandId, campaignId, breakEven, readGeneration = 0 }: { brandId: string; campaignId: string; breakEven: number | null; readGeneration?: number }) {
   const read = useApiRead((signal) => getAbPairs(brandId, campaignId, signal), [brandId, campaignId]);
+  const previousRead = useRef(readGeneration);
+  const reload = read.reload;
+  useEffect(() => {
+    if (previousRead.current !== readGeneration) reload();
+    previousRead.current = readGeneration;
+  }, [readGeneration, reload]);
   const navigate = useNavigate();
   const [busy, setBusy] = useState<string | null>(null);
   const [failed, setFailed] = useState<Record<string, string>>({});
@@ -51,6 +57,9 @@ export function AbBlock({ brandId, campaignId, breakEven }: { brandId: string; c
 
   if (read.status === "error") {
     return <ReadFailed what={`兩則比較讀不到（${read.error}）；上面的成績和下面的廣告照常可看。`} onRetry={read.reload} />;
+  }
+  if (read.status === "loading" && !read.data) {
+    return <p role="status" className="text-sm text-muted-foreground">正在讀取兩則比較…</p>;
   }
   const pairs = read.data?.pairs ?? [];
   if (!pairs.length) return null;
@@ -80,18 +89,20 @@ export function AbBlock({ brandId, campaignId, breakEven }: { brandId: string; c
       return <Decided brandId={brandId} campaignId={campaignId} pair={pair} loser={loser} />;
     }
     return (
-      <Button onClick={() => void pauseLoser(pair)} busy={busy === pair.pair_id}>
+      <Button onClick={() => void pauseLoser(pair)} busy={busy === pair.pair_id}
+        disabledReason={read.status === "loading" ? "正在更新比較，完成後再操作" : undefined}>
         {busy === pair.pair_id ? "建立中…" : `關掉輸家（${loser}）→`}
       </Button>
     );
   }
 
   return (
-    <section className="surface px-[22px] py-5" aria-label="兩則只差一處的比較" data-testid="ab-block">
+    <section className="surface px-[22px] py-5" aria-label="兩則只差一處的比較" data-testid="ab-block" aria-busy={read.status === "loading"}>
       <div className="mb-3.5 flex flex-wrap items-center justify-between gap-3">
         <h2 className="text-[15px] font-semibold">兩則只差一處的比較</h2>
         <Chip>{pairs.length} 組</Chip>
       </div>
+      {read.status === "loading" && <p role="status" className="mb-3.5 text-sm text-muted-foreground">正在更新比較…</p>}
       <div className="flex flex-col gap-4">
         {pairs.map((pair, i) => (
           <div key={pair.pair_id} className="flex flex-col gap-4">

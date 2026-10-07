@@ -148,11 +148,11 @@ function CloseResult({ learned, campaignId }: { learned: Learned; campaignId: st
 
 /** The one close dialog. Mount it only while open (`{open && <CloseCampaignDialog …/>}`) so each opening starts
  * without the previous refusal; it stays mounted across the workspace's quiet reload after a platform read, and a
- * read that ends while it is open (syncing true → false) releases a held 確認結案 for the server to re-check.
+ * served terminal read generation while it is open releases a held 確認結案 for the server to re-check.
  * F46: after a successful close it stays open on the result (prototype `#/close`) and reads what was learned
  * (`GET …/coordinate-learnings?campaign_id=`); the closed campaign is handed to the parent, and `onClose` runs, only
  * when the dialog is dismissed (關閉, overlay, Escape or either exit link). */
-export function CloseCampaignDialog({ brandId, campaign: c, onClose, onCampaignChange, onSync, syncing = false, syncError = "" }: {
+export function CloseCampaignDialog({ brandId, campaign: c, onClose, onCampaignChange, onSync, syncing = false, syncError = "", readGeneration = 0 }: {
   brandId: string;
   campaign: CampaignDetail;
   /** Dismiss (取消, overlay, Escape), and dismissing the result after a successful close. */
@@ -163,6 +163,8 @@ export function CloseCampaignDialog({ brandId, campaign: c, onClose, onCampaignC
   syncing?: boolean;
   /** The workspace's last sync failure (job error); the 重讀仍失敗 note shows it. */
   syncError?: string;
+  /** A terminal platform-read outcome for this campaign; POST completion alone does not release coverage. */
+  readGeneration?: number;
 }) {
   const [closing, setClosing] = useState(false);
   const [closeError, setCloseError] = useState<string | null>(null);
@@ -172,11 +174,11 @@ export function CloseCampaignDialog({ brandId, campaign: c, onClose, onCampaignC
   const [reread, setReread] = useState(false);
   const [done, setDone] = useState<{ campaign: CampaignDetail; learned: Learned } | null>(null);
 
-  const wasSyncing = useRef(syncing);
+  const previousRead = useRef(readGeneration);
   useEffect(() => {
-    if (wasSyncing.current && !syncing) setReread(true);
-    wasSyncing.current = syncing;
-  }, [syncing]);
+    if (previousRead.current !== readGeneration) setReread(true);
+    previousRead.current = readGeneration;
+  }, [readGeneration]);
 
   async function handleClose(skipMissing = false) {
     if (c.origin === "imported") return;

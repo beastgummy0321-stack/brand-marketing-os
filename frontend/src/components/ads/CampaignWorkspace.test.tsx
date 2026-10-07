@@ -2,11 +2,16 @@ vi.mock("@/lib/figures", async (actual) => ({ ...await actual<typeof import("@/l
 /** F30-I07: the v10 workspace frame — tab routing (six tabs, `perf` key, `?tab=performance` redirect), the perf tab's
  * 「進階：每日資料、次要指標與舊版檢討」 fold, the two independent reads (campaign, workspace progress) and the step targets. The tab
  * bodies are stubs: each has its own tests. */
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { assetHandoff, type Placement } from "@/lib/adsUserAssetsApi";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { getCampaign, type CampaignDetail } from "@/lib/adsApi";
+import { closeCampaign, getCampaign, getPerformance, type CampaignDetail, type CampaignPerformance } from "@/lib/adsApi";
+import { ApiResponseError } from "@/lib/http";
+import { getTriage, getQueue, type CampaignTriage, type TriageItem } from "@/lib/adsTriageApi";
+import { getAbPairs, type AbPair } from "@/lib/adsAbApi";
+import { listMaterialTasks } from "@/lib/adsMaterialApi";
+import { readComparison } from "@/lib/adsExperimentApi";
 import { completeExternalView, existingCampaigns, syncCampaign, syncJob, syncOutcome, type CampaignSyncOutcome } from "@/lib/adsExternalApi";
 import { getCampaignWorkspace, type CampaignWorkspace as WorkspaceRead } from "@/lib/adsWorkspaceApi";
 import type { StepTarget } from "./nextStep";
@@ -34,7 +39,13 @@ function useKiritimati() {
   beforeEach(() => { orgTimezone = "Pacific/Kiritimati"; vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(KIRITIMATI_INSTANT); });
   afterEach(() => { vi.useRealTimers(); orgTimezone = "Asia/Taipei"; });
 }
-vi.mock("@/lib/adsApi", () => ({ getCampaign: vi.fn() }));
+const composed = vi.hoisted(() => ({ enabled: false }));
+vi.mock("@/lib/adsApi", async importOriginal => ({...await importOriginal<object>(), getCampaign: vi.fn(), getPerformance: vi.fn(), closeCampaign: vi.fn()}));
+vi.mock("@/lib/adsTriageApi", async importOriginal => ({...await importOriginal<object>(), getTriage: vi.fn(), getQueue: vi.fn()}));
+vi.mock("@/lib/adsAbApi", async importOriginal => ({...await importOriginal<object>(), getAbPairs: vi.fn()}));
+vi.mock("@/lib/adsMaterialApi", async importOriginal => ({...await importOriginal<object>(), listMaterialTasks: vi.fn()}));
+vi.mock("@/lib/adsExperimentApi", async importOriginal => ({...await importOriginal<object>(), readComparison: vi.fn()}));
+vi.mock("@/lib/useEchart", () => ({useEchart: () => ({current: null})}));
 vi.mock("@/lib/adsWorkspaceApi", () => ({ getCampaignWorkspace: vi.fn() }));
 vi.mock("@/lib/adsExternalApi", () => ({ completeExternalView: vi.fn(), syncCampaign: vi.fn(), syncJob: vi.fn(), syncOutcome: vi.fn(), existingCampaigns: vi.fn() }));
 // F36-I09: `AssetHandoffPanel` and `currentBudgetMonth` have no suite of their own; this is the nearest one (issue Done #4).
@@ -51,24 +62,28 @@ vi.mock("./DeliveryTab", () => ({ DeliveryTab: () => <h2>共用結構</h2> }));
 vi.mock("./AssetsTab", () => ({ AssetsTab: () => <h2>共用素材</h2> }));
 vi.mock("./ChangeControl", () => ({ ChangeControl: () => <h2>共用變更</h2> }));
 vi.mock("./ReviewPanel", () => ({ ReviewPanel: () => <h2>單則廣告檢討</h2> }));
-vi.mock("./PerformanceTab", () => ({ PerformanceTab: () => <h2>共用成效</h2> }));
+vi.mock("./PerformanceTab", async importOriginal => {
+  const actual = await importOriginal<typeof import("./PerformanceTab")>();
+  return {PerformanceTab: (props: Parameters<typeof actual.PerformanceTab>[0]) => composed.enabled
+    ? <actual.PerformanceTab {...props} /> : <h2>共用成效</h2>};
+});
 // The perf body stub exposes what the workspace hands it for the platform read: its button, the busy flag, the
 // finished read's served sentence and the close dialog's failure text.
-vi.mock("./detail/CampaignDetailPage", () => ({
-  CampaignPerfBody: ({ advanced, onSync, syncing, syncNote, syncError }: {
-    advanced: unknown; onSync: () => void; syncing: boolean; syncNote: { state: string; text: string } | null; syncError: string;
-  }) => (
-    <div>
-      <h2>F29 成效本體</h2>
-      <button type="button" onClick={onSync} disabled={syncing}>{syncing ? "讀取中…" : "重新讀取平台"}</button>
-      <p data-testid="sync-note" data-state={syncNote?.state ?? ""}>{syncNote?.text ?? ""}</p>
-      <p data-testid="sync-error">{syncError}</p>
-      {advanced as never}
-    </div>
-  ),
-}));
+vi.mock("./detail/CampaignDetailPage", async importOriginal => {
+  const actual = await importOriginal<typeof import("./detail/CampaignDetailPage")>();
+  return {CampaignPerfBody: (props: Parameters<typeof actual.CampaignPerfBody>[0]) => composed.enabled
+    ? <actual.CampaignPerfBody {...props} /> : <StubPerfBody {...props} />};
+});
+function StubPerfBody({ advanced, onSync, syncing, syncNote, syncError }: {
+  advanced?: unknown; onSync?: () => void; syncing?: boolean; syncNote?: {state: string; text: string} | null; syncError?: string;
+}) {
+  return <div><h2>F29 成效本體</h2>
+    <button type="button" onClick={onSync} disabled={syncing}>{syncing ? "讀取中…" : "重新讀取平台"}</button>
+    <p data-testid="sync-note" data-state={syncNote?.state ?? ""}>{syncNote?.text ?? ""}</p>
+    <p data-testid="sync-error">{syncError}</p>{advanced as never}</div>;
+}
 
-const CAP = { value: 450, basis: "own", own_value: 450, break_even: 520, price: 1580, product_id: null, result_kind: "purchase", result_label: "購買", missing: [], revision: 1 };
+const CAP: CampaignDetail["cap"] = { value: 450, basis: "own", own_value: 450, break_even: 520, price: 1580, product_id: null, result_kind: "purchase", result_label: "購買", missing: [], revision: 1 };
 function detail(o: Partial<CampaignDetail> = {}): CampaignDetail {
   return { id: "c", name: "日常商品推廣・轉換", objective: "購買", origin: "internal", status: "live", groups: [], cap: CAP,
     start_date: "2026-09-08", end_date: "2026-10-08", capabilities: { allowed: [], unavailable: {} }, ...o } as unknown as CampaignDetail;
@@ -92,6 +107,7 @@ function renderAt(path = "/brands/b/ads/campaigns/c") {
 afterEach(cleanup);
 beforeEach(() => {
   vi.clearAllMocks();
+  composed.enabled = false;
   go = null;
   vi.mocked(getCampaign).mockResolvedValue(detail());
   vi.mocked(getCampaignWorkspace).mockResolvedValue(ws());
@@ -237,6 +253,200 @@ describe("F49 Contract O: 重新讀取平台 follows the campaign's one served o
     fireEvent.click(screen.getByRole("button", { name: "重新讀取平台" }));
     await vi.waitFor(() => expect(screen.getByTestId("sync-note").textContent).toBe("同步失敗：伺服器忙碌"));
     expect(screen.getByTestId("sync-note").getAttribute("data-state")).toBe("error");
+  });
+});
+
+describe("F52 actual composed settlement", () => {
+  function observed(cpp: number): CampaignTriage {
+    const unit = {basis: "own" as const, currency: "TWD", source: "user", unit_basis: "manual_ntd_input"};
+    const metrics = {spend: cpp * 30, result_count: 30, cost_per_result: cpp, result_kind: "purchase",
+      result_label: "購買", derived_zero_days: 0, reason: null, currency: "TWD"};
+    const item: TriageItem = {entity_id: "e1", native_id: "n1", name: "實際廣告・同步後仍開著的列", campaign_id: "c",
+      campaign_name: "日常商品推廣・轉換", thumbnail_url: null, class: "flat", label: "持平", reason_code: "",
+      grade: "watch", grade_label: "偏貴", previous_grade: null, grade_move: null,
+      delivery: {state: "running", label: "投放中"}, delivery_label: "投放中",
+      window: {start: "2026-09-10", end: "2026-09-23", days: 14, previous_start: "2026-08-27",
+        previous_end: "2026-09-09", extended_from: null},
+      target: {value: 350, basis: "own", result_kind: "purchase", result_label: "購買", missing: [],
+        break_even: null, cap_unit: unit}, cap_comparison: {...unit, reason: null, message: null},
+      current: metrics, previous: {...metrics, spend: null, result_count: null, cost_per_result: null},
+      change_pct: null, sample: {gate: true, spend_multiple: null, days_with_events: 14}};
+    return {window_days: 14, items: [item], closed: {groups: [], total: 0, items: [], truncated: false},
+      data: {sync: {state: "ok", error: null, last_success_at: "2026-09-24T00:00:00Z"},
+        coverage: {start: "2026-09-10", end: "2026-09-23"}, missing_days: [],
+        status: {state: "ready", label: "資料已讀齊。", missing_days: [], last_success_at: "2026-09-24T00:00:00Z"}}};
+  }
+  function period(spend: number): CampaignPerformance {
+    return {totals: {spend, impressions: 10000, clicks: 100, purchases: 30, revenue: 24000, cpa: spend / 30,
+      ctr: 0.01, roas_tracked_spend: 24000 / spend, roas_all_spend: 24000 / spend}, daily: [], groups: [], ads: [],
+      coverage: {start: "2026-09-08", end: "2026-09-23", expected: 16, missing: 0, missing_days: [], never_synced: false},
+      last_data_at: "2026-09-24T00:00:00Z", scope: {basis: "campaign_window", start: "2026-09-08", end: "2026-09-23",
+        days: 16, state: "ready", currency: "TWD", last_complete_day: "2026-09-23", incomplete_day_policy: "excluded",
+        day_basis: "account_timezone", account_timezone: "Asia/Taipei", caption: "本期 2026-09-08 ～ 2026-09-23；只計完整帳戶日。"},
+      cap_comparison: {basis: "own", currency: "TWD", source: "user", unit_basis: "manual_ntd_input", reason: null, message: null}};
+  }
+  beforeEach(() => {
+    composed.enabled = true;
+    Element.prototype.scrollIntoView = vi.fn();
+    vi.mocked(getQueue).mockResolvedValue({items: [], counts: {stop_loss: 0, worse: 0, better: 0, flat: 0,
+      insufficient: 0, no_target: 0}, total_ads: 1, kinds_available: [], kinds_pending: []});
+    vi.mocked(getAbPairs).mockResolvedValue({pairs: [], unavailable: null});
+    vi.mocked(listMaterialTasks).mockResolvedValue({tasks: []});
+    vi.mocked(readComparison).mockResolvedValue({proposal: null, missing: "缺少合格對照", stale: false,
+      closed: false, simulation: false, confirmed: null, result: {verdict: "看不出", reason: "缺資料", values: []}});
+  });
+  it.each(["found", "partial"] as const)("refreshes the real row, ruler, period and opened advanced view only after served %s", async (outcomeState) => {
+    vi.useFakeTimers({shouldAdvanceTime: true}); vi.setSystemTime(new Date("2026-09-24T04:30:00Z"));
+    const trace: string[] = []; let terminal = false;
+    let acknowledge!: () => void;
+    const ack = new Promise<void>(resolve => {acknowledge = resolve;});
+    const c = detail({context_json: {}, constraints_json: {}, asset_readiness: {ready_count: 1, total: 1},
+      outcome: {spend: 12000, purchases: 30, revenue: 24000},
+      lifecycle: {state: "live", label: "投放中", can_close: true}, cap: {...CAP, value: 350, own_value: 350},
+      running: {count: 1, unknown: 0, read_at: "2026-09-24T00:00:00Z", stale: false}});
+    vi.mocked(getCampaign).mockImplementation(async () => {trace.push(`campaign ${terminal ? "fresh" : "old"}`); return c;});
+    vi.mocked(getCampaignWorkspace).mockImplementation(async () => {trace.push(`workspace ${terminal ? "fresh" : "old"}`);
+      return ws({active_ads: 1, delivery: "running", lifecycle: c.lifecycle, running: c.running});});
+    vi.mocked(getPerformance).mockImplementation(async () => {trace.push(`performance ${terminal ? "fresh" : "old"}`); return period(terminal ? 11400 : 12000);});
+    vi.mocked(getTriage).mockImplementation(async () => {trace.push(`triage ${terminal ? "fresh" : "old"}`); return observed(terminal ? 380 : 400);});
+    vi.mocked(syncCampaign).mockImplementation(async () => {trace.push("POST start"); await ack; trace.push("POST acknowledged");
+      return {job: {id: "aes_1", status: "pending", last_success_at: null}};});
+    vi.mocked(syncOutcome).mockImplementationOnce(async () => {trace.push("outcome running"); return {state: "running", code: null,
+      text: "正在讀取平台資料", job_ids: ["aes_1"], last_success_at: null};})
+      .mockImplementationOnce(async () => {terminal = true; trace.push(`outcome ${outcomeState}`); return {state: outcomeState,
+        code: outcomeState === "partial" ? "source_error" : null,
+        text: outcomeState === "partial" ? "有部分平台資料沒讀到：素材讀取失敗" : "已讀到平台資料",
+        job_ids: ["aes_1"], last_success_at: "2026-09-24T04:30:00Z"};});
+    try {
+      renderAt("/brands/b/ads/campaigns/c?tab=perf&ad=e1");
+      const row = within(await screen.findByTestId("ad-row-e1"));
+      expect(row.getByText("400 TWD")).toBeTruthy();
+      const status = within(screen.getByTestId("period-status-row"));
+      expect(await status.findByText("12,000 TWD")).toBeTruthy();
+      const fold = screen.getByRole("button", {name: "進階：每日資料、次要指標與舊版檢討"});
+      const advanced = document.getElementById(fold.getAttribute("aria-controls")!)!;
+      expect(fold.getAttribute("aria-expanded")).toBe("true");
+      await within(advanced).findByText("12,000 TWD");
+      fireEvent.click(status.getByRole("button", {name: "重新讀取平台"}));
+      await act(async () => acknowledge());
+      await vi.waitFor(() => expect(trace).toContain("outcome running"));
+      expect(status.getByRole("button", {name: "讀取中…"})).toBeTruthy();
+      expect(trace.some(event => event.endsWith("fresh"))).toBe(false);
+      await act(async () => vi.advanceTimersByTimeAsync(3000));
+      expect(await status.findByText("11,400 TWD")).toBeTruthy();
+      expect(await within(advanced).findByText("11,400 TWD")).toBeTruthy();
+      console.info("F52 actual composed request trace", JSON.stringify(trace));
+      expect(await within(screen.getByTestId("ad-row-e1")).findByText("380 TWD")).toBeTruthy();
+      expect(within(screen.getByRole("region", {name: "對照上限"})).getByRole("button", {name: /實際廣告.*380 TWD/})).toBeTruthy();
+      expect(fold.getAttribute("aria-expanded")).toBe("true");
+      expect(screen.getByTestId("ad-row-e1").className).toContain("ring-primary");
+      if (outcomeState === "partial") expect(status.getByText("有部分平台資料沒讀到：素材讀取失敗")).toBeTruthy();
+      expect(syncJob).not.toHaveBeenCalled();
+    } finally {vi.useRealTimers();}
+  });
+  it.each(["rejected_post", "unknown_outcome", "failed", "empty"] as const)("keeps explicit %s recovery in the real composed screen", async (caseName) => {
+    vi.mocked(getCampaign).mockResolvedValue(detail({context_json: {}, asset_readiness: {ready_count: 1, total: 1},
+      lifecycle: {state: "live", label: "投放中", can_close: true}}));
+    vi.mocked(getTriage).mockResolvedValue(observed(400));
+    vi.mocked(getPerformance).mockResolvedValue(period(12000));
+    const message = {rejected_post: "沒有送出平台讀取", unknown_outcome: "讀取結果暫時無法核實",
+      failed: "這次沒讀到平台資料：授權已失效", empty: "這次讀取沒有新的平台資料"}[caseName];
+    if (caseName === "rejected_post") vi.mocked(syncCampaign).mockRejectedValueOnce(new Error(message));
+    else {
+      vi.mocked(syncCampaign).mockResolvedValueOnce({job: {id: "aes_1", status: "pending", last_success_at: null}});
+      if (caseName === "unknown_outcome") vi.mocked(syncOutcome).mockRejectedValueOnce(new Error(message));
+      else vi.mocked(syncOutcome).mockResolvedValueOnce({state: caseName, code: caseName === "failed" ? "permission_denied" : null,
+        text: message, job_ids: ["aes_1"], last_success_at: null});
+    }
+    renderAt("/brands/b/ads/campaigns/c?tab=perf");
+    const row = within(await screen.findByTestId("ad-row-e1"));
+    const status = within(screen.getByTestId("period-status-row"));
+    fireEvent.click(status.getByRole("button", {name: "重新讀取平台"}));
+    expect(await status.findByText(message)).toBeTruthy();
+    expect(status.getByRole("button", {name: "重新讀取平台"})).toBeTruthy();
+    expect(row.getByText("400 TWD")).toBeTruthy();
+    const settled = caseName === "failed" || caseName === "empty";
+    await vi.waitFor(() => expect(getTriage).toHaveBeenCalledTimes(settled ? 2 : 1));
+    expect(screen.getByRole("button", {name: "進階：每日資料、次要指標與舊版檢討"}).getAttribute("aria-expanded")).toBe("false");
+    if (caseName === "rejected_post") expect(syncOutcome).not.toHaveBeenCalled();
+  });
+  it("does not claim the open dialog reread or release its coverage hold after POST rejection", async () => {
+    vi.mocked(getCampaign).mockResolvedValue(detail({context_json: {}, asset_readiness: {ready_count: 1, total: 1},
+      lifecycle: {state: "live", label: "投放中", can_close: true}}));
+    vi.mocked(getTriage).mockResolvedValue(observed(400));
+    vi.mocked(getPerformance).mockResolvedValue(period(12000));
+    vi.mocked(closeCampaign).mockRejectedValueOnce(new ApiResponseError("有一天還沒讀到平台資料", 409, {}, {
+      code: "coverage_missing", details: {missing_days: ["2026-09-22"], never_synced: false, can_skip: false}}));
+    let rejectPost!: (reason: Error) => void;
+    vi.mocked(syncCampaign).mockImplementationOnce(() => new Promise((_, reject) => {rejectPost = reject;}));
+    renderAt("/brands/b/ads/campaigns/c?tab=perf");
+    const status = within(await screen.findByTestId("period-status-row"));
+    fireEvent.click(status.getByRole("button", {name: "結案這一期 →"}));
+    const dialog = within(await screen.findByRole("dialog"));
+    fireEvent.click(dialog.getByRole("button", {name: "確認結案"}));
+    await dialog.findByText("有 1 天還沒讀到平台資料，先補讀再結案。");
+    expect((dialog.getByRole("button", {name: "確認結案"}) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(dialog.getByRole("button", {name: "重新讀取平台"}));
+    await dialog.findByRole("button", {name: "讀取中…"});
+    await act(async () => rejectPost(new Error("沒有送出平台讀取")));
+    await status.findByText("沒有送出平台讀取");
+    console.info("F52 real dialog POST rejection", JSON.stringify({post: vi.mocked(syncCampaign).mock.calls.length,
+      outcomes: vi.mocked(syncOutcome).mock.calls.length, closeWrites: vi.mocked(closeCampaign).mock.calls.length,
+      confirmDisabled: (dialog.getByRole("button", {name: "確認結案"}) as HTMLButtonElement).disabled,
+      text: dialog.getByRole("alert").textContent}));
+    expect(dialog.queryByText("已重新讀取；按「確認結案」再核對一次。")).toBeNull();
+    expect((dialog.getByRole("button", {name: "確認結案"}) as HTMLButtonElement).disabled).toBe(true);
+    expect(closeCampaign).toHaveBeenCalledTimes(1);
+  });
+  it("refreshes the real nonempty comparison metrics and winner action after terminal settlement", async () => {
+    vi.useFakeTimers({shouldAdvanceTime: true});
+    const trace: string[] = []; let terminal = false;
+    const pair = (fresh: boolean): AbPair => ({pair_id: "e1:e2", group_id: "g1", group_name: "實際比較組",
+      dimension: "hook", dimension_label: "開場",
+      a: {ad_id: "a1", entity_id: "e1", name: "開箱畫面", value_label: "開箱", thumbnail_url: null,
+        spend: fresh ? 560 : 330, results: fresh ? 10 : 6, cost_per_result: fresh ? 56 : 55},
+      b: {ad_id: "a2", entity_id: "e2", name: "出門情境", value_label: "出門", thumbnail_url: null,
+        spend: fresh ? 720 : 410, results: fresh ? 16 : 11, cost_per_result: fresh ? 45 : 37.27},
+      window: {start: "2026-09-17", end: "2026-09-23"}, days: 7,
+      rules: {min_days: 7, min_conversions_each: 10, relative_difference: 0.1}, state: fresh ? "judged" : "collecting",
+      missing: {days: 0, a_results: fresh ? 0 : 4, b_results: 0}, winner: fresh ? "b" : null,
+      difference_pct: fresh ? 19.6 : null, reason: fresh ? "出門情境每次轉換成本低 19.6%" : null, decision: null});
+    const c = detail({context_json: {}, asset_readiness: {ready_count: 2, total: 2},
+      lifecycle: {state: "live", label: "投放中", can_close: true}});
+    vi.mocked(getCampaign).mockResolvedValue(c);
+    vi.mocked(getTriage).mockImplementation(async () => {
+      const result = observed(terminal ? 380 : 400);
+      return {...result, items: [result.items[0], {...result.items[0], entity_id: "e2", native_id: "n2", name: "出門情境"}]};
+    });
+    vi.mocked(getPerformance).mockImplementation(async () => {
+      const result = period(terminal ? 22800 : 24000);
+      return {...result, totals: {...result.totals, purchases: 60, cpa: terminal ? 380 : 400, revenue: 48000,
+        roas_tracked_spend: 48000 / result.totals.spend!, roas_all_spend: 48000 / result.totals.spend!}};
+    });
+    vi.mocked(getAbPairs).mockImplementation(async () => {trace.push(`ab-pairs ${terminal ? "fresh" : "old"}`);
+      return {pairs: [pair(terminal)], unavailable: null};});
+    vi.mocked(syncCampaign).mockImplementation(async () => {trace.push("POST acknowledged");
+      return {job: {id: "aes_1", status: "pending", last_success_at: null}};});
+    vi.mocked(syncOutcome).mockImplementationOnce(async () => {trace.push("outcome running");
+      return {state: "running", code: null, text: "正在讀取平台資料", job_ids: ["aes_1"], last_success_at: null};})
+      .mockImplementationOnce(async () => {terminal = true; trace.push("outcome found");
+        return {state: "found", code: null, text: "已讀到平台資料", job_ids: ["aes_1"], last_success_at: "2026-09-24T04:30:00Z"};});
+    try {
+      renderAt("/brands/b/ads/campaigns/c?tab=perf");
+      const block = within(await screen.findByTestId("ab-block"));
+      expect(block.queryByRole("button", {name: "關掉輸家（A）→"})).toBeNull();
+      const fold = block.getByRole("button", {name: "怎麼比的"}); fireEvent.click(fold);
+      await act(async () => fireEvent.click(within(screen.getByTestId("period-status-row")).getByRole("button", {name: "重新讀取平台"})));
+      expect(trace).toContain("outcome running");
+      await act(async () => vi.advanceTimersByTimeAsync(3000));
+      await within(screen.getByTestId("period-status-row")).findByText("22,800 TWD");
+      console.info("F52 actual comparison settlement trace", JSON.stringify(trace));
+      expect(await block.findByRole("button", {name: "關掉輸家（A）→"})).toBeTruthy();
+      expect(block.getByText("56 元")).toBeTruthy();
+      expect(block.getByText("45 元")).toBeTruthy();
+      expect(block.getByText(/每筆便宜 19\.6%/)).toBeTruthy();
+      expect(fold.getAttribute("aria-expanded")).toBe("true");
+    } finally {vi.useRealTimers();}
   });
 });
 

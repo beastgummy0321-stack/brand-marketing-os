@@ -105,10 +105,10 @@ function RulerCard({ items, status, strategyHref, assetsHref, campaign, onAdClic
     note: trendNote(item),
   }));
   const title = !cap
-    ? <>在投 {items.length} 則，沒設<Term k="cap">上限</Term></>
+    ? <>{items.length} 則，沒設<Term k="cap">上限</Term></>
     : cap.basis === "break_even"
-      ? <>在投 {items.length} 則對照暫用<Term k="break_even" value={breakEven}>打平線</Term> {formatAmount(cap.value)} {cap.currency ?? "幣別未知"}</>
-      : <>在投 {items.length} 則對照<Term k="cap">上限</Term> {formatAmount(cap.value)} {cap.currency ?? "幣別未知"}</>;
+      ? <>{items.length} 則對照暫用<Term k="break_even" value={breakEven}>打平線</Term> {formatAmount(cap.value)} {cap.currency ?? "幣別未知"}</>
+      : <>{items.length} 則對照<Term k="cap">上限</Term> {formatAmount(cap.value)} {cap.currency ?? "幣別未知"}</>;
   // Prototype `beCap`: the dashed 打平 mark is drawn only beside an own cap that differs from it; this line names it.
   const beLine = cap && cap.basis === "own" && breakEven !== null && Math.abs(breakEven - cap.value) > 0.01;
   const statusChip = dataStatusChip(status);
@@ -227,7 +227,7 @@ export function CampaignDetailPage({ brandId, campaignId }: { brandId: string; c
 /** The workspace perf tab body (prototype v10 `tabPerf()` under `wsHead()`): the ruler card, the A/B block, the grade
  * groups, 不在投的 and the bottom bar. The workspace head (name, chips, rail, tabs) is the caller's. `origin`: an
  * imported campaign has no A/B block (never read). */
-export function CampaignPerfBody({ brandId, campaignId, origin, advanced, triage: shared, campaign, onCampaignChange, onSync, syncing = false, syncError = "", syncNote = null }: {
+export function CampaignPerfBody({ brandId, campaignId, origin, advanced, triage: shared, campaign, onCampaignChange, onSync, syncing = false, syncError = "", syncNote = null, readGeneration = 0 }: {
   brandId: string; campaignId: string; origin: "internal" | "imported" | undefined;
   /** The caller's own triage read (the standalone page shares it with its header); else the body reads it. */
   triage?: ApiRead<CampaignTriage>;
@@ -243,6 +243,7 @@ export function CampaignPerfBody({ brandId, campaignId, origin, advanced, triage
   syncError?: string;
   /** F49 Contract O: the outcome of the workspace's last platform read (printed beside 重新讀取平台). */
   syncNote?: SyncNote | null;
+  readGeneration?: number;
 }) {
   const [searchParams] = useSearchParams();
   const highlightAdParam = searchParams.get("ad");
@@ -250,6 +251,12 @@ export function CampaignPerfBody({ brandId, campaignId, origin, advanced, triage
 
   const own = useApiRead((signal) => (shared ? Promise.resolve(null) : getTriage(brandId, campaignId, signal)), [brandId, campaignId, Boolean(shared)]);
   const triage = shared ?? (own as ApiRead<CampaignTriage>);
+  const previousRead = useRef(readGeneration);
+  const reloadTriage = triage.reload;
+  useEffect(() => {
+    if (previousRead.current !== readGeneration) reloadTriage();
+    previousRead.current = readGeneration;
+  }, [readGeneration, reloadTriage]);
   const queue = useApiRead((signal) => getQueue(brandId, signal).then((q) => q.items), [brandId]);
   const requests = useReplaceRequests(brandId, campaignId);
 
@@ -258,7 +265,7 @@ export function CampaignPerfBody({ brandId, campaignId, origin, advanced, triage
   const [highlightId, setHighlightId] = useState<string | null>(null);
   const rowRefs = useRef(new Map<string, HTMLDivElement>());
 
-  const items = triage.status === "ready" ? triage.data.items : null;
+  const items = triage.data?.items ?? null;
 
   // `?ad=<entity_id>`: open that ad's group and highlight its row, once per id; an unknown id is ignored.
   const [handledAdParam, setHandledAdParam] = useState<string | null>(null);
@@ -290,20 +297,22 @@ export function CampaignPerfBody({ brandId, campaignId, origin, advanced, triage
   );
   const cleanup = queueItems ? openCleanup(brandId, campaignId, queueItems) : null;
 
-  const closed = triage.status === "ready" ? triage.data.closed : null;
-  const status = triage.status === "ready" ? triage.data.data?.status ?? null : null;
+  const closed = triage.data?.closed ?? null;
+  const status = triage.data?.data?.status ?? null;
   const active = items !== null && items.length > 0 ? items : null;
   const breakEven = active?.[0].target.break_even ?? null;
-  const lastSuccessAt = triage.status === "ready" ? triage.data.data?.sync.last_success_at ?? null : null;
+  const lastSuccessAt = triage.data?.data?.sync.last_success_at ?? null;
   const withRow = campaign && onCampaignChange && campaign.lifecycle !== undefined && campaign.lifecycle.state !== "draft";
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-4" aria-busy={triage.status === "loading"}>
       {withRow && (
         <PeriodStatusRow brandId={brandId} campaign={campaign} lastSuccessAt={lastSuccessAt} onCampaignChange={onCampaignChange}
-          onSync={onSync} syncing={syncing} syncError={syncError} syncNote={syncNote} />
+          onSync={onSync} syncing={syncing} syncError={syncError} syncNote={syncNote} readGeneration={readGeneration} />
       )}
-      {triage.status === "loading" && <Skeleton className="h-60 w-full" />}
+      {triage.status === "loading" && (triage.data
+        ? <p role="status" className="text-sm text-muted-foreground">正在更新成效…</p>
+        : <Skeleton className="h-60 w-full" />)}
       {triage.status === "error" && (
         <ReadFailed what={`成效讀不到：${triage.error}`} onRetry={triage.reload} />
       )}
@@ -324,7 +333,7 @@ export function CampaignPerfBody({ brandId, campaignId, origin, advanced, triage
             campaign={campaign}
             onAdClick={(id) => { const a = actions.get(id); if (a) navigate(a.href); }}
           />
-          {origin !== "imported" && <AbBlock brandId={brandId} campaignId={campaignId} breakEven={breakEven} />}
+          {origin !== "imported" && <AbBlock brandId={brandId} campaignId={campaignId} breakEven={breakEven} readGeneration={readGeneration} />}
           {queue.status === "error" && (
             <ReadFailed what={`決策進度讀不到（${queue.error}）；成績照常可看，哪幾則在清理提議或要處理暫時看不到。`} onRetry={queue.reload} />
           )}
