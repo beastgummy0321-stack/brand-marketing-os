@@ -1,5 +1,5 @@
 import { beforeEach, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ManualSettings } from "./ManualSettings";
 import { getCampaign, type CampaignDetail } from "@/lib/adsApi";
@@ -178,4 +178,46 @@ it("F49 Contract L: an ended campaign (not yet closed) still edits its settings"
 it("groupId of a group without manual settings renders nothing", () => {
   const { container } = render(<ManualSettings draftScope={testScope} brandId="b1" campaign={campaign()} groupId="other" onSaved={vi.fn()} />);
   expect(container.textContent).toBe("");
+});
+
+it("successful PUT remains blocked through failed readback; retry reads without writing again", async () => {
+  const user = userEvent.setup();
+  const onSaved = vi.fn();
+  const blocker = vi.fn();
+  vi.mocked(saveManualSettings).mockResolvedValue(undefined);
+  vi.mocked(getCampaign).mockRejectedValueOnce(new Error("讀取逾時")).mockResolvedValue(campaign("新設定") as never);
+  render(<ManualSettings draftScope={testScope} brandId="b1" campaign={campaign()} onSaved={onSaved} onBlockerChange={blocker} />);
+  await user.click(screen.getByRole("button", { name: "補齊再行銷設定" }));
+  await user.type(await screen.findByRole("textbox", { name: "受眾來源 *" }), "新設定");
+  await user.click(screen.getByRole("button", { name: "儲存這組設定" }));
+  expect((await screen.findByRole("alert")).textContent).toContain("設定已寫入，但活動資料讀不到");
+  expect(blocker.mock.lastCall?.[0]).toBeTruthy();
+  expect((screen.getByRole("button", { name: "取消變更" }) as HTMLButtonElement).disabled).toBe(true);
+  expect(onSaved).not.toHaveBeenCalled();
+  await user.click(screen.getByRole("button", { name: "重新讀取設定" }));
+  await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(1));
+  expect(saveManualSettings).toHaveBeenCalledTimes(1);
+  expect(getCampaign).toHaveBeenCalledTimes(2);
+  await waitFor(() => expect(blocker.mock.lastCall?.[0]).toBeNull());
+});
+
+it("same-tick save clicks send one PUT; a late readback cannot notify a different owner", async () => {
+  const user = userEvent.setup();
+  const oldSaved = vi.fn();
+  const newSaved = vi.fn();
+  let finish!: (value: CampaignDetail) => void;
+  vi.mocked(saveManualSettings).mockResolvedValue(undefined);
+  vi.mocked(getCampaign).mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+  const rendered = render(<ManualSettings draftScope={testScope} brandId="b1" campaign={campaign()} onSaved={oldSaved} />);
+  await user.click(screen.getByRole("button", { name: "補齊再行銷設定" }));
+  await user.type(await screen.findByRole("textbox", { name: "受眾來源 *" }), "舊組織草稿");
+  const save = screen.getByRole("button", { name: "儲存這組設定" });
+  fireEvent.click(save); fireEvent.click(save);
+  await waitFor(() => expect(getCampaign).toHaveBeenCalledTimes(1));
+  expect(saveManualSettings).toHaveBeenCalledTimes(1);
+  rendered.rerender(<ManualSettings draftScope={`${testScope}:other`} brandId="b1" campaign={campaign("新組織設定")} onSaved={newSaved} />);
+  await act(async () => { finish(campaign("舊組織草稿") as CampaignDetail); });
+  expect(oldSaved).not.toHaveBeenCalled();
+  expect(newSaved).not.toHaveBeenCalled();
+  expect(screen.queryByDisplayValue("舊組織草稿")).toBeNull();
 });
