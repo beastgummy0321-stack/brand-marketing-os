@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { strategyFixture } from "../src/components/ads/strategy/strategyEvidence.fixtures";
+import {libraryEvidenceFixture, libraryOptionsFixture, libraryShellFixture} from "../src/components/ads/learnings/learningEvidence.fixtures";
 
 /** 殼寬回歸閘門（票 u2-fluid-shell-to-1920，ADR 0051 rule 4／Consequences）：16 條路由
  * 在 1280 寬時，殼不能橫向溢出視窗——這是 ADR 0051 量過的那件事（固定 1440px 殼在
@@ -30,6 +31,106 @@ async function api<T>(page: Page, headers: ApiHeaders, method: string, path: str
   const text = await response.text();
   expect(response.ok(), `${method} ${path} failed: ${response.status()} ${text}`).toBeTruthy();
   return text ? (JSON.parse(text) as T) : ({} as T);
+}
+
+for (const width of [1024, 1920]) {
+  test(`F53 library ${width}: source keyboard, retained scope, null/zero, cold and read recovery`, async ({page}, info) => {
+    await page.setViewportSize({width, height: 1200});
+    await page.goto("/app/login");
+    await page.getByLabel("Email").fill("123@example.com");
+    await page.getByLabel("密碼").fill("123456");
+    await page.getByRole("button", {name: "登入", exact: true}).click();
+    await page.waitForURL(url => !url.pathname.includes("login"));
+    const data = libraryEvidenceFixture();
+    const long = "下班後夜跑、步行通勤與戶外活動的完整商品情境名稱".repeat(8);
+    data.evidence_context.items[0].display_text = long;
+    data.evidence_context.items[0].scope.product_label = long;
+    data.evidence_context.items[0].contrary_count = 1;
+    data.evidence_context.items[0].use_state = "revalidation";
+    data.evidence_context.items[0].reason_labels = ["已有反向觀察，需重新核對。"];
+    const picks = structuredClone(libraryOptionsFixture);
+    picks.products[0].name = long;
+    picks.products.push({...picks.products[0], id: "prd_second", name: "第二商品 · 單件"});
+    let fail = false;
+    let release: (() => void) | null = null;
+    let delay = false;
+    let cold = false;
+    const errors: string[] = [];
+    const writes: string[] = [];
+    page.on("pageerror", error => errors.push(error.message));
+    await page.route("**/api/**", route => {
+      if (route.request().method() !== "GET") {writes.push(route.request().url()); return route.abort();}
+      return route.continue();
+    });
+    await page.route("**/api/dashboard/overview", route => route.fulfill({json: {data: [{brand_id: "brd_f53_ui", brand_name: "夜行裝備", health: "green", revenue_this_month: null, revenue_mom_pct: null, next_step: null}], generated_at: "2026-10-08T00:00:00Z"}}));
+    await page.route("**/api/jobs/active", route => route.fulfill({json: {data: [], total: 0, other_count: 0, done_today: 0, failed_today: 0, generated_at: "2026-10-08T00:00:00Z", worker_alive: true, stalled: false}}));
+    await page.route("**/api/library/brands/brd_f53_ui", route => route.fulfill({json: {data: libraryShellFixture, generated_at: "2026-10-08T00:00:00Z"}}));
+    await page.route("**/api/ads/brands/brd_f53_ui/new-campaign/options", route => route.fulfill({json: picks}));
+    await page.route("**/api/ads/brands/brd_f53_ui/coordinate-learnings*", async route => {
+      const id = new URL(route.request().url()).searchParams.get("sell_way_id");
+      if (id && delay) await new Promise<void>(resolve => {release = resolve;});
+      if (id && fail) return route.fulfill({status: 502, json: {error: {message: "來源暫時無法讀取"}}});
+      const response = structuredClone(data);
+      if (id) {response.evidence_context.scope_product_id = id; response.next = null; response.campaigns = [];}
+      if (cold) {response.evidence_context.items = []; response.evidence_context.eligible_count = 0; response.campaigns = []; response.next = null;}
+      return route.fulfill({json: response});
+    });
+    await page.goto("/app/brands/brd_f53_ui/library?tab=ads-learnings");
+    const scene = page.locator("[data-slot=learning-screen]");
+    await expect(page.getByRole("link", {name: "用可參考資料規劃下一期 →"})).toBeVisible();
+    await expect(scene.getByText("本商品不適用。", {exact: true})).toBeVisible();
+    await expect(scene.getByText("已有反向觀察，需重新核對。", {exact: true})).toBeVisible();
+    for (const node of [page.locator("#root"), page.locator("body"), scene, page.locator("[data-slot=qualified-learning-list]")]) {
+      expect(await node.evaluate(element => element.scrollWidth)).toBeLessThanOrEqual(await node.evaluate(element => element.clientWidth));
+    }
+    const bounds = await scene.evaluate(node => {
+      const r = node.getBoundingClientRect();
+      return {left: r.left, right: r.right, cards: Array.from(node.querySelectorAll(".surface, [data-slot=library-learning-row], [data-slot=learning-evidence] p")).map(card => {const c = card.getBoundingClientRect(); return {left: c.left, right: c.right};})};
+    });
+    for (const card of bounds.cards) {expect(card.left).toBeGreaterThanOrEqual(bounds.left - 1); expect(card.right).toBeLessThanOrEqual(bounds.right + 1);}
+    await expect(page.getByRole("button", {name: "每期廣告排名"})).toHaveAttribute("aria-expanded", "false");
+    await scene.getByRole("button", {name: "查看 →"}).first().click();
+    const longSource = page.getByRole("dialog", {name: "經驗來源與適用範圍"});
+    await longSource.getByRole("button", {name: "完整來源與限制"}).click();
+    expect(await longSource.evaluate(node => node.scrollWidth)).toBeLessThanOrEqual(await longSource.evaluate(node => node.clientWidth));
+    await expect(longSource.getByText("已有反向觀察，需重新核對。", {exact: true})).toBeVisible();
+    await page.screenshot({path: info.outputPath(`library-source-long-complete-${width}.png`), fullPage: true});
+    await page.keyboard.press("Escape");
+    const sourceTrigger = scene.getByRole("button", {name: "查看 →"}).nth(3);
+    await sourceTrigger.focus(); await page.keyboard.press("Enter");
+    const dialog = page.getByRole("dialog", {name: "經驗來源與適用範圍"});
+    await expect(dialog.getByText("樣本尚未完整核實", {exact: true})).toBeVisible();
+    for (let i = 0; i < 8; i++) {await page.keyboard.press("Tab"); expect(await dialog.evaluate(node => node.contains(document.activeElement))).toBe(true);}
+    await page.screenshot({path: info.outputPath(`library-source-null-${width}.png`), fullPage: true});
+    await page.keyboard.press("Escape"); await expect(sourceTrigger).toBeFocused();
+    await scene.getByRole("button", {name: "查看 →"}).nth(4).click();
+    await expect(dialog.getByText("0 筆", {exact: true})).toBeVisible();
+    await page.keyboard.press("Escape");
+    await page.getByRole("button", {name: "下一期商品範圍"}).click();
+    await page.getByRole("combobox", {name: "選擇商品"}).selectOption("prd_second");
+    await expect(page.getByRole("link", {name: "用可參考資料規劃下一期 →"})).toHaveAttribute("href", "/app/brands/brd_f53_ui/ads/new?sell_way=prd_second");
+    delay = true;
+    await page.getByRole("button", {name: "重新讀取 ↻"}).click();
+    await expect(page.getByRole("status")).toContainText("正在讀取");
+    await expect(scene.locator("[data-slot=library-learning-row]")).toHaveCount(6);
+    await page.screenshot({path: info.outputPath(`library-loading-${width}.png`), fullPage: true});
+    await expect.poll(() => Boolean(release)).toBe(true);
+    delay = false; fail = true; release!();
+    await expect(page.getByRole("alert")).toContainText("保留同商品上次讀取");
+    await expect(page.getByRole("combobox", {name: "選擇商品"})).toHaveValue("prd_second");
+    await page.screenshot({path: info.outputPath(`library-error-retained-draft-${width}.png`), fullPage: true});
+    fail = false;
+    await page.getByRole("button", {name: "重新讀取", exact: true}).click();
+    await expect(page.getByRole("link", {name: "用可參考資料規劃下一期 →"})).toHaveAttribute("href", "/app/brands/brd_f53_ui/ads/new?sell_way=prd_second");
+    cold = true; await page.reload();
+    await page.getByRole("button", {name: "下一期商品範圍"}).click();
+    await page.getByRole("combobox", {name: "選擇商品"}).selectOption("prd_fixture");
+    await expect(page.getByText("還沒有學習紀錄", {exact: true})).toBeVisible();
+    await page.screenshot({path: info.outputPath(`library-cold-${width}.png`), fullPage: true});
+    await page.getByRole("link", {name: "用可參考資料規劃下一期 →"}).click();
+    await expect(page).toHaveURL(/\/app\/brands\/brd_f53_ui\/ads\/new\?sell_way=prd_fixture$/);
+    expect(errors).toEqual([]); expect(writes).toEqual([]);
+  });
 }
 
 test("15 條路由（扣 /accept-invite）在 1280 寬不橫向溢出", async ({ page }) => {

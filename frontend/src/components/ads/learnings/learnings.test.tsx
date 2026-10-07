@@ -26,6 +26,9 @@ import { GroupSummary } from "./GroupSummary";
 import { LearningsTab, learningsCount, type LearningsLoad } from "./LearningsTab";
 import { LearningsTable } from "./LearningsTable";
 import { RULES_FIXTURE } from "../patterns/rulesFixture";
+import {libraryOptionsFixture} from "./learningEvidence.fixtures";
+vi.mock("@/lib/adsWizardApi", () => ({getWizardOptions: vi.fn(async () => ({...libraryOptionsFixture, products: [{...libraryOptionsFixture.products[0], id: "prd_box"}]}))}));
+vi.mock("@/lib/adsLearningsApi", () => ({getCoordinateLearnings: vi.fn(async () => DATA)}));
 
 const G_STUDY = { id: "pcg_study", who: "學生備考" };
 const G_COMMUTE = { id: "pcg_commute", who: "通勤上班族" };
@@ -78,7 +81,7 @@ const GAP: LearningCampaign = {
   rule_text: "", empty_reason: "資料缺天，這期沒有記學習", rows: [],
 };
 const DATA: CoordinateLearnings = {
-  evidence_context: evidenceContext, campaigns: [B, A, GAP],
+  evidence_context: {...evidenceContext, scope_product_id: "prd_box"}, campaigns: [B, A, GAP],
   groups: [
     { customer_group_id: "pcg_study", who: "學生備考", ads: 3, spend: 6035, sales: 12, cap: 450, cost_per_sale: 502.9 },
     { customer_group_id: "pcg_gone", who: "已刪除的顧客群", ads: 1, spend: 3000, sales: 4, cap: 450, cost_per_sale: 750 },
@@ -88,11 +91,13 @@ const DATA: CoordinateLearnings = {
 };
 
 function tab(state: LearningsLoad, opts: { highlight?: string; onRetry?: () => void } = {}) {
-  return render(
+  const view = render(
     <MemoryRouter>
       <LearningsTab brandId="brd_1" state={state} onRetry={opts.onRetry ?? vi.fn()} highlightCampaignId={opts.highlight} />
     </MemoryRouter>,
   );
+  if (state.status === "ready" && !opts.highlight) fireEvent.click(screen.getByRole("button", {name: "每期廣告排名"}));
+  return view;
 }
 const rowsOf = (name: string) => within(screen.getByRole("table", { name: `${name} 每則廣告排名` })).getAllByRole("row").slice(1);
 
@@ -153,9 +158,9 @@ describe("LearningsTab 投放學到的", () => {
     expect(within(first).queryByText("痛點")).toBeNull();
   });
 
-  it("header: next-plan link to next.new_campaign_href, rule strip and group summary", () => {
+  it("header: next-plan link to next.new_campaign_href, rule strip and group summary", async () => {
     tab({ status: "ready", data: DATA });
-    expect(screen.getByRole("link", { name: "用這些學習排下一期 →" }).getAttribute("href")).toBe("/brands/brd_1/ads/new?sell_way=prd_box");
+    expect((await screen.findByRole("link", { name: "用可參考資料規劃下一期 →" })).getAttribute("href")).toBe("/brands/brd_1/ads/new?sell_way=prd_box");
     // The strip prints the newest ranked campaign's served rule_text, then the served sample flag (no constant here).
     const strip = screen.getByLabelText("怎麼判");
     expect(within(strip).getByText(`最近一期：${B.rule_text}`)).toBeTruthy();
