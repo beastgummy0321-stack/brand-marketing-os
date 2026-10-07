@@ -47,8 +47,28 @@ vi.mock("./tabs/CoordinatesTab", () => ({ CoordinatesTab: () => <p>創意座標�
 import { fetchLibrary, type LibraryData } from "@/lib/libraryApi";
 import { getCoordinateLearnings, type CoordinateLearnings } from "@/lib/adsLearningsApi";
 import { LibraryPage } from "./LibraryPage";
-import {getWizardOptions} from "@/lib/adsWizardApi";
-import {libraryEvidenceFixture, libraryOptionsFixture} from "../ads/learnings/learningEvidence.fixtures";
+import {getWizardOptions, type WizardOptions} from "@/lib/adsWizardApi";
+
+// Synthetic public-wire receipts stay inside the consuming feature's test boundary.
+const scopedOptions: WizardOptions = {
+  products: [{id: "prd_box", name: "三盒組", display_name: "三盒組", kind: "bundle",
+    knowledge_product_id: "kp_box", knowledge_product_name: "三盒組", price: 999, currency: "TWD",
+    thumbnail_url: null, has_cost: true, break_even: 450, cap_per_sale: 450, derived_fields: [],
+    offer_labels: [], customer_groups: [{id: "pcg_1", who: "學生備考"}], landing_url: null,
+    previous: null, learned: null}],
+  objectives: [], default_objective: "購買", default_platform: null,
+};
+
+function scopedLearning(id: string): LearningEvidence {
+  const row = learningEvidence(id);
+  return {...row, display_text: "先前訊息可保留作對照", provenance: "platform_observation",
+    support_label: "單次觀察", use_state: "usable", reason_codes: [], reason_labels: ["保留對照，仍待測試"],
+    allowed_uses: ["test", "retain_control"], independent_count: 1, same_direction_count: 1,
+    sources: [{kind: "campaign", id: "adc_source", version: "source-v1", label: "先前活動",
+      period: {start: "2026-09-01", end: "2026-09-30"}}],
+    scope: {...row.scope, product_id: "prd_box", product_label: "三盒組", customer_group_id: "pcg_1"},
+    sample: {result_events: 6, sufficient: false}};
+}
 
 const mockFetchLibrary = vi.mocked(fetchLibrary);
 const mockLearnings = vi.mocked(getCoordinateLearnings);
@@ -166,11 +186,11 @@ it("explains why brand editing is unavailable after a failed read", async () => 
 });
 
 it("scoped qualification never replaces global nav counts or the complete campaign ranks", async () => {
-  vi.mocked(getWizardOptions).mockResolvedValue({...libraryOptionsFixture, products: [{...libraryOptionsFixture.products[0], id: "prd_box"}]});
-  const scoped = libraryEvidenceFixture();
-  scoped.evidence_context.scope_product_id = "prd_box";
-  scoped.campaigns = [];
-  scoped.next = {sell_way_id: "prd_box", new_campaign_href: "/brands/brand-1/ads/new?sell_way=prd_box"};
+  vi.mocked(getWizardOptions).mockResolvedValue(scopedOptions);
+  const scoped: CoordinateLearnings = {campaigns: [], groups: [],
+    evidence_context: {...evidenceContext, scope_product_id: "prd_box", scope_label: "三盒組",
+      eligible_count: 2, items: [scopedLearning("scoped_1"), scopedLearning("scoped_2")]},
+    next: {sell_way_id: "prd_box", new_campaign_href: "/brands/brand-1/ads/new?sell_way=prd_box"}};
   mockLearnings.mockImplementation(async (_brand, filter) => filter?.sellWayId ? scoped : LEARNED);
   view("/brands/brand-1/library?tab=ads-learnings");
   expect(await screen.findByRole("button", {name: /^投放學到的\s*2$/})).toBeTruthy();
