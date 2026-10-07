@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "feature": "F53",
-  "status": "historical-operations-unverified-corrected-final-pending",
+  "status": "tooling-calibrated-provider-and-corrected-final-pending",
   "cases_sha256": "48ada4e752fa4c2e5848b7b986e3af7146c9ede0aa712b7a72460b5d53505339",
   "gates": {
     "G1": {
@@ -20,7 +20,10 @@
       "status": "unverified"
     },
     "G6": {
-      "status": "unverified"
+      "status": "unverified",
+      "provider_receipt": "provider-receipt.json",
+      "diagnosis": "readonly CLI version/login controls complete; prior direct timeout cause unknown",
+      "actual_sample": "pending lead-owned sole gateway sample on stable merged main"
     },
     "G7": {
       "status": "unverified",
@@ -28,7 +31,7 @@
       "auth": "unverified",
       "restore": "historical-pass",
       "aggregation": "failed",
-      "corrected_final_acceptance": "pending lead-owned new nonce after reviewed repair merge"
+      "corrected_final_acceptance": "pending lead-owned new nonce after reviewed I08 selector/metadata calibration merge"
     }
   },
   "G8": {
@@ -53,5 +56,5 @@
       "G8"
     ]
   },
-  "provenance": "I09 ran real owned Auth and isolated PG/Storage modes once on original frozen runner. Real issuer refresh succeeded but pre-browser fixture failed; restore passed and cleaned up. Aggregation failed. Original raw evidence is historical; corrected final G7 remains pending. No provider generation, fixed cycle, or final integration acceptance has run."
+  "provenance": "Historical I09 Auth/restore receipts and the failed first combined attempt remain preserved. I08 calibrates only the supported login selector, sanitized stage diagnostics and owned test account metadata; pure regressions do not prove actual operational gates. Main readonly CLI controls found executable/version/login availability; model response and prior timeout cause remain unverified. No provider generation, Auth, restore or fixed cycle ran in this lease. Corrected final acceptance and independent model semantics remain lead-owned pending."
 }

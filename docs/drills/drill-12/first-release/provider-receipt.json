@@ -1,0 +1,87 @@
+{
+  "schema_version": 1,
+  "feature": "F53",
+  "gate": "G6",
+  "status": "unverified",
+  "disposition": "Readonly diagnosis complete; actual provider sample pending lead after reviewed calibration merge",
+  "run_id": "a9a73ea80be044ff840ab8c2f7d953ab",
+  "context": {
+    "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\I08-diagnosis-20261008-8d930a\\context.json",
+    "bytes": 21600,
+    "sha256": "997b4853be0459f3236b173729684d928403f43b755ccdd57b64f39acdb3adf3"
+  },
+  "diagnosis": {
+    "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\I08-diagnosis-20261008-8d930a\\provider-diagnosis.json",
+    "bytes": 1002,
+    "sha256": "ad1bbb479d5db2346e611409a68082992a3e876b98fa274a41dcb488ebae276e"
+  },
+  "cases_sha256": "48ada4e752fa4c2e5848b7b986e3af7146c9ede0aa712b7a72460b5d53505339",
+  "diagnosis_main_source_hashes": {
+    "product": "f17763b0f2723a29fd31447cd223f5f50880ead3a9c0a4062cc91439decb75d5",
+    "ui": "b01c806e52870fd7a243577f84a97f06579ab63d3a79f51e46d7fb81ddecf8f9",
+    "probe": "3edf46b26a546524e2dc9a3704e8619eeac01de53b56b6c72a2c00374fb33301",
+    "runtime_config": "3826657d9f99c968c0a509b9d4513952c5f1d5c6ea1ebaed4da658de47c4ef53"
+  },
+  "diagnosis_environment": "BRAND_OS_LLM_PROVIDER=codex_cli; same Harness environment for prepare and readonly controls",
+  "current_cli": {
+    "executable_available": true,
+    "executable_sha256": "af02050cc0c95f5aeb714af2c1077e635c58e9896c13c89d75099cf5b96477be",
+    "controls": [
+      {
+        "name": "version",
+        "exit_code": 0,
+        "output_hash": "9ebe7fe954726cba39b31a50a7cc5874c6ef90645e23fb3b5cb2f876eec3846b",
+        "output_bytes": 18,
+        "version": "codex-cli 0.158.0"
+      },
+      {
+        "name": "login",
+        "exit_code": 0,
+        "output_hash": "16118df3eb3595e44a4721878cef0f79910e6564e10ff0e78e451e7c4e478947",
+        "output_bytes": 24,
+        "version": null
+      }
+    ],
+    "configured_model": "gpt-5.6-luna",
+    "model_server_availability": "unverified; non-generating version/login controls do not prove a model reply"
+  },
+  "historical_timeout": {
+    "reference": {
+      "path": "D:\\0UserProfile\\Desktop\\marketing\\.harness\\scratch\\launch-direction-probe-20261007\\planning-results.json",
+      "bytes": 2907,
+      "sha256": "79745b3e2d15f7b35e0f4c2b8cdf8be74b7d8247b151e4fd742e0d640f900b91"
+    },
+    "boundary": "Prior sample was direct provider, not gateway",
+    "cause": "unknown"
+  },
+  "calibration": {
+    "status": "implemented; pending exact-head Harness review/finish/merge",
+    "auth_login": "Supported ordinary Email label on existing LoginPage text field; issuer/SDK/expiry/policy unchanged",
+    "auth_diagnostic": "Finite stage/status/time/error-type-only raw artifact; no credential, header or original error message dump",
+    "cycle_metadata": "Only outcome_seed test/test account, exact owned org and primary brand; Asia/Taipei and TWD; other readers and assembly network guard preserved",
+    "proof": "Pure Node and real coverage -> account_reader -> period_projection regressions; no actual browser/Auth/restore/cycle/provider mode",
+    "missing_reader": "2026-07-30 conservative fallback remains unchanged",
+    "matched_owned_reader": "2026-07-31 frozen row retained, spend 400 / 2 results = cost 200 by existing product formula",
+    "source_observations_dates_formulas_cases": "unchanged"
+  },
+  "actual_provider_calls_in_this_lease": 0,
+  "actual_auth_restore_cycle_modes_in_this_lease": 0,
+  "cleanup": {
+    "new_services": 0,
+    "new_owned_databases": 0,
+    "new_browser": 0
+  },
+  "lead_handoff": {
+    "pending": "Fresh stable-main context after merge; corrected operational/fixed-cycle modes and sole existing gateway model sample",
+    "provider": "CodexCliProvider / gpt-5.6-luna",
+    "options": {
+      "max_retries": 0,
+      "timeout_s": 60,
+      "tools": "disabled"
+    },
+    "semantic_review": "required independently after actual response; this receipt cannot award G6",
+    "diagnosis_context_reuse": "Do not reuse this pre-calibration diagnosis context for final modes; its main probe hash intentionally precedes calibrated merge"
+  },
+  "human_acceptance": "pending",
+  "release_eligible": false
+}

@@ -12,6 +12,65 @@ from scripts.drill import first_release_acceptance as runner
 from scripts.drill import first_release_cases as cases
 
 
+@pytest.mark.parametrize("error_name,expected_type", [
+    ("TimeoutError", "TimeoutError"), ("credential-error-marker", "Error"),
+])
+def test_auth_browser_real_login_selector_and_failed_stage_are_credential_safe(
+    error_name, expected_type
+):
+    """Execute the actual browser script against in-memory Node boundaries, without a browser."""
+    import re
+    import shutil
+
+    node = shutil.which("node")
+    assert node, "Harness Node runtime is required for the browser-script regression"
+    login_source = (runner.ROOT / "frontend/src/components/auth/LoginPage.tsx").read_text(
+        encoding="utf-8"
+    )
+    assert 'type="text"' in login_source
+    assert re.search(r'<label\b[^>]*>.*?>Email</span>.*?<Input\s+type="text"', login_source, re.S)
+    script = "\n".join(
+        line for line in runner.AUTH_BROWSER.splitlines() if not line.startswith("import ")
+    )
+    harness = r"""
+const crypto = require('node:crypto');
+const calls = [], diagnostics = [];
+const cfg = {email:'credential-email-marker', password:'credential-password-marker',
+  origin:'http://owned.invalid', directory:'owned-directory', frontend_package:'owned-package'};
+const fs = {existsSync:()=>true, readFileSync:filename=>JSON.stringify(
+  String(filename).endsWith('browser-contained.json') ? {pid:process.pid} : cfg),
+  writeFileSync:(filename, content)=>diagnostics.push(JSON.parse(content))};
+const page = {on:()=>{}, goto:async()=>{},
+  getByLabel:label=>({fill:async()=>calls.push({kind:'label', label})}),
+  locator:selector=>({fill:async()=>calls.push({kind:'selector', selector}),
+    click:async()=>{const e = Error(cfg.email+' '+cfg.password+' Authorization secret-token');
+          e.name=ERROR_NAME; throw e;}})};
+const createRequire = () => () => ({chromium:{launch:async()=>({
+  newPage:async()=>page, close:async()=>calls.push({kind:'closed'})})}});
+const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
+new AsyncFunction('crypto','fs','createRequire', SOURCE)(crypto,fs,createRequire).catch(error=>{
+  console.log(JSON.stringify({calls,diagnostics,error:error.message}));
+});
+    """.replace("SOURCE", json.dumps(script)).replace("ERROR_NAME", json.dumps(error_name))
+    result = subprocess.run([node], input=harness, text=True, capture_output=True, timeout=10)
+    assert result.returncode == 0
+    output = result.stdout + result.stderr
+    for secret in (
+        "credential-email-marker", "credential-password-marker", "secret-token",
+        "credential-error-marker",
+    ):
+        assert secret not in output
+    actual = json.loads(result.stdout)
+    assert {"kind": "label", "label": "Email"} in actual["calls"]
+    assert {"kind": "selector", "selector": "input[type=email]"} not in actual["calls"]
+    assert actual["calls"][-1] == {"kind": "closed"}
+    assert actual["diagnostics"][-1]["stage"] == "initial-login"
+    assert actual["diagnostics"][-1]["status"] == "unverified"
+    assert actual["diagnostics"][-1]["error_type"] == expected_type
+    assert set(actual["diagnostics"][-1]) == {"stage", "status", "at", "error_type"}
+    assert actual["error"] == "Owned Auth browser failed at finite stage: initial-login"
+
+
 @pytest.mark.parametrize(
     "caller,dsn_name", [(runner.run_provider, "dsn"), (runner.auth_probe, "scoped")]
 )
