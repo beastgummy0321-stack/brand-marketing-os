@@ -2,6 +2,8 @@
 
 from urllib.parse import parse_qsl, urlsplit
 
+from psycopg.errors import LockNotAvailable
+
 from app.ads import (
     adapters,
     asset_binding,
@@ -139,15 +141,47 @@ def _ownership(conn, org, brand, campaign, node):
             raise Refused("owned_by_plan")
 
 
-def _source_versions(conn, org, platform, account, native_ids):
-    return {
-        r["id"]: str(r["updated_at"])
-        for r in conn.execute(
-            "SELECT id,updated_at FROM ads_external_entity WHERE org_id=%s AND platform=%s "
-            "AND source_account=%s AND native_id=ANY(%s)",
-            (org, platform, account, native_ids),
-        ).fetchall()
-    }
+def _source_rows(conn, org, brand, campaign, platform, account, native_ids, *, lock=False):
+    rows = conn.execute(
+        "WITH RECURSIVE chain AS (SELECT id,parent_native_kind,parent_native_id "
+        "FROM ads_external_entity WHERE org_id=%s AND brand_id=%s AND campaign_id=%s "
+        "AND platform=%s AND source_account=%s AND native_id=ANY(%s) UNION "
+        "SELECT p.id,p.parent_native_kind,p.parent_native_id FROM ads_external_entity p "
+        "JOIN chain c ON p.native_kind=c.parent_native_kind AND p.native_id=c.parent_native_id "
+        "WHERE p.org_id=%s AND p.brand_id=%s AND p.campaign_id=%s "
+        "AND p.platform=%s AND p.source_account=%s) "
+        "SELECT e.* FROM ads_external_entity e WHERE e.id IN (SELECT id FROM chain) "
+        "ORDER BY e.id LIMIT 102" + (" FOR UPDATE NOWAIT" if lock else ""),
+        (org, brand, campaign, platform, account, native_ids,
+         org, brand, campaign, platform, account),
+    ).fetchall()
+    if len(rows) > 101:
+        raise Refused("chain_mismatch")
+    lookup = {(row["native_kind"], row["native_id"]): row for row in rows}
+    for row in rows:
+        node, visited = row, set()
+        while node["parent_native_id"] is not None:
+            if node["id"] in visited or len(visited) >= 100:
+                raise Refused("chain_mismatch")
+            visited.add(node["id"])
+            node = lookup.get((node["parent_native_kind"], node["parent_native_id"]))
+            if node is None:
+                raise Refused("chain_mismatch")
+    return rows
+
+
+def _source_versions(conn, org, brand, campaign, platform, account, native_ids, *, lock=False):
+    rows = _source_rows(conn, org, brand, campaign, platform, account, native_ids)
+    if lock:
+        # Do not wait on a parent lease while holding the source rows its writer needs.
+        for row in rows:
+            if not bindings.lock_native(conn, row, wait=False):
+                raise Refused("source_changed")
+        rows = _source_rows(conn, org, brand, campaign, platform, account, native_ids, lock=True)
+        for row in rows:
+            if not bindings.lock_native(conn, row, wait=False):
+                raise Refused("source_changed")
+    return {row["id"]: str(row["updated_at"]) for row in rows}
 
 
 _COPY_LABELS = {"title": "標題", "body": "文案", "description": "說明"}
@@ -606,6 +640,48 @@ def check_action(conn, org, brand, campaign, set_id, action_id, actor):
     return changes.get(conn, org, brand, campaign, set_id)
 
 
+def _guard_read(conn, org, brand, campaign, item, attempt, parent, payload, source_ids,
+                source_versions, *, entity_id=None):
+    """Reacquire owner locks after HTTP, before any source proof can be persisted."""
+    changes.lock(conn, org, brand)
+    latest = handoff_data.get(conn, org, brand, campaign, item["id"])
+    if latest["attempt_id"] != attempt:
+        raise Refused("source_changed")
+    current_set = changes.get(conn, org, brand, campaign, item["change_set_id"])
+    if current_set["status"] != "approved":
+        raise Refused("not_approved")
+    action = next(row for row in current_set["items"] if row["id"] == item["action_id"])
+    if action["kind"] == "new_ad" and action["verification_state"] == "stale":
+        raise Refused("plan_changed")
+    _material_current(conn, org, brand, campaign, latest)
+    if (latest["expected_json"], latest["placement_id"], latest["placement_revision"]) != (
+        item["expected_json"], item["placement_id"], item["placement_revision"]
+    ):
+        raise Refused("plan_changed")
+    if entity_id is not None and latest["entity_id"] != entity_id:
+        raise Refused("identity_taken")
+    # Sync creative writers hold this lease without the brand/placement locks. Wait first,
+    # then lock every existing source row so structure writers cannot move a parent afterward.
+    bindings.lock_native(conn, {"org_id": org, **payload})
+    try:
+        current_source_versions = _source_versions(
+            conn, org, brand, campaign, payload["platform"], payload["source_account"],
+            source_ids, lock=True
+        )
+    except LockNotAvailable as exc:
+        raise Refused("source_changed") from exc
+    latest_parent = _parent(conn, org, brand, campaign, latest)
+    keys = ("id", "platform", "source_account", "native_kind", "native_id")
+    if tuple((latest_parent or {}).get(key) for key in keys) != tuple(
+        (parent or {}).get(key) for key in keys
+    ):
+        raise Refused("parent_mismatch")
+    if source_versions is not None and source_versions != current_source_versions:
+        raise Refused("source_changed")
+    if not _launch_current(conn, org, brand, campaign, current_set):
+        raise Refused("plan_changed")
+
+
 def check(conn, org, brand, campaign, item_id, payload, actor):
     changes.lock(conn, org, brand)
     item = handoff_data.get(conn, org, brand, campaign, item_id)
@@ -653,7 +729,7 @@ def check(conn, org, brand, campaign, item_id, payload, actor):
         {payload["native_id"], root["native_id"], *([parent["native_id"]] if parent else [])}
     )
     source_versions = _source_versions(
-        conn, org, payload["platform"], payload["source_account"], source_ids
+        conn, org, brand, campaign, payload["platform"], payload["source_account"], source_ids
     )
     attempt = db.new_id("ahc")
     conn.execute("UPDATE ads_handoff_item SET attempt_id=%s WHERE id=%s", (attempt, item_id))
@@ -689,55 +765,8 @@ def check(conn, org, brand, campaign, item_id, payload, actor):
         external_sync.account_reader(
             conn, org, brand, payload["platform"], payload["source_account"]
         )
-        changes.lock(conn, org, brand)
-        latest = handoff_data.get(conn, org, brand, campaign, item_id)
-        if latest["attempt_id"] != attempt:
-            conn.commit()
-            return latest
-        current_set = changes.get(conn, org, brand, campaign, item["change_set_id"])
-        if current_set["status"] != "approved":
-            conn.commit()
-            return latest
-        _material_current(conn, org, brand, campaign, latest)
-        if (latest["expected_json"], latest["placement_revision"]) != (
-            item["expected_json"], item["placement_revision"]
-        ):
-            raise Refused("plan_changed")
-        latest_parent = _parent(conn, org, brand, campaign, latest)
-        if (latest_parent or {}).get("id") != (parent or {}).get("id"):
-            raise Refused("parent_mismatch")
-        if source_versions != _source_versions(
-            conn, org, payload["platform"], payload["source_account"], source_ids
-        ):
-            return _finish(
-                conn,
-                org,
-                brand,
-                campaign,
-                item_id,
-                attempt,
-                "unknown",
-                {
-                    "message": reason_text("source_changed"),
-                    "reason_code": "source_changed",
-                    "entity_exists": False,
-                },
-            )
-        if not _launch_current(conn, org, brand, campaign, change_set):
-            return _finish(
-                conn,
-                org,
-                brand,
-                campaign,
-                item_id,
-                attempt,
-                "stale",
-                {
-                    "message": reason_text("plan_changed"),
-                    "reason_code": "plan_changed",
-                    "entity_exists": False,
-                },
-            )
+        _guard_read(conn, org, brand, campaign, item, attempt, parent, payload,
+                    source_ids, source_versions)
         nodes = [
             ExternalEntity.model_validate(
                 {k: v for k, v in raw.items() if k in ExternalEntity.model_fields}
@@ -778,6 +807,16 @@ def check(conn, org, brand, campaign, item_id, payload, actor):
         conn.commit()
         material = "user_verified" if payload.get("user_verified") else "unknown"
         if item["placement_id"]:
+            # The first read persisted its own source rows. Freeze the second HTTP's basis now.
+            material_source_versions = _source_versions(
+                conn, org, brand, campaign, payload["platform"], payload["source_account"],
+                source_ids
+            )
+
+            def before_material_persist():
+                _guard_read(conn, org, brand, campaign, item, attempt, parent, payload,
+                            source_ids, material_source_versions, entity_id=entity_id)
+
             binding = _coded(
                 "material_unverified",
                 asset_binding.verify,
@@ -790,8 +829,12 @@ def check(conn, org, brand, campaign, item_id, payload, actor):
                 entity_id,
                 actor,
                 user_verified=payload.get("user_verified", False),
+                before_persist=before_material_persist,
             )
             material = binding["evidence_level"]
+            # The verifier commits its source proof. Keep the action premise locked to finish.
+            _guard_read(conn, org, brand, campaign, item, attempt, parent, payload,
+                        source_ids, None, entity_id=entity_id)
             node = bindings.entity(conn, org, brand, campaign, entity_id)
         pixels = launch_settings.cached_pixels(
             campaigns.get_campaign(conn, org, brand, campaign) or {}

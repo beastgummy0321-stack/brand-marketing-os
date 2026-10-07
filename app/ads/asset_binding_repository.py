@@ -168,13 +168,19 @@ def sync_failed(conn, org, brand, campaign):
     )
 
 
-def lock_native(conn, row):
+def lock_native(conn, row, *, wait=True):
     if not row.get("platform"):
-        return
+        return None if wait else True
     key = "ads-binding:" + ":".join(
         str(row[k]) for k in ("org_id", "platform", "source_account", "native_kind", "native_id")
     )
-    conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0))", (key,))
+    if wait:
+        conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0))", (key,))
+        return None
+    acquired = conn.execute(
+        "SELECT pg_try_advisory_xact_lock(hashtextextended(%s,0)) AS acquired", (key,)
+    ).fetchone()
+    return bool(acquired and acquired["acquired"])
 
 
 def record_failure(conn, org, brand, campaign, placement_id, revision, leaf):
