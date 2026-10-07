@@ -3,12 +3,14 @@ refresh, and nothing here calls the platform. F49 Contract O: every read serves 
 outcome."""
 
 import unittest
+from datetime import date
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
 from app import main
 from app.ads import external_sync as sync
+from app.ads.adapters.external import SourceReadError
 from app.core import db
 from app.tests.test_ads_external_sync import Reader, setup_brand
 
@@ -27,6 +29,27 @@ class ExternalRoutesTest(unittest.TestCase):
         ):
             p.start()
             self.addCleanup(p.stop)
+
+    def test_f52_first_import_does_not_retry_unrelated_retained_months(self):
+        from app.tests.test_ads_external_sync import ExternalSyncTest
+
+        with (
+            patch.object(sync.settings, "today_for_org", return_value=date(2026, 10, 20)),
+            patch.object(self.reader, "read_monthly",
+                         side_effect=SourceReadError("月份讀取失敗", "permission_denied")),
+        ):
+            failed = ExternalSyncTest.run_pages(self, sync.request_sync(
+                self.conn, self.org, self.brand, "other", "account",
+            ))["tasks"]["monthly:2026-10"]
+        with patch.object(sync.settings, "today_for_org", return_value=date(2026, 11, 5)):
+            response = self.client.post(self.url + "/imports", json={
+                "platform": "other", "source_account": "account",
+                "native_kind": "portfolio", "native_id": "root",
+            })
+        self.assertEqual(response.status_code, 200, response.text)
+        tasks = response.json()["job"]["tasks"]
+        self.assertEqual(tasks["monthly:2026-10"], failed)
+        self.assertIn("monthly:2026-11", tasks)
 
     def test_get_is_read_only_and_refresh_only_enqueues(self):
         # F49 Contract O: the listing GET never requests a read; it serves the account's job and

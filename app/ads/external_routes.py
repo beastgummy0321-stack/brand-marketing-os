@@ -95,7 +95,8 @@ class Refresh(BaseModel):
 def refresh(request: Request, brand_id: str, body: Refresh):
     actor = web.require_actor(request)
     try:
-        return {"job": sync.request_sync(web.conn, actor.org_id, brand_id, **body.model_dump())}
+        return {"job": sync.request_sync(web.conn, actor.org_id, brand_id,
+                                         retry_failed_monthly=True, **body.model_dump())}
     except ValueError as exc:
         raise _error(exc) from exc
 
