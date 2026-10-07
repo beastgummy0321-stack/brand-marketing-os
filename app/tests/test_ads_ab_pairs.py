@@ -3,13 +3,14 @@ pause-loser change set through the normal approval flow, and the learning its co
 writes. Nothing here writes to a platform: the readback uses a fake reader."""
 
 import copy
-from datetime import timedelta
-from unittest.mock import patch
+import json
+from datetime import date, timedelta
+from unittest.mock import Mock, patch
 
 from fastapi.testclient import TestClient
 
 import app.main as main
-from app.ads import ab_pairs, channels, coverage, external_sync, live_creative, plan
+from app.ads import ab_pairs, ads_learnings, channels, coverage, external_sync, live_creative, plan
 from app.ads import change_control as service
 from app.ads import change_control_verify as verification
 from app.ads import external_repository as external
@@ -18,6 +19,7 @@ from app.core import settings as coresettings
 from app.core.db import jsonb, new_id
 from app.shared import web
 from app.tests.fixtures.ads_external import outcome_seed
+from app.workbench import encode_learning_scope, qualify_learning_evidence
 
 from .test_ads_publish_simulated import ACTOR, SimulatedPublishTestBase
 
@@ -484,8 +486,14 @@ class AbPairsTest(SimulatedPublishTestBase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["learning_text"], "「開場」用「先講價格」比「先講痛點」划算")
         self.assertEqual(rows[0]["source_cycle_id"], approved["items"][0]["id"])
-        self.assertEqual(again["items"][0]["learning"],
-                         {"recorded": True, "confidence": "observed", "count": 1})
+        recorded = again["items"][0]["learning"]
+        self.assertEqual(
+            {k: recorded[k] for k in ("recorded", "confidence", "count")},
+            {"recorded": True, "confidence": "observed", "count": 0},
+        )
+        self.assertEqual(recorded["evidence"]["allowed_uses"], [])
+        self.assertEqual(recorded["evidence"]["sources"][0]["kind"], "ab")
+        self.assertEqual(recorded["evidence"]["provenance"], "unknown")
         self.assertEqual(self.pair()["decision"]["verification_state"], "confirmed")
 
     # -- HTTP -----------------------------------------------------------------------------------
@@ -520,3 +528,152 @@ class AbPairsTest(SimulatedPublishTestBase):
         self.assertEqual(client.post(url, json={"operation_id": "op-5"})
                          .json()["change_set"]["id"], created.json()["change_set"]["id"])
         self.assertEqual(client.post(url, json={}).status_code, 422)
+
+def test_only_offer_pair_retains_each_condition_and_carried_content_stays_comparable():
+    """Synthetic retained rows exercise the actual extractor, without claiming platform proof."""
+    offers = [
+        {"key": key, "version": f"terms-{key}", "valid_until": "2026-10-08"}
+        for key in ("none", "discount")
+    ]
+    campaign = {"id": "first", "result_kind": "purchase", "context_json": {"product_ids": ["A"]}}
+    members = [
+        {
+            "id": key,
+            "audience_key": "cold",
+            "customer_group_id": None,
+            "pain_key": "need",
+            "angle_key": "angle",
+            "hook_key": "hook",
+            "proof_key": "proof",
+            "format_key": "single_image",
+            "offer_key": key,
+            "live_creative_json": {
+                "evidence_conditions": {
+                    "price_version": "price",
+                    "target_version": "target",
+                    "offers": offers,
+                    "material_version": f"content-{key}",
+                }
+            },
+        }
+        for key in ("none", "discount")
+    ]
+
+    def extract(identity, start, end, ads):
+        detail = {**campaign, "id": identity, "groups": [{"ads": ads}]}
+        rows = [
+            {
+                "observation_id": f"{identity}-{ad['id']}",
+                "entity_id": ad["id"],
+                "day": date.fromisoformat(start),
+                "source": "graph",
+                "spend": 1000,
+                "result_kind": "purchase",
+                "result_count": 10,
+                "currency": "TWD",
+                "attribution_key": "7d",
+                "result_action": "omni_purchase",
+                "result_attribution": "7d_click",
+            }
+            for ad in ads
+        ]
+        with patch.object(
+            ads_learnings.ads_repo,
+            "campaign_objective_family",
+            return_value="sales",
+        ):
+            return ads_learnings.source_evidence(
+                Mock(),
+                "org",
+                "brand",
+                detail,
+                kind="ab",
+                members=ads,
+                observations=rows,
+                window={"start": start, "end": end},
+                claim_key="comparison:discount-v-none",
+                direction="support",
+            )
+
+    first = extract("first", "2026-08-01", "2026-08-10", members)
+    carried = copy.deepcopy(members)
+    for ad in carried:
+        ad.update(
+            id="new-" + ad["id"],
+            material_placement_id="new-placement",
+            material_placement_revision=2,
+        )
+    second = extract("second", "2026-09-01", "2026-09-10", list(reversed(carried)))
+    materials = [
+        json.loads(s["conditions"]["material_version"].removeprefix("@pair-v1:"))
+        for s in (first, second)
+    ]
+    assert len({side["side"] for side in materials[0]}) == 2
+    assert [{k: v for k, v in s.items() if k != "ad_id"} for s in materials[0]] == [
+        {k: v for k, v in s.items() if k != "ad_id"} for s in materials[1]
+    ]
+    assert first["conditions"]["offer_key"] == second["conditions"]["offer_key"]
+    ctx = {
+        "org_id": "org",
+        "brand_id": "brand",
+        "product_id": "A",
+        "org_day": "2026-10-08",
+        "mode": "real",
+        "audience_keys": ["cold"],
+        "customer_group_ids": [],
+        **{k: first["scope"][k] for k in ("result_kind", "currency", "attribution")},
+        "conditions": {
+            "price_version": "price",
+            "target_version": "target",
+            "offers": offers,
+            "materials": [
+                {"ad_id": s["ad_id"], "version": s["version"]} for pair in materials for s in pair
+            ],
+        },
+    }
+    ledger = [
+        {
+            "id": str(n),
+            "org_id": "org",
+            "brand_id": "brand",
+            "product_id": "A",
+            "applicability_scope": encode_learning_scope("ads", evidence),
+        }
+        for n, evidence in enumerate((first, second))
+    ]
+
+    def project(current):
+        return qualify_learning_evidence(ledger, current, min_result_events=10, max_age_days=180)
+
+    items = project(ctx)["items"]
+    assert all(i["independent_count"] == i["same_direction_count"] == 2 for i in items)
+    assert all("market_support" in i["allowed_uses"] for i in items)
+    for key, value, reason in (
+        ("version", "new-terms", "condition_changed"),
+        ("valid_until", "2026-10-07", "offer_ended"),
+    ):
+        changed = copy.deepcopy(ctx)
+        changed["conditions"]["offers"][1][key] = value
+        assert all(
+            reason in i["reason_codes"] and not i["allowed_uses"] for i in project(changed)["items"]
+        )
+    changed_content = copy.deepcopy(carried)
+    changed_content[0]["live_creative_json"]["evidence_conditions"]["material_version"] = "new-copy"
+    third = extract("third", "2026-09-11", "2026-09-20", changed_content)
+    assert third["conditions"]["material_version"] != second["conditions"]["material_version"]
+    current = copy.deepcopy(ctx)
+    next(m for m in current["conditions"]["materials"] if m["ad_id"] == "new-none")["version"] = (
+        "new-copy"
+    )
+    ledger.append(
+        {
+            "id": "third",
+            "org_id": "org",
+            "brand_id": "brand",
+            "product_id": "A",
+            "applicability_scope": encode_learning_scope("ads", third),
+        }
+    )
+    items = {i["id"]: i for i in project(current)["items"]}
+    assert items["third"]["independent_count"] == 1
+    assert items["1"]["use_state"] == "revalidation"

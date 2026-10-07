@@ -307,21 +307,27 @@ def pause_loser(conn, org, brand, campaign_id, pid, operation_id, actor) -> dict
     observations = outcome.select_period(outcome.rows(conn, org, brand, campaign_id, "ad"),
                                          pair["window"])
     observations = [r for r in observations if r["entity_id"] in {a["id"] for a in members}]
+    variable = f"{pair['dimension']}_key"
+    values = sorted(a.get(variable) for a in members)
+    comparison = ads_learnings.semantic_version({
+        "dimension": pair["dimension"], "values": values,
+        "background": sorted(ads_learnings.semantic_version({
+            d: a.get(f"{d}_key") for d in experiments.DIMENSIONS if d != pair["dimension"]
+        }) for a in members),
+    })
+    winner = next(a.get(variable) for a in members if a["id"] == win["ad_id"])
     # Both sides are retained: a pause receipt cannot certify the market comparison.
     ab["evidence"] = ads_learnings.source_evidence(
         conn, org, brand, detail, kind="ab", window=pair["window"], members=members,
-        observations=observations, claim_key="comparison:" + ads_learnings.semantic_version({
-            "dimension": pair["dimension"], "winner": next(
-                a.get(f"{pair['dimension']}_key") for a in members if a["id"] == win["ad_id"]),
-            "loser": next(a.get(f"{pair['dimension']}_key") for a in members
-                          if a["id"] == lose["ad_id"]), "messages": sorted(
-                ads_learnings.message_claim(a) or "unknown" for a in members),
-        }), direction="support", trial_id=campaign_id,
+        observations=observations,
+        claim_key=f"comparison:{comparison}:first={values[0]}:second={values[1]}",
+        direction="support" if winner == values[0] else "contrary", trial_id=campaign_id,
     )
-    counts = [sum(float(r["result_count"]) for r in observations
-                  if r["entity_id"] == a["id"] and r.get("result_count") is not None)
-              for a in members]
-    ab["evidence"]["sample"]["result_events"] = min(counts, default=None)
+    sides = [[r.get("result_count") for r in observations if r["entity_id"] == a["id"]]
+             for a in members]
+    ab["evidence"]["sample"]["result_events"] = min(
+        (sum(float(v) for v in side) for side in sides), default=None,
+    ) if sides and all(side and all(v is not None for v in side) for side in sides) else None
     month = settings.today_for_org(conn, org_id=org).strftime("%Y-%m")
     payload = {
         "operation_id": operation_id,

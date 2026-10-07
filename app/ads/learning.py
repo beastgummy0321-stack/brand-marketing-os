@@ -111,6 +111,7 @@ def write_learning(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str,
     重讀 `campaign_detail`（要投放組／廣告的座標湊 `applicability_scope`），呼叫端
     （`closeout.close`）已經有的那份 dict 只到 campaign 欄位，不值得為了少一次查詢多傳一個
     尚未組好的大 dict。"""
+    from app.ads import outcome
     from app.ads import repository as ads_repo  # 延遲 import 避免循環（closeout.py 已是入口）
 
     detail = ads_repo.campaign_detail(conn, org_id, brand_id, campaign_id)
@@ -126,6 +127,10 @@ def write_learning(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str,
     claim = next(iter(claims)) if len(claims) == 1 and None not in claims else None
     evidence = ads_learnings.source_evidence(
         conn, org_id, brand_id, detail, kind="campaign", window=verdict_json.get("window") or {},
+        observations=outcome.select_period(
+            outcome.rows(conn, org_id, brand_id, campaign_id, "group"),
+            verdict_json.get("window") or {"start": None, "end": None},
+        ),
         claim_key=claim, direction={"達成": "support", "未達成": "contrary"}.get(
             verdict, "inconclusive"),
     )

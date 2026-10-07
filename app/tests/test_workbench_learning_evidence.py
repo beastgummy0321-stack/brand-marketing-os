@@ -1,5 +1,6 @@
 """Frozen qualification counterexamples; all data here is synthetic market-shaped evidence."""
 
+import json
 from copy import deepcopy
 
 from app.workbench import base_learning_scope, encode_learning_scope, qualify_learning_evidence
@@ -126,6 +127,37 @@ def test_unknown_legacy_and_invalid_trailers_cannot_certify_support():
         assert item["use_state"] == "history"
         assert item["allowed_uses"] == []
         assert "unknown_source" in item["reason_codes"]
+
+
+def test_unknown_audience_or_message_cannot_certify_aggregate_support():
+    for missing in ("audience_key", "claim_key"):
+        item = qualify([mutate(row(), scope={missing: None})])["items"][0]
+        assert item["use_state"] == "revalidation"
+        assert item["independent_count"] == 0
+        assert item["allowed_uses"] == []
+        assert "conditions_unknown" in item["reason_codes"]
+
+
+def test_retired_winner_remains_history_and_never_counts_as_current_support():
+    retired = {**row(), "expired": True}
+    latest = row("new", start="2026-09-01", end="2026-09-30")
+    result = {i["id"]: i for i in qualify([retired, latest])["items"]}
+    assert result["one"]["use_state"] == "history"
+    assert result["one"]["allowed_uses"] == []
+    assert "superseded" in result["one"]["reason_codes"]
+    assert result["new"]["independent_count"] == 1
+
+
+def test_unknown_sample_is_unverified_and_known_zero_is_small():
+    unknown = qualify([row(events=None)])["items"][0]
+    zero = qualify([row(events=0)])["items"][0]
+    assert unknown["sample"] == {"result_events": None, "sufficient": None}
+    assert "尚未完整核實" in unknown["support_label"]
+    assert "樣本數尚未完整核實" in unknown["reason_labels"]
+    assert "樣本少" not in unknown["support_label"]
+    assert zero["sample"] == {"result_events": 0, "sufficient": False}
+    assert "樣本少" in zero["support_label"]
+    assert unknown["independent_count"] == zero["independent_count"] == 0
 
 
 def test_product_provenance_tenant_and_measurement_boundaries():
@@ -278,3 +310,88 @@ def test_revision_covers_actual_meaning_sources_eligibility_and_not_labels_or_or
     ):
         assert before["revision"] != qualify([changed, other])["revision"]
     assert qualify([])["eligible_count"] == 0
+
+
+def paired_row():
+    material = [
+        {"side": side, "ad_id": side, "version": f"content-{side}"} for side in ("first", "second")
+    ]
+    offers = [
+        {"side": side, "key": side, "version": f"offer-{side}", "valid_until": "2026-10-08"}
+        for side in ("first", "second")
+    ]
+    source = mutate(
+        row(),
+        source_kind="ab",
+        conditions={
+            "material_version": "@pair-v1:" + json.dumps(material),
+            "offer_key": "@pair-v1:" + json.dumps(offers),
+        },
+    )
+    ctx = current()
+    ctx["conditions"].update(
+        materials=[{"ad_id": s["ad_id"], "version": s["version"]} for s in material],
+        offers=[{k: v for k, v in s.items() if k != "side"} for s in offers],
+    )
+    return source, ctx, material, offers
+
+
+def test_pair_each_side_changed_unknown_or_expired_blocks_support():
+    source, ctx, material, offers = paired_row()
+    assert "market_support" in qualify([source], ctx)["items"][0]["allowed_uses"]
+    for side in (0, 1):
+        for menu, key, value, reason in (
+            ("materials", "version", "changed", "condition_changed"),
+            ("materials", "version", None, "conditions_unknown"),
+            ("offers", "version", "changed", "condition_changed"),
+            ("offers", "version", None, "conditions_unknown"),
+            ("offers", "valid_until", "2026-10-07", "offer_ended"),
+            ("offers", "valid_until", "malformed", "conditions_unknown"),
+        ):
+            changed = deepcopy(ctx)
+            changed["conditions"][menu][side][key] = value
+            item = qualify([source], changed)["items"][0]
+            assert item["allowed_uses"] == []
+            assert reason in item["reason_codes"]
+        for field, sides, key in (
+            ("material_version", material, "version"),
+            ("offer_key", offers, "version"),
+        ):
+            missing = deepcopy(sides)
+            missing[side][key] = None
+            raw = mutate(source, conditions={field: "@pair-v1:" + json.dumps(missing)})
+            assert qualify([raw], ctx)["items"][0]["allowed_uses"] == []
+        ended = deepcopy(offers)
+        ended[side]["valid_until"] = "2026-10-07"
+        raw = mutate(source, conditions={"offer_key": "@pair-v1:" + json.dumps(ended)})
+        assert "offer_ended" in qualify([raw], ctx)["items"][0]["reason_codes"]
+
+
+def test_malformed_pair_carriers_and_mismatched_sides_stay_unknown():
+    source, ctx, material, offers = paired_row()
+    for field in ("material_version", "offer_key"):
+        for malformed in (
+            None,
+            "@pair-v2:[]",
+            "@pair-v1:{broken",
+            "@pair-v1:[]",
+            "@pair-v1:[null,null]",
+            "@pair-v1:{}",
+            "opaque",
+        ):
+            item = qualify([mutate(source, conditions={field: malformed})], ctx)["items"][0]
+            assert item["allowed_uses"] == []
+            assert "conditions_unknown" in item["reason_codes"]
+    for sides in (material, offers):
+        sides[1]["side"] = "first"
+    for field, sides in (("material_version", material), ("offer_key", offers)):
+        assert (
+            qualify([mutate(source, conditions={field: "@pair-v1:" + json.dumps(sides)})], ctx)[
+                "items"
+            ][0]["allowed_uses"]
+            == []
+        )
+    _, _, _, offers = paired_row()
+    offers[1]["side"] = "third"
+    changed = mutate(source, conditions={"offer_key": "@pair-v1:" + json.dumps(offers)})
+    assert qualify([changed], ctx)["items"][0]["allowed_uses"] == []

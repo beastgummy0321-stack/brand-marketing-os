@@ -22,6 +22,7 @@ from app.ads import user_assets_repository as assets
 from app.brand_intelligence import repository as brands
 from app.core import db, settings
 from app.tests.fixtures.ads_external import outcome_seed
+from app.workbench import base_learning_scope
 
 ACTOR = "test"
 _COORDS = {
@@ -184,7 +185,8 @@ class LiveCreativeTest(unittest.TestCase):
 
         rows = brands.list_learnings(self.conn, self.brand, source_track="visual")
         self.assertEqual(
-            [r["applicability_scope"] for r in rows], ["visual；audience=cold；look=phone_raw"]
+            [base_learning_scope(r["applicability_scope"]) for r in rows],
+            ["visual；audience=cold；look=phone_raw"]
         )
         self.assertIn("studio_hero標籤", rows[0]["learning_text"])
 

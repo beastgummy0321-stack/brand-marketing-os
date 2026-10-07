@@ -152,6 +152,88 @@ def _day(value):
         return None
 
 
+def _pair(value, kind):
+    """Decode the private two-side carrier; partial or unknown versions never certify it."""
+    if not isinstance(value, str) or not value.startswith("@pair-v1:"):
+        return None
+    try:
+        sides = json.loads(value.removeprefix("@pair-v1:"))
+    except (ValueError, TypeError):
+        return None
+    keys = (
+        {"side", "ad_id", "version"}
+        if kind == "material"
+        else {"side", "key", "version", "valid_until"}
+    )
+    if not isinstance(sides, list) or len(sides) != 2:
+        return None
+    for side in sides:
+        if not isinstance(side, dict) or set(side) != keys or not _scalar(side.get("side")):
+            return None
+        if kind == "material":
+            if not _scalar(side.get("ad_id")) or not _scalar(side.get("version")):
+                return None
+        elif (
+            not _scalar(side.get("key"))
+            or (side["key"] != "none" and not _scalar(side.get("version")))
+            or (side["valid_until"] is not None and not _day(side["valid_until"]))
+        ):
+            return None
+    if sides[0]["side"] == sides[1]["side"]:
+        return None
+    return sorted(sides, key=lambda side: side["side"])
+
+
+def _cohort_conditions(conditions):
+    """A carried ad is the same content; retain each canonical side's material/offer relation."""
+    material = _pair(conditions["material_version"], "material")
+    offers = _pair(conditions["offer_key"], "offer")
+    return {
+        **conditions,
+        "material_version": [{k: v for k, v in side.items() if k != "ad_id"} for side in material]
+        if material
+        else conditions["material_version"],
+        "offer_key": offers if offers else conditions["offer_key"],
+    }
+
+
+def _pair_conditions(old, now, current):
+    material = _pair(old["material_version"], "material")
+    offers = _pair(old["offer_key"], "offer")
+    if not material or not offers or [s["side"] for s in material] != [s["side"] for s in offers]:
+        return ["conditions_unknown"]
+    reasons = []
+    for side in material:
+        match = next((m for m in now.get("materials", []) if m.get("ad_id") == side["ad_id"]), {})
+        reasons.append(
+            "conditions_unknown"
+            if not match.get("version")
+            else "condition_changed"
+            if match["version"] != side["version"]
+            else ""
+        )
+    for side in offers:
+        if side["key"] == "none":
+            continue
+        match = next((o for o in now.get("offers", []) if o.get("key") == side["key"]), {})
+        reasons.append(
+            "condition_changed"
+            if not match
+            else "conditions_unknown"
+            if not match.get("version")
+            else "condition_changed"
+            if match["version"] != side["version"]
+            else ""
+        )
+        ends = [_day(value) for value in (side["valid_until"], match.get("valid_until")) if value]
+        today = _day(current.get("org_day"))
+        if any(end and today and end < today for end in ends):
+            reasons.append("offer_ended")
+        if match.get("valid_until") and not _day(match["valid_until"]):
+            reasons.append("conditions_unknown")
+    return reasons
+
+
 def _conditions(evidence, current):
     old, now = evidence["conditions"], current.get("conditions") or {}
     reasons = []
@@ -166,8 +248,13 @@ def _conditions(evidence, current):
                 if old[key] != now[key]
                 else ""
             )
+    paired = any(
+        str(old[key] or "").startswith("@pair-") for key in ("material_version", "offer_key")
+    )
+    if paired:
+        reasons.extend(_pair_conditions(old, now, current))
     offer = old["offer_key"]
-    if offer and offer != "none":
+    if not paired and offer and offer != "none":
         match = next((o for o in now.get("offers", []) if o.get("key") == offer), None)
         if match is None:
             reasons.append("condition_changed")
@@ -179,7 +266,7 @@ def _conditions(evidence, current):
         today = _day(current.get("org_day"))
         if end and today and end < today:
             reasons.append("offer_ended")
-    if old["material_version"]:
+    if not paired and old["material_version"]:
         ad = evidence["source_ref"]["ad_id"]
         match = next((m for m in now.get("materials", []) if m.get("ad_id") == ad), None)
         reasons.append(
@@ -257,6 +344,8 @@ def qualify_learning_evidence(rows, current, *, min_result_events, max_age_days)
                 reasons.append("measurement_stale")
         if row.get("needs_revalidation"):
             reasons.append("condition_changed")
+        if row.get("expired"):
+            reasons.append("superseded")
         events = evidence["sample"]["result_events"]
         sufficient = events is not None and events >= min_result_events
         evidence["sample"]["sufficient"] = sufficient if events is not None else None
@@ -269,6 +358,8 @@ def qualify_learning_evidence(rows, current, *, min_result_events, max_age_days)
         elif "simulated" in reasons and current.get("mode") != "isolated_simulation":
             state = "excluded"
         elif "unknown_source" in reasons:
+            state = "history"
+        elif "superseded" in reasons:
             state = "history"
         elif any(
             r in reasons
@@ -334,7 +425,7 @@ def qualify_learning_evidence(rows, current, *, min_result_events, max_age_days)
                 p["row"].get("org_id"),
                 p["row"].get("brand_id"),
                 e["scope"],
-                e["conditions"],
+                _cohort_conditions(e["conditions"]),
                 e["provenance"],
             ]
         )
@@ -392,6 +483,8 @@ def qualify_learning_evidence(rows, current, *, min_result_events, max_age_days)
             support_label = "操作核對；成效原因未知"
         elif "simulated" in reasons:
             support_label = "演練資料"
+        elif "superseded" in reasons:
+            support_label = "已由較新結論取代；保留歷史"
         elif e["scope"]["claim_family"] == "brand_fact" and p["state"] == "usable":
             support_label = "已確認品牌事實"
         elif same:
@@ -399,7 +492,15 @@ def qualify_learning_evidence(rows, current, *, min_result_events, max_age_days)
                 min(same, 3) - 1
             ] + "；僅表示相關"
         elif "insufficient_sample" in reasons:
-            support_label = "樣本少；僅供測試或對照"
+            support_label = (
+                "樣本數尚未完整核實；僅供測試或對照"
+                if e["sample"]["result_events"] is None
+                else "樣本少；僅供測試或對照"
+            )
+        elif p["state"] == "revalidation":
+            support_label = "適用條件待核對"
+        elif e["scope"]["claim_family"] == "performance" and "unknown_source" not in reasons:
+            support_label = "本期看不出方向；僅供測試或對照"
         source_ids = list(dict.fromkeys(v for v in e["source_ref"].values() if v)) or [None]
         item = {
             "schema_version": 1,
@@ -426,7 +527,12 @@ def qualify_learning_evidence(rows, current, *, min_result_events, max_age_days)
             "contrary_count": contrary,
             "use_state": p["state"],
             "reason_codes": reasons,
-            "reason_labels": [_REASONS[r] for r in reasons],
+            "reason_labels": [
+                "樣本數尚未完整核實"
+                if r == "insufficient_sample" and e["sample"]["result_events"] is None
+                else _REASONS[r]
+                for r in reasons
+            ],
             "allowed_uses": allowed,
             "limits": sorted(
                 set(

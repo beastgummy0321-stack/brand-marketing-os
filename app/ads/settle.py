@@ -127,7 +127,8 @@ def _written_view(written: dict):
         return None
     rows = sorted(written.values(), key=lambda row: row["created_at"])
     effective = sum(1 for row in rows if (
-        ads_learnings.stored_evidence(row).get("direction") == "support"
+        ";settle_fate=effective" in ads_learnings.workbench.base_learning_scope(
+            row["applicability_scope"])
         if ads_learnings.stored_evidence(row) else row["learning_text"].endswith("有效")))
     return {
         "at": rows[-1]["created_at"], "by": rows[-1]["created_by"], "count": len(rows),
@@ -430,7 +431,8 @@ def _customer_groups(conn, org_id, brand_id, entity_ids) -> dict:
 def _scope(row, group_id) -> str:
     """The stored scope: the campaign and the customer group the ad spoke to (Contract R; the
     learning text says 「這群受眾」, so the scope names which)."""
-    return f"ads;campaign={row['campaign_id']};group={group_id or learning_rank.MISSING}"
+    return (f"ads;campaign={row['campaign_id']};group={group_id or learning_rank.MISSING}"
+            f";settle_fate={row['fate']}")
 
 
 def _resolve_queue_rows(conn, org_id, brand_id, end, actor) -> None:
@@ -464,9 +466,12 @@ def write(conn, org_id, brand_id, month, picks, actor) -> dict:
         campaign_id = row["campaign_id"]
         if campaign_id not in sell_ways:
             sell_ways[campaign_id] = sell_way.of_campaign_id(conn, org_id, brand_id, campaign_id)
-        within = row["cost_per_result"] is not None and row["cap"] is not None \
-            and row["cost_per_result"] <= row["cap"]
+        comparable = row["cost_per_result"] is not None and row["cap"] is not None
+        within = row["cost_per_result"] <= row["cap"] if (
+            row["cost_per_result"] is not None and row["cap"] is not None) else False
         text = learning_text("effective" if within else "ineffective", angle)
+        if not comparable:
+            text = f"「{angle}」本期無法計算每筆成本與上限的差距；成效原因未知"
         detail = repository.campaign_detail(conn, org_id, brand_id, campaign_id)
         if detail is None:
             raise SettleError(409, "campaign_unknown", "來源活動已不存在，請重新讀取結算。")
@@ -488,7 +493,8 @@ def write(conn, org_id, brand_id, month, picks, actor) -> dict:
             conn, org_id, brand_id, detail, kind="settle",
             window={"start": start.isoformat(), "end": end.isoformat()}, ad=ad,
             members=[ad] if ad else [], observations=observations, entity_id=row["entity_id"],
-            claim_key="message_text:" + angle, direction="support" if within else "contrary",
+            claim_key="message_text:" + angle,
+            direction="support" if within else "contrary" if comparable else "inconclusive",
         )
         ads_learnings.write(
             conn, org_id, brand_id, actor=actor, product_id=sell_ways[campaign_id], text=text,

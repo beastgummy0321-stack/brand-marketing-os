@@ -203,20 +203,25 @@ def write_visual_learnings(conn: _AnyConn, org_id: str, brand_id: str, campaign_
                 sample_size = _smallest_bucket([b["sample_bucket"] for b in buckets.values()])
 
             observations = [r for a in stratum_ads for r in rows_by_entity.get(a["id"], [])]
-            claim = f"visual:{dimension}:{best_key}" if best_key is not None else None
+            background = ads_learnings.semantic_version(sorted({
+                ads_learnings.message_claim(a) or "unknown" for a in stratum_ads
+            }))
+            claim = f"visual:{dimension}:{best_key}:{background}" if best_key is not None else None
             evidence = ads_learnings.source_evidence(
                 conn, org_id, brand_id, detail, kind="visual", window=window,
                 members=stratum_ads, observations=observations, claim_key=claim,
                 direction="support" if best_key is not None else "inconclusive",
             )
-            counts = [sum(float(r["result_count"]) for aid in ids
-                          for r in rows_by_entity.get(aid, []) if r.get("result_count") is not None)
-                      for ids in value_groups.values()]
-            evidence["sample"]["result_events"] = min(counts, default=None)
+            samples = [[r.get("result_count") for aid in ids
+                        for r in rows_by_entity.get(aid, [])] for ids in value_groups.values()]
+            evidence["sample"]["result_events"] = min(
+                (sum(float(v) for v in sample) for sample in samples), default=None,
+            ) if samples and all(sample and all(v is not None for v in sample)
+                                 for sample in samples) else None
             # Only a qualified comparable result can retire an opposing prior value. Legacy,
             # other-product and changed-condition observations remain inspectable history.
             prior = bi_repo.list_learnings(cast(Conn, conn), brand_id,
-                                          source_track="visual", limit=500)
+                                          source_track="visual", limit=500, include_expired=True)
             candidate = {"id": "pending", "org_id": org_id, "brand_id": brand_id,
                          "product_id": product_id, "applicability_scope":
                          ads_learnings.workbench.encode_learning_scope(scope, evidence)}
@@ -231,7 +236,7 @@ def write_visual_learnings(conn: _AnyConn, org_id: str, brand_id: str, campaign_
                     old = ads_learnings.stored_evidence(previous)
                     old_scope = old.get("scope") or {}
                     old_claim = old_scope.get("claim_key")
-                    if old_claim not in {f"visual:{dimension}:{k}" for k in comparable
+                    if old_claim not in {f"visual:{dimension}:{k}:{background}" for k in comparable
                                          if k != best_key}:
                         continue
                     if (projected[previous["id"]]["use_state"] == "usable"
