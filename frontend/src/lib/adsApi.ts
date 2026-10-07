@@ -24,7 +24,19 @@ export type DeliveryState = "running" | "not_running" | "off" | "unknown";
 export interface DeliveryView { state: DeliveryState; label: string }
 /** F49 Contract L: 「在投」 = `count` running ads; `unknown` ads apart; `read_at` = the newest clean structure read,
  * `stale` when it is older than the newest launch item the user reported done. */
-export interface RunningAds { count: number; unknown: number; read_at: string | null; stale: boolean }
+export interface RunningAds {
+  count: number; unknown: number; read_at: string | null; stale: boolean;
+  /** F52 Contract L: additive actual adapter/structure facts; absent legacy fields remain unknown. */
+  not_running?: number; off?: number; scheduled?: number;
+  state?: DeliveryState; label?: string; reason?: string;
+  freshness?: "read" | "unread" | "stale" | "partial" | "failed" | "syncing";
+}
+/** Navigation descriptors are passed to existing adsRoutes builders; never reconstruct delivery in a view. */
+export interface CampaignNextAction {
+  id: "review_checklist" | "prepare_campaign" | "review_period" | "view_delivery" | "read_platform" | "view_performance";
+  label: string; reason: string;
+  target: {kind: "campaign"; tab: "strategy" | "assets" | "perf" | "structure"} | {kind: "flow"; parts: string[]};
+}
 
 export interface CampaignOutcomeTotals {
   spend: number | null;
@@ -88,6 +100,8 @@ export interface CampaignCard extends ExternalCampaignFields {
   name: string;
   status: CampaignStatus;
   lifecycle?: CampaignLifecycle;
+  running?: RunningAds;
+  next_action?: CampaignNextAction;
   start_date: string | null;
   end_date: string | null;
   objective: string; // F27-I09: `campaign_objective` optional, see `adsTriageApi.ts`.
@@ -187,6 +201,8 @@ export interface CampaignDetail extends EntityBinding, ExternalCampaignFields {
   end_date: string | null;
   status: CampaignStatus;
   lifecycle?: CampaignLifecycle;
+  running?: RunningAds;
+  next_action?: CampaignNextAction;
   budget_planned: number | null;
   budget_scenario: string | null;
   /** 產生策略前是 `{}`；F03-I05 起是 `AdsBudgetBasisJson`——讀前先檢查 `.strategy` 存不存在。 */

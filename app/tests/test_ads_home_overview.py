@@ -272,10 +272,14 @@ class OneSpentTest(_Pinned):
         home = self.overview(brand)
         buy = next(c for c in home["campaigns"] if c["campaign_id"] == self.buy)
         self.assertEqual(buy["active_ads"], 2)
-        self.assertEqual(buy["running"],
+        self.assertEqual({key: buy["running"][key]
+                          for key in ("count", "unknown", "read_at", "stale")},
                          {"count": 2, "unknown": 1, "read_at": None, "stale": False})
+        self.assertEqual({key: buy["running"][key]
+                          for key in ("not_running", "off", "state", "freshness")},
+                         {"not_running": 1, "off": 1, "state": "unknown", "freshness": "unread"})
         self.assertEqual(buy["lifecycle"],
-                         {"state": "live", "label": "投放中", "can_close": False})
+                         {"state": "live", "label": "本期進行中", "can_close": False})
 
     def test_closed_this_month_counts_campaigns_closed_in_the_month(self):
         # N3: the closed campaign is gone from the rows, but the home knows one was closed.

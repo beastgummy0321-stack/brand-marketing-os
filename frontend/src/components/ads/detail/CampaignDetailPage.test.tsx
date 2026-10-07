@@ -694,7 +694,7 @@ function lifecycleOf(status: CampaignDetail["status"], imported: boolean): Campa
   if (status === "draft" || status === "ready") return { state: "draft", label: "草稿", can_close: false };
   if (status === "closed") return { state: "closed", label: "已結案", can_close: false };
   if (status === "ended") return { state: "ended", label: imported ? "已結束" : "已結束・待結案", can_close: !imported };
-  return { state: "live", label: "投放中", can_close: !imported };
+  return { state: "live", label: "本期進行中", can_close: !imported };
 }
 /** The drill-7 period-2 shape: 4 built ads, 2 never built (缺圖). */
 function campaignDetail(o: Partial<CampaignDetail> = {}, ads?: AdRow[]): CampaignDetail {
@@ -923,7 +923,7 @@ describe("這期狀態列 (F40-I06, prototype #/perf)", () => {
   });
 
   it("F49 Contract L: 結案這一期 shows only when the served lifecycle can close", async () => {
-    renderBody(campaignDetail({ lifecycle: { state: "live", label: "投放中", can_close: false } }));
+    renderBody(campaignDetail({ lifecycle: { state: "live", label: "本期進行中", can_close: false } }));
     expect(await within(row()).findByText("10,081 TWD")).toBeTruthy();
     expect(within(row()).queryByRole("button", { name: "結案這一期 →" })).toBeNull();
     expect(within(row()).getByRole("button", { name: "重新讀取平台" })).toBeTruthy();

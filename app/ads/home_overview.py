@@ -32,6 +32,7 @@ from decimal import Decimal
 
 from app.ads import (
     budget,
+    campaign_stage,
     change_control_launch,
     coverage,
     handoff_assignment,
@@ -517,7 +518,9 @@ def _campaigns_block(conn, org_id, brand_id, win, campaigns, caps, entities, row
         draft = state["state"] == "draft"
         ads = ads_by_campaign[campaign_id]
         judged_ads = [ad for ad in ads if lifecycle.judged(ad)]
-        running = lifecycle.running_view(campaign, ads, reported.get(campaign_id))
+        running = lifecycle.running_view(
+            campaign, ads, reported.get(campaign_id), today=win["today"],
+        )
         rows = rows_by_campaign.get(campaign_id, [])
         month = (
             _campaign_money(rows, win["start"], win["cutoff"], currency_ok) if rows
@@ -532,6 +535,10 @@ def _campaigns_block(conn, org_id, brand_id, win, campaigns, caps, entities, row
         entry = {
             "campaign_id": campaign_id, "name": campaign["name"], "origin": campaign["origin"],
             "status": campaign["status"], "lifecycle": state, "running": running,
+            "next_action": campaign_stage.action_of(
+                conn, org_id, brand_id, campaign, state, running,
+                stage_key="assets" if cap["value"] is not None else None,
+            ),
             "month_spend": _money_out(spend),
             "purchases": _count_out(purchases),
             "cost_per_purchase": _money_out(spend / purchases)

@@ -14,10 +14,10 @@ vi.mock("@/components/layout/WorkspaceContext", () => ({ useWorkspace: () => ({ 
 /** F49 Contract L: the served lifecycle, as `app/ads/lifecycle.py` labels it. */
 const LIFE = {
   draft: { state: "draft", label: "草稿", can_close: false },
-  live: { state: "live", label: "投放中", can_close: true },
+  live: { state: "live", label: "本期進行中", can_close: true },
   ended: { state: "ended", label: "已結束・待結案", can_close: true },
   closed: { state: "closed", label: "已結案", can_close: false },
-  importedLive: { state: "live", label: "投放中", can_close: false },
+  importedLive: { state: "live", label: "本期進行中", can_close: false },
 } as const;
 const CAP = { value: 450, basis: "own", own_value: 450, break_even: 520, price: 1580, product_id: null, result_kind: "purchase", result_label: "購買", missing: [], revision: 1 };
 function detail(o: Partial<CampaignDetail> = {}): CampaignDetail {
@@ -41,10 +41,27 @@ const chips = () => [...document.querySelectorAll("[data-slot=chip]")].map((e) =
 });
 
 describe("WorkspaceHead (F30-I07, v10 wsHead)", () => {
+  it("F52: known paused zero keeps the served period word and does not say the platform was unread", () => {
+    renderHead(detail(), ready(ws({ delivery: "off", active_ads: 0, running: {
+      count: 0, unknown: 0, off: 2, not_running: 0, scheduled: 0, read_at: "2026-10-01T00:00:00Z",
+      stale: false, state: "off", freshness: "read", label: "平台未在投放", reason: "已暫停",
+    } })));
+    expect(chips()).toContain("本期進行中");
+    expect(chips().join("|")).toContain("在投 0 則");
+    expect(chips().join("|")).not.toContain("還沒讀到平台");
+    expect(chips().join("|")).not.toContain("投放中");
+  });
+
+  it("F52: a future period word stays separate from the actual adapter running count", () => {
+    renderHead(detail({ lifecycle: { state: "live", label: "本期尚未開始", can_close: true } }), ready(ws()));
+    expect(chips()).toContain("本期尚未開始");
+    expect(chips().join("|")).toContain("在投 8 則");
+  });
+
   it("live: the served lifecycle word, objective・在投 N 則, 每日, period, the campaign's own cap; the rail marks done stations and the current one", () => {
     renderHead(detail(), ready(ws()));
     expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("日常商品推廣・轉換");
-    expect(chips()).toEqual(["投放中", "購買・在投 8 則", "每日 1,200", "09/08 – 10/08", "日常商品推廣的上限 450"]);
+    expect(chips()).toEqual(["本期進行中", "購買・在投 8 則", "每日 1,200", "09/08 – 10/08", "日常商品推廣的上限 450"]);
     expect(document.querySelector('[data-slot=chip][data-tone="accent"]')).toBeTruthy();
     const rail = screen.getByRole("navigation", { name: "活動進度" });
     const current = within(rail).getByRole("link", { current: "step" });
@@ -79,7 +96,7 @@ describe("WorkspaceHead (F30-I07, v10 wsHead)", () => {
 
   it("a break-even cap reads 暫用打平線 in warn; an unknown daily budget and pending count print nothing", () => {
     renderHead(detail({ cap: { ...CAP, value: 520, basis: "break_even", own_value: null } as never }), ready(ws({ daily_budget: null, pending_count: null })));
-    expect(chips()).toEqual(["投放中", "購買・在投 8 則", "09/08 – 10/08", "日常商品推廣暫用打平線 520"]);
+    expect(chips()).toEqual(["本期進行中", "購買・在投 8 則", "09/08 – 10/08", "日常商品推廣暫用打平線 520"]);
     expect(document.querySelector('[data-slot=chip][data-tone="warn"]')?.textContent).toContain("打平線");
     expect(screen.getByRole("button", { name: /^總覽/ }).textContent).toBe("總覽");
   });
@@ -105,7 +122,7 @@ describe("WorkspaceHead (F30-I07, v10 wsHead)", () => {
     expect(reload).toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "成效" }));
     expect(onTab).toHaveBeenCalledWith("perf");
-    expect(chips()).toEqual(["投放中", "購買", "09/08 – 10/08", "日常商品推廣的上限 450"]);
+    expect(chips()).toEqual(["本期進行中", "購買", "09/08 – 10/08", "日常商品推廣的上限 450"]);
   });
 
   it("F49 Contract L (drill-11 p2): an ended campaign reads 已結束・待結案 (warn), never 投放中, even while its stored status is live", () => {
@@ -115,7 +132,7 @@ describe("WorkspaceHead (F30-I07, v10 wsHead)", () => {
     const word = chips()[0];
     expect(word).toBe("已結束・待結案");
     expect(document.querySelector('[data-slot=chip][data-state="ended"]')!.getAttribute("data-tone")).toBe("warn");
-    expect(chips().join("|")).not.toContain("投放中");
+    expect(chips().join("|")).not.toContain("本期進行中");
     expect(chips()[1]).toBe("購買・在投 6 則");
   });
 
