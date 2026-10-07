@@ -60,8 +60,8 @@ export function LearningEvidenceSource({ evidence, audienceLabel }: { evidence: 
     <dl className="grid grid-cols-2 gap-x-5 gap-y-4 text-[13px]">
       <div><dt className="text-xs text-muted-foreground">來源活動</dt><dd className="mt-1 [overflow-wrap:anywhere]">{evidence.sources.map((source, i) => <p key={i}>{source.label ?? "來源名稱尚未提供"}</p>)}</dd></div>
       <div><dt className="text-xs text-muted-foreground">觀察期間</dt><dd className="mt-1 [overflow-wrap:anywhere]">{evidence.sources.map((source, i) => <p key={i}>{formatDay(source.period.start, "ymd") || "起日未知"} 至 {formatDay(source.period.end, "ymd") || "迄日未知"}</p>)}</dd></div>
-      <div><dt className="text-xs text-muted-foreground">適用商品</dt><dd className="mt-1 [overflow-wrap:anywhere]">{evidence.scope.product_label ?? "商品尚未核實"}</dd></div>
-      <div><dt className="text-xs text-muted-foreground">受眾</dt><dd className="mt-1 [overflow-wrap:anywhere]">{audienceLabel ?? "受眾名稱尚未提供"}</dd></div>
+      <div><dt className="text-xs text-muted-foreground">適用商品</dt><dd className="mt-1 [overflow-wrap:anywhere]">{evidence.scope.product_label ?? (evidence.scope.product_id ? "商品名稱尚未提供" : "商品範圍尚未核實")}</dd></div>
+      <div><dt className="text-xs text-muted-foreground">受眾</dt><dd className="mt-1 [overflow-wrap:anywhere]">{audienceLabel ?? (evidence.scope.customer_group_id || evidence.scope.audience_key ? "受眾名稱尚未提供" : "受眾範圍尚未核實")}</dd></div>
       <div><dt className="text-xs text-muted-foreground">成果樣本</dt><dd className="numeric mt-1">{evidence.sample.result_events === null ? "樣本尚未完整核實" : `${formatAmount(evidence.sample.result_events)} 筆`}</dd></div>
       <div><dt className="text-xs text-muted-foreground">當時每筆成本</dt><dd className="mt-1">來源未提供，尚未核實</dd></div>
       <div><dt className="text-xs text-muted-foreground">獨立觀察</dt><dd className="numeric mt-1">{formatAmount(evidence.independent_count)} 次</dd></div>
@@ -80,6 +80,9 @@ export function LearningEvidenceSource({ evidence, audienceLabel }: { evidence: 
         <dl className="mt-2 grid grid-cols-2 gap-3"><SourceField label="來源類型" value={source.kind ? SOURCE_KIND[source.kind] : null} /><SourceField label="來源識別" value={source.id} /><SourceField label="來源版本" value={source.version} /></dl>
       </li>)}</ul>
       <dl className="mt-4 grid grid-cols-2 gap-4">
+        <SourceField label="商品識別" value={evidence.scope.product_id} />
+        <SourceField label="顧客群識別" value={evidence.scope.customer_group_id} />
+        <SourceField label="受眾條件識別" value={evidence.scope.audience_key} />
         <SourceField label="成果類型（來源值）" value={evidence.scope.result_kind} />
         <SourceField label="幣別" value={evidence.scope.currency} />
         <SourceField label="成果歸因方式（來源值）" value={evidence.scope.attribution} />

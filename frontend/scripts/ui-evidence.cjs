@@ -85,7 +85,7 @@ function facts(screenSelector) {
     "settings-grid": "SettingsGrid", "setting-field": "SettingField", "readback-row": "ReadbackRow",
     // F30-I03 kit
     "source-list": "SourceList", "source-row": "SourceRow", "day-grid": "DayGrid", legend: "Legend", "copy-fields": "CopyFields", "copy-field": "CopyField",
-    "slot-grid": "SlotGrid", "slot-tile": "SlotTile", "tree-rows": "TreeRows", "change-timeline": "ChangeTimeline", "pick-group": "PickGroup", "pick-card": "PickCard", "money-input": "MoneyInput", "learning-evidence": "LearningEvidenceCard", "learning-source": "LearningEvidenceSource" };
+    "slot-grid": "SlotGrid", "slot-tile": "SlotTile", "tree-rows": "TreeRows", "change-timeline": "ChangeTimeline", "pick-group": "PickGroup", "pick-card": "PickCard", "money-input": "MoneyInput", "learning-evidence": "LearningEvidenceCard", "learning-source": "LearningEvidenceSource", "learning-receipt": "LearningReceipt" };
   const VARIANT = { kind: ["stop", "worse", "up", "fresh", "cut"], todo: ["ok"], hero: ["ok", "warn", "bad"], opt: ["pick"], old: ["old"], new: ["new"] };
   const NOVARIANT = new Set(["campaign-chip", "tag-toggle", "learn-card", "recover-steps", "thumb-tiles", "day-tiles", "meter", "evidence-row", "ladder", "option-card",
     "grade-band", "pace-chart", "next-up-strip", "scenario-bars", "allocation-bar", "diff-row", "cap-dots", "progress-segments",
@@ -104,6 +104,7 @@ function facts(screenSelector) {
   ];
   // v10 pieces (F29-I09): prototype element -> piece; the built side reports them by data-slot above.
   const V10 = [
+    [(e) => e.matches(".receipt") && e.querySelector("[data-act=pause-source]"), () => "LearningReceipt"],
     // F30-I03 kit: prototype class -> piece
     [(e) => e.matches(".src"), () => "SourceRow"], [(e) => e.matches(".calg"), () => "DayGrid"], [(e) => e.matches(".lg") && !e.querySelector(":scope > span:nth-child(4) > .term"), () => "Legend"],
     [(e) => e.matches(".fl"), () => "CopyField"], [(e) => e.matches(".slots"), () => "SlotGrid"], [(e) => e.matches(".slot"), () => "SlotTile"],

@@ -328,7 +328,8 @@ describe("ConfirmPage（F27-I16 Contract C/D）這則主打什麼？", () => {
     renderAt(proposePath);
     await screen.findByText("這則主打什麼？");
     expect(screen.queryByRole("button", { name: "＋ 自訂" })).toBeNull();
-    expect(screen.getByText("選一個，暫停後記入品牌學習")).toBeTruthy();
+    expect(screen.getByText("可選操作標籤；成效原因尚未確認")).toBeTruthy();
+    expect(screen.queryByText(/暫停後記入品牌學習|對這群受眾無效/)).toBeNull();
   });
 
   it("ready：三顆候選＋自訂，選一顆會更新右側文字", async () => {
@@ -339,10 +340,12 @@ describe("ConfirmPage（F27-I16 Contract C/D）這則主打什麼？", () => {
     expect(screen.getByRole("button", { name: "辦公室情境" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "提問式貼文" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "＋ 自訂" })).toBeTruthy();
-    expect(screen.getByText("選一個，暫停後記入品牌學習")).toBeTruthy();
+    expect(screen.getByText("可選操作標籤；成效原因尚未確認")).toBeTruthy();
     await user.click(tag);
     expect(tag.getAttribute("aria-pressed")).toBe("true");
-    expect(screen.getByText("「日常出發情境」對這群受眾無效")).toBeTruthy();
+    expect(screen.getByText("「日常出發情境」")).toBeTruthy();
+    expect(screen.getByText(/成效原因尚未確認/)).toBeTruthy();
+    expect(screen.queryByText(/對這群受眾無效|暫停後記入品牌學習/)).toBeNull();
   });
 
   it("failed：只剩「＋ 自訂」，點開變成輸入框", async () => {
@@ -356,7 +359,15 @@ describe("ConfirmPage（F27-I16 Contract C/D）這則主打什麼？", () => {
     await user.click(custom);
     const input = screen.getByLabelText("自訂主打");
     await user.type(input, "夏季限定");
-    expect(screen.getByText("「夏季限定」對這群受眾無效")).toBeTruthy();
+    expect(screen.getByText("「夏季限定」")).toBeTruthy();
+    expect(screen.getByText(/成效原因尚未確認/)).toBeTruthy();
+    expect(screen.queryByText(/對這群受眾無效/)).toBeNull();
+    await user.click(screen.getByRole("button", {name: "拒絕／暫緩"}));
+    await user.click(screen.getByRole("button", {name: /^取消$/}));
+    expect((input as HTMLInputElement).value).toBe("夏季限定");
+    expect(screen.getByText("「夏季限定」")).toBeTruthy();
+    expect(changeApi.createChangeSet).not.toHaveBeenCalled();
+    expect(changeApi.approveChangeSet).not.toHaveBeenCalled();
   });
 
   it("選了候選再核准：payload 帶上 angle", async () => {

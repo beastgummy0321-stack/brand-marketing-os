@@ -47,3 +47,4 @@ export { PickCard, PickGroup } from "./PickCard";
 export { MoneyInput } from "./MoneyInput";
 export { campaignWord, closedWord } from "./campaignWords";
 export { LearningEvidenceCard, LearningEvidenceSource, LearningEvidenceState, LearningEvidenceOrigin } from "./LearningEvidence";
+export {LearningReceipt} from "./LearningReceipt";

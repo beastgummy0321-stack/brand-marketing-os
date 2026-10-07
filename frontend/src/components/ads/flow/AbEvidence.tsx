@@ -2,7 +2,7 @@ import { getAbPairs, type AbPair, type AbSide } from "@/lib/adsAbApi";
 import type { AbChangeBlock, AbChangeSide, ChangeItem } from "@/lib/adsChangeApi";
 import { getTriage, type CampaignObjectiveFamily } from "@/lib/adsTriageApi";
 import { useApiRead } from "@/lib/useApiRead";
-import { Chip, KindMark, LearnLine, MoneyTag, Term, Thumb, useAdsRules } from "../patterns";
+import { Chip, KindMark, LearningReceipt, LearnLine, MoneyTag, Term, Thumb, useAdsRules } from "../patterns";
 import { perSaleAmount } from "../patterns/csv";
 import { daysBetween } from "@/lib/orgClock";
 
@@ -143,20 +143,19 @@ export function AbEvidence({ ab, context }: { ab: AbChangeBlock; context: AbCont
   );
 }
 
-/** The verify step's learning line (prototype `stepChk()` for kind `ab`): written once the pause reads back confirmed
- * (`item.learning.recorded`, Contract F); until then it says it will be. */
-export function AbLearnedCard({ ab, item }: { ab: AbChangeBlock; item: ChangeItem }) {
-  const recorded = item.learning?.recorded === true;
-  const meta = costPair(ab);
-  return (
-    <div className="surface px-[22px] py-1">
-      <LearnLine
-        tone="ok"
-        mark="✎"
-        eyebrow={recorded ? <>已寫進<Term k="notebook">筆記本</Term></> : <>核對完成後寫進<Term k="notebook">筆記本</Term></>}
-        title={abLearningText(ab)}
-        meta={meta ?? undefined}
-      />
-    </div>
-  );
+/** Frozen approved side amounts remain history; qualification comes only from the served evidence. */
+export function AbLearnedCard({ ab, item, context }: { ab: AbChangeBlock; item: ChangeItem; context: AbContext }) {
+  const letters = abLetters(ab, context.pair);
+  const liveOf = (side: AbChangeSide) => context.pair ? [context.pair.a, context.pair.b].find(s => s.ad_id === side.ad_id) ?? null : null;
+  return <div className="flex min-w-0 flex-col gap-5">
+    <section className="surface w-full max-w-[920px] px-[22px] py-5" aria-label="已核准的比較設定">
+      <h2 className="text-[15px] font-semibold">已核准的比較設定</h2>
+      <p className="mt-1 text-xs text-muted-foreground">保留核准時的兩側金額與關閉安排；目前適用性另看下方比較紀錄。</p>
+      <ul className="mt-3">
+        <SideRow letter={letters?.loser ?? null} side={ab.loser} live={liveOf(ab.loser)} dimension={ab.dimension_label} span={days(ab.window)} close breakEven={context.breakEven}/>
+        <SideRow letter={letters?.winner ?? null} side={ab.winner} live={liveOf(ab.winner)} dimension={ab.dimension_label} span={days(ab.window)} close={false} breakEven={context.breakEven}/>
+      </ul>
+    </section>
+    <LearningReceipt comparative recorded={item.learning?.recorded === true} evidence={item.learning?.evidence ?? null}/>
+  </div>;
 }
