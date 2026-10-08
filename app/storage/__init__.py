@@ -91,9 +91,12 @@ def put(*, org_id: str, key: str, filename: str, content: bytes, content_type: s
 def get(*, org_id: str, key: str) -> tuple[bytes, str]:
     """下載。回傳 (bytes, content_type)。對到不存在的 key 丟 `NotFound`。"""
     _guard_tenant(org_id, key, label="key")
-    resp = httpx.get(
-        f"{_base_url()}/storage/v1/object/{_BUCKET}/{key}", headers=_headers(), timeout=30.0
-    )
+    try:
+        resp = httpx.get(
+            f"{_base_url()}/storage/v1/object/{_BUCKET}/{key}", headers=_headers(), timeout=30.0
+        )
+    except httpx.TransportError:
+        raise StorageError("Storage 下載連線暫時無法完成。") from None
     if resp.status_code >= 400:
         if _error_code(resp) == "NoSuchKey":
             raise NotFound(f"物件不存在：{key}")

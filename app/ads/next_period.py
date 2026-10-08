@@ -435,6 +435,8 @@ def _qualified(conn, org, brand, snapshot, ids, product, confirmed, *, destinati
             ads_learnings.condition_snapshot(conn, org, brand, destination, product)
         )
         target = targets.resolve(conn, org, brand, destination, product_id=product)
+        source_family = repository.campaign_objective_family(conn, org, brand, campaign)
+        destination_family = repository.campaign_objective_family(conn, org, brand, destination)
         source_rows = [r for r in snapshot["grades"] if r["campaign_id"] == campaign["id"]]
         ranked = learning_rank.rank(source_rows)
         rows = []
@@ -471,8 +473,10 @@ def _qualified(conn, org, brand, snapshot, ids, product, confirmed, *, destinati
                     **{f"{d}_key": k for d, k in parsed["keys"].items()},
                 }
             reasons = []
-            if repository.campaign_objective_family(conn, org, brand, campaign) == "other":
+            if source_family == "other":
                 reasons.append("objective_unknown")
+            elif source_family != destination_family:
+                reasons.append("objective_family_mismatch")
             if not mapping:
                 reasons.append("mapping_required" if known is None else "other_product")
             if campaign["id"] in snapshot["missing"]:

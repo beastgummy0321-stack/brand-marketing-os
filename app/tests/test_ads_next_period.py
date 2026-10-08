@@ -2,15 +2,17 @@
 
 import hashlib
 import json
+import zlib
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 from unittest.mock import patch
 from uuid import uuid4
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from app import main
+from app import main, storage
 from app.ads import (
     ads_learnings,
     asset_binding_repository,
@@ -31,6 +33,8 @@ from app.brand_intelligence import repository as brands
 from app.core import db
 from app.llm import providers
 from app.workbench import encode_learning_scope
+
+_REAL_STORAGE_GET = storage.get
 
 
 def test_relative_best_is_not_absolute_success():
@@ -77,7 +81,7 @@ class Reader:
 
 
 @pytest.fixture
-def source(monkeypatch):
+def source(monkeypatch, request):
     conn, org = db.current(), db.DEV_ORG_ID
     monkeypatch.setattr(channels, "external_reader", lambda *args, **kwargs: Reader())
     monkeypatch.setattr(
@@ -117,7 +121,7 @@ def source(monkeypatch):
             "source_account": "account",
             "native_kind": "campaign",
             "native_id": native_campaign,
-            "objective": "OUTCOME_SALES",
+            "objective": getattr(request, "param", "OUTCOME_SALES"),
             "native_status": "ACTIVE",
         },
     )
@@ -501,10 +505,15 @@ def test_continuation_missing_month_is_rejected_before_draft_write(source):
     response = create(source, body)
     assert response.status_code == 422, response.text
     assert response.json()["error"]["code"] == "continuation_invalid"
-    assert source["conn"].execute(
-        "SELECT count(*) AS n FROM ads_campaign WHERE brand_id=%s AND origin='internal'",
-        (source["brand"],),
-    ).fetchone()["n"] == 0
+    assert (
+        source["conn"]
+        .execute(
+            "SELECT count(*) AS n FROM ads_campaign WHERE brand_id=%s AND origin='internal'",
+            (source["brand"],),
+        )
+        .fetchone()["n"]
+        == 0
+    )
 
 
 def _oversize(source):
@@ -698,11 +707,19 @@ def test_imported_only_public_generate_select_adopt_reuses_actual_original(sourc
     assert replay["id"] == campaign_id
 
 
-def test_adoption_rejects_changed_asset_before_writing_any_slot(source, monkeypatch):
+@pytest.mark.parametrize("change", ["asset", "objective"])
+def test_adoption_rejects_changed_asset_before_writing_any_slot(source, monkeypatch, change):
     campaign_id, revision, _ = _generated(source, monkeypatch)
-    source["conn"].execute(
-        "UPDATE ads_user_asset SET status='failed' WHERE id=%s", (source["asset"]["id"],)
-    )
+    if change == "asset":
+        source["conn"].execute(
+            "UPDATE ads_user_asset SET status='failed' WHERE id=%s", (source["asset"]["id"],)
+        )
+    else:
+        source["conn"].execute(
+            "UPDATE ads_external_entity SET objective='OUTCOME_TRAFFIC' WHERE campaign_id=%s"
+            " AND native_kind='campaign'",
+            (source["campaign"],),
+        )
     source["conn"].commit()
     with pytest.raises(plan.StrategyConflict):
         plan.adopt_strategy(
@@ -884,10 +901,22 @@ def test_unqualified_selected_source_remains_new_test_context_without_proven_car
             source["org"],
             source["brand"],
             campaign,
-            {**{k: source["entity"][k] for k in (
-                "platform", "source_account", "native_kind", "native_id",
-                "parent_native_kind", "parent_native_id", "native_status", "name",
-            )}, "creative": creative},
+            {
+                **{
+                    k: source["entity"][k]
+                    for k in (
+                        "platform",
+                        "source_account",
+                        "native_kind",
+                        "native_id",
+                        "parent_native_kind",
+                        "parent_native_id",
+                        "native_status",
+                        "name",
+                    )
+                },
+                "creative": creative,
+            },
         )
         conn.execute(
             "UPDATE ads_asset_binding SET creative_hash=%s WHERE entity_id=%s",
@@ -1010,3 +1039,244 @@ def test_small_sample_retains_existing_allowed_uses_and_sample_warning(source):
     assert "insufficient_sample" in row["evidence"]["reason_codes"]
     assert "retain_control" in row["evidence"]["allowed_uses"]
     assert "market_support" not in row["evidence"]["allowed_uses"]
+
+
+@pytest.mark.parametrize(
+    "source,expected", [("OUTCOME_TRAFFIC", 0), ("OUTCOME_SALES", 1)], indirect=["source"]
+)
+def test_selected_objective_family_controls_actual_create_and_planner(source, expected):
+    conn, org, brand = source["conn"], source["org"], source["brand"]
+    history = brands.list_learnings(conn, brand, include_expired=True)
+    native = conn.execute(
+        "SELECT native_id,native_status,objective FROM ads_external_entity WHERE campaign_id=%s"
+        " ORDER BY id",
+        (source["campaign"],),
+    ).fetchall()
+    response = create(source, payload(source))
+    assert response.status_code == 200, response.text
+    draft = repository.get_campaign(conn, org, brand, response.json()["campaign"]["id"])
+    ctx = planner_context.planner_context(conn, org, brand, source["product"], campaign=draft)
+    assert len(ctx["carried_candidates"]) == expected
+    assert len(ctx["continuation"]["eligible_learning_refs"]) == expected
+    row = ctx["learnings"]["ranked"]["campaigns"][0]["rows"][0]
+    if expected:
+        assert "market_support" in row["evidence"]["allowed_uses"]
+    else:
+        assert "objective_family_mismatch" in {
+            r["reason_code"] for r in ctx["continuation"]["excluded"]
+        }
+        assert row["evidence"]["allowed_uses"] == []
+        decision = strategy.executable_decision(
+            ctx,
+            draft,
+            {
+                "allocation": [{"role": "new", "pct": 100}],
+                "slots": [
+                    {
+                        "id": "forged-family",
+                        "role": "new",
+                        "customer_group_id": source["group"]["id"],
+                        "offer_key": "none",
+                        "carry_from_ad_id": source["entity"]["id"],
+                        "test_intent": None,
+                        "rationale": "Retain original",
+                        "evidence_refs": [],
+                    }
+                ],
+            },
+        )
+        assert "carry_unavailable" in {r["code"] for r in decision["feasibility"]["reasons"]}
+    assert brands.list_learnings(conn, brand, include_expired=True) == history
+    assert (
+        conn.execute(
+            "SELECT native_id,native_status,objective FROM ads_external_entity WHERE campaign_id=%s"
+            " ORDER BY id",
+            (source["campaign"],),
+        ).fetchall()
+        == native
+    )
+
+
+@pytest.mark.parametrize("failure", [httpx.ReadTimeout, httpx.ConnectError])
+def test_real_storage_transport_failure_is_read_only_material_exclusion(
+    source, monkeypatch, failure
+):
+    conn, org, brand, campaign = (
+        source["conn"],
+        source["org"],
+        source["brand"],
+        source["campaign"],
+    )
+    repository.save_campaign_target(
+        conn,
+        org,
+        brand,
+        campaign,
+        result_kind="purchase",
+        basis="own",
+        value=100,
+        product_id=source["product"],
+        expected_revision=1,
+        actor="test",
+    )
+    # A valid metadata chunk gives the second original a distinct hash (assets deduplicate it).
+    metadata = b"fixture\x00healthy"
+    chunk = (
+        len(metadata).to_bytes(4, "big")
+        + b"tEXt"
+        + metadata
+        + zlib.crc32(b"tEXt" + metadata).to_bytes(4, "big")
+    )
+    content = source["content"][:-12] + chunk + source["content"][-12:]
+    healthy = external.upsert_entity(
+        conn,
+        org,
+        brand,
+        campaign,
+        {
+            **{
+                k: source["entity"][k]
+                for k in (
+                    "platform",
+                    "source_account",
+                    "native_kind",
+                    "parent_native_kind",
+                    "parent_native_id",
+                    "creative",
+                    "native_status",
+                )
+            },
+            "native_id": f"healthy-{brand}",
+            "name": "Healthy original",
+        },
+    )
+    external.upsert_observation(
+        conn,
+        org,
+        brand,
+        campaign,
+        {
+            "entity_id": healthy["id"],
+            "metric_scope": "ad",
+            "day": "2026-09-30",
+            "spend": 400,
+            "purchases": 20,
+            "attribution_key": "7d",
+            "currency": "TWD",
+            "source": "graph",
+        },
+        result_kind="purchase",
+        result_count=20,
+        result_action="omni_purchase",
+        result_attribution="7d_click",
+    )
+    upload = assets.create_batch(
+        conn, org, brand, [{"filename": "healthy.png", "size": len(content)}], "test"
+    )["uploads"][0]
+    assets.set_upload(
+        conn,
+        org,
+        brand,
+        upload["id"],
+        storage_key=f"{org}/brands/{brand}/healthy.png",
+        sha256=hashlib.sha256(content).hexdigest(),
+        mime_type="image/png",
+        byte_size=len(content),
+        status="complete",
+    )
+    original = assets.finalize_original(conn, org, brand, upload["id"])
+    conn.execute("UPDATE ads_user_asset SET status='ready' WHERE id=%s", (original["id"],))
+    placement = assets.attach(
+        conn,
+        org,
+        brand,
+        campaign,
+        original["id"],
+        asset_binding_repository.effective_copy(source["placement"]),
+        "test",
+    )
+    conn.execute(
+        "UPDATE ads_asset_placement SET confirmed_at=now() WHERE id=%s", (placement["id"],)
+    )
+    binding = asset_binding_repository.report(
+        conn, org, brand, campaign, placement["id"], 1, "test"
+    )
+    conn.execute(
+        "UPDATE ads_asset_binding SET entity_id=%s,platform='meta',source_account='account',"
+        " native_kind='ad',native_id=%s,existence_status='platform_confirmed',creative_hash=%s"
+        " WHERE id=%s",
+        (
+            healthy["id"],
+            healthy["native_id"],
+            asset_binding_repository.creative_hash(healthy["creative"]),
+            binding["id"],
+        ),
+    )
+    conn.commit()
+    old = brands.list_learnings(conn, brand, include_expired=True)[0]
+    evidence = ads_learnings.stored_evidence(old)
+    evidence["source_ref"].update(entity_id=healthy["id"], ad_id=healthy["id"])
+    evidence["scope"]["product_id"] = source["product"]
+    conditions = ads_learnings.condition_snapshot(
+        conn, org, brand, repository.get_campaign(conn, org, brand, campaign), source["product"]
+    )
+    evidence["conditions"].update(
+        price_version=conditions["price_version"],
+        target_version=conditions["target_version"],
+        material_version=ads_learnings.material_version(
+            {
+                "material_evidence": {
+                    "sha256": original["sha256"],
+                    "copy": asset_binding_repository.effective_copy(placement),
+                }
+            },
+            {},
+        ),
+    )
+    ranked = learning_rank.rank(
+        [{"entity_id": healthy["id"], "spend": 400, "results": 20, "currency": "TWD", "cap": 100}]
+    )[0]
+    brands.record_learning(
+        conn,
+        brand,
+        actor="test",
+        learning_text="Healthy native observation",
+        applicability_scope=encode_learning_scope(
+            learning_rank.scope(ranked, source["keys"], source["group"]["id"]), evidence
+        ),
+        confidence="observed",
+        sample_size="20",
+        product_id=source["product"],
+        source_track="ads",
+        source_cycle_id=f"native:{campaign}:{healthy['id']}",
+    )
+    tables = ("ads_campaign", "ads_ad", "ads_asset_placement", "ads_asset_binding", "llm_task")
+
+    def counts():
+        return {
+            t: conn.execute(
+                f"SELECT count(*) AS n FROM {t} WHERE brand_id=%s", (brand,)
+            ).fetchone()["n"]
+            for t in tables
+        }
+
+    before, history = counts(), brands.list_learnings(conn, brand, include_expired=True)
+    monkeypatch.setattr(storage, "get", _REAL_STORAGE_GET)
+
+    def transport(url, **kwargs):
+        if url.endswith("/original.png"):
+            raise failure("expected fixture transport failure")
+        assert url.endswith("/healthy.png")
+        return httpx.Response(200, content=content, headers={"content-type": "image/png"})
+
+    with patch("app.storage.httpx.get", side_effect=transport):
+        response = TestClient(main.app).get(f"/api/ads/brands/{brand}/next-period?month=2026-09")
+    assert response.status_code == 200, response.text
+    unavailable = {
+        r["ref"] for r in response.json()["excluded"] if r["reason_code"] == "material_unavailable"
+    }
+    assert unavailable == {source["entity"]["id"]}
+    assert not any(r["ref"] == healthy["id"] for r in response.json()["excluded"])
+    assert {r["ref"] for r in response.json()["eligible_learning_refs"]} == {healthy["id"]}
+    assert counts() == before
+    assert brands.list_learnings(conn, brand, include_expired=True) == history
