@@ -97,6 +97,43 @@ describe("isQueueItemDone", () => {
   });
 });
 
+describe("ready review copy ownership", () => {
+  it.each([
+    ["draft", "pending", "等你核准", "confirm", false],
+    ["approved", "pending", "到平台完成", "handoff", false],
+    ["approved", "reported", "核對中", "verify", false],
+    ["approved", "confirmed", "核對中", "verify", true],
+  ] as const)("follows %s/%s on the existing copy set", (status, verification, label, step, done) => {
+    const proposal: QueueReviewProposal = {
+      ...deferredReview, status: "ready", decision: null, change_set_id: "cs_1",
+      change_set_status: status, verification_state: verification,
+    };
+    expect(proposalAction("brd_1", "cmp_1", "ad_1", proposal, "review")).toEqual({
+      label, href: `/brands/brd_1/ads/campaigns/cmp_1/changes/cs_1/${step}`, done,
+    });
+  });
+
+  it("follows the explicitly rejected copy set while the original review is ready", () => {
+    const proposal: QueueReviewProposal = {
+      ...deferredReview, status: "ready", decision: null, change_set_id: "cs_rejected",
+      change_set_status: "rejected", reason: "Keep current copy",
+    };
+    expect(proposalAction("brd_1", "cmp_1", "ad_1", proposal, "review")).toEqual({
+      label: "已拒絕", href: "/brands/brd_1/ads/campaigns/cmp_1/changes/cs_rejected/confirm", done: true,
+    });
+  });
+
+  it("follows a deferred copy set and its revisit time while the original review is ready", () => {
+    const proposal: QueueReviewProposal = {
+      ...deferredReview, status: "ready", decision: null, change_set_id: "cs_deferred",
+      change_set_status: "deferred", revisit_at: "2026-10-20T00:00:00+08:00",
+    };
+    expect(proposalAction("brd_1", "cmp_1", "ad_1", proposal, "review", "Asia/Taipei")).toEqual({
+      label: "10/20 再看", href: "/brands/brd_1/ads/campaigns/cmp_1/changes/cs_deferred/confirm", done: true,
+    });
+  });
+});
+
 // F49 Contract Q: the board, 「第 N 件」 and 「共 M 件」 read the served `decision`／`position`／`decisions.open` — the
 // served order here (refresh, settle, closeout, worse) is not the old local list (cleanup, worse, settle, refresh).
 const closeoutRow = (overrides: Partial<CloseoutQueueRow> = {}): CloseoutQueueRow => ({

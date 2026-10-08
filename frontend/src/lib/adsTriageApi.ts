@@ -120,8 +120,8 @@ export interface TriageItem {
   class: TriageClass; label: string; reason_code: string;
   grade: TriageGrade; grade_label: string;
   // F29-I01 Contract A: the previous equal-length window graded by the same ruler (null when not
-  // synced, below the gate or unknown); `grade_move` only when both are graded and differ. 變貴 =
-  // a move from `on_target` to `watch`/`over` -- the only thing that raises a `worse` row.
+  // synced or unknown); `grade_move` only when both are graded and differ. The queue also serves
+  // an absolute over-cap decision when the previous grade was costly or unknown.
   previous_grade: RankedGrade | null; grade_move: GradeMove | null;
   window: TriageWindow; target: TriageTargetView;
   current: TriageMetricsView; previous: TriageMetricsView;
@@ -231,7 +231,8 @@ export interface QueueBudgetProposal {
 
 /** F23-I01: the review round (if any) that currently answers a `worse` row, per
  * `app/ads/triage.py::_row_review_proposal` (feature Decisions "Queue row state") — `null` when
- * there is no round whose `window_end` falls inside the row's current triage window. `status` is
+ * there is no applicable round. Explicit decisions survive rolling windows until a due revisit
+ * or changed semantic conditions release them. `status` is
  * the round's own workflow status; the matching copy change set's own status is the separate
  * `change_set_status` field (never `status` — a `worse` row's round and its optional copy change
  * set carry two different, independently-evolving statuses). `change_set_id`,
@@ -400,6 +401,8 @@ export interface QueueItem {
   status: string; created_at: string; resolved_at: string | null;
   kind_key: QueueKind;
   triage: TriageItem; proposal: QueueProposal | null;
+  /** The canonical cap decision trigger; independent of the trend class and sample flag. */
+  trigger_reason?: "crossed_cap" | "persistently_over_cap" | "currently_over_cap";
   /** F47 Contract D (`app/ads/queue_done.py`): the row no longer waits on the user (decided,
    * deferred, or its change confirmed). The only done rule — read it, never recompute it. */
   done: boolean;
