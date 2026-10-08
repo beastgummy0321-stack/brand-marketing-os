@@ -6,18 +6,22 @@ import { NewCampaignPage } from "./NewCampaignPage";
 import { createCampaign, getCampaign, listCampaigns, patchCampaign, type CampaignCard, type CampaignDetail } from "@/lib/adsApi";
 import { putTarget } from "@/lib/adsTriageApi";
 import { fetchChannels } from "@/lib/adsLaunchApi";
-import { createCampaignFromPicks, getWizardOptions, type WizardOptions } from "@/lib/adsWizardApi";
+import { createCampaignFromPicks, getNextPeriod, getWizardOptions, type WizardOptions, type NextPeriodPreparation } from "@/lib/adsWizardApi";
 import { useAuthedImage } from "@/lib/useAuthedImage";
-import { clearDraft, readDraft } from "./campaignDraft";
+import { clearDraft, readAttempt, readDraft, saveAttempt, saveDraft } from "./campaignDraft";
 import { RULES_FIXTURE, seedAdsRules } from "./patterns/rulesFixture";
+import {attachUpload, getUploadBatch, type AssetUpload} from "@/lib/adsUserAssetsApi";
 
 vi.mock("@/components/layout/WorkspaceContext", () => ({ useWorkspace: () => ({ scope: "u:o" }) }));
 vi.mock("@/lib/adsApi", async (original) => ({ ...await original<object>(), getCampaign: vi.fn(), listCampaigns: vi.fn(), patchCampaign: vi.fn(), createCampaign: vi.fn() }));
 vi.mock("@/lib/adsLaunchApi", async (original) => ({ ...await original<object>(), fetchChannels: vi.fn() }));
 vi.mock("@/lib/adsTriageApi", async (original) => ({ ...await original<object>(), putTarget: vi.fn() }));
-vi.mock("@/lib/adsWizardApi", () => ({ getWizardOptions: vi.fn(), createCampaignFromPicks: vi.fn() }));
+vi.mock("@/lib/adsWizardApi", async original => ({...await original<object>(), getWizardOptions: vi.fn(), createCampaignFromPicks: vi.fn(), getNextPeriod: vi.fn()}));
 vi.mock("@/lib/useAuthedImage", () => ({ useAuthedImage: vi.fn(() => ({ src: null, failed: true })) }));
-vi.mock("./UserAssetsLibrary", () => ({ UserAssetsLibrary: () => <div>選擇已完成素材</div> }));
+vi.mock("@/lib/adsUserAssetsApi", async original => ({...await original<object>(), attachUpload: vi.fn(), getUploadBatch: vi.fn()}));
+vi.mock("./UserAssetsLibrary", () => ({ UserAssetsLibrary: ({onSelection, initialSelection = []}: {onSelection: (uploads: AssetUpload[]) => void; initialSelection?: AssetUpload[]}) =>
+  <div>選擇已完成素材<span>恢復 {initialSelection.length} 檔</span><button onClick={() => onSelection(["u1", "u2"].map(id => ({id, batch_id: "batch", filename: `${id}.png`, expected_size: 1,
+    status: "complete", error: null, asset_id: id, copy_fields: {}})))}>選取測試素材</button></div> }));
 
 const LONG = "Beast Gummy咖啡因機能軟糖・終極組合包(T-shirt+12盒)加贈隨身盒與保冷袋";
 const VITAMIN_URL = "https://beastgummy.tw/shop/multivitamin";
@@ -280,7 +284,7 @@ describe("「期間、預算與平台」 starts from the previous campaign (F46-
       expect(tagOf(label)?.textContent, label).toBe("沿用上一期");
       expect(tagOf(label)?.getAttribute("title"), label).toBe(`上一期：${PREV_NAME}`);
     }
-    expect(screen.getByText("上一期 09/19～10/01 花了 9,781 TWD")).toBeTruthy();
+    expect(screen.getByText("上一期 09/19～10/01 花了 9,781（幣別未提供）")).toBeTruthy();
     expect(screen.getByText(`標「沿用上一期」的照 ${PREV_NAME}`)).toBeTruthy();
     expect(learnStrip()?.textContent).toBe(`這期會用 2 期的學習・${PREV_NAME}、綜合維他命軟糖 · 三盒組・09/05～09/18留下 3換掉 3看學到什麼 →`);
     expect(within(learnStrip() as HTMLElement).getByRole("link", { name: "看學到什麼 →" }).getAttribute("href")).toBe("/brands/b1/library?tab=ads-learnings");
@@ -446,7 +450,7 @@ describe("「進階：這期不一樣」 (F43-I15; F46-I08 keeps 受眾 and 落�
     const user = userEvent.setup();
     view();
     await user.click(await screen.findByRole("radio", { name: /三盒組/ }));
-    expect(screen.getByText("品牌還沒接上帳戶")).toBeTruthy();
+    expect(screen.getByText("已核實，目前沒有已連線帳戶")).toBeTruthy();
     expect(value("平台")).toBe("");
     expect(tagOf("平台")).toBeNull();
     await user.selectOptions(screen.getByLabelText("平台"), "meta");
@@ -622,5 +626,171 @@ describe("「進階：一句話建立、自帶圖片／影片」 (kept, feature 
     expect(screen.queryByText("選擇已完成素材")).toBeNull();
     await openSentence(user);
     expect(screen.getByText("選擇已完成素材")).toBeTruthy();
+  });
+});
+
+const sourceQuery = "source_month=2026-08&source_campaign=native&source_revision=source-v1";
+const preparation = (): NextPeriodPreparation => ({month: "2026-08", window: {start: "2026-08-01", end: "2026-08-31"}, revision: "source-v1",
+  source_campaigns: [{campaign_id: "native", name: "既有平台活動", origin: "imported", mapping_required: true, result_kind: "purchase", currency: "TWD"}],
+  eligible_learning_refs: [], excluded: [{owner: "result", ref: "native-ad", reason_code: "above_target"}]});
+describe("completed-source wizard recovery", () => {
+  it("pending original B wins over created A and a different URL source, preserving replay and identity", async () => {
+    const payload={product_ids:["sw_three"] as [string],objective:"購買",budget:30000,continuation:{month:"2026-08",campaign_ids:["native"],revision:"source-v1",request_id:"b7ac6be2-fda5-4f58-9dd4-43b33b9d8dc6",product_mapping_confirmed:true}};
+    saveDraft("campaign-draft:u:o:b1",{productId:"sw_three",objective:"購買",budget:35000,startDate:"",endDate:"",goalText:""});saveAttempt("campaign-draft:u:o:b1",{payload,uploads:[],attached:[]});
+    vi.mocked(getNextPeriod).mockResolvedValue(preparation());vi.mocked(createCampaignFromPicks).mockResolvedValue(draft({id:"cmp_B"}));vi.mocked(patchCampaign).mockResolvedValue(draft({id:"cmp_B"}));
+    view("b1","/brands/b1/ads/new?created=cmp_A&source_month=2026-07&source_campaign=other&source_revision=other-v1");const user=userEvent.setup();
+    await screen.findByText("既有平台活動・既有平台活動・TWD");expect(getNextPeriod).toHaveBeenCalledWith("b1","2026-08",expect.any(AbortSignal));expect(getCampaign).not.toHaveBeenCalled();
+    expect(screen.getByText(/網址來源/)).toBeTruthy();const originalBox=screen.getByRole("checkbox",{name:/我確認選定歷史活動/});expect(originalBox).toHaveProperty("disabled",true);expect(originalBox).toHaveProperty("checked",true);
+    await user.click(screen.getByRole("button",{name:"確認上次送出結果"}));await screen.findByText("第二步頁面");
+    expect(createCampaignFromPicks).toHaveBeenCalledWith("b1",payload);expect(patchCampaign).toHaveBeenCalledWith("b1","cmp_B",expect.any(Object));expect(getCampaign).not.toHaveBeenCalledWith("b1","cmp_A");
+  });
+  it.each(["connected","unconnected","unverified"])("failed options keep platform status %s honest",async state=>{
+    vi.mocked(getWizardOptions).mockRejectedValue(new Error("options unavailable"));if(state==="unverified")vi.mocked(fetchChannels).mockRejectedValue(new Error("channels unavailable"));else vi.mocked(fetchChannels).mockResolvedValue([{key:"meta",label:"Meta",connected:state==="connected",state_text:""}]);
+    view();await screen.findByText(/賣法和目標清單讀不到/);expect(await screen.findByText(state==="connected" ? "尚未選擇平台" : state==="unconnected" ? "已核實，目前沒有已連線帳戶" : "帳戶連線尚未核實")).toBeTruthy();expect(screen.queryByText("品牌還沒接上帳戶")).toBeNull();
+  });
+  it.each([undefined,"cmp_B"])("a changed product cannot re-confirm the submitted immutable mapping (created=%s)",async createdId=>{
+    const payload={product_ids:["sw_three"] as [string],objective:"購買",budget:30000,continuation:{month:"2026-08",campaign_ids:["native"],revision:"source-v1",request_id:"b7ac6be2-fda5-4f58-9dd4-43b33b9d8dc6",product_mapping_confirmed:true}};
+    saveDraft("campaign-draft:u:o:b1",{productId:"sw_duo",objective:"購買",budget:30000,startDate:"",endDate:"",goalText:""});saveAttempt("campaign-draft:u:o:b1",{payload,createdId,uploads:[],attached:[]});vi.mocked(getNextPeriod).mockResolvedValue(preparation());vi.mocked(getCampaign).mockResolvedValue(draft({id:"cmp_B"}));
+    view("b1",`/brands/b1/ads/new?${sourceQuery}`);await screen.findByText(/目前商品關聯未確認/);const box=screen.getByRole("checkbox",{name:/我確認選定歷史活動/});expect(box).toHaveProperty("checked",false);expect(box).toHaveProperty("disabled",true);expect(readAttempt("campaign-draft:u:o:b1")?.payload).toEqual(payload);
+  });
+  it("uses the shared Chinese objective exclusion without changing source qualification", async () => {
+    vi.mocked(getNextPeriod).mockResolvedValue({...preparation(),excluded:[{owner:"result",ref:"native-ad",reason_code:"objective_family_mismatch"}]});
+    view("b1",`/brands/b1/ads/new?${sourceQuery}`);const user=userEvent.setup();
+    await screen.findByText("既有平台活動・既有平台活動・TWD");await user.click(screen.getByRole("button",{name:"查看來源資格與限制"}));
+    expect(screen.getByText(/投放目標不同，僅保留歷史/)).toBeTruthy();
+    expect(screen.queryByText(/objective_family_mismatch/)).toBeNull();expect(createCampaignFromPicks).not.toHaveBeenCalled();
+  });
+  it("submits only explicit association, preserves chosen source dates and never uses sentence create", async () => {
+    vi.mocked(getNextPeriod).mockResolvedValue(preparation());
+    vi.mocked(listCampaigns).mockResolvedValue([card("unrelated", "closed", "2026-10-10", "2026-10-01", "2026-10-31")]);
+    vi.mocked(createCampaignFromPicks).mockImplementation(async (_brand, payload) => {
+      expect(readAttempt("campaign-draft:u:o:b1")?.payload).toEqual(payload);
+      return draft();
+    });
+    view("b1", `/brands/b1/ads/new?${sourceQuery}`); const user = userEvent.setup();
+    await screen.findByText("既有平台活動・既有平台活動・TWD");
+    await pickAll(user);
+    expect(value("開始")).toBe("2026-09-01"); expect(value("結束")).toBe("2026-10-01");
+    expect(listCampaigns).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("checkbox", {name: /我確認選定歷史活動/}));
+    expect(screen.getByText(/素材資格仍待送出時由系統核實/)).toBeTruthy();
+    await user.click(screen.getByRole("button",{name:"查看來源資格與限制"}));
+    expect(screen.getByText(/來源成本超過上限，不能當作成功沿用/)).toBeTruthy();
+    await openSentence(user); expect(screen.queryByRole("button", {name: "產生建議"})).toBeNull();
+    await user.click(next()); await screen.findByText("第二步頁面");
+    expect(createCampaign).not.toHaveBeenCalled();
+    expect(createCampaignFromPicks).toHaveBeenCalledWith("b1", expect.objectContaining({continuation: {
+      month: "2026-08", campaign_ids: ["native"], revision: "source-v1", request_id: expect.any(String), product_mapping_confirmed: true}}));
+  });
+  it.each(["invalid", "foreign", "stale"])("%s source cannot turn into a plain create", async kind => {
+    vi.mocked(getNextPeriod).mockResolvedValue({...preparation(), ...(kind === "foreign" ? {source_campaigns: []} : kind === "stale" ? {revision: "source-v2"} : {})});
+    view("b1", `/brands/b1/ads/new?${kind === "invalid" ? "source_month=2026-08" : sourceQuery}`);
+    const user = userEvent.setup(); await pickAll(user); await user.click(next());
+    expect(next()).toHaveProperty("disabled", true); expect(createCampaignFromPicks).not.toHaveBeenCalled(); expect(createCampaign).not.toHaveBeenCalled();
+  });
+  it("replays the immutable uncertain attempt before failed fresh options/source reads, then patches the same ID", async () => {
+    const key="campaign-draft:u:o:b1";
+    const payload={product_ids: ["sw_three"] as [string], objective: "購買", budget: 30000,
+      continuation: {month: "2026-08", campaign_ids: ["native"], revision: "source-v1", request_id: "b7ac6be2-fda5-4f58-9dd4-43b33b9d8dc6", product_mapping_confirmed: false}};
+    saveDraft(key, {productId: "sw_three", objective: "購買", startDate: "", endDate: "", budget: 35000, goalText: "edited"});
+    expect(saveAttempt(key, {payload, uploads: [], attached: []})).toBe(true);
+    vi.mocked(getWizardOptions).mockRejectedValueOnce(new Error("options unavailable")).mockResolvedValue(options());
+    vi.mocked(getNextPeriod).mockRejectedValue(new Error("fresh source unavailable"));
+    vi.mocked(createCampaignFromPicks).mockResolvedValue(draft()); vi.mocked(patchCampaign).mockResolvedValue(draft({constraints_json: {budget: 35000, platform: "meta"}}));
+    view("b1", `/brands/b1/ads/new?${sourceQuery}`); const user=userEvent.setup();
+    await screen.findByText(/賣法和目標清單讀不到/); await user.click(screen.getByRole("button", {name:"確認上次送出結果"}));
+    await screen.findByText(/已確認上次建立的活動/);
+    expect(createCampaignFromPicks).toHaveBeenCalledWith("b1", payload); expect(readAttempt(key)?.createdId).toBe("cmp_new");
+    await user.click(within(screen.getByText(/賣法和目標清單讀不到/).closest('[data-slot="read-failed"]') as HTMLElement).getByRole("button", {name: "重試"}));
+    await screen.findByRole("radio", {name: /三盒組/}); await user.click(next()); await screen.findByText("第二步頁面");
+    expect(createCampaignFromPicks).toHaveBeenCalledTimes(1);
+    expect(patchCampaign).toHaveBeenCalledWith("b1", "cmp_new", expect.objectContaining({constraints_json: {budget: 35000, platform: "meta"}}));
+  });
+  it("refuses before first POST when both durable receipt stores throw and keeps all inputs", async () => {
+    vi.mocked(getNextPeriod).mockResolvedValue(preparation()); view("b1", `/brands/b1/ads/new?${sourceQuery}`);
+    const user=userEvent.setup(); await pickAll(user);
+    const storage=vi.spyOn(Storage.prototype, "setItem").mockImplementation(()=>{throw new Error("disabled");});
+    const history=vi.spyOn(window.history, "replaceState").mockImplementation(()=>{throw new Error("disabled");});
+    try {await user.click(next()); expect(screen.getByRole("alert").textContent).toContain("尚未送出");
+      expect(value("這個活動最多花")).toBe("30000"); expect(radio("sw_three").getAttribute("aria-checked")).toBe("true");
+      expect(createCampaignFromPicks).not.toHaveBeenCalled();
+    } finally {storage.mockRestore();history.mockRestore();}
+  });
+  it("new session receipt wins over stale history when history writes fail", () => {
+    const key="campaign-draft:u:o:b1";
+    const payload={product_ids: ["sw_three"] as [string], objective: "購買", budget: 30000,
+      continuation: {month: "2026-08", campaign_ids: ["native"], revision: "source-v1", request_id: "b7ac6be2-fda5-4f58-9dd4-43b33b9d8dc6"}};
+    expect(saveAttempt(key,{payload,uploads:[],attached:[]})).toBe(true);
+    const history=vi.spyOn(window.history,"replaceState").mockImplementation(()=>{throw new Error("disabled");});
+    try {expect(saveAttempt(key,{payload,createdId:"same-created",uploads:[],attached:["u1"]})).toBe(true);
+      expect(readAttempt(key)).toMatchObject({createdId:"same-created",attached:["u1"]});
+    } finally {history.mockRestore();}
+  });
+  it("completion tombstones beat a receipt in an older history entry", () => {
+    const key="campaign-draft:u:o:b1";
+    const payload={product_ids: ["sw_three"] as [string], objective:"購買",budget:30000,
+      continuation:{month:"2026-08",campaign_ids:["native"],revision:"source-v1",request_id:"b7ac6be2-fda5-4f58-9dd4-43b33b9d8dc6"}};
+    saveAttempt(key,{payload,createdId:"cmp_new",uploads:[],attached:[]});
+    const previous=window.history.state; clearDraft(key); window.history.replaceState(previous, "");
+    expect(readAttempt(key)).toBeNull(); expect(readDraft(key).productId).toBeNull();
+  });
+  it("a missing history copy does not shadow a valid legacy session draft", () => {
+    const key="campaign-draft:u:o:legacy";
+    window.history.replaceState({usr:{},key:"router-key",idx:2},"");
+    sessionStorage.setItem(key,JSON.stringify({productId:"sw_three",objective:"購買",budget:30000,startDate:"",endDate:"",goalText:"legacy picks"}));
+    expect(readDraft(key)).toMatchObject({productId:"sw_three",budget:30000,goalText:"legacy picks"});
+  });
+  it("a stale created URL cannot replace the receipt's confirmed campaign identity", async () => {
+    const key="campaign-draft:u:o:b1";
+    const payload={product_ids:["sw_three"] as [string],objective:"購買",budget:30000,
+      continuation:{month:"2026-08",campaign_ids:["native"],revision:"source-v1",request_id:"b7ac6be2-fda5-4f58-9dd4-43b33b9d8dc6"}};
+    saveDraft(key,{productId:"sw_three",objective:"購買",budget:35000,startDate:"",endDate:"",goalText:""});
+    saveAttempt(key,{payload,createdId:"cmp_B",uploads:[],attached:[]});
+    vi.mocked(getCampaign).mockResolvedValue(draft({id:"cmp_B"}));vi.mocked(patchCampaign).mockResolvedValue(draft({id:"cmp_B"}));
+    vi.mocked(getNextPeriod).mockRejectedValue(new Error("fresh source unavailable"));
+    view("b1",`/brands/b1/ads/new?${sourceQuery}&created=cmp_A`);const user=userEvent.setup();
+    await screen.findByText(/以已核實的活動 cmp_B 繼續/);await waitFor(()=>expect(next()).toHaveProperty("disabled",false));
+    await user.click(next());await screen.findByText("第二步頁面");
+    expect(getCampaign).toHaveBeenCalledWith("b1","cmp_B");expect(getCampaign).not.toHaveBeenCalledWith("b1","cmp_A");
+    expect(patchCampaign).toHaveBeenCalledWith("b1","cmp_B",expect.objectContaining({constraints_json:{budget:35000,platform:"meta"}}));
+    expect(createCampaignFromPicks).not.toHaveBeenCalled();
+  });
+  it("unverified references that resolve to unfinished uploads block the first POST", async () => {
+    const key="campaign-draft:u:o:b1";
+    saveDraft(key,{productId:"sw_three",objective:"購買",budget:30000,startDate:"",endDate:"",goalText:"",
+      uploads:[{id:"u1",batch_id:"batch",filename:"u1.png"}]});
+    vi.mocked(getUploadBatch).mockResolvedValue({batch:{id:"batch",uploads:[{id:"u1",batch_id:"batch",filename:"u1.png",expected_size:1,status:"pending",error:null,asset_id:null,copy_fields:{}}]}});
+    view(); const user=userEvent.setup(); await screen.findByRole("radio",{name:/三盒組/}); await user.click(next());
+    expect(await screen.findByText(/選取的原檔尚未保存/)).toBeTruthy(); expect(createCampaignFromPicks).not.toHaveBeenCalled();
+    expect(readDraft(key).uploads).toHaveLength(1);
+  });
+  it.each([0, -12, null])("previous spend %s is raw and never supplied a TWD unit", async spend => {
+    vi.mocked(getWizardOptions).mockResolvedValue(options({},ranThree({spend})));
+    view("b1", "/brands/b1/ads/new?sell_way=sw_three");
+    await waitFor(()=>expect(value("這個活動最多花")).toBe("10000"));
+    if(spend===null) expect(screen.queryByText(/花了/)).toBeNull();
+    else expect(screen.getByText(`上一期 09/19～10/01 花了 ${spend}（幣別未提供）`)).toBeTruthy();
+  });
+});
+
+describe("attachment identity", () => {
+  it.each([true,false])("partial attachment plus remount restores references and adds only missing uploads (continuation=%s)", async continuation => {
+    vi.mocked(getNextPeriod).mockResolvedValue(preparation());
+    const result=draft({start_date:"2026-09-01",end_date:"2026-10-01"});
+    vi.mocked(createCampaignFromPicks).mockResolvedValue(result); vi.mocked(getCampaign).mockResolvedValue(result);
+    const refs: AssetUpload[]=["u1","u2"].map(id=>({id,batch_id:"batch",filename:`${id}.png`,expected_size:1,status:"complete",error:null,asset_id:id,copy_fields:{}}));
+    vi.mocked(getUploadBatch).mockResolvedValue({batch:{id:"batch",uploads:refs}});
+    vi.mocked(attachUpload).mockImplementation(async (_brand,_campaign,id)=>{if(id==="u2"&&vi.mocked(attachUpload).mock.calls.length===2)throw new Error("partial failed"); return {} as Awaited<ReturnType<typeof attachUpload>>;});
+    const query=continuation ? sourceQuery : "";
+    const user=userEvent.setup(); const first=view("b1",`/brands/b1/ads/new?${query}`); await pickAll(user); await openSentence(user);
+    await user.click(screen.getByRole("button",{name:"選取測試素材"})); await user.click(next());
+    await screen.findByText(/未完成素材仍可重試/);
+    if(continuation) expect(readAttempt("campaign-draft:u:o:b1")).toMatchObject({createdId:"cmp_new",attached:["u1"]});
+    expect(readDraft("campaign-draft:u:o:b1").attachment).toEqual({campaignId:"cmp_new",ids:["u1"]}); first.unmount();
+    view("b1",`/brands/b1/ads/new?${query}&created=cmp_new`); await waitFor(()=>expect(next()).toHaveProperty("disabled", false));
+    expect(screen.getByText("已確認加入 1／2 檔；重試只處理未確認加入的素材。")).toBeTruthy();
+    await openSentence(user); expect(screen.getByText("恢復 2 檔")).toBeTruthy(); await user.click(next()); await screen.findByText("第二步頁面");
+    expect(createCampaignFromPicks).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(attachUpload).mock.calls.map(call=>[call[1],call[2]])).toEqual([["cmp_new","u1"],["cmp_new","u2"],["cmp_new","u2"]]);
   });
 });

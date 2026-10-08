@@ -838,14 +838,16 @@ def planner_source(conn, org, brand, source, campaign):
     snapshot = _load(conn, org, brand, source["month"], source["campaign_ids"])
     snapshot["revision"] = _revision(conn, org, brand, *_window(conn, org, source["month"]))
     ids = source["campaign_ids"]
+    current_product = sell_way.of_campaign(campaign)
     qualified = _qualified(
         conn,
         org,
         brand,
         snapshot,
         ids,
-        sell_way.of_campaign(campaign),
-        source["product_mapping_confirmed"],
+        current_product,
+        bool(current_product and current_product == source.get("product_id")
+             and source["product_mapping_confirmed"]),
         destination=campaign,
     )
     if not set(ids) <= {c["id"] for c in snapshot["campaigns"]}:

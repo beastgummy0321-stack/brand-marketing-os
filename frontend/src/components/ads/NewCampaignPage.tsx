@@ -1,5 +1,4 @@
 import { newCampaignPath } from "@/lib/adsRoutes";
-import { formatMoney } from "@/lib/format";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { addDays, daysBetween } from "@/lib/orgClock";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
@@ -13,14 +12,15 @@ import { createCampaign, getCampaign, listCampaigns, patchCampaign, type Campaig
 import type { CampaignCreateExtras } from "@/lib/adsCampaignTypes";
 import { fetchChannels } from "@/lib/adsLaunchApi";
 import { putTarget } from "@/lib/adsTriageApi";
-import { attachUpload, type AssetUpload } from "@/lib/adsUserAssetsApi";
-import { createCampaignFromPicks, getWizardOptions, type CampaignPicks, type WizardProduct } from "@/lib/adsWizardApi";
+import { attachUpload, getUploadBatch, type AssetUpload } from "@/lib/adsUserAssetsApi";
+import { createCampaignFromPicks, getWizardOptions, readContinuationQuery, withContinuationQuery, type CampaignPicks, type WizardProduct } from "@/lib/adsWizardApi";
 import { useApiRead } from "@/lib/useApiRead";
 import { cn } from "@/lib/utils";
 import { UserAssetsLibrary } from "./UserAssetsLibrary";
-import { clearDraft, readDraft, saveDraft } from "./campaignDraft";
+import { clearDraft, readAttempt, readDraft, saveAttempt, saveDraft } from "./campaignDraft";
 import { ActionBar, Chip, Disclosure, FlowHeader, MoneyInput, PickCard, PickGroup, ReadFailed, formatAmount, useAdsRules } from "./patterns";
 import { SellWayPickCard, SourceTag, UnderstandingView, breakEvenDerivedMark, wizardSteps, type SourceTagKind } from "./wizard/WizardPieces";
+import {useContinuation, WizardContinuation} from "./wizard/WizardContinuation";
 
 /** The one-sentence create's 「請 AI 依品牌資料建議」 request (the free-text create path, kept under 進階). */
 const BRAND_SUGGESTION_REQUEST = "請依這個品牌已保存的商品、成效目標與資料，建議第一份投放計畫。沿用已知資訊，缺少或未確認的條件請標示待確認，不要假設已有投放成效。";
@@ -112,7 +112,16 @@ function CampaignWizard({ brandId, draftKey }: { brandId: string; draftKey: stri
   const navigate = useNavigate();
   const homeHref = `/brands/${brandId}/ads`;
   const [search, setSearch] = useSearchParams();
-  const createdId = search.get("created");
+  const attempt = useRef(readAttempt(draftKey));
+  const [created, setCreated] = useState<CampaignDetail | null>(null);
+  const createdId = attempt.current ? attempt.current.createdId ?? null : search.get("created");
+  const urlSource = readContinuationQuery(search);
+  const originalSource = attempt.current?.payload.continuation ?? created?.context_json?.next_period_source;
+  const recoveryQuery = readContinuationQuery(withContinuationQuery(new URLSearchParams(), originalSource ?? null));
+  const continuation = useContinuation(brandId, attempt.current || originalSource ? recoveryQuery : urlSource);
+  const sourceMismatch = !!originalSource && JSON.stringify(urlSource) !== JSON.stringify(recoveryQuery);
+  const originalProduct = attempt.current?.payload.product_ids[0] ?? created?.context_json?.next_period_source?.product_id;
+  const sourceSignature = JSON.stringify(continuation.selection);
   const sellWayParam = search.get("sell_way");
   const life = useRef(new AbortController());
   useEffect(() => { life.current = new AbortController(); return () => life.current.abort(); }, []);
@@ -131,15 +140,20 @@ function CampaignWizard({ brandId, draftKey }: { brandId: string; draftKey: stri
   const [goalText, setGoalText] = useState(initial.goalText);
   /** 「進階：這期不一樣」: `null`／`""`／`undefined` = not changed (the brand's and the sell-way's value shows and
    * nothing is sent). A cleared cap is `null` and a cleared landing `""` — shown empty, still not sent. */
-  const [platform, setPlatform] = useState<string | null>(null);
-  const [groupPick, setGroupPick] = useState("");
-  const [cap, setCap] = useState<number | null | undefined>(undefined);
-  const [landing, setLanding] = useState<string | undefined>(undefined);
+  const [platform, setPlatform] = useState<string | null>(initial.platform ?? null);
+  const [groupPick, setGroupPick] = useState(initial.groupPick ?? "");
+  const [cap, setCap] = useState<number | null | undefined>(initial.cap);
+  const [landing, setLanding] = useState<string | undefined>(initial.landing);
+  const [mappingProductId, setMappingProductId] = useState(initial.mappingProductId ?? null);
+  const [mappingScope, setMappingScope] = useState(initial.mappingScope ?? "");
   const [previous, setPrevious] = useState<{ start: string; end: string } | null>(null);
-  const [uploads, setUploads] = useState<AssetUpload[]>([]);
+  const restoredUploads = (initial.uploads ?? attempt.current?.uploads ?? []).map(ref => ({...ref,
+    expected_size: 0, status: "unverified", error: null, asset_id: null, copy_fields: {}}));
+  const [uploads, setUploads] = useState<AssetUpload[]>(restoredUploads);
   const [uploadBusy, setUploadBusy] = useState(false);
-  const [attached, setAttached] = useState<Set<string>>(new Set());
-  const [created, setCreated] = useState<CampaignDetail | null>(null);
+  const [attached, setAttached] = useState<Set<string>>(new Set(attempt.current?.attached ??
+    (initial.attachment?.campaignId === createdId ? initial.attachment.ids : [])));
+  const finished = useRef(false);
   const [restoring, setRestoring] = useState(!!createdId);
   const [restoreFailed, setRestoreFailed] = useState<string | null>(null);
   const [restoreKey, setRestoreKey] = useState(0);
@@ -158,7 +172,9 @@ function CampaignWizard({ brandId, draftKey }: { brandId: string; draftKey: stri
       .then((c) => {
         if (cancelled) return;
         const p = picksOf(c);
-        setCreated(c); setProductId(p.productId); setObjective(p.objective);
+        setCreated(c);
+        if (attempt.current?.createdId === c.id) return;
+        setProductId(p.productId); setObjective(p.objective);
         setStartDate(p.startDate); setEndDate(p.endDate); setBudget(p.budget);
         setPlatform(p.platform); setGroupPick(p.groupPick); setCap(p.cap); setLanding(p.landing);
       })
@@ -168,7 +184,7 @@ function CampaignWizard({ brandId, draftKey }: { brandId: string; draftKey: stri
   }, [brandId, createdId, created?.id, restoreKey]);
   // The period default (F40, kept): only when the draft holds no dates; a read that fails leaves them empty.
   useEffect(() => {
-    if (createdId || initial.startDate || initial.endDate) return;
+    if (createdId || initial.startDate || initial.endDate || continuation.query.status !== "none") return;
     let cancelled = false;
     readPreviousPeriod(brandId)
       .then((period) => {
@@ -178,7 +194,16 @@ function CampaignWizard({ brandId, draftKey }: { brandId: string; draftKey: stri
       })
       .catch(() => { /* No period to follow: the dates stay empty. */ });
     return () => { cancelled = true; };
-  }, [brandId, createdId, initial]);
+  }, [brandId, createdId, initial, continuation.query.status]);
+  useEffect(() => {
+    if (createdId || !continuation.valid || continuation.read.status !== "ready") return;
+    const window = continuation.read.data.window;
+    const length = daysBetween(window.start, window.end);
+    if (length === null || length <= 0) return;
+    setPrevious({start: window.start, end: window.end});
+    setStartDate(now => now || addDays(window.end, 1));
+    setEndDate(now => now || addDays(window.end, length));
+  }, [createdId, continuation.valid, continuation.read]);
   // Once the options are in: `?sell_way=` picks that sell-way (when it is pickable), and an empty result takes the
   // brand's conversion goal (`default_objective`; null = no preselection). A created campaign keeps its own picks.
   const data = options.data;
@@ -191,8 +216,12 @@ function CampaignWizard({ brandId, draftKey }: { brandId: string; draftKey: stri
     if (goalKey && data.objectives.some((o) => o.key === goalKey && o.available)) setObjective((now) => now ?? goalKey);
   }, [data, createdId, sellWayParam]);
   useEffect(() => {
-    saveDraft(draftKey, { productId, objective, startDate, endDate, budget, goalText });
-  }, [draftKey, productId, objective, startDate, endDate, budget, goalText]);
+    if (finished.current) return;
+    saveDraft(draftKey, { productId, objective, startDate, endDate, budget, goalText,
+      platform, groupPick, cap, landing, mappingProductId, mappingScope,
+      attachment: created?.id || createdId ? {campaignId: created?.id ?? createdId!, ids: [...attached]} : initial.attachment,
+      uploads: uploads.map(({id, batch_id, filename}) => ({id, batch_id, filename})) });
+  }, [draftKey, productId, objective, startDate, endDate, budget, goalText, platform, groupPick, cap, landing, uploads, mappingProductId, mappingScope, createdId, created?.id, attached, initial.attachment]);
   useEffect(() => {
     if (phase !== "understanding") return;
     setWaited(0);
@@ -236,14 +265,15 @@ function CampaignWizard({ brandId, draftKey }: { brandId: string; draftKey: stri
       : capShown > breakEven ? `比${beText} 高 ${fmt(capShown - breakEven)}` : `比${beText} 低 ${fmt(breakEven - capShown)}`;
   const prevPeriod = prev ? prev.campaign_name.split("・")[1] ?? prev.campaign_name : "";
   const budgetHint = budgetOk
-    ? (budgetTag === "copied" && prev?.spend != null ? `上一期 ${prevPeriod} 花了 ${formatMoney(prev.spend, "TWD")}` : "")
+    ? (budgetTag === "copied" && prev?.spend != null ? `上一期 ${prevPeriod} 花了 ${fmt(prev.spend)}（幣別未提供）` : "")
     : way && !prev ? "第一次推，要自己填" : "";
 
-  const hint = !way || !goal ? "選好要推什麼和想要的結果"
+  const sourceHint = !created && !createdId && continuation.query.status !== "none" && !continuation.valid ? "請先核實完成期來源" : "";
+  const hint = sourceHint || (!way || !goal ? "選好要推什麼和想要的結果"
     : !budgetOk ? "填這個活動最多花"
     : capCleared ? "填每筆上限"
     : oneDate ? "開始和結束要一起填"
-    : backwards ? "結束要在開始之後" : "";
+    : backwards ? "結束要在開始之後" : "");
   const pendingRead = restoring || (!!createdId && !created);
   const blocked = !!hint || busy || uploadBusy || pendingRead;
 
@@ -278,7 +308,21 @@ function CampaignWizard({ brandId, draftKey }: { brandId: string; draftKey: stri
     for (const upload of uploads) {
       if (signal.aborted) return errors;
       if (done.has(upload.id)) continue;
-      try { await attachUpload(brandId, campaignId, upload.id); done.add(upload.id); }
+      try {
+        const {batch} = await getUploadBatch(brandId, upload.batch_id, signal);
+        const fresh = batch.uploads.find(item => item.id === upload.id);
+        if (!fresh || fresh.status !== "complete") throw new Error("原檔目前無法核實，請重新讀取或取消選取");
+        await attachUpload(brandId, campaignId, fresh.id); done.add(fresh.id);
+        setAttached(new Set(done));
+        if (!saveDraft(draftKey, {...readDraft(draftKey), attachment: {campaignId, ids: [...done]}})) {
+          throw new Error("加入成功，但恢復紀錄無法保存；請保留此頁重試");
+        }
+        if (attempt.current) {
+          const next = {...attempt.current, attached: [...done]};
+          if (!saveAttempt(draftKey, next)) throw new Error("加入成功，但恢復紀錄無法保存；請保留此頁重試");
+          attempt.current = next;
+        }
+      }
       catch (e) { errors.push(`${upload.filename}：${message(e, "加入失敗")}`); }
     }
     setAttached(done);
@@ -286,6 +330,7 @@ function CampaignWizard({ brandId, draftKey }: { brandId: string; draftKey: stri
   }
 
   function finish(campaignId: string) {
+    finished.current = true;
     clearDraft(draftKey);
     navigate(`${newCampaignPath(brandId)}/${encodeURIComponent(campaignId)}`);
   }
@@ -321,9 +366,11 @@ function CampaignWizard({ brandId, draftKey }: { brandId: string; draftKey: stri
   }
 
   async function submit(request: CreateRequest = { kind: "picks" }) {
-    if (request.kind === "picks" && (blocked || !way || !goal || budget === null)) return;
+    const pendingAttempt = attempt.current && !createdId;
+    if (busy || restoring) return;
+    if (request.kind === "picks" && !pendingAttempt && (blocked || !way || !goal || budget === null)) return;
+    if (request.kind === "sentence" && continuation.query.status !== "none") {setError("接續來源請用商品與目標選擇確認；一句話建立不能略過來源。"); return;}
     if (request.kind === "sentence" && (!request.text.trim() || busy || uploadBusy || restoring || !!created || !!createdId || oneDate || backwards)) return;
-    if (uploads.some((u) => u.status !== "complete")) { setError("選取的原檔尚未保存，請重試上傳，或取消該檔選取後繼續。"); return; }
     const signal = life.current.signal;
     setError(null); setBusy(true);
     const dates = startDate && endDate ? { start_date: startDate, end_date: endDate } : {};
@@ -331,25 +378,65 @@ function CampaignWizard({ brandId, draftKey }: { brandId: string; draftKey: stri
     if (request.kind === "sentence") setGoalText(request.text);
     try {
       let campaign = created;
+      if (!campaign && !attempt.current) {
+        for (const upload of uploads) {
+          let fresh = upload;
+          if (upload.status === "unverified") {
+            const {batch} = await getUploadBatch(brandId, upload.batch_id, signal);
+            const found = batch.uploads.find(item => item.id === upload.id);
+            if (!found) throw new Error(`${upload.filename}：原檔目前無法核實，請重新讀取或取消選取。`);
+            fresh = found;
+          }
+          if (fresh.status !== "complete") {
+            setPhase("pick"); setBusy(false); setError("選取的原檔尚未保存，請重試上傳，或取消該檔選取後繼續。"); return;
+          }
+        }
+      }
+      if (!campaign && attempt.current) {
+        setPhase("understanding");
+        campaign = attempt.current.createdId ? await getCampaign(brandId, attempt.current.createdId)
+          : await createCampaignFromPicks(brandId, attempt.current.payload);
+        const resolved = {...attempt.current, createdId: campaign.id};
+        if (!saveAttempt(draftKey, resolved)) throw new Error("已確認活動，但恢復紀錄無法保存；請保留此頁再試，不會建立另一個活動。");
+        attempt.current = resolved;
+      }
       if (campaign && way && goal && budget !== null) {
         campaign = await update(campaign, way, goal.key, budget);
-      } else if (request.kind === "sentence") {
+      } else if (!campaign && request.kind === "sentence") {
         setPhase("understanding");
         campaign = await createCampaign(brandId, {
           goal_text: request.text.trim(), ...dates,
           ...(budgetOk ? { constraints: { budget } } : {}), ...(platformChanged && platform ? { platform } : {}),
         });
-      } else if (way && goal && budget !== null) {
+      } else if (!campaign && way && goal && budget !== null) {
         setPhase("understanding");
-        campaign = await createCampaignFromPicks(brandId, {
+        const payload: CampaignPicks = {
           product_ids: [way.id], objective: goal.key, budget, ...dates,
           ...(goalText.trim() ? { goal_text: goalText.trim() } : {}), ...extras,
-        });
+          ...(continuation.selection ? {continuation: {...continuation.selection, request_id: crypto.randomUUID(),
+            product_mapping_confirmed: mappingProductId === way.id && mappingScope === sourceSignature}} : {}),
+        };
+        if (payload.continuation) {
+          const next = {payload, uploads: uploads.map(({id, batch_id, filename}) => ({id, batch_id, filename})), attached: []};
+          if (!saveAttempt(draftKey, next)) {
+            setPhase("pick"); setBusy(false); setError("瀏覽器無法保存恢復紀錄；尚未送出，請保留輸入並恢復儲存功能後重試。"); return;
+          }
+          attempt.current = next;
+        }
+        campaign = await createCampaignFromPicks(brandId, payload);
       }
       if (signal.aborted || !campaign) return;
       setCreated(campaign);
       const id = campaign.id;
-      if (createdId !== id) setSearch((prev) => { const next = new URLSearchParams(prev); next.set("created", id); next.delete("sell_way"); return next; }, { replace: true });
+      if (attempt.current) {
+        const resolved = {...attempt.current, createdId: id};
+        if (!saveAttempt(draftKey, resolved)) throw new Error("活動已建立，恢復紀錄無法保存；請保留此頁重試。");
+        attempt.current = resolved;
+      }
+      if (createdId !== id) setSearch((prev) => { const next = new URLSearchParams(prev); next.set("created", id); next.delete("sell_way"); return next; }, { replace: true, state: window.history.state?.usr });
+      if (request.kind !== "sentence" && (!way || !goal || budget === null)) {
+        setPhase("pick"); setBusy(false); setError("已確認上次建立的活動；請恢復清單或核實選擇後，繼續更新同一個活動。"); return;
+      }
       const errors = await attachAll(id, signal);
       if (signal.aborted) return;
       if (errors.length) { setPhase("pick"); setError(`活動已建立，未完成素材仍可重試，不會重建活動。${errors.join("；")}`); setBusy(false); return; }
@@ -387,6 +474,20 @@ function CampaignWizard({ brandId, draftKey }: { brandId: string; draftKey: stri
       {!picking && <UnderstandingView brandId={brandId} failed={phase === "failed" ? failure : null} waitedSeconds={waited} onRetry={() => void submit(lastRequest)} />}
       <div className={picking ? "contents" : "hidden"}>
       <FlowHeader steps={wizardSteps(brandId)} current={0} title="建立活動" purpose="選要推什麼、推多久、花多少；其他照上一期或商品建檔帶入" />
+      {attempt.current && !created && !restoring && <div className="surface px-5 py-4 text-sm">
+        <p>上次送出結果尚未確認；先找回原活動，再將你的修改套用到同一個活動。</p>
+        <p className="mt-1 text-xs text-muted-foreground [overflow-wrap:anywhere]">上次來源：{originalSource?.month}；活動 {originalSource?.campaign_ids.join("、")}；先核對已保存的原送出內容，來源重新讀不到也可確認結果。</p>
+        <Button variant="outline" busy={busy} onClick={() => void submit()}>確認上次送出結果</Button>
+      </div>}
+      <WizardContinuation source={continuation} brand={brandId} productChosen={!!productId}
+        confirmed={originalSource ? !!originalSource.product_mapping_confirmed && originalProduct === productId : mappingProductId === productId && mappingScope === sourceSignature}
+        onConfirm={value => {setMappingProductId(value ? productId : null); setMappingScope(sourceSignature);}} locked={locked || !!attempt.current || !!createdId}
+        submitted={!!attempt.current || !!createdId} />
+      {sourceMismatch && <p role="status" className="text-sm text-muted-foreground">網址來源與恢復紀錄不同；畫面與重試沿用上次送出的 {originalSource?.month} 來源，不會改寫原送出內容。</p>}
+      {created && <p className="text-sm text-muted-foreground">已建立「{created.name || created.id}」；修改與素材加入都會續接同一個活動。</p>}
+      {created && uploads.length > 0 && <p className="text-sm text-muted-foreground">已確認加入 {uploads.filter(upload => attached.has(upload.id)).length}／{uploads.length} 檔；重試只處理未確認加入的素材。</p>}
+      {attempt.current && search.get("created") && search.get("created") !== attempt.current.createdId &&
+        <p role="status" className="text-sm text-muted-foreground">網址活動與恢復紀錄不同；{attempt.current.createdId ? `以已核實的活動 ${attempt.current.createdId} 繼續。` : "先確認上次送出結果，不會讀取或更新網址中的活動。"}</p>}
       {restoreFailed && <ReadFailed what={`已建立的活動讀不到（${restoreFailed}）；不會重建活動`} onRetry={() => setRestoreKey((k) => k + 1)} />}
       {options.status === "error" ? (
         <ReadFailed what={`賣法和目標清單讀不到（${options.error}）`} onRetry={options.reload} />
@@ -417,7 +518,7 @@ function CampaignWizard({ brandId, draftKey }: { brandId: string; draftKey: stri
               )}
             </div>
           </section>
-          {way && <LearnStrip brandId={brandId} way={way} breakEvenCap={capBase.source === "break_even"} />}
+          {way && continuation.query.status === "none" && <LearnStrip brandId={brandId} way={way} breakEvenCap={capBase.source === "break_even"} />}
           <section className="surface" aria-labelledby="new-goal">
             <div className="surface-header">
               <h2 id="new-goal">想要的結果</h2>
@@ -451,7 +552,7 @@ function CampaignWizard({ brandId, draftKey }: { brandId: string; draftKey: stri
             <Input id="new-end" type="date" value={endDate} disabled={locked} onChange={(e) => setEndDate(e.target.value)} className="h-[42px] w-full rounded-lg" />
           </Field>
           <Field id="new-platform" label="平台" tag={platformTag && <SourceTag kind={platformTag} title={platformTag === "copied" && prev ? `上一期：${prev.campaign_name}` : undefined} />}
-            hint={platformShown ? undefined : "品牌還沒接上帳戶"}>
+            hint={platformShown ? undefined : channels.status !== "ready" ? "帳戶連線尚未核實" : channels.data?.some(c => c.connected) ? "尚未選擇平台" : "已核實，目前沒有已連線帳戶"}>
             <select id="new-platform" className={SELECT} value={platformShown ?? ""} disabled={locked || !channels.data} onChange={(e) => setPlatform(e.target.value || null)}>
               {!platformShown && <option value="" disabled>請選擇</option>}
               {(channels.data ?? []).map((c) => <option key={c.key} value={c.key}>{c.label}（{c.connected ? "已接上" : "還沒接上"}）</option>)}
@@ -473,7 +574,7 @@ function CampaignWizard({ brandId, draftKey }: { brandId: string; draftKey: stri
             {previous && startDate && <p className="text-xs text-muted-foreground">日期接在上一期後面（上一期 {md(previous.start)}～{md(previous.end)}）</p>}
           </div>
         )}
-        {channels.status === "error" && <div className="surface-body pt-0"><ReadFailed what={`平台清單讀不到（${channels.error}）；平台先照品牌已接上的帳戶，其他照常`} onRetry={channels.reload} /></div>}
+        {channels.status === "error" && <div className="surface-body pt-0"><ReadFailed what={`平台清單讀不到（${channels.error}）；帳戶連線尚未核實，其他已知內容保留`} onRetry={channels.reload} /></div>}
       </section>
       <Disclosure label="進階：這期不一樣（受眾、落地頁）">
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -496,14 +597,14 @@ function CampaignWizard({ brandId, draftKey }: { brandId: string; draftKey: stri
             <Textarea id="new-goal-text" value={goalText} disabled={locked || !!created} maxLength={500} onChange={(e) => setGoalText(e.target.value)}
               placeholder="例如：下個月想推主力商品，希望增加購買。" className="min-h-20" />
           </Field>
-          {!created && !createdId && (
+          {!created && !createdId && continuation.query.status === "none" && (
             <div className="flex flex-wrap gap-2">
               {goalText.trim()
                 ? <Button variant="outline" busy={busy || uploadBusy} disabledReason={locked ? "目前活動資料尚未就緒" : oneDate ? "開始和結束日期要一起填" : backwards ? "結束日不能早於開始日" : undefined} onClick={() => void submit({ kind: "sentence", text: goalText })}>產生建議</Button>
                 : <Button variant="outline" busy={busy || uploadBusy} disabledReason={locked ? "目前活動資料尚未就緒" : oneDate ? "開始和結束日期要一起填" : backwards ? "結束日不能早於開始日" : undefined} onClick={() => void submit({ kind: "sentence", text: BRAND_SUGGESTION_REQUEST })}>請 AI 依品牌資料建議</Button>}
             </div>
           )}
-          <UserAssetsLibrary brandId={brandId} readOnly={busy} onSelection={setUploads} onBusy={setUploadBusy} />
+          <UserAssetsLibrary brandId={brandId} readOnly={busy} initialSelection={restoredUploads} onSelection={setUploads} onBusy={setUploadBusy} />
         </div>
       </Disclosure>
       {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
