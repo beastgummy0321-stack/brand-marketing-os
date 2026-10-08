@@ -3,6 +3,7 @@
 from datetime import date
 from uuid import uuid4
 
+import psycopg
 import pytest
 from fastapi.testclient import TestClient
 
@@ -228,3 +229,108 @@ def test_material_cancel_response_failure_does_not_leave_cancelled_row(campaign,
     retry = client.post(f"{path}/{task['id']}/cancel")
     assert retry.status_code == 200, retry.text
     assert retry.json()["task"]["cancelled_at"] is not None
+
+
+def try_material_lock(brand):
+    # Never borrow a pooled connection: a leaked session lock is reentrant on its
+    # owning backend, which would conceal the failure this probe must detect.
+    key = f"ads-material:{db.DEV_ORG_ID}:{brand}"
+    with psycopg.connect(db.dsn(), autocommit=True) as observer:
+        acquired = observer.execute(
+            "SELECT pg_try_advisory_lock(hashtextextended(%s,0))", (key,)
+        ).fetchone()[0]
+        if acquired:
+            observer.execute("SELECT pg_advisory_unlock(hashtextextended(%s,0))", (key,))
+        return acquired
+
+
+def test_material_http_commit_holds_lock_until_business_rows_are_visible(campaign, monkeypatch):
+    brand, campaign_id, _, _ = campaign
+    original = material_tasks.create
+    observed = []
+
+    def before_owner_finishes(conn, *args, **kwargs):
+        result = original(conn, *args, **kwargs)
+        # The service lock context has exited, but the HTTP operation has not.
+        observed.append(try_material_lock(brand))
+        with db.connection() as observer:
+            assert observer.execute(
+                "SELECT count(*) AS n FROM ads_material_task WHERE campaign_id=%s", (campaign_id,)
+            ).fetchone()["n"] == 0
+        return result
+
+    monkeypatch.setattr(material_tasks, "create", before_owner_finishes)
+    response = TestClient(main.app).post(
+        f"/api/ads/brands/{brand}/campaigns/{campaign_id}/material-tasks",
+        json={"operation_id": "locked-create", "title": "Material", "mode": "copy"})
+    assert response.status_code == 200, response.text
+    assert observed == [False]
+    assert try_material_lock(brand) is True
+    with db.connection() as observer:
+        assert observer.execute(
+            "SELECT count(*) AS n FROM ads_material_task WHERE campaign_id=%s", (campaign_id,)
+        ).fetchone()["n"] == 1
+
+
+def test_material_sql_failure_releases_lock_without_masking_the_original_error(campaign,
+                                                                              monkeypatch):
+    brand, campaign_id, _, _ = campaign
+    original = material_tasks._write
+    path = f"/api/ads/brands/{brand}/campaigns/{campaign_id}/material-tasks"
+    body = {"operation_id": "sql-failure", "title": "Material", "mode": "copy"}
+
+    def sql_failure(conn, *args, **kwargs):
+        original(conn, *args, **kwargs)
+        conn.execute("SELECT 1 / 0")
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr(material_tasks, "_write", sql_failure)
+        with pytest.raises(psycopg.errors.DivisionByZero):
+            TestClient(main.app).post(path, json=body)
+    assert try_material_lock(brand) is True
+    with db.connection() as observer:
+        assert observer.execute(
+            "SELECT count(*) AS n FROM ads_material_task WHERE campaign_id=%s", (campaign_id,)
+        ).fetchone()["n"] == 0
+    retry = TestClient(main.app).post(path, json=body)
+    assert retry.status_code == 200, retry.text
+    assert try_material_lock(brand) is True
+
+
+def test_material_nested_success_keeps_lock_through_outer_operation(campaign):
+    brand, campaign_id, _, _ = campaign
+    conn = db.current()
+    conn.execute("SELECT 1")
+    with conn.atomic():
+        with conn.atomic():
+            task = material_tasks.create(conn, db.DEV_ORG_ID, brand, campaign_id, {
+                "operation_id": "nested-create", "title": "Material", "mode": "copy"}, "test")
+        # RELEASE SAVEPOINT must not release a successful business lock.
+        assert try_material_lock(brand) is False
+        conn.commit()
+        assert try_material_lock(brand) is False
+    assert try_material_lock(brand) is False
+    conn.commit()
+    assert try_material_lock(brand) is True
+    with db.connection() as observer:
+        assert material_tasks.get(observer, db.DEV_ORG_ID, brand, campaign_id,
+                                  task["id"])["revision"] == 1
+
+
+def test_material_nested_rollback_releases_lock_and_discards_business_rows(campaign):
+    brand, campaign_id, _, _ = campaign
+    conn = db.current()
+    conn.execute("SELECT 1")
+    with conn.atomic():
+        with pytest.raises(ValueError, match="rejected"):
+            with conn.atomic():
+                material_tasks.create(conn, db.DEV_ORG_ID, brand, campaign_id, {
+                    "operation_id": "rollback-create", "title": "Material", "mode": "copy"
+                }, "test")
+                assert try_material_lock(brand) is False
+                raise ValueError("rejected")
+        assert try_material_lock(brand) is True
+        assert conn.execute(
+            "SELECT count(*) AS n FROM ads_material_task WHERE campaign_id=%s", (campaign_id,)
+        ).fetchone()["n"] == 0
+    conn.commit()
