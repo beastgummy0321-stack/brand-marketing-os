@@ -156,7 +156,7 @@ describe("SettlePage step 1 這期成績", () => {
     getSettle.mockResolvedValue(knownView());
     renderAt("result");
     const imported = await screen.findByRole("region", { name: SN });
-    expect(within(imported).getByText("從 Meta 帶進來")).toBeTruthy();
+    expect(within(imported).getByText("既有平台活動")).toBeTruthy();
     expect(within(imported).getByText(/的上限 480/)).toBeTruthy();
     expect(within(imported).getByText("夏日冰飲・保冷一整天")).toBeTruthy();
     expect(within(imported).queryByText("晨光隨行杯・日常出發")).toBeNull();
@@ -173,18 +173,18 @@ describe("SettlePage step 1 這期成績", () => {
     const own = await screen.findByRole("region", { name: DN });
     const li = (name: string) => within(own).getByText(name).closest("li") as HTMLElement;
     const good = li("晨光隨行杯・日常出發");
-    expect(within(good).getByText("第 1／5 名・成交 24 筆")).toBeTruthy();
+    expect(within(good).getByText("第 1／5 名・排名成果 24 筆")).toBeTruthy();
     expect(within(good).getByText("記成有效")).toBeTruthy();
     expect(within(good).getByText(/每筆 353 TWD/)).toBeTruthy();
     expect(within(good).queryByText("樣本少")).toBeNull();
     const few = li("健身情境・保冷 12 小時");
-    expect(within(few).getByText("第 3／5 名・成交 4 筆")).toBeTruthy();
+    expect(within(few).getByText("第 3／5 名・排名成果 4 筆")).toBeTruthy();
     expect(within(few).getByText("樣本少")).toBeTruthy();
     expect(within(few).getByText("記成無效")).toBeTruthy();
     // 剛開始 (a known zero under the 沒賣出 line) is ranked like every unsold row; no gate sentence is printed.
     const fresh = li("開箱 15 秒・單手開蓋");
     expect(fresh.getAttribute("data-fate")).toBe("ineffective");
-    expect(within(fresh).getByText("第 4／5 名・成交 0 筆")).toBeTruthy();
+    expect(within(fresh).getByText("第 4／5 名・排名成果 0 筆")).toBeTruthy();
     expect(within(fresh).getAllByText("剛開始、數字還不夠").length).toBeGreaterThan(0);
     expect(own.textContent).not.toMatch(/要花到|跑滿|賣出 10 筆/);
     const wasted = li("秋季新色預告・直式 9:16 短影音");
@@ -202,8 +202,8 @@ describe("SettlePage step 1 這期成績", () => {
     expect(thin.getAttribute("data-fate")).toBe("skip");
     expect(within(thin).getByText("沒有可排名的數字")).toBeTruthy();
     expect(within(thin).getAllByText("資料不足").length).toBeGreaterThan(0);
-    expect(within(thin).queryByText(/名・成交/)).toBeNull();
-    expect(screen.getByText("排名留下的記成有效、換掉的記成無效；排不上名的不記")).toBeTruthy();
+    expect(within(thin).queryByText(/名・排名成果/)).toBeNull();
+    expect(screen.getByText("本期成本達標與未達標分開記錄；資料不足只保留歷史，排名不代表成功")).toBeTruthy();
   });
 
   it("before the month ends, step 1 is read-only and later steps lead back to it", async () => {
@@ -232,12 +232,12 @@ describe("SettlePage step 1 這期成績", () => {
 
   it("CSV lines are the numbers on screen, unknown cost as an empty cell", () => {
     const rows = settleCsvRows(view());
-    expect(rows[0]).toEqual(["活動", "來源", "廣告組", "廣告", "花費", "購買", "每賣一筆", "上限", "等級", "排名", "成交", "寫進筆記本"]);
+    expect(rows[0]).toEqual(["活動", "來源", "廣告組", "廣告", "花費", "平台成果數", "每筆成果成本", "上限", "等級", "排名", "排名成果數", "寫進筆記本", "幣別", "成果類型", "成果動作", "歸因", "資料開始", "資料截止"]);
     const wasted = rows.find((r) => r[3] === "秋季新色預告・直式 9:16 短影音");
-    expect(wasted).toEqual([DN, "本系統", "A・廣泛受眾", "秋季新色預告・直式 9:16 短影音", 1600, 0, null, 450, "沒賣出", "5／5", 0, "無效"]);
-    expect(rows.find((r) => r[3] === "健身情境・保冷 12 小時")?.slice(9)).toEqual(["3／5", 4, "無效"]);
-    expect(rows.find((r) => r[3] === "夏日冰飲・保冷一整天")?.[1]).toBe("從 Meta 帶進來");
-    expect(rows.find((r) => r[3] === "五種用法輪播")?.slice(9)).toEqual([null, null, "不記"]);
+    expect(wasted?.slice(0, 12)).toEqual([DN, "本系統", "A・廣泛受眾", "秋季新色預告・直式 9:16 短影音", 1600, 0, null, 450, "沒賣出", "5／5", 0, "無效"]);
+    expect(rows.find((r) => r[3] === "健身情境・保冷 12 小時")?.slice(9, 12)).toEqual(["3／5", 4, "無效"]);
+    expect(rows.find((r) => r[3] === "夏日冰飲・保冷一整天")?.[1]).toBe("既有平台活動");
+    expect(rows.find((r) => r[3] === "五種用法輪播")?.slice(9, 12)).toEqual([null, null, "不記"]);
   });
 });
 
@@ -300,8 +300,8 @@ describe("SettlePage step 3 寫進筆記本", () => {
     fireEvent.change(screen.getByRole("textbox", { name: "「夏日冰飲・保冷一整天」的自訂主打" }), { target: { value: "辦公室冰飲" } });
     fireEvent.click(screen.getByRole("link", { name: "都對，下一步 →" }));
     expect(await screen.findByRole("heading", { name: "寫進筆記本" })).toBeTruthy();
-    expect(screen.getByText("「保溫到公司」對這群受眾有效")).toBeTruthy();
-    expect(screen.getByText("「辦公室冰飲」對這群受眾有效")).toBeTruthy();
+    expect(screen.getByText("「保溫到公司」・本期成本達標")).toBeTruthy();
+    expect(screen.getByText("「辦公室冰飲」・本期成本達標")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "寫進筆記本（7 條）→" }));
     await screen.findByRole("alert");
     const sent = writeSettle.mock.calls[0][2];
@@ -315,10 +315,10 @@ describe("SettlePage step 3 寫進筆記本", () => {
     renderAt("angle");
     fireEvent.click(await screen.findByRole("button", { name: "12 小時長效" }));
     fireEvent.click(screen.getByRole("link", { name: "都對，下一步 →" }));
-    expect(await screen.findByText("「12 小時長效」對這群受眾無效")).toBeTruthy();
+    expect(await screen.findByText("「12 小時長效」・本期成本未達標")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "寫進筆記本（7 條）→" }));
     expect((await screen.findByRole("alert")).textContent).toContain("還沒寫進筆記本");
-    expect(screen.getByText("「12 小時長效」對這群受眾無效")).toBeTruthy();
+    expect(screen.getByText("「12 小時長效」・本期成本未達標")).toBeTruthy();
     const sent = writeSettle.mock.calls[0][2];
     expect(sent).toContainEqual({ entity_id: "ent_3", angle: "12 小時長效" });
     expect(sent).toContainEqual({ entity_id: "ent_1", angle: "通勤帶著走" });
@@ -328,7 +328,7 @@ describe("SettlePage step 3 寫進筆記本", () => {
     written.rows.forEach((r) => { if (r.fate !== "skip") r.written_angle = r.entity_id === "ent_3" ? "12 小時長效" : r.angles.candidates[0]; });
     writeSettle.mockResolvedValueOnce(written);
     fireEvent.click(screen.getByRole("button", { name: "寫進筆記本（7 條）→" }));
-    expect(await screen.findByText("寫好了 7 條：有效 2、無效 5")).toBeTruthy();
+    expect(await screen.findByText("已寫 7 條：留存分類有效 2、無效 5、未核實 未知")).toBeTruthy();
     expect(writeSettle.mock.calls[1][2]).toEqual(sent);
     expect(screen.getByText("原本 14 條")).toBeTruthy();
   });
@@ -340,8 +340,8 @@ describe("SettlePage step 3 寫進筆記本", () => {
     renderAt("angle");
     expect(await screen.findByRole("heading", { name: "寫進筆記本了" })).toBeTruthy();
     expect(screen.getByText("多了 7 條")).toBeTruthy();
-    expect(screen.getByText("「通勤帶著走」對這群受眾有效")).toBeTruthy();
-    expect(screen.getByText("「新色搶先看」對這群受眾無效")).toBeTruthy();
+    expect(screen.getByText("「通勤帶著走」・本期成本達標")).toBeTruthy();
+    expect(screen.getByText("「新色搶先看」・本期成本未達標")).toBeTruthy();
     expect(screen.queryByRole("button", { name: /寫進筆記本（/ })).toBeNull();
     expect(screen.getByRole("link", { name: "回投放中心 →" })).toBeTruthy();
     expect(writeSettle).not.toHaveBeenCalled();

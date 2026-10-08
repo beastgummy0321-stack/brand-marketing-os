@@ -18,11 +18,13 @@ const ORDER = [
 
 /** v10 `gradeBar()` (settle step 1, month review): the period's spend split by grade, with a legend of
  * 「<grade> N 則・X 元」 and — unless `rules={false}` — the grade rules under it. `data-slot="grade-bar"`. */
-export function GradeBar({ buckets, withMoney = false, thinLabel, rules = true, breakEven }: {
+export function GradeBar({ buckets, withMoney = false, thinLabel, gradeLabels, rules = true, breakEven }: {
   buckets: GradeBarBucket[];
   withMoney?: boolean;
   /** Replaces 「剛開始、數字還不夠」 in the legend when a screen words the thin bucket differently. */
   thinLabel?: string;
+  /** Display-only words for result kinds that are not purchases; bucket geometry stays unchanged. */
+  gradeLabels?: Partial<Record<Grade, string>>;
   rules?: boolean;
   breakEven?: number | null;
 }) {
@@ -47,7 +49,8 @@ export function GradeBar({ buckets, withMoney = false, thinLabel, rules = true, 
   const total = comparable ? merged.reduce((s, o) => s + o.width, 0) : 0;
   const served = useAdsRules();
   // Served words (F48 Contract R-API); the thin bucket reads 剛開始、數字還不夠 unless the screen words it itself.
-  const label = (key: (typeof ORDER)[number]["key"]) => (key === "insufficient" && thinLabel ? thinLabel : gradeWord(served, key) ?? "");
+  const label = (key: (typeof ORDER)[number]["key"]) => gradeLabels?.[key]
+    ?? (key === "insufficient" && thinLabel ? thinLabel : gradeWord(served, key) ?? "");
   return (
     <div data-slot="grade-bar">
       <div className="mt-1 mb-2 flex h-3 overflow-hidden rounded-md bg-muted" aria-hidden="true">

@@ -619,5 +619,79 @@ class SettleRouteTest(SettleFixture):
         self.assertEqual(early.json()["error"]["code"], "settle_not_ended")
 
 
+class SettleDefinitionTest(SettleFixture):
+    def response(self):
+        from fastapi.testclient import TestClient
+
+        from app import main
+
+        response = TestClient(main.app).get(f"/api/ads/brands/{self.brand}/settle?month={MONTH}")
+        self.assertEqual(response.status_code, 200, response.text)
+        return response.json()
+
+    def replace_definition(
+        self, kind="purchase", action="omni_purchase", attribution="7d_click+1d_view",
+    ):
+        self.conn.execute(
+            "UPDATE ads_external_daily SET result_kind=%s,result_action=%s,result_attribution=%s "
+            "WHERE org_id=%s AND brand_id=%s AND campaign_id=%s",
+            (kind, action, attribution, self.org, self.brand, self.imp),
+        )
+        self.conn.commit()
+
+    def test_http_matched_definition_has_exact_window_and_known_totals(self):
+        view = self.response()
+        self.assertEqual(view["result_comparison"], {"reason": None})
+        self.assertEqual(view["result_definition"], {
+            "kind": "purchase", "action": "omni_purchase", "attribution": "7d_click+1d_view",
+            "window": {"start": START.isoformat(), "end": END.isoformat()},
+        })
+        self.assertEqual(view["results"], 64)
+        self.assertEqual(view["spent"], 32340)
+
+    def test_http_mixed_kind_action_attribution_do_not_sum_results(self):
+        for definition in [("lead", "lead", "7d_click+1d_view"),
+                           ("purchase", "purchase", "7d_click+1d_view"),
+                           ("purchase", "omni_purchase", "1d_click")]:
+            with self.subTest(definition=definition):
+                self.replace_definition(*definition)
+                view = self.response()
+                self.assertEqual(view["result_comparison"]["reason"], "mixed_result_definition")
+                self.assertIsNone(view["results"])
+                self.assertIsNone(view["cost_per_result"])
+                self.assertIsNone(view["on_target_results"])
+                self.assertEqual(view["spent"], 32340)
+                self.assertEqual(len(view["rows"]), 8)
+
+    def test_http_legacy_unknown_definition_is_not_an_aggregate(self):
+        self.replace_definition(action=None)
+        view = self.response()
+        self.assertEqual(view["result_comparison"]["reason"], "result_definition_unknown")
+        self.assertIsNone(view["results"])
+        self.assertEqual(view["spent"], 32340)
+
+    def test_window_mismatch_and_legacy_projection_are_not_aggregated(self):
+        rows = self.view()["rows"]
+        rows[-1]["result_window"] = {"start": "2026-07-01", "end": "2026-07-31"}
+        totals = settle._totals(rows, None)
+        self.assertEqual(totals["result_comparison"]["reason"], "mixed_result_definition")
+        self.assertIsNone(totals["results"])
+        rows[-1].pop("result_window")
+        totals = settle._totals(rows, None)
+        self.assertEqual(totals["result_comparison"]["reason"], "result_definition_unknown")
+
+    def test_http_known_zero_has_zero_results_and_null_cost(self):
+        self.conn.execute(
+            "UPDATE ads_external_daily SET result_count=0 WHERE org_id=%s AND brand_id=%s",
+            (self.org, self.brand),
+        )
+        self.conn.commit()
+        view = self.response()
+        self.assertEqual(view["results"], 0)
+        self.assertEqual(view["on_target_results"], 0)
+        self.assertIsNone(view["cost_per_result"])
+        self.assertEqual(view["result_comparison"], {"reason": None})
+
+
 if __name__ == "__main__":
     unittest.main()

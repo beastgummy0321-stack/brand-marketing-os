@@ -5,8 +5,9 @@ import { Input } from "@/components/layout/ui/input";
 import { Skeleton } from "@/components/layout/Skeleton";
 import type { SettleRow, SettleView } from "@/lib/adsSettleApi";
 import type { ActiveJobsSnapshot } from "@/lib/jobsApi";
-import { ActionBar, GradeRules, GradeTermChip, OriginTag, ReadFailed, TagToggle, Thumb, WaitLine } from "../patterns";
+import { ActionBar, OriginTag, ReadFailed, TagToggle, Thumb, WaitLine } from "../patterns";
 import { FROM_META, campaignOf, isImported } from "./settleCsv";
+import {SettleCostRules, SettleGradeChip} from "./settleWords";
 
 /** F29-I12 step 2 「確認每則主打什麼」 (prototype v10 `stepAngle()`, hash `d/settle/angle`): every ad that will be
  * written gets one angle — the AI's three candidates from its copy (the first preselected, marked ✦) or the user's
@@ -58,7 +59,7 @@ function AngleRow({ row, view, pick, failed, onPick }: {
       <Thumb url={row.thumbnail_url} size={48} />
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-2">
-          {!pending && !readFailed && <GradeTermChip grade={row.grade} label={row.grade_label} />}
+          {!pending && !readFailed && <SettleGradeChip row={row} />}
           <span className="font-medium [overflow-wrap:anywhere]">{name}</span>
           {!pending && !readFailed && isImported(campaignOf(view, row).origin) && <OriginTag>{FROM_META}</OriginTag>}
         </div>
@@ -127,7 +128,7 @@ export function SettleAngles({ view, header, picks, onPick, jobs, onRetry, homeH
                 title="AI 正在從文案整理主打" status={found?.job.status ?? null} position={found?.job.position ?? null}
                 total={found?.total ?? null} waitedSeconds={found?.job.waited_seconds ?? null} note="可以先離開，整理好會出現在首頁待辦"
               />
-            : <div className="-mt-2"><GradeRules /></div>}
+            : <div className="-mt-2"><SettleCostRules rows={rows} /></div>}
         <ol aria-label="每則主打什麼" className="surface px-[22px] py-1">
           {rows.map((row) => (
             <AngleRow key={row.entity_id} row={row} view={view} pick={picks[row.entity_id]} failed={jobsFailed}

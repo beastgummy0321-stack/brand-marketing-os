@@ -171,7 +171,36 @@ export async function createCampaignFromPicks(
 }
 
 /** Read-only completed org-month evidence; exclusions are supplied by the backend. */
-export async function getNextPeriod(brandId: string, month: string): Promise<NextPeriodPreparation> {
-  const res = await apiFetch(`${brandPath(brandId)}/next-period?month=${encodeURIComponent(month)}`);
+export async function getNextPeriod(brandId: string, month: string, signal?: AbortSignal): Promise<NextPeriodPreparation> {
+  const res = await apiFetch(`${brandPath(brandId)}/next-period?month=${encodeURIComponent(month)}`, { signal });
   return readJson<NextPeriodPreparation>(res, "讀取下一期來源失敗。");
+}
+
+/** Shared settle/wizard URL contract. Invalid partial selections must never become a plain create. */
+export type ContinuationSelection = Pick<ContinuationInput, "month" | "campaign_ids" | "revision">;
+export type ContinuationQuery = { status: "none" } | { status: "invalid" } |
+  { status: "ready"; selection: ContinuationSelection };
+const SOURCE_KEYS = ["source_month", "source_campaign", "source_revision"] as const;
+export function readContinuationQuery(params: URLSearchParams): ContinuationQuery {
+  if (!SOURCE_KEYS.some((key) => params.has(key))) return { status: "none" };
+  const month = params.get("source_month");
+  const revision = params.get("source_revision");
+  const ids = params.getAll("source_campaign");
+  if (params.getAll("source_month").length !== 1 || params.getAll("source_revision").length !== 1 ||
+      !month || !/^\d{4}-(0[1-9]|1[0-2])$/.test(month) || !revision?.trim() ||
+      !ids.length || ids.some((id) => !id.trim()) || new Set(ids).size !== ids.length) return { status: "invalid" };
+  return { status: "ready", selection: { month, campaign_ids: ids, revision } };
+}
+export function withContinuationQuery(params: URLSearchParams, selection: ContinuationSelection | null): URLSearchParams {
+  const result = new URLSearchParams(params);
+  SOURCE_KEYS.forEach((key) => result.delete(key));
+  if (selection) {
+    result.set("source_month", selection.month);
+    selection.campaign_ids.forEach((id) => result.append("source_campaign", id));
+    result.set("source_revision", selection.revision);
+  }
+  return result;
+}
+export function nextPeriodWizardHref(brand: string, selection: ContinuationSelection): string {
+  return `/brands/${encodeURIComponent(brand)}/ads/new?${withContinuationQuery(new URLSearchParams(), selection)}`;
 }

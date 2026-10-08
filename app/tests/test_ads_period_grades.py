@@ -89,6 +89,32 @@ class GradePeriodTest(unittest.TestCase):
 
     # -- grades ---------------------------------------------------------------------------------
 
+    def test_observed_definition_is_preserved_and_target_kind_mismatch_is_not_graded(self):
+        ad = self.ad("definition", name="Definition")
+        self.days(ad, 10, spend=20, result_count=1)
+        repository.save_campaign_target(
+            self.conn, self.org, self.brand, self.campaign, result_kind="lead", basis="own",
+            value=100, expected_revision=1, actor="test",
+        )
+        self.conn.commit()
+        row = self.rows()["Definition"]
+        self.assertEqual((row["grade"], row["reason_code"]),
+                         ("insufficient", "result_kind_mismatch"))
+        self.assertEqual((row["result_kind"], row["result_action"], row["result_attribution"]),
+                         ("purchase", "omni_purchase", "7d_click+1d_view"))
+        self.assertEqual(row["result_window"], {"start": START.isoformat(), "end": END.isoformat()})
+        self.assertEqual((row["results"], row["cost_per_result"], row["spend"]), (10, 20, 200))
+        self.assertIsNone(row["result_reason"])
+
+    def test_matched_definition_remains_on_target(self):
+        ad = self.ad("matched", name="Matched")
+        self.days(ad, 10, spend=20, result_count=1)
+        row = self.rows()["Matched"]
+        self.assertEqual(row["grade"], "on_target")
+        self.assertEqual((row["result_kind"], row["result_action"], row["result_attribution"]),
+                         ("purchase", "omni_purchase", "7d_click+1d_view"))
+        self.assertIsNone(row["result_reason"])
+
     def test_every_spending_ad_is_graded_closed_ones_included(self):
         cheap = self.ad("a1", name="便宜", parent=("adset", "s1"))
         wasted = self.ad("a2", name="沒賣", status="PAUSED")
