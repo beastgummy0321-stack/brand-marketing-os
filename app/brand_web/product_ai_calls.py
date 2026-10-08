@@ -26,7 +26,8 @@ def run_product_scan(conn, brand_id: str, product_id: str, product_name: str, ur
     `routes_products.py::_research_state()` 事後用
     `context_scope_json->>'product_id'` 反查這一列 llm_task，跟業務邏輯無關。"""
     ok, text = fetch_url(url)
-    parts = [f"產品名稱：{product_name}", f"產品頁網址：{url}"]
+    shown_url = net.safe_url(url)
+    parts = [f"產品名稱：{product_name}", f"產品頁網址：{shown_url}"]
     if brand_facts:
         known = "\n".join(f"・{f['label']}：{f['value']}" for f in brand_facts)
         parts.append(f"這個品牌已經確認過的事實（背景參考，不要重複產出）：\n{known}")
@@ -46,7 +47,7 @@ def run_product_scan(conn, brand_id: str, product_id: str, product_name: str, ur
     # 跨層禁止裸 SQL（CrossLayerRawSqlScanTest），走 repository 公開進入點
     row = repo.get_brand(conn, brand_id)
     context = gateway.TaskContext(
-        context_scope={"brand_id": brand_id, "product_id": product_id, "product_scan_url": url},
+        context_scope={"brand_id": brand_id, "product_id": product_id, "product_scan_url": shown_url},
         knowledge_item_ids=[], brand_version=row["knowledge_version"] if row else 1,
     )
     task = gateway.run_task(

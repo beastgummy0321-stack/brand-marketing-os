@@ -347,10 +347,11 @@ def _read_pages(urls: list) -> tuple[list, list]:
     pages, failed = [], []
     for url in urls[:MAX_PREFILL_PAGES]:
         ok, text, reason = read_url(url)
+        shown_url = net.safe_url(url)
         if ok and text and text.strip():
-            pages.append((url, text.strip()))
+            pages.append((shown_url, text.strip()))
         else:
-            failed.append({"url": url, "reason": reason or net.REASON_EMPTY})
+            failed.append({"url": shown_url, "reason": reason or net.REASON_EMPTY})
     return pages, failed
 
 
@@ -388,7 +389,7 @@ def run_prefill(conn, draft: dict) -> tuple:
     pages, failed = _read_pages(urls)
     blocks, kinds = _brand_photo_blocks(conn, brand_id)
     previous = (ir.get_draft(conn, brand_id, draft["id"]) or {}).get("prefill_json")
-    kept: dict = {"urls_read": urls, "pages_failed": failed}
+    kept: dict = {"urls_read": [net.safe_url(url) for url in urls], "pages_failed": failed}
     if isinstance(previous, dict) and previous.get("dismissed"):
         kept["dismissed"] = previous["dismissed"]
     if not pages and not blocks:

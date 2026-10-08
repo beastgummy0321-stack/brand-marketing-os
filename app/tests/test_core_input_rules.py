@@ -246,6 +246,10 @@ def test_url():
     assert r.url(" https://example.com/a?b=1 ", "官網") == "https://example.com/a?b=1"
     assert r.url("http://localhost:8710/x", "官網") == "http://localhost:8710/x"
     assert r.url("", "官網", optional=True) is None
+    for sensitive in ("https://user:SECRET@example.com/", "https://user@example.com/",
+                      "https://user:SECRET@[invalid"):
+        with _refused("官網網址不可包含帳號或密碼，請使用公開頁面網址。"):
+            r.url(sensitive, "官網")
     for bad in ("https://", "example.com", "ftp://example.com", "https://exa mple.com",
                 "https://localhost.", "javascript:alert(1)", "https://nodot"):
         with _refused(f"官網「{bad}」不是完整的網址，請從 https:// 開始，例如 https://example.com。"):

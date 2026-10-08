@@ -119,6 +119,31 @@ class _Base(unittest.TestCase):
 
 
 class PrefillScanTest(_Base):
+    def test_brand_private_website_is_blocked_without_a_model_call(self):
+        intake_ai.read_url = net.read_url
+        with mock.patch.object(net, "_PinnedConnection") as transport:
+            bid = self._create(photos=0, urls=("http://127.0.0.1/private",))
+            self._scan(bid)
+        prefill = self._prefill(bid)
+        self.assertEqual(prefill["pages_read"], 0)
+        self.assertEqual(prefill["pages_failed"], [{"url": "http://127.0.0.1/private",
+                                                  "reason": net.REASON_BLOCKED}])
+        self.assertEqual(intake_ai.PROVIDER.calls, [])
+        transport.assert_not_called()
+
+    def test_legacy_url_credentials_do_not_enter_prefill_receipts(self):
+        bid = self._create(photos=0)
+        draft = ir.get_active_draft(web.conn, bid)
+        ir.update_draft(web.conn, bid, draft["id"],
+                        research_urls_json=["https://user:SECRET@example.com/"])
+        web.conn.commit()
+        intake_ai.read_url = net.read_url
+        self._scan(bid)
+        prefill = self._prefill(bid)
+        self.assertNotIn("SECRET", json.dumps(prefill))
+        self.assertEqual(prefill["urls_read"], [net.REDACTED_URL])
+        self.assertEqual(intake_ai.PROVIDER.calls, [])
+
     def test_invalid_entries_are_dropped_and_the_rest_stored(self):
         bid = self._create(photos=1)
         status = self._scan(bid)

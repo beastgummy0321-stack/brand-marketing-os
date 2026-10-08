@@ -310,7 +310,7 @@ def run_prefill(conn: Conn, brand_id: str, product_id: str) -> tuple:
     if product.get("page_url"):
         ok, text, reason = read_url(product["page_url"])
         if ok and text and text.strip():
-            page = (product["page_url"], text.strip())
+            page = (net.safe_url(product["page_url"]), text.strip())
         else:
             reason = reason or net.REASON_EMPTY
     blocks = _photo_blocks(conn, brand, product_id)

@@ -276,6 +276,14 @@ def url(value, label: str, *, optional: bool = False) -> str | None:
         raise InputRuleError(
             f"{label}「」不是完整的網址，請從 https:// 開始，例如 https://example.com。")
     sentence = f"{label}「{text}」不是完整的網址，請從 https:// 開始，例如 https://example.com。"
+    credentials_message = f"{label}網址不可包含帳號或密碼，請使用公開頁面網址。"
+    try:
+        parsed = urlsplit(text)
+        if parsed.username is not None or parsed.password is not None:
+            raise InputRuleError(credentials_message)
+    except ValueError:
+        if "@" in text:
+            raise InputRuleError(credentials_message) from None
     if any(c.isspace() for c in text):
         raise InputRuleError(sentence)
     try:
