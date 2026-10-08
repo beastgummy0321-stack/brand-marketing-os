@@ -424,8 +424,10 @@ export function VerifyPage({ brandId, campaignId, setId }: {
       ...(item.evidence_json.setting_matches === true
         ? [{ title: "設定相符", note: confirmedRailNote(item, kind), ok: true }]
         : []),
-      ...(kind === "new_ad" && (item.evidence_json.peers?.length ?? 0) <= 1
-        ? [{ title: "素材核對", note: materialProofText(item.evidence_json.peers?.[0]?.material_evidence) }]
+      ...(kind === "new_ad" && (!Array.isArray(item.evidence_json.peers) || item.evidence_json.peers.length <= 1)
+        ? [{ title: "素材核對", note: Array.isArray(item.evidence_json.peers)
+          ? materialProofText(item.evidence_json.peers[0]?.material_evidence)
+          : "素材清單尚未提供，素材尚未確認" }]
         : []),
       // An A/B pause has no angle: its notebook line is the card below, not the angle cell.
       ...(abSet ? timeline.slice(0, 1) : timeline),

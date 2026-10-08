@@ -211,7 +211,7 @@ describe("v9 pieces（F28-I07）", () => {
     { id: "a6", name: "再行銷・兩入組", grade: "watch" as const, costPerResult: 520, spend: 3120 },
     { id: "a7", name: "提問式貼文", grade: "over" as const, costPerResult: 617.5, spend: 2470 },
     { id: "a8", name: "秋季新色預告", grade: "wasted" as const, costPerResult: null, spend: 1480 },
-  ];
+  ].map((ad) => ({ ...ad, currency: "TWD", comparisonReason: null }));
 
   it("TargetRuler 依每筆成本放點，上限線與打平線落在原型算出的位置", async () => {
     const { TargetRuler, rulerScale } = await import("./TargetRuler");
@@ -219,10 +219,10 @@ describe("v9 pieces（F28-I07）", () => {
     const { max, pos } = rulerScale(450, daily.flatMap((a) => (a.costPerResult === null ? [] : [a.costPerResult])));
     expect(max).toBe(720);
     expect(pos(450)).toBe(62.5);
-    const { container } = render(<TargetRuler ads={daily} cap={{ value: 450, basis: "own" }} breakEven={520} size="full" />);
+    const { container } = render(<TargetRuler ads={daily} cap={{ value: 450, basis: "own", currency: "TWD" }} breakEven={520} breakEvenCurrency="TWD" size="full" />);
     const cap = container.querySelector('[data-part="cap-mark"]') as HTMLElement;
     expect(cap.style.left).toBe("62.5%");
-    expect(cap.textContent).toBe("上限 450");
+    expect(cap.textContent).toBe("上限 450 TWD");
     expect((container.querySelector('[data-part="break-even-mark"]') as HTMLElement).style.left).toBe(`${(520 / 720) * 100}%`);
     const dot = (name: string) => screen.getByRole("button", { name: new RegExp(`^${name}｜`) });
     expect(dot("提問式貼文").style.left).toBe(`${(617.5 / 720) * 100}%`);
@@ -231,7 +231,7 @@ describe("v9 pieces（F28-I07）", () => {
     expect(dot("開箱 15 秒・單手開蓋").style.bottom).toBe("99px");
     // 沒賣出 has no cost: it sits in the box, not on the axis.
     expect(dot("秋季新色預告").style.left).toBe("");
-    expect(screen.getByRole("group", { name: "對照上限：上限 450；沒賣出 1、太貴 1、偏貴 1、划算 5" })).toBeTruthy();
+    expect(screen.getByRole("group", { name: "對照上限：上限 450 TWD；沒賣出 1、太貴 1、偏貴 1、划算 5" })).toBeTruthy();
   });
 
   it("TargetRuler 沒上限畫空狀態；暫用打平標在上限位置；清理標出要關的；剛開始的花費未知不印 0", async () => {
@@ -239,19 +239,36 @@ describe("v9 pieces（F28-I07）", () => {
     const { container, rerender } = render(<TargetRuler ads={daily} cap={null} size="mid" />);
     expect(container.querySelector('[data-variant="empty"]')).toBeTruthy();
     expect(screen.getByText("沒設上限，先不分等級")).toBeTruthy();
-    rerender(<TargetRuler ads={daily} cap={{ value: 520, basis: "break_even" }} breakEven={520} size="mid" highlight={{ mode: "close", ids: ["a7", "a8"] }} />);
-    expect(container.querySelector('[data-part="cap-mark"]')?.textContent).toBe("暫用打平 520");
+    rerender(<TargetRuler ads={daily} cap={{ value: 520, basis: "break_even", currency: "TWD" }} breakEven={520} breakEvenCurrency="TWD" size="mid" highlight={{ mode: "close", ids: ["a7", "a8"] }} />);
+    expect(container.querySelector('[data-part="cap-mark"]')?.textContent).toBe("暫用打平 520 TWD");
     expect(container.querySelector('[data-part="break-even-mark"]')).toBeNull();
     expect(screen.getAllByText("關")).toHaveLength(2);
-    rerender(<TargetRuler ads={[{ id: "m2", name: "中秋限定・月光藍開箱", grade: "insufficient", gradeLabel: null, costPerResult: null, spend: null }]} cap={{ value: 450, basis: "own" }} size="full" />);
+    rerender(<TargetRuler ads={[{ id: "m2", name: "中秋限定・月光藍開箱", grade: "insufficient", gradeLabel: null, costPerResult: null, spend: null, currency: "TWD", comparisonReason: null }]} cap={{ value: 450, basis: "own", currency: "TWD" }} size="full" />);
     expect(screen.getByText("剛開始、數字還不夠 1 則")).toBeTruthy();
-    expect(screen.getByText(/已花 未知／1,350 元/)).toBeTruthy();
+    expect(screen.getByText(/已花 未知／1,350 TWD/)).toBeTruthy();
+  });
+
+  it.each([
+    { currency: undefined, comparisonReason: null },
+    { currency: "USD", comparisonReason: "currency_mismatch" },
+    { currency: "TWD", comparisonReason: undefined },
+    { currency: "TWD", comparisonReason: "unknown_cap_currency" },
+  ])("does not put unknown or incomparable money on the ruler ($currency/$comparisonReason)", async (unit) => {
+    const { TargetRuler } = await import("./TargetRuler");
+    const { container } = render(<TargetRuler ads={[{ ...daily[0], ...unit }]} cap={{ value: 450, basis: "own", currency: "TWD" }} size="full" />);
+    expect(container.querySelector("button[data-grade]")).toBeNull();
+    const tray = container.querySelector("[data-part=tray]")!;
+    expect(tray).toBeTruthy();
+    expect(container.textContent).toContain("幣別不同或尚未核實，不能比較。");
+    expect(tray.textContent).not.toContain("%");
+    expect(tray.querySelector("i[style]")).toBeNull();
+    expect(container.textContent).toContain(unit.currency ?? "幣別未知");
   });
 
   it("F28-I14：TargetRuler 圖片載入失敗（Meta 網址過期）換成中性佔位，不出破圖", async () => {
     const { TargetRuler } = await import("./TargetRuler");
     const ads = [{ ...daily[0], thumbnailUrl: "https://scontent.example/expired.jpg" }];
-    const { container } = render(<TargetRuler ads={ads} cap={{ value: 450, basis: "own" }} size="full" />);
+    const { container } = render(<TargetRuler ads={ads} cap={{ value: 450, basis: "own", currency: "TWD" }} size="full" />);
     const img = container.querySelector("img") as HTMLImageElement;
     expect(img.getAttribute("src")).toBe("https://scontent.example/expired.jpg");
     expect(container.querySelector('[data-part="thumb-placeholder"]')).toBeNull();
@@ -504,20 +521,80 @@ describe("v10 kit（F29-I09）", () => {
     const moneyRule = rules.querySelector("[data-slot='money-rule']") as HTMLElement;
     expect(moneyRule.querySelectorAll("[role='tooltip']")[1].textContent).toContain("這裡是 520");
 
-    const { container } = render(
-      <GradeBar withMoney rules={false} buckets={[
-        { grade: "on_target", amount: 14240, count: 2 }, { grade: "watch", amount: 6100, count: 1 },
-        { grade: "over", amount: 8200, count: 2 }, { grade: "wasted", amount: 1600, count: 1 },
-        { grade: "insufficient", amount: 1600, count: 2 }, { grade: "ungraded", amount: null, count: 1 },
-      ]} />,
-    );
+    const buckets = [
+      { grade: "on_target" as const, amount: 14240, count: 2, currency: "TWD" },
+      { grade: "watch" as const, amount: 6100, count: 1, currency: "TWD" },
+      { grade: "over" as const, amount: 8200, count: 2, currency: "TWD" },
+      { grade: "wasted" as const, amount: 1600, count: 1, currency: "TWD" },
+      { grade: "insufficient" as const, amount: 1600, count: 2, currency: "TWD" },
+    ];
+    const { container, rerender } = render(<GradeBar withMoney rules={false} buckets={buckets} />);
     const seg = container.querySelector("i[data-grade='on_target']") as HTMLElement;
     expect(seg.style.width).toBe(`${(14240 / 31740) * 100}%`);
-    expect(container.textContent).toContain("划算 2 則・14,240 元");
-    expect(container.textContent).toContain("剛開始、數字還不夠 2 則・1,600 元");
+    expect(container.textContent).toContain("划算 2 則・14,240 TWD");
+    expect(container.textContent).toContain("剛開始、數字還不夠 2 則・1,600 TWD");
+    rerender(<GradeBar withMoney rules={false} buckets={[...buckets, { grade: "ungraded", amount: null, count: 1, currency: "TWD" }]} />);
+    expect(container.querySelector("i[data-grade]")).toBeNull();
     expect(container.textContent).toContain("未判斷 1 則・金額未知");
-    expect(container.textContent).not.toContain("・0 元");
+    expect(container.textContent).not.toContain("・0 TWD");
     expect(container.querySelector("[data-slot='grade-rules']")).toBeNull();
+  });
+
+  it.each([
+    { amount: null, count: 1, currency: "TWD" },
+    { amount: null, count: 0, currency: "TWD" },
+    { amount: 100, count: 1, currency: null },
+    { amount: 100, count: 1, currency: "USD" },
+    { amount: 0, count: 0, currency: null },
+    { amount: 0, count: 0, currency: "USD" },
+  ])("GradeBar refuses incomplete or mixed buckets, including zero-count unknowns ($amount/$count/$currency)", async (other) => {
+    const { GradeBar } = await import("./GradeBar");
+    const { container } = render(<GradeBar withMoney rules={false} buckets={[
+      { grade: "on_target", amount: 100, count: 1, currency: "TWD" }, { grade: "watch", ...other },
+    ]} />);
+    expect(container.querySelector("i[data-grade]")).toBeNull();
+    expect(container.textContent).toContain("不比較花費占比");
+    expect(container.textContent).toContain("划算 1 則・100 TWD");
+    if (other.amount === null) {
+      expect(container.textContent).toContain("・金額未知");
+      expect(container.textContent).not.toContain("・0 TWD");
+    } else expect(container.textContent).toContain(`・${other.amount} ${other.currency ?? "幣別未知"}`);
+  });
+
+  it("GradeBar keeps counted zero separate from absent buckets and refuses mixed amounts within one grade", async () => {
+    const { GradeBar } = await import("./GradeBar");
+    const { container, rerender } = render(<GradeBar withMoney rules={false} buckets={[]} />);
+    expect(container.querySelector("[data-grade]")).toBeNull();
+    expect(container.textContent).not.toContain("・0");
+    rerender(<GradeBar withMoney rules={false} buckets={[{ grade: "on_target", amount: 0, count: 0, currency: "TWD" }]} />);
+    expect(container.textContent).toContain("划算 0 則・0 TWD");
+    expect(container.textContent).not.toContain("不比較花費占比");
+    expect(container.querySelector("i[data-grade]")).toBeNull();
+    rerender(<GradeBar withMoney rules={false} buckets={[
+      { grade: "on_target", amount: 100, count: 1, currency: "TWD" },
+      { grade: "on_target", amount: 100, count: 1, currency: "USD" },
+    ]} />);
+    expect(container.querySelector("i[data-grade]")).toBeNull();
+    expect(container.textContent).toContain("划算 2 則・金額未知");
+    expect(container.textContent).not.toContain("・200");
+  });
+
+  it("GradeBar treats raw missing amounts as unknown rather than a zero-width comparable bucket", async () => {
+    const { GradeBar } = await import("./GradeBar");
+    const buckets = JSON.parse('[{"grade":"on_target","amount":100,"count":1,"currency":"TWD"},{"grade":"watch","count":0,"currency":"TWD"}]');
+    const { container, rerender } = render(<GradeBar withMoney rules={false} buckets={buckets} />);
+    expect(container.querySelector("i[data-grade]")).toBeNull();
+    expect(container.textContent).toContain("偏貴 0 則・金額未知");
+    expect(container.textContent).toContain("花費金額未知，不比較花費占比。");
+    expect(container.textContent).not.toMatch(/NaN|undefined|偏貴 0 則・0/);
+    buckets[1].grade = "on_target";
+    rerender(<GradeBar withMoney rules={false} buckets={buckets} />);
+    expect(container.querySelector("i[data-grade]")).toBeNull();
+    expect(container.textContent).toContain("划算 1 則・金額未知");
+    // An explicitly known amount still prints even when the unit is absent.
+    rerender(<GradeBar withMoney rules={false} buckets={[{ grade: "on_target", amount: 100, count: 1, currency: "" }]} />);
+    expect(container.textContent).toContain("划算 1 則・100 幣別未知");
+    expect(container.querySelector("i[data-grade]")).toBeNull();
   });
 
   it("WaitLine：排第 2 件、正在處理的第 1 件、位置讀不到；不印第 0 件", async () => {
@@ -806,14 +883,14 @@ describe("served rules（F48-I08 Contract R-API）", () => {
         { id: "w", name: "沒賣出那則", grade: "wasted" as const, costPerResult: null, spend: 2000 },
         { id: "t", name: "剛開始那則", grade: "insufficient" as const, gradeLabel: L.too_new, costPerResult: null, spend: 900 },
         { id: "o", name: "太貴那則", grade: "over" as const, costPerResult: 700, spend: 1400 },
-      ];
-      const ruler = render(<TargetRuler ads={ads} cap={{ value: 450, basis: "own" }} size="full" />).container;
+      ].map((ad) => ({ ...ad, currency: "TWD", comparisonReason: null }));
+      const ruler = render(<TargetRuler ads={ads} cap={{ value: 450, basis: "own", currency: "TWD" }} size="full" />).container;
       const { pos } = rulerScale(450, [700]);
       const watchZone = ruler.querySelector("i.bg-grade-watch") as HTMLElement;
       expect(watchZone.style.width).toBe(`${pos(675) - pos(450)}%`);
       expect(ruler.querySelector("[data-zone='有點貴']")).toBeTruthy();
-      expect(screen.getByRole("button", { name: /^沒賣出那則｜/ }).textContent).toContain("花到 1,800 還沒賣");
-      expect(ruler.textContent).toContain("已花 900／1,800 元");
+      expect(screen.getByRole("button", { name: /^沒賣出那則｜/ }).textContent).toContain("花到 1,800 TWD 還沒賣");
+      expect(ruler.textContent).toContain("已花 900 TWD／1,800 TWD");
 
       const meter = render(<MoneyMeter value={600} cap={{ value: 450, basis: "own" }} size="sm" />).container;
       expect(meter.querySelector("i")?.className).toContain("bg-warning/80");
@@ -839,7 +916,7 @@ describe("served rules（F48-I08 Contract R-API）", () => {
       expect(rules.querySelectorAll("i")).toHaveLength(0);
       expect(visible(rules)).toBe("有賺／在虧：跟打平線比；分級：跟你的上限比");
 
-      const ruler = render(<TargetRuler ads={[{ id: "w", name: "沒賣出那則", grade: "wasted", costPerResult: null, spend: 2000 }]} cap={{ value: 450, basis: "own" }} size="full" />).container;
+      const ruler = render(<TargetRuler ads={[{ id: "w", name: "沒賣出那則", grade: "wasted", costPerResult: null, spend: 2000, currency: "TWD", comparisonReason: null }]} cap={{ value: 450, basis: "own", currency: "TWD" }} size="full" />).container;
       expect(ruler.querySelector("[data-zone]")).toBeNull();
       expect(screen.getByRole("button", { name: /^沒賣出那則｜/ }).textContent).not.toContain("花到");
 

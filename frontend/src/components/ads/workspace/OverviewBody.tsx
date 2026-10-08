@@ -220,7 +220,7 @@ function GapOverview({ brandId, campaign: c, workspace: ws, fold, readGeneration
         {structure.status === "loading" && <Skeleton className="h-40 w-full" />}
         {structure.status === "error" && <ReadFailed what={`每則廣告的花費讀不到：${structure.error}`} onRetry={structure.reload} />}
         <DeliveryNote workspace={ws} />
-        {structure.status === "ready" && ads.length === 0 && <p className="py-3 text-sm text-muted-foreground">{ws.running && ws.running.count + ws.running.unknown + (ws.running.off ?? 0) + (ws.running.not_running ?? 0) > 0
+        {structure.status === "ready" && ads.length === 0 && <p className="py-3 text-sm text-muted-foreground">{ws.running && [ws.running.count, ws.running.unknown, ws.running.off, ws.running.not_running].some((count) => typeof count === "number" && count > 0)
           ? "已讀到平台廣告，這裡還沒有可判斷的成效資料。" : "這裡還沒有可判斷的廣告成效資料。"}</p>}
         {ads.map((a) => {
           const graded = a.grade !== null && RANKED.has(a.grade);

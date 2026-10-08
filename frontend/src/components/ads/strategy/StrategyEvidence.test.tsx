@@ -3,9 +3,23 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { LearningEvidenceSource } from "../patterns/LearningEvidence";
 import { StrategyEvidence } from "./StrategyEvidence";
+import { StrategyCommitments } from "./StrategyCommitments";
 import { evidenceFixture, strategyFixture } from "./strategyEvidence.fixtures";
 
 describe("served strategy learning evidence", () => {
+  it.each(["missing", "empty", "known"] as const)("keeps %s references distinct without certifying availability", (kind) => {
+    const decision = strategyFixture().budget_basis_json.strategy!.decision!;
+    const slot = decision.slots[0];
+    if (kind === "missing") Reflect.deleteProperty(slot, "evidence_refs");
+    else if (kind === "empty") slot.evidence_refs = [];
+    render(<StrategyCommitments decision={decision} role={slot.role} stale={false} details />);
+    const commitment = document.querySelector("[data-slot=strategy-commitment]") as HTMLElement;
+    if (kind === "missing") expect(commitment.textContent).toContain("引用依據尚未提供");
+    else expect(commitment.textContent).not.toContain("引用依據尚未提供");
+    if (kind === "empty") expect(commitment.textContent).toContain("本次安排未列引用依據");
+    else expect(commitment.textContent).not.toContain("本次安排未列引用依據");
+    expect(commitment.textContent).not.toContain("沒有可引用的投放紀錄");
+  });
   it("keeps backend support labels and excludes history from the proposal card", async () => {
     const user = userEvent.setup();
     const basis = strategyFixture().budget_basis_json.basis!;
