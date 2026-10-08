@@ -4,10 +4,11 @@
 
 ## First-release carve — 2026-10-07
 
-Status: the user approved the [F53 plan](../../.work/features/F53.md) and prototype on
-2026-10-08. The original queue and the newly authorized delivery-blocker repairs I12-I16 are
-merged; current technical proof is source-bound in the first-release packet. This Windows local/private release remains subject to the actual combined packet,
-G8 integration sidecar and pending human screen acceptance; queue completion is not closure.
+Status: the user explicitly accepted F53 and F48-F51 on 2026-10-08. All five features
+are closed after successful source-matched integration; no executable construction issue
+remains. [Handoff](../drills/drill-12/first-release/Handoff.md) records the current stop
+boundary and captured pre-close evidence. The user authorized commit and branch push,
+then instructed waiting for the next command. This does not accept the original F52 drill.
 
 The settled evidence/source/applicability/support/revision/wire contract, complete writer/reader
 inventory and frozen G1-G8 gates moved to [ads §6.55](../architecture/ads.md#655-supervised-first-release-evidence-contract-f53-planned-2026-10-07).
@@ -27,12 +28,19 @@ First-release outcome remains defensible direction, faithful accepted execution 
 next-period adaptation. Copy/image polish, simulated profit and optimal strategy are not gates;
 fabrication, wrong scope/money/bindings, input loss and unrecoverable supported flows are blockers.
 Actual provider/auth/backup dispositions are recorded in the first-release packet;
-missing or failed gates remain unverified and human acceptance remains pending.
-No repair/readiness percentage follows from case/issue counts. F48-F52 remain open; F52's
-unchanged original final nine-dimension acceptance stays paused. Approval of F53 cannot close it.
+G1-G8 and explicit human acceptance are recorded separately in the preserved pre-close
+packet/seal and current closure receipt. F48-F51 and F53 are closed; F52's unchanged original
+final nine-dimension acceptance stays paused. Approval of F53 does not close F52.
 
 The later autonomous/multi-platform roadmap below is preserved and remains outside F53.
-Public deployment, push, paid calls and platform mutation are not authorized by this plan.
+The latest 2026-10-08 instruction authorizes this round's commit and branch push. Public
+deployment, paid calls and platform mutation remain outside authorization.
+
+Deferred candidate: after a confirmed cleanup, connect reassessment of remaining ads, an
+explicit replenish-or-observe decision, any scoped material task, and visible review timing
+or conditions. Current cleanup confirmation does not create this followup; manual new-ad
+creation remains separate. This observed workflow gap is preserved, not implemented or
+queued in the accepted round. Wait for a new user instruction before planning or dispatch.
 
 ## 已確認方向
 

@@ -1,5 +1,13 @@
 # 演練 12 修復交接
 
+## Current acceptance boundary — 2026-10-08
+
+F48-F51 and F53 were explicitly accepted by the user and closed. Their construction
+queues are empty. The user authorized this round's commit and branch push, then requested
+a stop. F52 stays open and paused; its original fresh three-period/nine-dimension
+acceptance has not run. Follow [first-release Handoff](first-release/Handoff.md) for
+the completed round. The dated F52 repair evidence below remains historical.
+
 ## Execution update — 2026-10-07
 
 All 24 F52 repair issues are DONE and locally merged on `codex/drill12-system-contracts`.
@@ -52,7 +60,7 @@ quality acceptance and human acceptance remain deferred. F52 and F48–F51 stay 
 
 先前的「開始」已授權並完成整批修復；使用者後來要求修完即停。
 不能沿用舊的整批授權，自動啟動下一輪完整驗證。只讀交接不等於恢復執行。
-F48–F51 保持未結案；F52 也不代替它們的人工驗收。
+F48-F51 were separately accepted and closed on 2026-10-08. F52 remains paused and unaccepted.
 
 ## 恢復完整驗證前確認
 
@@ -68,7 +76,7 @@ F48–F51 保持未結案；F52 也不代替它們的人工驗收。
 
 ## 可直接貼到新 session 的開場
 
-> 讀取 D:\0UserProfile\Desktop\marketing\docs\drills\drill-12\Handoff.md 與其指向的 F52 計畫。24 張修復票已完成，目前暫停。先核對目前版本與未驗證清單並回報，不重做已完成修復，也不啟動完整整合或新演練；等待我明確要求恢復。保留原始證據與 F48–F52 未結案狀態，不 push、不操作真實投放。
+> 讀取 D:\0UserProfile\Desktop\marketing\docs\drills\drill-12\Handoff.md 與其指向的 F52 計畫。24 張修復票已完成，目前暫停。先核對目前版本與未驗證清單並回報，不重做已完成修復，也不啟動完整整合或新演練；等待我明確要求恢復。Preserve original evidence and the open/paused F52 state; F48-F51 and F53 are closed. Do not resume work or perform another push or platform action without a new instruction.
 
 ## 最後一張修復的交件位置
 

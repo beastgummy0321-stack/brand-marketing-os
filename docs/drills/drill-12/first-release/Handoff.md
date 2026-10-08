@@ -1,10 +1,13 @@
 # F53 repaired first-release handoff
 
 Date: 2026-10-08. Branch: codex/first-release-evidence-learning.
-The human authorized clearing the recommended first-release delivery blockers and handing over
-the final screen acceptance. I01-I16 are merged. Current G1-G7 pass on the repaired source;
-actual G8 is recorded only in the ignored final sidecar after the lead's integration.
-Do not infer G8 from this pre-integration tracked document or prefill human acceptance.
+The human explicitly accepted F53 and F48-F51 on 2026-10-08 and requested commit/push,
+an empty construction queue and then a stop. All five features are closed through Harness.
+F53 G1-G8 passed and were independently sealed at pre-close HEAD
+`88123b7dda6520a82612a81f724874a9f11e362d`. Preserve that captured version; closure changes
+HEAD and deletes completed queue files. No source-matched receipt is rebound to a new HEAD.
+Current human/closure status is `.harness/scratch/F53/final/closure.json`; the original
+packet, seal and outcome are immutable pre-close reports. F52 remains open and paused.
 
 ## Current evidence
 - Current context: `.scratch/F53/repair-combined-20261008-r2/context.json`.
@@ -42,10 +45,12 @@ cannot pass. Postgres/Storage restore uses separate owned targets, tenant invent
 equality after source deletion. Cleanup is recorded; shared public and other tasks are untouched.
 
 ## Final human acceptance
-After a successful current integration and exact seal, review the three screen comparisons.
-From each screen identify where you are, what the step does, what its main button does,
-next/back, and accept/reject/exit. Actual human approval alone satisfies this item.
-Only then may Harness close F53; preserve the pre-close seal because closure changes inputs.
+The user explicitly granted acceptance on 2026-10-08. F53 closed on its existing exact
+successful integration/seal. F51, F50, F49 and F48 each passed a fresh current-tree Harness
+integration and then closed with the same explicit human approval. Actual per-feature
+integration, timing and closure records are in `.scratch/F53/closeout-20261008/`.
+This acceptance does not revise historical drill scores or accept F52. No executable
+construction issue remains. Stop; wait for a new explicit user instruction.
 
 ## Preserved history and limits
 The rejected a5 model reply and failed seven-test integration remain under `.scratch/F53/`;
@@ -57,6 +62,10 @@ delivery blockers. A single newly authorized unchanged-model r2 sample follows t
 the valid r1 output is not normalized or rebound to r2 fingerprints.
 All earlier a1-a4 and original carve/case/prototype artifacts remain immutable. Frozen cases
 SHA-256 is unchanged: `48ada4e752fa4c2e5848b7b986e3af7146c9ede0aa712b7a72460b5d53505339`.
-F48-F52 remain open; original F52 nine-dimension drill is paused/unrun. No push, public deploy,
-paid direct API, platform mutation or autonomous marketing is authorized. Synthetic/local
-proof does not establish market delivery, causality or revenue. Protect shared ports/services.
+F48-F51 and F53 are accepted and closed; original F52 nine-dimension acceptance remains
+paused/unrun. The latest user instruction explicitly authorizes this round's commit and
+branch push only. No public deployment, paid direct API, platform mutation or autonomous
+marketing is authorized. Synthetic/local proof does not establish market delivery, causality
+or revenue. Protect shared ports/services. The observed post-cleanup reassessment, material
+replenishment and explicit review followup gap is deferred in the existing roadmap; do not
+create or dispatch another feature until the user requests it.
