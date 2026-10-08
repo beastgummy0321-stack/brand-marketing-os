@@ -595,12 +595,35 @@ SELECT j.args->>'org_id' AS org_id, e.type::text AS type, count(*) AS n
 """
 #: Contract C: a worker whose last heartbeat is older than this is not alive.
 WORKER_HEARTBEAT_STALE_SECONDS = 60
-_WORKER_ALIVE_SQL = """
-SELECT EXISTS (
-  SELECT 1 FROM procrastinate_workers
-   WHERE last_heartbeat >= now() - make_interval(secs => %(stale)s)
-) AS alive
+_WORKER_HEALTH_SQL = """
+SELECT now() AS checked_at, max(last_heartbeat) AS last_heartbeat_at,
+       COALESCE(max(last_heartbeat) >= now() - make_interval(secs => %(stale)s), false) AS alive
+  FROM procrastinate_workers
 """
+
+
+def worker_health() -> dict:
+    """One read-only liveness projection; unavailable/test queues prove no liveness."""
+    unknown = {"state": "unknown", "checked_at": db.now_utc().isoformat(),
+               "last_heartbeat_at": None, "reason_code": "health_unavailable"}
+    if config.settings().brand_os_job_queue == "memory":
+        return {**unknown, "reason_code": "test_queue"}
+    try:
+        row = _sync_app_for_defer().connector.execute_query_one(
+            _WORKER_HEALTH_SQL, stale=WORKER_HEARTBEAT_STALE_SECONDS,
+        )
+        if row is None:
+            return unknown
+        return {
+            "state": "alive" if row["alive"] else "stopped",
+            "checked_at": row["checked_at"].isoformat(),
+            "last_heartbeat_at": (row["last_heartbeat_at"].isoformat()
+                                  if row["last_heartbeat_at"] is not None else None),
+            "reason_code": "heartbeat_fresh" if row["alive"] else "heartbeat_stale",
+        }
+    except Exception:
+        _log.warning("Worker heartbeat read unavailable", exc_info=True)
+        return unknown
 
 
 def _seconds(later: datetime, earlier: datetime | None) -> int | None:
@@ -624,15 +647,16 @@ def queue_snapshot(*, since: datetime) -> dict:
       are keyed `None`.
     - `worker_alive`: Contract C (module docstring) — some worker heartbeat within
       `WORKER_HEARTBEAT_STALE_SECONDS`.
-    Memory queue mode (e2e): an empty snapshot with `worker_alive` True."""
+    `worker_health` is the canonical projection; `worker_alive` keeps legacy memory
+    compatibility, which must not be treated as operational evidence."""
+    health = worker_health()
     if config.settings().brand_os_job_queue == "memory":
         return {"jobs": [], "total": 0, "done_today": {}, "failed_today": {},
-                "worker_alive": True}
+                "worker_alive": True, "worker_health": health}
     connector = _sync_app_for_defer().connector
     rows = connector.execute_query_all(_SNAPSHOT_JOBS_SQL)
     finished = connector.execute_query_all(_SNAPSHOT_FINISHED_SQL, since=since)
-    alive_row = connector.execute_query_one(_WORKER_ALIVE_SQL, stale=WORKER_HEARTBEAT_STALE_SECONDS)
-    worker_alive = bool(alive_row and alive_row["alive"])
+    worker_alive = health["state"] == "alive"
 
     far = datetime.max.replace(tzinfo=UTC)
     running = sorted(
@@ -668,4 +692,4 @@ def queue_snapshot(*, since: datetime) -> dict:
         counts[r["type"]][r["org_id"]] = int(r["n"])
     return {"jobs": jobs, "total": len(jobs),
             "done_today": counts["succeeded"], "failed_today": counts["failed"],
-            "worker_alive": worker_alive}
+            "worker_alive": worker_alive, "worker_health": health}

@@ -214,13 +214,64 @@ class WorkerWatchdogTest(unittest.TestCase):
                 for handle in handles:
                     kernel.CloseHandle(handle)
 
-    def test_main_does_nothing_when_port_is_owned_elsewhere(self):
+    def test_live_web_still_starts_and_supervises_worker_before_cleanup(self):
+        calls = []
         with (
+            tempfile.TemporaryDirectory() as directory,
             mock.patch.object(boot_launcher, "_port_is_listening", return_value=True),
+            mock.patch.object(boot_launcher, "_port_status", return_value="alive"),
+            mock.patch.object(boot_launcher, "_LOG_PATH", Path(directory) / "boot.log"),
+            mock.patch.object(boot_launcher, "_WORKER_LOG_PATH", Path(directory) / "worker.log"),
+            mock.patch.object(boot_launcher, "_WorkerWatchdog") as watchdog,
+            mock.patch("uvicorn.run") as web,
+        ):
+            watchdog.return_value.start.side_effect = lambda: calls.append("start")
+            watchdog.return_value.thread.is_alive.side_effect = [True, False]
+            watchdog.return_value.stop_event.wait.side_effect = lambda _: calls.append("supervise")
+            watchdog.return_value.stop.side_effect = lambda: calls.append("stop")
+            boot_launcher.main()
+        self.assertEqual(calls, ["start", "supervise", "stop"])
+        web.assert_not_called()
+
+    def test_external_web_exit_stops_only_owned_worker(self):
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            mock.patch.object(boot_launcher, "_port_is_listening", return_value=True),
+            mock.patch.object(boot_launcher, "_port_status", return_value="refused") as probe,
+            mock.patch.object(boot_launcher, "_LOG_PATH", Path(directory) / "boot.log"),
+            mock.patch.object(boot_launcher, "_WORKER_LOG_PATH", Path(directory) / "worker.log"),
             mock.patch.object(boot_launcher, "_WorkerWatchdog") as watchdog,
         ):
+            watchdog.return_value.thread.is_alive.return_value = True
             boot_launcher.main()
-        watchdog.assert_not_called()
+        watchdog.return_value.start.assert_called_once()
+        watchdog.return_value.stop.assert_called_once()
+        self.assertEqual(probe.call_count, boot_launcher._WEB_STOP_CONFIRMATIONS)
+
+    def test_transient_refusals_and_unknown_probes_do_not_stop_owned_worker(self):
+        statuses = ["refused"] * 5 + ["unknown"] + ["refused"] * 5 + ["alive"]
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            mock.patch.object(boot_launcher, "_port_is_listening", return_value=True),
+            mock.patch.object(boot_launcher, "_port_status", side_effect=statuses) as probe,
+            mock.patch.object(boot_launcher, "_LOG_PATH", Path(directory) / "boot.log"),
+            mock.patch.object(boot_launcher, "_WORKER_LOG_PATH", Path(directory) / "worker.log"),
+            mock.patch.object(boot_launcher, "_WorkerWatchdog") as watchdog,
+        ):
+            watchdog.return_value.thread.is_alive.side_effect = [True] * len(statuses) + [False]
+            boot_launcher.main()
+        self.assertEqual(probe.call_count, len(statuses))
+        self.assertEqual(watchdog.return_value.stop_event.wait.call_count, len(statuses))
+        watchdog.return_value.stop.assert_called_once()
+
+    def test_probe_timeout_is_unknown_and_refusal_is_explicit(self):
+        with mock.patch.object(boot_launcher.socket, "socket") as factory:
+            sock = factory.return_value.__enter__.return_value
+            for code, state in ((0, "alive"), (10061, "refused"), (10060, "unknown")):
+                sock.connect_ex.return_value = code
+                self.assertEqual(boot_launcher._port_status(8710), state)
+            sock.connect_ex.side_effect = OSError("probe unavailable")
+            self.assertEqual(boot_launcher._port_status(8710), "unknown")
 
     def test_web_failure_always_stops_owned_watchdog(self):
         with (

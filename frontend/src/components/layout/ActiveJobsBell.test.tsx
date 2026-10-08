@@ -50,6 +50,7 @@ const QUEUE: ActiveJobsSnapshot = {
   done_today: 12,
   failed_today: 0,
   generated_at: "2026-09-23T02:40:00Z",
+  worker_alive: true,
 };
 
 beforeEach(() => {
@@ -57,6 +58,16 @@ beforeEach(() => {
 });
 
 describe("ActiveJobsBell", () => {
+  it("unknown heartbeat overrides a legacy healthy flag and never gives an all-clear", async () => {
+    vi.mocked(fetchActiveJobs).mockResolvedValue({ ...QUEUE, data: [], total: 0, worker_health: {
+      state: "unknown", checked_at: QUEUE.generated_at, last_heartbeat_at: null, reason_code: "test_queue",
+    } });
+    render(<MemoryRouter><ActiveJobsBell /></MemoryRouter>);
+    await userEvent.click(await screen.findByRole("button", { name: /背景程式狀態無法確認/ }));
+    expect(screen.getByRole("alert").textContent).toContain("還不能確認工作是否繼續");
+    expect(screen.getByRole("alert").textContent).not.toContain("停了");
+  });
+
   it("pill: what runs now and how many of yours wait", async () => {
     vi.mocked(fetchActiveJobs).mockResolvedValue(QUEUE);
     render(<MemoryRouter><ActiveJobsBell /></MemoryRouter>);
@@ -125,7 +136,7 @@ describe("ActiveJobsBell", () => {
     await userEvent.click(pill);
 
     const panel = screen.getByRole("dialog", { name: "背景工作" });
-    expect(within(panel).getByRole("alert").textContent).toContain("排隊狀態讀不到；工作本身沒有停，做好的結果都在");
+    expect(within(panel).getByRole("alert").textContent).toContain("排隊狀態讀不到，還不能確認背景工作是否繼續；已填的資料保留");
     expect(panel.textContent).not.toMatch(/沒有.*背景工作|排隊 0 件/);
 
     await userEvent.click(within(panel).getByRole("button", { name: "重試" }));

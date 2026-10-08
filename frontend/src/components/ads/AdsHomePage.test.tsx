@@ -59,7 +59,8 @@ function home(overrides: Partial<HomeOverview> = {}): HomeOverview {
         cost_per_purchase: 130.31, cap: { value: 450, basis: "own", break_even: 520 }, active_ads: 8, daily_budget: 1200, missing_days: [], sync_state: "ok",
         data_status: { state: "ready", label: "資料已讀齊。", missing_days: [], last_success_at: "2026-09-23T00:40:00Z" }, handoff: null, draft: null },
     ],
-    sync: { last_success_at: "2026-09-23T00:40:00Z", next_at: "2026-09-23T04:40:00Z" },
+    sync: { last_success_at: "2026-09-23T00:40:00Z", next_at: "2026-09-23T04:40:00Z",
+      eligible_at: "2026-09-23T04:40:00Z", worker_health: { state: "alive", checked_at: "2026-09-23T00:40:00Z", last_heartbeat_at: "2026-09-23T00:40:00Z", reason_code: "heartbeat_fresh" } },
     ...overrides,
   };
 }

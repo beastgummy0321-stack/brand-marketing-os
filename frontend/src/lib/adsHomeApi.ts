@@ -16,6 +16,7 @@ import {
   BASE, type CampaignLifecycle, type CampaignNextAction, type CampaignStatus, type CampaignSyncState, type RunningAds,
 } from "./adsApi";
 import type { CampaignDataStatus, CapBasis, TriageGrade } from "./adsTriageApi";
+import type { WorkerHealthProjection } from "./jobsApi";
 
 /** F29 Contract D: `break_even` beside the cap (null when no product break-even is known; on
  * `money.cap` only when every included campaign shares the same one). */
@@ -108,7 +109,14 @@ export interface HomeCampaign {
   draft: HomeDraft | null;
 }
 
-export interface HomeSync { last_success_at: string | null; next_at: string | null }
+export interface HomeSync {
+  last_success_at: string | null;
+  /** An estimate only when a real worker can execute. */
+  next_at: string | null;
+  /** The due rule alone; this does not reserve an execution time. */
+  eligible_at: string | null;
+  worker_health: WorkerHealthProjection;
+}
 
 export interface HomeOverview {
   month: string;

@@ -3,6 +3,7 @@ import { useCallback, useEffect, useId, useRef, useState } from "react";
 import {
   ACTIVE_JOB_KIND_LABELS,
   fetchActiveJobs,
+  workerHealthState,
   type ActiveJob,
   type ActiveJobsSnapshot,
 } from "@/lib/jobsApi";
@@ -67,8 +68,12 @@ function pillText(state: ReadState): Pill {
   }
   // F47 Contract C: with the worker stopped nothing runs and nothing moves up — say that, not
   // 「排隊中・前面還有 0 件」.
-  if (state.snapshot.stalled === true) {
-    return { parts: [{ text: "背景程式停了" }, { text: "・工作還排著", wide: true }], mark: "bad" };
+  const health = workerHealthState(state.snapshot);
+  if (health !== "alive") {
+    if (health === "stopped" && state.snapshot.stalled === true) {
+      return { parts: [{ text: "背景程式停了" }, { text: "・工作還排著", wide: true }], mark: "bad" };
+    }
+    return { parts: [{ text: health === "stopped" ? "背景程式停了" : "背景程式狀態無法確認" }], mark: "bad" };
   }
   const jobs = state.snapshot.data;
   const running = jobs.find((j) => j.status === "running");
@@ -88,7 +93,7 @@ function pillText(state: ReadState): Pill {
   return { parts: [{ text: "沒有背景工作在跑" }], mark: "ok" };
 }
 
-function JobRow({ job, onPick }: { job: ActiveJob; onPick: () => void }) {
+function JobRow({ job, onPick, health }: { job: ActiveJob; onPick: () => void; health: "alive" | "stopped" | "unknown" }) {
   const ahead = job.position - 1;
   return (
     <li className="border-t border-border">
@@ -111,7 +116,7 @@ function JobRow({ job, onPick }: { job: ActiveJob; onPick: () => void }) {
           {label(job)}・{job.brand_name}
         </span>
         <span className="whitespace-nowrap text-[11.5px] text-muted-foreground">
-          {job.status === "running"
+          {health !== "alive" ? (health === "stopped" ? "等待背景程式恢復" : "執行狀態待確認") : job.status === "running"
             ? `進行中・${elapsed(job.waited_seconds)}`
             : ahead > 0
               ? `前面還有 ${ahead} 件`
@@ -133,7 +138,7 @@ function ReadFailedBox({ onRetry }: { onRetry: () => void }) {
       </span>
       <div className="min-w-0 grow">
         <p className="text-[17px] font-semibold">讀取失敗</p>
-        <p className="mt-0.5 text-xs text-muted-foreground">排隊狀態讀不到；工作本身沒有停，做好的結果都在</p>
+        <p className="mt-0.5 text-xs text-muted-foreground">排隊狀態讀不到，還不能確認背景工作是否繼續；已填的資料保留</p>
       </div>
       <Button type="button" variant="outline" size="sm" onClick={onRetry}>
         重試
@@ -247,9 +252,9 @@ export function ActiveJobsBell() {
             <p className="py-3 text-[13px] text-muted-foreground">讀取中…</p>
           ) : (
             <>
-              {state.snapshot.stalled === true && (
+              {workerHealthState(state.snapshot) !== "alive" && (
                 <div className="my-2">
-                  <WorkerStoppedNotice onRecheck={load} />
+                  <WorkerStoppedNotice state={workerHealthState(state.snapshot)} onRecheck={load} />
                 </div>
               )}
               <p className="mb-1.5 mt-0.5 text-[11.5px] text-muted-foreground">
@@ -261,7 +266,7 @@ export function ActiveJobsBell() {
               ) : (
                 <ul>
                   {state.snapshot.data.map((job) => (
-                    <JobRow key={`${job.task_name}:${job.position}`} job={job} onPick={() => close(false)} />
+                    <JobRow key={`${job.task_name}:${job.position}`} job={job} onPick={() => close(false)} health={workerHealthState(state.snapshot)} />
                   ))}
                 </ul>
               )}

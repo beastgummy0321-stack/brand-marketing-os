@@ -342,7 +342,9 @@ class CounterexampleTest(_Pinned):
         self.assertTrue(all(d["cumulative"] is None for d in home["pace"]["daily"]))
         self.assertIsNone(home["pace"]["projected_month_end"])
         self.assertEqual(home["campaigns"], [])
-        self.assertEqual(home["sync"], {"last_success_at": None, "next_at": None})
+        self.assertEqual(home["sync"]["last_success_at"], None)
+        self.assertEqual(home["sync"]["next_at"], None)
+        self.assertEqual(home["sync"]["eligible_at"], None)
 
     def test_zero_purchases_is_a_known_loss_and_no_cost_per_purchase(self):
         conn, org, brand = self.conn, self.org, self.brand
@@ -618,7 +620,18 @@ class SyncBlockTest(_Pinned):
         self.conn.commit()
         sync = self.overview(brand)["sync"]
         self.assertEqual(sync["last_success_at"], success)
-        self.assertEqual(sync["next_at"], updated + timedelta(hours=6))
+        self.assertEqual(sync["eligible_at"], updated + timedelta(hours=6))
+        self.assertIsNone(sync["next_at"])
+        self.assertEqual(sync["worker_health"]["state"], "stopped")
+        for state, reason in (("alive", "heartbeat_fresh"), ("unknown", "health_unavailable"),
+                              ("unknown", "test_queue")):
+            health = {"state": state, "checked_at": success.isoformat(),
+                      "last_heartbeat_at": None, "reason_code": reason}
+            with mock.patch("app.background.worker_health", return_value=health):
+                sync = self.overview(brand)["sync"]
+            self.assertEqual(sync["worker_health"], health)
+            self.assertEqual(sync["eligible_at"], updated + timedelta(hours=6))
+            self.assertEqual(sync["next_at"], sync["eligible_at"] if state == "alive" else None)
 
 
 class RealTriageTest(unittest.TestCase):

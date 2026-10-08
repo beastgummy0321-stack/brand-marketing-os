@@ -255,6 +255,19 @@ describe("ProductOnboarding", () => {
     expect(mockWhat.mock.calls.length).toBeGreaterThan(reads);
   });
 
+  it("unavailable worker health keeps the product form and offers a neutral retry", async () => {
+    mockStatus.mockResolvedValue(status({ prefill_status: "running" }));
+    mockWhat.mockResolvedValue(blankWhat());
+    mockJobs.mockRejectedValue(new Error("unavailable"));
+    renderAt(`/brands/${B}/products/prd_vit/onboarding`);
+    expect(await screen.findByText("背景程式狀態無法確認")).toBeTruthy();
+    expect(screen.queryByText(/背景程式停了/)).toBeNull();
+    expect(screen.getByLabelText("商品名稱")).toBeTruthy();
+    mockJobs.mockResolvedValue(jobs(false));
+    await userEvent.click(screen.getByRole("button", { name: "再檢查一次" }));
+    await waitFor(() => expect(screen.queryByText("背景程式狀態無法確認")).toBeNull());
+  });
+
   it("找不到的商品顯示空狀態", async () => {
     mockStatus.mockRejectedValue(new ApiResponseError("任意文案", 404, {}));
     mockWhat.mockResolvedValue(blankWhat());

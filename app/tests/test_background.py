@@ -24,7 +24,7 @@ import inspect
 import os
 import unittest
 from contextlib import contextmanager
-from datetime import timedelta
+from datetime import datetime, timedelta
 from unittest import mock
 
 import psycopg
@@ -439,6 +439,33 @@ class QueueSnapshotTest(unittest.TestCase):
                     " VALUES (now() - interval '5 seconds')")
         self.assertTrue(self._snapshot()["worker_alive"])
 
+    def test_worker_health_exposes_the_same_checked_projection(self):
+        health = background_module.worker_health()
+        self.assertEqual(health["state"], "stopped")
+        self.assertEqual(health["reason_code"], "heartbeat_stale")
+        self.assertIsNone(health["last_heartbeat_at"])
+        self._queue("INSERT INTO procrastinate_workers (last_heartbeat)"
+                    " VALUES (now() - interval '2 minutes')")
+        stale = background_module.worker_health()
+        self.assertEqual(stale["state"], "stopped")
+        self.assertIsNotNone(stale["last_heartbeat_at"])
+        self._queue("INSERT INTO procrastinate_workers (last_heartbeat) VALUES (now())")
+        fresh = background_module.worker_health()
+        self.assertEqual(fresh["state"], "alive")
+        self.assertEqual(fresh["reason_code"], "heartbeat_fresh")
+        self.assertEqual(set(fresh), {"state", "checked_at", "last_heartbeat_at", "reason_code"})
+        datetime.fromisoformat(fresh["checked_at"])
+
+    def test_failed_heartbeat_read_is_unknown_even_if_jobs_are_readable(self):
+        queue = background_module._sync_app_for_defer()
+        with mock.patch.object(
+            queue.connector, "execute_query_one", side_effect=OSError("unavailable"),
+        ):
+            snapshot = self._snapshot()
+        self.assertFalse(snapshot["worker_alive"])
+        self.assertEqual(snapshot["worker_health"]["state"], "unknown")
+        self.assertEqual(snapshot["worker_health"]["reason_code"], "health_unavailable")
+
     def test_pick_order_positions_and_waits(self):
         a = background_module.app()
         with a.open():
@@ -485,8 +512,11 @@ class QueueSnapshotTest(unittest.TestCase):
                 mock.patch.object(background_module, "_sync_app_for_defer") as queue:
             snap = self._snapshot()
         queue.assert_not_called()
-        self.assertEqual(snap, {"jobs": [], "total": 0, "done_today": {}, "failed_today": {},
-                                "worker_alive": True})
+        self.assertEqual(snap["worker_health"]["state"], "unknown")
+        self.assertEqual(snap["worker_health"]["reason_code"], "test_queue")
+        self.assertEqual({k: v for k, v in snap.items() if k != "worker_health"},
+                         {"jobs": [], "total": 0, "done_today": {}, "failed_today": {},
+                          "worker_alive": True})
 
 
 class WorkerConcurrencyTest(unittest.TestCase):

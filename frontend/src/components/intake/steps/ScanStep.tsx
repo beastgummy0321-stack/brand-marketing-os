@@ -111,7 +111,7 @@ export function ScanStep({ brandId, nav, back, onNext }: { brandId: string; nav:
       ) : (
         <>
           <IntakeJobRow job={{ status: "running", error: null }} runningLabel="正在讀網站…" actions={[]} />
-          {worker.stalled && <WorkerStoppedNotice onRecheck={recheck} />}
+          {(worker.stalled || worker.unavailable) && <WorkerStoppedNotice state={worker.state} onRecheck={recheck} />}
         </>
       )}
 

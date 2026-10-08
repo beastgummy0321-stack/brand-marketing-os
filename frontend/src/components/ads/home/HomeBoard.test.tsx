@@ -7,7 +7,7 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 
-import type { HomeCampaign, HomeOverview } from "@/lib/adsHomeApi";
+import type { HomeCampaign, HomeOverview, HomeSync } from "@/lib/adsHomeApi";
 import type { CloseoutQueueRow, QueueItem, SettleQueueRow, TriageItem } from "@/lib/adsTriageApi";
 import { CampaignRows } from "./CampaignRows";
 import { MonthMoney } from "./MonthMoney";
@@ -57,7 +57,8 @@ function home(overrides: Partial<HomeOverview> = {}): HomeOverview {
       { date: "2026-10-08", kind: "campaign_end", campaign_id: "cmp_daily", name: "日常商品推廣・轉換", ready: null },
     ],
     campaigns: [campaign()],
-    sync: { last_success_at: "2026-09-23T00:40:00Z", next_at: null },
+    sync: { last_success_at: "2026-09-23T00:40:00Z", next_at: null, eligible_at: null,
+      worker_health: { state: "alive", checked_at: "2026-09-23T00:40:00Z", last_heartbeat_at: "2026-09-23T00:40:00Z", reason_code: "heartbeat_fresh" } },
     ...overrides,
   };
 }
@@ -531,7 +532,9 @@ describe("TodayDecisions", () => {
   it("read failure: hero with the last successful sync time and a retry", () => {
     const d = new Date("2026-09-22T14:40:00Z");
     const p = (n: number) => String(n).padStart(2, "0");
-    wrap(<TodayDecisions brandId="b" state={{ status: "error", message: "x" }} syncing={false} recovering={false} sync={{ last_success_at: d.toISOString(), next_at: null }} onRetry={vi.fn()} />);
+    const sync: HomeSync = { last_success_at: d.toISOString(), next_at: null, eligible_at: null,
+      worker_health: { state: "unknown", checked_at: d.toISOString(), last_heartbeat_at: null, reason_code: "health_unavailable" } };
+    wrap(<TodayDecisions brandId="b" state={{ status: "error", message: "x" }} syncing={false} recovering={false} sync={sync} onRetry={vi.fn()} />);
     expect(screen.getByText("今天的判斷讀取失敗")).toBeTruthy();
     expect(screen.getByText(`上次成功 ${p(d.getMonth() + 1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}・已保存的決定都還在`)).toBeTruthy();
     expect(screen.getByRole("button", { name: "重新讀取" })).toBeTruthy();
