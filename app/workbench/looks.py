@@ -13,7 +13,7 @@ from copy import deepcopy
 
 from app.brand_intelligence import repository as bi_repo
 from app.core import settings
-from app.workbench import repository
+from app.workbench import coordinate_vocabulary
 from app.workbench.learning_evidence import base_learning_scope, qualify_learning_evidence
 
 # F53 retains the source owner's ten-event rule. Brief payloads cannot change that policy.
@@ -219,7 +219,7 @@ def current_conditions(conn, org, brand, product_id, *, supplied=None):
     return {**current, "org_id": org, "brand_id": brand, "product_id": selected,
             "org_day": today, "mode": "real", "result_kind": None,
             "currency": None, "attribution": None,
-            "audience_keys": [r["key"] for r in repository.list_coordinate_vocabulary(
+            "audience_keys": [r["key"] for r in coordinate_vocabulary.list_coordinate_vocabulary(
                 conn, org, brand) if r["dimension"] == "audience"],
             "customer_group_ids": [g["id"] for g in bi_repo.list_customer_groups(
                 conn, brand, selected)] if selected else [],

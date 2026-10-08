@@ -11,12 +11,65 @@ from copy import deepcopy
 from datetime import UTC, date, datetime, timedelta
 from unittest.mock import patch
 
+from fastapi.testclient import TestClient
+
+from app import main
 from app.brand_intelligence import repository as bi_repo
 from app.core import db
 from app.workbench import encode_learning_scope, looks
 from app.workbench import repository as workbench_repo
 
 ACTOR = "測試員"
+
+
+class CoordinateVocabularyReadTest(unittest.TestCase):
+    def test_shared_read_preserves_scope_order_shape_and_does_not_seed(self):
+        conn = db.current()
+        brand = bi_repo.create_brand(conn, name="Vocabulary", client_name=None,
+                                     actor=ACTOR, org_id=db.DEV_ORG_ID)["id"]
+        other = bi_repo.create_brand(conn, name="Other vocabulary", client_name=None,
+                                     actor=ACTOR, org_id=db.DEV_ORG_ID)["id"]
+        conn.commit()
+        self.assertEqual(workbench_repo.list_coordinate_vocabulary(conn, db.DEV_ORG_ID, brand), [])
+        self.assertEqual(looks.current_conditions(conn, db.DEV_ORG_ID, brand, None)[
+            "audience_keys"], [])
+        client = TestClient(main.app)
+
+        def create(brand_id, dimension, label, category):
+            response = client.post(f"/api/schedule/brands/{brand_id}/coordinates", json={
+                "dimension": dimension, "label": label, "category": category,
+            })
+            self.assertEqual(response.status_code, 200, response.text)
+            return response.json()
+
+        last = create(brand, "audience", "A without category", "")
+        second = create(brand, "audience", "Z in category", "A")
+        first = create(brand, "audience", "B in category", "A")
+        angle = create(brand, "angle", "Angle", "")
+        foreign = create(other, "audience", "Foreign", "")
+        disabled = client.post(
+            f"/api/schedule/brands/{brand}/coordinates/{second['id']}/disable",
+            json={"disabled": True},
+        )
+        self.assertEqual(disabled.status_code, 200, disabled.text)
+        rows = workbench_repo.list_coordinate_vocabulary(conn, db.DEV_ORG_ID, brand)
+        self.assertEqual([r["key"] for r in rows],
+                         [angle["key"], first["key"], second["key"], last["key"]])
+        self.assertEqual(set(rows[0]), {
+            "dimension", "key", "label", "attributes", "disabled_at", "rejected",
+        })
+        self.assertEqual(rows[0]["attributes"], {})
+        self.assertFalse(rows[0]["rejected"])
+        self.assertIsNotNone(rows[2]["disabled_at"])
+        current = looks.current_conditions(conn, db.DEV_ORG_ID, brand, None)
+        self.assertEqual(current["audience_keys"],
+                         [first["key"], second["key"], last["key"]])
+        self.assertNotIn(foreign["key"], current["audience_keys"])
+        self.assertEqual(workbench_repo.list_coordinate_vocabulary(conn, "other-org", brand), [])
+        self.assertEqual(looks.current_conditions(conn, "other-org", brand, None)[
+            "audience_keys"], [])
+        self.assertIsNone(current["result_kind"])
+        self.assertIsNone(current["conditions"]["target_version"])
 
 
 class AllocateTest(unittest.TestCase):
