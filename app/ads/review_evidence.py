@@ -5,10 +5,10 @@ from datetime import date, timedelta
 from zoneinfo import ZoneInfo
 
 from app import orders, workbench
+from app.ads import ads_learnings, external_sync, review_monitor_source, sell_way
 from app.ads import asset_binding_repository as bindings
 from app.ads import asset_suggestion_policy as policy
 from app.ads import change_control_data as changes
-from app.ads import external_sync, review_monitor_source
 from app.ads.adapters.external import SourceReadError
 from app.ads.external_repository import is_monthly_budget_row
 from app.brand_intelligence import repository as brands
@@ -23,6 +23,14 @@ LIMITATIONS = [
     "前後比較不是素材因果；平台設定相符不代表已改善。",
     "商務記錄日期時區尚未確認，商務與平台日期口徑不保證一致。",
 ]
+
+
+def learning_context(conn, org, brand, campaign_id):
+    """Proposed current context, separate from any historical accepted strategy receipt."""
+    campaign = changes.campaign(conn, org, brand, campaign_id)
+    product = sell_way.of_campaign(campaign)
+    current = ads_learnings.current_conditions(conn, org, brand, product, campaign=campaign)
+    return ads_learnings.evidence_context(conn, org, brand, product, current=current)
 
 
 def _predates_result_columns(row):
@@ -465,6 +473,7 @@ def snapshot(
         "constraints": campaign.get("constraints_json") or {},
         "brand_version": version,
         "knowledge_ids": knowledge,
+        "learning_context": learning_context(conn, org, brand, campaign_id),
         "campaign": {
             "goal_text": campaign.get("goal_text"),
             "objective": objective,

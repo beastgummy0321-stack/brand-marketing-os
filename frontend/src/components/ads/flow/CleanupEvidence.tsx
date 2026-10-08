@@ -17,9 +17,9 @@ type Row = { id: string; name: string | null; ad: QueueCleanupAd | null; mark: M
  * F28-I15: with `drift` (the draft's close list is not the queue row's current one, `cleanupDraft.ts::cleanupDrift`)
  * the card shows the latest proposal — its count, then its close list with the ads the draft did not have marked
  * 新增 — followed by the draft's ads the latest proposal no longer closes, struck through and marked 不關. */
-export function CleanupEvidence({ cleanup, items, picked, drift = null, breakEven = null }: {
+export function CleanupEvidence({ cleanup, items, picked, drift = null, breakEven = null, breakEvenCurrency = null }: {
   cleanup: QueueCleanup | null; items: ChangeItem[]; picked?: QueueCleanupAd[]; drift?: CleanupDrift | null;
-  breakEven?: number | null;
+  breakEven?: number | null; breakEvenCurrency?: string | null;
 }) {
   const rules = useAdsRules();
   const pool = new Map([...(cleanup?.ads ?? []), ...(cleanup?.keep ?? [])].map((ad) => [ad.entity_id, ad]));
@@ -76,7 +76,7 @@ export function CleanupEvidence({ cleanup, items, picked, drift = null, breakEve
                 {row.ad && <CleanupName ad={row.ad} word={cleanupWord(rules, row.ad)} withName={false} />}
               </div>
               {row.ad ? <CleanupGrade ad={row.ad} /> : <span />}
-              <div className="numeric text-right">{row.ad && <CostCell ad={row.ad} word={cleanupWord(rules, row.ad)} withCaption breakEven={breakEven} />}</div>
+              <div className="numeric text-right">{row.ad && <CostCell ad={row.ad} word={cleanupWord(rules, row.ad)} withCaption breakEven={breakEven} breakEvenCurrency={breakEvenCurrency} />}</div>
               {row.mark === "dropped" ? <Chip tone="neutral">不關</Chip> : <Chip tone="bad">關</Chip>}
             </li>
           ))}

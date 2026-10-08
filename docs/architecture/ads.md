@@ -2258,3 +2258,261 @@ claim an active ad. Reuse adapter vocabulary and canonical route builders. No au
 or requirement to spend money. On sync completion, workspace/performance/row detail consume the
 latest generation; a late response may not overwrite newer state or another campaign. Keep folds
 and independent errors intact. Existing reload callbacks must be investigated before adding more.
+
+
+### 6.55 Supervised first-release evidence contract (F53, planned 2026-10-07)
+
+Status: implemented through the approved F53 queue and narrowly reviewed acceptance-tool
+calibration (2026-10-08). This is the authoritative implemented evidence contract; actual
+technical/human/release dispositions remain in the first-release packet and ignored G8 sidecar.
+Scope is supervised own-brand use: defensible proposals, faithful accepted assignments and
+traceable next-period adaptation. F48-F52 remain open; F52's unchanged nine-dimension drill
+is paused and is not replaced by this release gate. No publication, push, paid call or platform
+write is included.
+
+#### Ownership and persistence
+
+Keep the existing learning ledger and public brand-intelligence facade unchanged. All ads
+writers still enter through `ads_learnings.write`. Use its existing `applicability_scope` text
+for an additive, versioned evidence trailer: the exact existing base scope, followed by
+`\n@evidence-v1:` and one canonical JSON object. JSON is serialized on one line (embedded
+newlines escaped). No second ledger, new table, migration or direct cross-owner SQL is planned.
+
+A narrow pure helper in `app/workbench/learning_evidence.py` owns trailer decoding/encoding,
+normalized meaning and qualification for its creative consumers. Export only
+`encode_learning_scope(base_scope, evidence)`,
+`base_learning_scope(scope)`, and
+`qualify_learning_evidence(rows, current, *, min_result_events, max_age_days)`
+through `app.workbench`. It performs no SQL, model call, clock lookup or write. Ads already
+depends on workbench; workbench must never import ads. Ads owns source extraction, numeric
+rules/thresholds, current conditions and the call to that pure helper. Workbench supplies the
+same current-condition shape from its own public brand reads. Reuse existing public facade
+reads; no new legacy capability. Decode malformed/unsupported trailers conservatively,
+retain original history and expose unknown qualification. All existing scope parsers and
+comparisons first consume `base_learning_scope`; preserve coordinate v=2 and visual scope
+semantics. Round-trip, delimiter/Unicode/malformed and old-row fixtures are mandatory.
+
+Trailer shape (all listed members emitted; unknown scalar values are null, never invented):
+- `schema_version:1`, `source_kind:campaign|pause|ab|settle|coordinate|visual`,
+  `source_ref:{campaign_id,ad_id,action_id,entity_id,trial_id}`, `source_version:string|null`;
+- `provenance:platform_observation|user_report|operation_readback|simulation|unknown`;
+- `period:{start:string|null,end:string|null}` (inclusive org-calendar dates);
+- `scope:{product_id:string|null,audience_key:string|null,customer_group_id:string|null,
+  claim_key:string|null,claim_family:performance|brand_fact|operation,
+  objective_family:string|null,result_kind:string|null,currency:string|null,
+  attribution:string|null}`;
+- `conditions:{price_version:string|null,offer_key:string|null,offer_version:string|null,
+  material_version:string|null,target_version:string|null,valid_until:string|null}`;
+- `sample:{result_events:number|null,sufficient:boolean|null}`,
+  `direction:support|contrary|inconclusive`, `limits:string[]`.
+
+The helper current input is explicit: {org_id,brand_id,product_id,org_day,audience_keys:[],
+customer_group_ids:[],result_kind,currency,attribution,conditions:{price_version,
+offers:[{key,version,valid_until}],materials:[{ad_id,version}],target_version},
+mode:real|isolated_simulation}. Unknown scalars are null and unknown menus are empty with an
+explicit conditions_unknown limit. Caller-provided labels are presentation only. The helper
+returns {items:LearningEvidence[],revision,eligible_count}; callers wrap scope label/id/omitted
+into evidence_context. Caller source extractors hash sorted canonical relevant source facts
+and immutable creative/price/offer/target snapshots to obtain versions; no hash from a name,
+job success or read timestamp. Sampling sufficiency is recomputed from known event count and
+the caller's unchanged threshold, never trusted merely because stored confidence says validated.
+
+Sources are qualified from actual observation/source records, not internal campaign origin,
+a successful job, a manually entered sentence or a front-end label. A pause receipt is
+operation_readback. A/B's associated market comparison is a separate qualified observation,
+not established by the pause. User-provided month angles identify a message, not provenance.
+Simulation remains simulation structurally across all tracks, including coordinate and visual.
+Unknown legacy provenance is historical; recover only facts proved by retained source records.
+Do not bulk rewrite old ledger rows or certify origin from text matching.
+
+#### Support and applicability
+
+The compatibility cohort is tenant + brand + product + audience/claim meaning + result kind +
+currency/attribution + relevant condition versions + observation provenance. An unknown
+product is not a product-wide permission. Explicit confirmed brand facts may support multiple
+products as facts, never as product-specific performance. Exact text is not cohort identity.
+Preserve existing `triage.MIN_RESULT_EVENTS=10` and the separate original rank/sample rules;
+do not change grades, budget arithmetic or low-sample verdict acceptance.
+
+Count independent qualified trials, not rows. Replay/action recheck is idempotent. Campaign,
+coordinate, visual, settle and A/B derivatives of the same source trial count once for the
+same claim; overlapping measurement windows do not add independent support. Stable sorting
+uses source period then source ID, never accidental SQL order. Keep independent_count and
+same_direction_count distinct. A new contrary comparable trial resets same-direction support
+to the new observation; older contrary/supporting observations remain inspectable history.
+Inconclusive, unknown, operation, simulation and thin samples cannot promote market support.
+Compatibility transport levels remain observed (one), likely (two), validated (three or more)
+for sufficient independent same-direction market observations. These levels describe scoped
+association; UI/prompt wording never says causality is established or promises promotion after
+one additional repeat. Pause wording names the action and unknown performance cause. Settle
+wording says within/above the declared cost cap for that period, not universally effective.
+
+Compute current eligibility on read from the requested product, org day and relevant known
+price/offer/material/target/measurement conditions. A relevant changed or ended condition is
+revalidation; another product is excluded; expired/superseded/unknown-source results are history.
+Performance older than the existing 180-day visual-result horizon needs revalidation; adopt
+that horizon for ads performance only. Brand facts have no blanket age expiry. Unknown
+decision-critical conditions cannot certify current applicability. Preserve newest-current-
+campaign-verdict behavior; history still includes previous verdicts and original ranks.
+
+`use_state` is usable|history|revalidation|excluded. A usable thin observation can justify
+a labelled test or retained control, not promotion, proven effectiveness or automatic scaling.
+`allowed_uses` is a subset of test|retain_control|market_support|brand_fact|operation.
+An operation receipt allows operation only. Simulation is excluded from real-brand market
+support/proposals; isolated acceptance may exercise the same paths with explicit simulation
+labels. Existing accepted/carry bindings stay readable and recoverable; historical original
+creative can remain a declared control without being falsely promoted to present effectiveness.
+No available eligible evidence is a valid cold start, not a failure or fabricated history.
+
+#### Additive read map and revision identity
+
+Use one normalized `LearningEvidence` projection (required on new server responses):
+`{schema_version:1,id,meaning_revision,display_text,support_label,provenance,
+sources:[{kind,id,version,period:{start,end},label}],
+scope:{product_id,product_label,audience_key,customer_group_id,claim_key,claim_family,
+objective_family,result_kind,currency,attribution},
+conditions,sample,independent_count,same_direction_count,contrary_count,
+use_state,reason_codes:string[],reason_labels:string[],allowed_uses:string[],limits:string[]}`.
+All unspecified source/scalar values are null; counts are backend-owned. meaning_revision
+hashes actual learning_text, normalized evidence, support and eligibility; read timestamp,
+rendered labels and row order are excluded. Source/condition changes must invalidate meaning
+even when the learning ID stays constant. Reason codes include scope_required, other_product,
+unknown_source, conditions_unknown, condition_changed, offer_ended, measurement_stale,
+superseded, insufficient_sample, simulated, operation_only and contradictory_result.
+
+| Existing response / owner | Implemented additive projection |
+|---|---|
+| Campaign budget_basis_json.basis.learnings / strategy + planner_context | Each StrategyBasisLearning gains required evidence; basis gains evidence_context snapshot |
+| GET /api/ads/brands/{brand_id}/learnings / ads_learnings + learning_routes | Each AdsLearning gains evidence; optional sell_way_id query qualifies current use without hiding history |
+| GET .../coordinate-learnings / learning_view + learning_routes | Existing campaigns/groups/next unchanged; each LearningRow gains evidence; top-level evidence_context contains all capped ads/coordinate/visual items and eligible reasons for the same selected scope |
+| Change-set item.learning / ads_learnings.view_for_item + change_control_data | Existing recorded/confidence/count retained; evidence is required and null only when no learning was recorded |
+| Internal review evidence/model_input / review_evidence + review_rounds | Add capped learning_context with the same evidence_context shape; existing evidence hash covers qualification/revision, preventing stale review generation |
+
+`evidence_context:{schema_version:1,revision,scope_product_id:string|null,
+scope_label:string|null,eligible_count:number,items:LearningEvidence[],omitted:number}`
+uses the supplied sell_way_id, else the existing latest next.sell_way_id. Unknown/deleted
+scope produces scope_required and no product-specific eligible count. Strategy always uses
+its selected campaign product. No front-end scope/count inference. Keep campaign/row/nav
+counts separate. Product filtering must also apply to coordinate prompt input and all brief,
+copy, review and visual consumers; their historical data must not silently become current
+performance evidence. Library's original ranks and money remain served as before.
+
+I01 settles these additive shapes and every affected typed factory before UI dispatch.
+Strategy/plan/copy use the same normalized snapshot. decision_context hashes it, not the
+nonexistent ledger `text` key. A stale proposal is blocked on read and rejected on adoption
+with existing strategy_changed conflict semantics. Preserve input on refresh/failure, atomic
+receipts, accepted slots, ordinary same-scope retry and exact original carried copy/images.
+Display snapshots remain historical snapshots; do not silently update their accepted revision.
+Contract S's explicit offer=none remains legal even when offers exist, with a reasoned choice.
+Align the existing department prompt, validator and evidence references; no hard-coded split,
+extra scoring agent or new model arithmetic.
+
+#### Current inventory and dispatch coverage
+
+Static inventory on product HEAD 2375e161 (2026-10-07):
+- Campaign closeout: closeout -> learning.write_learning; separate coordinate and visual
+  writers run through ads_learnings.write. Source cycle is campaign or campaign:ad.
+- Pause/A-B: change_control_verify.check -> record_for_item / record_for_ab_item after the
+  committed setting receipt; runtime rechecks the same action. Cycle is action ID.
+- Month settle: settle.confirm -> ads_learnings.write; cycle is settle:month:entity.
+- Main readers: ads_learnings.list_for_brand/view_for_item; learning_routes;
+  learning_view; coordinate_learning.prompt_view/ranked_section/gate_pairs/keep_ads;
+  planner_context.ads_learnings/prepare/creative_basis/creative_projection;
+  strategy decision_context/generation/served/adoption and plan.
+- Downstream: assets/asset_suggestions/asset_suggestion_policy -> workbench creative context;
+  workbench.prompts.creative_text, jobs image generation and looks.visual_learnings;
+  review_evidence/review_jobs/review_rounds and month_summary/closeout use the same served outcomes. No other direct
+  ledger learning writer was found outside the public facade and ads_learnings.write.
+  context_compiler documents its retired ledger prompt path; do not reactivate it.
+- Backend factories: test_ads_closeout, learning_ledger, learning_flow, learnings_api,
+  coordinate_learning, learning_rank, learning_view, visual_learning, live_creative,
+  settle, planner_context, strategy, strategy_decision, plan, plan_scripted_reply,
+  one_ruler, assets, asset_suggestions, review_cycle/month_summary and workbench
+  looks/image_round/brief/copy/claims suites. Test fixtures use real response shapes.
+- Frontend factories: StrategyTab, PerformanceTab, detail/CampaignDetailPage, LibraryPage,
+  learnings/learnings, ChangeControl, flow/{VerifyPage,AbFlow,CleanupVerifyRows,ConfirmPage,
+  HandoffPage}, review/CopyPage and settle/{SettlePage,SettleResult}. Preserve other screens'
+  behavior; no unrelated redesign. E2E consumers include ads-cold-start, ads-target,
+  guided-advanced and width-overflow. I01 owns shared shapes; UI issues own their screen tests.
+
+Frozen counterexamples: C03/E01 cross-product promotion; C04 simulation promotion;
+R02 400-day-old result; R04 revalidation flag without exclusion; D02 same-ID meaning edit;
+D03 contradictory offer prompt. Additional fixed boundaries: null/zero/unknown source and
+scope, mixed currency/attribution/result families/tenants, overlapping/replayed observations,
+new contrary trial, invalid trailer, expired offer, changed price/material/target, removed
+audience, deterministic ordering, org midnight, thin sample, duplicate action check and
+unchanged accepted carry/none-offer. Probe counts are diagnostic, not a completion percentage.
+
+#### Fixed first-release gates and stopping rule
+
+Expectations are frozen here before code changes. I07 implements one isolated acceptance
+runner using existing drill/F13-F15 helpers; it must not rewrite original drill evidence.
+One controlled brand, product A plus incompatible product B, groups A1/A2, cost cap 300
+in one currency/attribution; periods 2026-07-01..07-31, 08-01..08-31, 09-01..09-30.
+Market-shaped fixtures use an injected platform reader to exercise the platform_observation
+branch; the entire receipt is labelled synthetic, never real market proof. Separate simulation
+fixtures persist provenance=simulation and must remain excluded from real-market support. Preparation freezes observation IDs, context and expected
+transitions; alternative reasoned model allocations are allowed.
+
+G1: July starts from confirmed brand facts, no history, adopts an explicit none-offer test.
+Close with 2 result events and cost-per-result 200: retain original rank/low-sample labels,
+do not promote confidence. August may propose a labelled test/control with uncertainty.
+G2: August contains one sufficient disjoint trial (10 events, cost-per-result 200); inject
+same-trial derivative/replay rows and product-B matches. Only independent product-A support
+counts. September proposal cites actual evidence and changes audience/offer/carry/test intent,
+or states a justified retained choice; rhetorical rewrites alone fail adaptation.
+G3: September has a sufficient contrary trial (10 events, cost-per-result 400). Current
+support cannot monotonically rise. Preserve history and lower support/new hypothesis.
+Before next adoption, change an offer/price/material/target and mutate same-ID learning meaning
+in separate fixtures: each blocks the displayed stale revision, keeps input and allows explicit
+refresh/reconfirmation. Adoption receipt and actual audience/offer/carry/test assignments match.
+G4: Exercise pause/A-B/month/coordinate/visual source qualification, provenance, overlapping
+windows, 400-day history, unknown legacy scope and cold start at source and reader boundaries.
+Preserve money rules and original rankings; no invented fact, causal conclusion or silent input loss.
+G5: Three UI screens match this exact HTML prototype and states at 1024/1920. Reference/build
+pairs, keyboard/focus, loading/empty/error/retry/stale/input-retention and the design five
+questions are separate from function pass. Sample percentages/names never become defaults.
+G6: Diagnose the recorded 60-second provider timeout from retained logs, executable/model/auth
+availability and subprocess behavior before one new bounded real-provider sample through
+the existing gateway. Default call cap stays 60 seconds, tools disabled, synthetic context,
+no direct paid API. Freeze inputs/semantic checklist first; no generation-until-pass or blind
+timeout extension/model switch. Output must respect facts, uncertainty, explicit no-offer
+and bindable slots; no optimal-strategy or profit claim. A fresh failed call stays unverified.
+A different model/provider, timeout policy or external cost is an unresolved change, not
+implicitly authorized by the queue.
+The authorized 2026-10-08 repair round preserves the rejected original sample and freezes
+one new synthetic request after deterministic correction. Require actual task provider/model/type,
+the actually delivered system/messages, strict format plus production executable_decision ready,
+and independent semantic review. Disclose the synthetic daily budget and derive shared capacity
+with existing capacity_of; never widen a ceiling from model output. Product fingerprints include
+the actual ads/workbench department prompts. No output rewriting or blind retries.
+G7: On the selected private release environment, prove genuine login/session-expiry and
+ordinary recovery without forged tokens, browser-originated original-work GET plus loaded
+DOM heading/body and capture/chronology (not API-only/loading proof), plus Postgres backup restore into a separate
+disposable target and schema/row/tenant/asset-reference checks, including restoration and
+byte-hash equality of sample Storage objects into an isolated owned destination. Do not overwrite shared public,
+delete another task's data or expose backup secrets. Existing provider availability is checked.
+No new backup service/framework or public deployment is planned. The user selected this Windows host for local/private use during carve. If its required
+capabilities are unavailable, record G7 unverified and do not call the release eligible.
+G8: On the final code tree, restart the matching backend, run the fixed cycle once and assemble
+source-matched G1-G7 receipts. Commit the tracked packet and scoped documentation closeout
+before one clean Harness feature integration. The tracked packet contains only a pending G8
+pointer to the lead-owned ignored `.harness/scratch/F53/final/` sidecar, never a predicted
+integration HEAD, signature or pass. Its receipt-only verify uses --pre-integration and does
+not demand its own pending integration receipt. After integration succeeds, preserve its actual
+CLI result/exit and `.harness/runtime/integrations/F53.json` receipt with hashes and timestamps
+in that ignored sidecar. The final checker reads those receipts and seals an ignored combined
+packet without changing tracked files, Feature/Issue bytes or HEAD. It recomputes the installed
+Harness integration signature, checks the same successful run/required steps, relevant product
+and runtime/config fingerprints, source evidence and cleanup. Never invoke integrate as a read
+check. Seal before human close; a subsequent close changes HEAD and removes queue inputs, so
+the archived seal then represents its explicitly captured pre-close version. Human acceptance
+remains separate. No cycle/model/auth/restore rerun is performed during sealing. The combined
+packet includes model limits and fixed/remaining/unverified disposition. Manifest suites
+run once through integrate; affected failures may be corrected/rechecked within approved scope.
+Do not begin another full drill/repair campaign after the agreed report boundary. F52 remains
+open and its unrun original acceptance is explicitly recorded.
+
+Release eligibility requires all blocking gates and genuine human UI acceptance. Copy/image
+polish and simulated profit are not gates. Completed issues, historical green checks, a model
+sample or fixture counts do not certify readiness, live delivery, causality or revenue.

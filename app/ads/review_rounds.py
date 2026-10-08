@@ -27,7 +27,22 @@ def evidence_digest(evidence):
 
 def model_input(evidence):
     """What the model reads: `retry_of` only separates a re-run's digest, it is not evidence."""
-    return policy.encode({k: v for k, v in evidence.items() if k != "retry_of"})
+    value = {k: v for k, v in evidence.items() if k != "retry_of"}
+    return policy.encode(policy.bounded_learning_input(
+        value, policy.INPUT_CHARS - len(PROMPT.read_text(encoding="utf-8")) - 32,
+    ))
+
+
+def check_learning_context(conn, review):
+    """Recheck eligibility before sending or using a delayed result; retain the snapshot."""
+    saved = (review.get("evidence_json") or {}).get("learning_context")
+    if saved is None:
+        return  # Existing rounds without learning context remain readable as original evidence.
+    current = review_evidence.learning_context(
+        conn, review["org_id"], review["brand_id"], review["campaign_id"],
+    )
+    if saved.get("revision") != current["revision"]:
+        raise ValueError("學習的適用條件已更新，本回未採用；請重新建立檢討。")
 
 
 def _period_figures(period):

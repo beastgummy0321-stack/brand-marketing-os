@@ -603,6 +603,13 @@ per-offering-type table: the kind of thing being sold is a row's numbers, not a 
 written and read only through `app/brand_intelligence/repository.py`; the product-onboarding capability lives in `intake`, which may
 call the ads public entry for `breakeven_cpa` and `workbench.validate_claims` for 食安法 flags. `intake_product_prefill` is intake's own.
 
+For F53's implemented additive evidence projection, see [ads §6.55](docs/architecture/ads.md#655-supervised-first-release-evidence-contract-f53-planned-2026-10-07) and
+[workbench §5.19](docs/architecture/workbench.md#519-first-release-learning-qualification-f53-planned-2026-10-07). The
+existing scope field carries versioned metadata; no schema ownership changes or second ledger.
+The pure workbench helper is exported through its existing public entry, which ads may already
+use. Ads prepares observations/current conditions; workbench qualifies them without reverse
+imports, SQL or model calls. These F53 changes are implemented; actual first-release/human acceptance remains separate in the packet.
+
 `learning_ledger` stays where it is — in `brand_intelligence`, which is legacy. It is brand
 knowledge shown in 品牌智庫, not ads bookkeeping, so `ads` does not own it and does not write it
 with SQL: `app/brand_intelligence/repository.py` (already a legacy facade, already registered for
@@ -620,7 +627,8 @@ other dead tables (`decision`, `strategy_hypothesis`, `campaign_period_budget_ve
 `brand_dismissed_calendar_category`) were dropped in F31-I09 (2026-09-26).
 
 Two cross-module raw-SQL reads exist and are deliberate, pre-dating the manifest:
-`app/workbench/repository.py::list_coordinate_vocabulary` reads `brand_coordinate`/`feedback`
+`app/workbench/repository.py::list_coordinate_vocabulary` delegates to the private
+`app/workbench/coordinate_vocabulary.py` leaf shared with looks; it reads `brand_coordinate`/`feedback`
 (schedule's tables) read-only rather than importing `app.schedule`, which would reverse the
 dependency direction. They are recorded here rather than declared as owned resources; the layer
 scan in `app/tests/test_architecture_boundaries.py` remains the tripwire for new ones.

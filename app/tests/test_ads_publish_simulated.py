@@ -40,10 +40,11 @@ class SimulatedPublishTestBase(unittest.TestCase):
         self.today = coresettings.today_for_org(web.conn, org_id=self.org_id)
 
     def _campaign(self, *, start_date=None, end_date=None, groups: int = 2,
-                  ads_per_group: int = 2) -> dict:
+                  ads_per_group: int = 2, manual_cap: bool = False) -> dict:
         campaign = ads_repo.create_campaign(web.conn, self.org_id, self.brand_id, {
             "name": "測試 Campaign", "goal_text": "測試模擬發布", "objective": "購買",
             "target_cost": 300,
+            "context_json": {"field_sources": {"cap": "user"}} if manual_cap else {},
             "start_date": start_date, "end_date": end_date, "status": "draft",
         }, created_by=ACTOR)
         for g in range(groups):
@@ -284,7 +285,13 @@ class GenerateOutcomesDeterministicTest(SimulatedPublishTestBase):
         rows_b = self._outcome_rows(detail_b["id"])
         self.assertTrue(rows_a)
         self.assertEqual(len(rows_a), len(rows_b))
-        _skip = ("entity_id", "observed_at")
+        ids_a = {r["observation_id"] for r in rows_a}
+        ids_b = {r["observation_id"] for r in rows_b}
+        self.assertEqual(len(ids_a), len(rows_a))
+        self.assertEqual(len(ids_b), len(rows_b))
+        self.assertTrue(all(ids_a | ids_b))
+        self.assertTrue(ids_a.isdisjoint(ids_b))
+        _skip = ("entity_id", "observed_at", "observation_id")
         stripped_a = [{k: v for k, v in r.items() if k not in _skip} for r in rows_a]
         stripped_b = [{k: v for k, v in r.items() if k not in _skip} for r in rows_b]
         self.assertEqual(stripped_a, stripped_b)

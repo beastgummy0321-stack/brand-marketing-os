@@ -70,7 +70,7 @@ function changeItem(overrides: Partial<ChangeItem> = {}): ChangeItem {
     target: { id: "aex_1", name: "1150706 健身情境單圖", platform: "meta", source_account: "acc_1", native_kind: "ad", native_id: "native_1" },
     before: { status: "PAUSED" }, after: { status: "PAUSED" }, reason: "花費超過停損線（目標 × 3）仍未達成目標",
     verification_state: "pending", evidence_json: {}, reported_at: null, first_observed_at: null, verified_at: null,
-    platform_url: "https://adsmanager.facebook.com/adsmanager/manage/ads?act=1&selected_ad_ids=native_1",
+    learning: {recorded: false, confidence: null, count: 0, evidence: null}, platform_url: "https://adsmanager.facebook.com/adsmanager/manage/ads?act=1&selected_ad_ids=native_1",
     ...overrides,
   };
 }
@@ -157,7 +157,7 @@ describe("HandoffPage（F22-I03）三種 kind", () => {
 describe("HandoffPage（F22-I03）沒有 platform_url 時退回複製編號", () => {
   it("換成標的名稱＋原生編號＋複製編號按鈕，沒有「打開平台」連結", async () => {
     vi.mocked(changeApi.getChangeControl).mockResolvedValue({
-      targets: [], change_sets: [changeSet({ items: [changeItem({ platform_url: null })] })],
+      targets: [], change_sets: [changeSet({ items: [changeItem({ learning: {recorded: false, confidence: null, count: 0, evidence: null}, platform_url: null })] })],
     });
     renderAt(handoffPath());
     await screen.findByText("打開平台上的這則廣告");
@@ -332,7 +332,7 @@ describe("HandoffPage（F27-I15 Contract F）cleanup kind", () => {
     return changeSet({
       items: [
         changeItem({ id: "item_low1", target_id: "aex_low1", target: { id: "aex_low1", name: "1150701 情境圖 A", platform: "meta", source_account: "acc_1", native_kind: "ad", native_id: "native_low1" }, platform_url: "https://adsmanager.facebook.com/x?id=low1" }),
-        changeItem({ id: "item_low2", target_id: "aex_low2", target: { id: "aex_low2", name: "1150702 情境圖 B", platform: "meta", source_account: "acc_1", native_kind: "ad", native_id: "native_low2" }, platform_url: null }),
+        changeItem({ id: "item_low2", target_id: "aex_low2", target: { id: "aex_low2", name: "1150702 情境圖 B", platform: "meta", source_account: "acc_1", native_kind: "ad", native_id: "native_low2" }, learning: {recorded: false, confidence: null, count: 0, evidence: null}, platform_url: null }),
       ],
     });
   }

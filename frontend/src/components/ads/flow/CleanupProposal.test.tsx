@@ -38,6 +38,7 @@ function ad(id: string, name: string, grade: QueueCleanupAd["grade"], spend: num
     entity_id: id, name, thumbnail_url: null, spend_7d: null, grade, cost_per_result: cost, spend, result_count: results, daily_spend: null, rejected_before: null,
     rank: place?.[0] ?? null, of: place?.[1] ?? null, sales: place === null ? null : results, few,
     verdict, verdict_label: verdict === null ? null : verdict === "keep" ? "留下" : "換掉", flags: few ? ["樣本少"] : [], reason_text: reason,
+    currency: "TWD", cap_comparison: {basis: "own", currency: "TWD", reason: null, message: null},
   };
 }
 
@@ -70,7 +71,8 @@ function triageItem(entityId: string, reasonCode: string, gradeLabel = ""): Tria
     entity_id: entityId, native_id: `n_${entityId}`, name: entityId, campaign_id: "cmp_1", campaign_name: "c", thumbnail_url: null,
     class: "flat", label: "持平", reason_code: reasonCode, grade: "insufficient", grade_label: gradeLabel, previous_grade: null, grade_move: null,
     window: { start: "2026-09-10", end: "2026-09-23", days: 14, previous_start: "2026-08-27", previous_end: "2026-09-09", extended_from: null },
-    target: { value: 450, basis: "own", result_kind: "purchase", result_label: "購買", missing: [] },
+    target: { value: 450, basis: "own", result_kind: "purchase", result_label: "購買", missing: [],
+      cap_unit: {basis: "own", currency: "TWD"}, break_even_unit: {basis: "break_even", currency: "TWD"} },
     current: { spend: 1, result_count: 0, cost_per_result: null, result_kind: "purchase", result_label: "購買", derived_zero_days: 0, reason: null },
     previous: { spend: null, result_count: null, cost_per_result: null, result_kind: "purchase", result_label: "購買", derived_zero_days: 0, reason: null },
     change_pct: null, sample: { gate: false, spend_multiple: null, days_with_events: 0 },
@@ -129,6 +131,53 @@ beforeEach(() => {
 });
 
 describe("CleanupProposal（F28-I11）", () => {
+  it.each([
+    {currency: "USD", reason: "cap_currency_mismatch"},
+    {currency: null, reason: "cap_currency_unknown"},
+    {currency: "TWD", reason: undefined},
+  ])("does not put unverified/mismatched row $currency / $reason on the ruler", async ({currency, reason}) => {
+    const original = vivian.close[0];
+    const changed = {...original, currency, cap_comparison: reason === undefined ? undefined : {
+      basis: "own", currency: "TWD", reason, message: "來源幣別不能比較",
+    }};
+    const {container} = renderProposal(cleanup({ads: [changed], keep: []}));
+    await screen.findByText("每日 1,100 撐 4 則");
+    const ruler = container.querySelector('[data-slot="target-ruler"]')!;
+    expect(within(ruler as HTMLElement).queryByRole("button", {name: new RegExp(`^${original.name}｜`)})).toBeNull();
+    expect(within(ruler as HTMLElement).getByText(original.name!)).toBeTruthy();
+    expect(ruler.querySelector('em.bg-danger')).toBeNull();
+    expect(orderRows()).toHaveLength(1);
+    expect(within(orderRows()[0]).getByText("關")).toBeTruthy();
+    if (currency !== "TWD") {
+      expect(orderRows()[0].querySelector('[data-slot="money-tag"]')).toBeNull();
+      expect(within(orderRows()[0]).getByText(currency === null ? "522 幣別未知" : "522 USD")).toBeTruthy();
+    }
+  });
+
+  it("keeps known USD comparisons and blocks a foreign break-even line without reordering", async () => {
+    const c = cleanup({ads: vivian.close.map(ad => ({...ad, currency: "USD",
+      cap_comparison: {basis: "own", currency: "USD", reason: null, message: null}})), keep: []});
+    // The selected queue target, not the brand or account, owns the ruler unit.
+    const originalTarget = row(c).triage.target;
+    const targeted = {...row(c), triage: {...row(c).triage, target: {...originalTarget,
+      cap_unit: {basis: "own", currency: "USD"}, break_even_unit: {basis: "break_even", currency: "TWD"}}}};
+    function CurrencyHarness() {
+      const pick = useCleanupPick(c);
+      return <CleanupProposal brandId="brd_1" campaignId="cmp_1" item={targeted} position={null} homeHref="/brands/brd_1/ads" pick={pick}/>;
+    }
+    const {container} = render(<MemoryRouter><CurrencyHarness/></MemoryRouter>);
+    await screen.findByText("每日 1,100 撐 4 則");
+    expect(container.querySelector('[data-part="cap-mark"]')?.textContent).toBe("上限 450 USD");
+    expect(container.querySelector('[data-part="break-even-mark"]')).toBeNull();
+    expect(screen.getAllByText("關", {selector: "em"})).toHaveLength(3);
+    expect(orderRows().map(row => row.getAttribute("data-ad"))).toEqual(c.ads.map(ad => ad.entity_id));
+    expect(container.querySelector('[data-slot="money-tag"]')).toBeNull();
+    await userEvent.click(screen.getByText("進階：自己挑要關哪幾則"));
+    const fold = screen.getByText("進階：自己挑要關哪幾則").closest("details")!;
+    expect(fold.querySelector('[data-slot="money-tag"]')).toBeNull();
+    expect(within(fold).getByText("每筆 522 USD")).toBeTruthy();
+  });
+
   it("Vivian 形狀：關 3 則、留 4 則，照後端給的排名順序印（名次、成交、樣本少、原因句），不在前端重排", async () => {
     renderProposal(cleanup());
     expect(await screen.findByText("每日 1,100 撐 4 則")).toBeTruthy();

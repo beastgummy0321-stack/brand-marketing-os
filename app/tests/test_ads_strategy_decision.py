@@ -157,6 +157,57 @@ def bind_fixture(conn, org, brand, campaign_id, reply=None):
 
 
 class DecisionRegressionTest(unittest.TestCase):
+    def test_provider_acceptance_requires_a_ready_production_decision(self):
+        from scripts.drill import first_release_acceptance as runner
+
+        frozen = runner.provider_input()
+        original = frozen["output_shape"]
+        valid = {"status": "succeeded", "rendered_output": json.dumps(original)}
+        checked = runner.validate_provider_output(valid)
+        self.assertEqual(checked["status"], "contract-pass")
+        self.assertEqual(checked["decision"]["feasibility"]["state"], "ready")
+        self.assertEqual(frozen["capacity"], planner_context.capacity_of(300, 300))
+        for mutation in ("role-audience", "duplicate-id", "unallocated-role", "missing-role",
+                         "over-capacity", "blank-rationale", "blank-intent", "missing-nullable"):
+            with self.subTest(mutation=mutation):
+                reply = deepcopy(original)
+                slot = reply["slots"][0]
+                if mutation in ("role-audience", "duplicate-id"):
+                    reply["slots"].append({**slot, "id": "another", "customer_group_id": "A2"
+                                           if mutation == "role-audience" else "A1"})
+                    if mutation == "duplicate-id":
+                        reply["slots"][1]["id"] = slot["id"]
+                elif mutation == "unallocated-role":
+                    slot["role"] = "explore"
+                elif mutation == "missing-role":
+                    reply["allocation"][0]["pct"] = 50
+                    reply["allocation"].append({"role": "explore", "pct": 50,
+                                                "rationale": "Distinct test."})
+                elif mutation == "over-capacity":
+                    reply["slots"] += [{**slot, "id": "another"}, {**slot, "id": "extra"}]
+                elif mutation == "blank-rationale":
+                    slot["rationale"] = " "
+                elif mutation == "blank-intent":
+                    slot["test_intent"] = " "
+                else:
+                    del slot["carry_from_ad_id"]
+                task = {"status": "succeeded", "rendered_output": json.dumps(reply)}
+                self.assertEqual(runner.validate_provider_output(task)["status"], "unverified")
+
+    def test_preserved_provider_invalid_number_and_object_alternative_shapes_stay_refused(self):
+        from scripts.drill import first_release_acceptance as runner
+
+        for mutation in ("number", "alternative-object", "both"):
+            with self.subTest(mutation=mutation):
+                reply = deepcopy(runner.provider_input()["output_shape"])
+                if mutation in ("number", "both"):
+                    reply["unknowns"] = ["觀測到的 2 個 result events 是否可重現未知。"]
+                if mutation in ("alternative-object", "both"):
+                    reply["alternatives"] = [{"offer_key": "shipping", "status": "尚未測試"}]
+                self.assertIsNone(strategy._validate_reply(reply, frozenset({"new", "explore"})))
+                task = {"status": "succeeded", "rendered_output": json.dumps(reply)}
+                self.assertEqual(runner.validate_provider_output(task)["status"], "unverified")
+
     def test_strategy_keeps_explicit_slots(self):
         slot = {
             "id": "slot-explore",
@@ -349,6 +400,35 @@ class ExecutableDecisionAcceptanceTest(unittest.TestCase):
             expected_revision=decision["revision"],
             operation_id=operation,
         )
+
+    def test_same_learning_id_changed_meaning_blocks_before_adoption_and_reconfirmation_works(self):
+        campaign = self.campaign()
+        learned = bi_repo.record_learning(
+            web.conn, self.brand, actor="tester", learning_text="Original limited observation",
+            product_id=self.way["id"], applicability_scope="brand", source_track="ads",
+            confidence="validated", sample_size="10",
+        )
+        decision = self.propose(campaign, [self.slot("new", self.people[0]["id"], "none")])
+        read = bi_repo.list_learnings
+
+        def changed(*args, **kwargs):
+            return [{**row, "learning_text": "Changed observation under the same ID",
+                     "needs_revalidation": True} if row["id"] == learned["id"] else row
+                    for row in read(*args, **kwargs)]
+
+        with mock.patch.object(bi_repo, "list_learnings", side_effect=changed):
+            detail = ads_repo.campaign_detail(web.conn, self.org, self.brand, campaign["id"])
+            shown = detail["budget_basis_json"]["strategy"]["decision"]
+            self.assertIn("strategy_changed", {r["code"] for r in shown["feasibility"]["reasons"]})
+            with self.assertRaises(plan.StrategyConflict) as failure:
+                self.adopt(campaign, decision)
+            self.assertEqual(str(failure.exception), "strategy_changed")
+            self.assert_empty(campaign)
+            again = self.propose(campaign, [self.slot("new", self.people[0]["id"], "none")])
+            self.assertNotEqual(again["revision"], decision["revision"])
+            self.adopt(campaign, again, operation="reconfirmed-meaning")
+        groups = ads_repo.campaign_detail(web.conn, self.org, self.brand, campaign["id"])["groups"]
+        self.assertEqual(groups[0]["ads"][0]["offer_key"], "none")
 
     def test_served_labels_follow_each_binding_without_mutating_saved_decision(self):
         prior, _ = self.previous()

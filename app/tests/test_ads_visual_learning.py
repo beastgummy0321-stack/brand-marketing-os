@@ -19,6 +19,7 @@ from app.core import db as coredb
 from app.core import settings as coresettings
 from app.shared import web
 from app.tests.fixtures.ads_external import outcome_seed
+from app.workbench import base_learning_scope
 
 ACTOR = "測試員"
 
@@ -228,7 +229,7 @@ class AudienceEditedAfterDispatchTest(VisualLearningTestBase):
 
         rows = bi_repo.list_learnings(self.conn, self.brand_id, source_track="visual")
         self.assertEqual(
-            [r["applicability_scope"] for r in rows],
+            [base_learning_scope(r["applicability_scope"]) for r in rows],
             ["visual；audience=cold_unaware；look=phone_raw"],
         )
         # The coordinate edit itself was kept.
@@ -281,15 +282,16 @@ class SecondCampaignSameWinnerUpgradesTest(VisualLearningTestBase):
         closeout.close(self.conn, self.org_id, self.brand_id, campaign["id"], actor=ACTOR)
         return campaign
 
-    def test_same_winner_twice_makes_it_likely_then_flipping_expires_the_newest(self):
+    def test_unknown_conditions_never_promote_or_retire_old_winners(self):
         self._run()  # phone_raw wins, observed
         self._run()  # phone_raw wins again, likely
 
         rows = bi_repo.list_learnings(self.conn, self.brand_id, source_track="visual")
-        phone_rows = [r for r in rows if r["applicability_scope"].endswith("look=phone_raw")]
+        phone_rows = [r for r in rows
+                      if base_learning_scope(r["applicability_scope"]).endswith("look=phone_raw")]
         self.assertEqual(len(phone_rows), 2)
         confidences = sorted(r["confidence"] for r in phone_rows)
-        self.assertEqual(confidences, ["likely", "observed"])
+        self.assertEqual(confidences, ["observed", "observed"])
 
         # 第三次反過來,studio_hero 贏
         self._run(look_a="studio_hero", look_b="phone_raw")
@@ -297,17 +299,18 @@ class SecondCampaignSameWinnerUpgradesTest(VisualLearningTestBase):
         all_rows = bi_repo.list_learnings(
             self.conn, self.brand_id, source_track="visual", include_expired=True,
         )
-        phone_rows = [r for r in all_rows if r["applicability_scope"].endswith("look=phone_raw")]
-        studio_rows = [r for r in all_rows if r["applicability_scope"].endswith("look=studio_hero")]
+        phone_rows = [r for r in all_rows
+                      if base_learning_scope(r["applicability_scope"]).endswith("look=phone_raw")]
+        studio_rows = [r for r in all_rows if base_learning_scope(
+            r["applicability_scope"]).endswith("look=studio_hero")]
         self.assertEqual(len(studio_rows), 1)
         self.assertEqual(studio_rows[0]["confidence"], "observed")
         self.assertEqual(len(phone_rows), 2)
         expired = [r for r in phone_rows if r["expired"]]
         non_expired = [r for r in phone_rows if not r["expired"]]
-        self.assertEqual(len(expired), 1)
-        self.assertEqual(len(non_expired), 1)
-        self.assertEqual(expired[0]["confidence"], "likely")
-        self.assertEqual(non_expired[0]["confidence"], "observed")
+        self.assertEqual(len(expired), 0)
+        self.assertEqual(len(non_expired), 2)
+        self.assertEqual([r["confidence"] for r in non_expired], ["observed"] * 2)
 
         # 第四次,phone_raw 再贏一次——只剩一條沒過期的舊 phone_raw 學習,新的一條該是
         # likely（1 條倖存 + 這條 = 2）,不是 validated（要 3 條才到 validated）。
@@ -316,11 +319,12 @@ class SecondCampaignSameWinnerUpgradesTest(VisualLearningTestBase):
         all_rows = bi_repo.list_learnings(
             self.conn, self.brand_id, source_track="visual", include_expired=True,
         )
-        phone_rows = [r for r in all_rows if r["applicability_scope"].endswith("look=phone_raw")]
+        phone_rows = [r for r in all_rows
+                      if base_learning_scope(r["applicability_scope"]).endswith("look=phone_raw")]
         self.assertEqual(len(phone_rows), 3)
         non_expired = [r for r in phone_rows if not r["expired"]]
-        self.assertEqual(len(non_expired), 2)
-        self.assertEqual(sorted(r["confidence"] for r in non_expired), ["likely", "observed"])
+        self.assertEqual(len(non_expired), 3)
+        self.assertEqual(sorted(r["confidence"] for r in non_expired), ["observed"] * 3)
 
 
 class DeviceOnlyDifferenceWritesDeviceLearningTest(VisualLearningTestBase):
@@ -404,19 +408,19 @@ class LowSampleIsComparedAndShownTest(VisualLearningTestBase):
         visual_rows = bi_repo.list_learnings(self.conn, self.brand_id, source_track="visual")
         self.assertEqual(len(visual_rows), 1)
         row = visual_rows[0]
-        self.assertTrue(row["applicability_scope"].endswith("look=phone_raw"))
+        self.assertTrue(base_learning_scope(row["applicability_scope"]).endswith("look=phone_raw"))
         self.assertEqual(row["sample_size"], "低")
         self.assertIn("樣本低", row["learning_text"])
         self.assertEqual(row["confidence"], "observed")
 
-    def test_two_low_sample_campaigns_with_the_same_winner_count_as_two(self):
-        # The sample is shown, never a gate: the visual level counts winners as before.
+    def test_low_sample_winners_remain_observed_without_independent_sufficient_support(self):
         self._close_low_sample_campaign()
         self._close_low_sample_campaign()
 
         rows = bi_repo.list_learnings(self.conn, self.brand_id, source_track="visual")
-        phone = [r for r in rows if r["applicability_scope"].endswith("look=phone_raw")]
-        self.assertEqual(sorted(r["confidence"] for r in phone), ["likely", "observed"])
+        phone = [r for r in rows
+                 if base_learning_scope(r["applicability_scope"]).endswith("look=phone_raw")]
+        self.assertEqual(sorted(r["confidence"] for r in phone), ["observed", "observed"])
         self.assertEqual({r["sample_size"] for r in phone}, {"低"})
 
     def test_untracked_purchases_write_no_winner_and_say_why(self):
@@ -442,7 +446,7 @@ class LowSampleIsComparedAndShownTest(VisualLearningTestBase):
 
         rows = bi_repo.list_learnings(self.conn, self.brand_id, source_track="visual")
         # No look is named a winner; the only row is the 看不出 note, and it names the cause.
-        self.assertEqual([r["applicability_scope"] for r in rows],
+        self.assertEqual([base_learning_scope(r["applicability_scope"]) for r in rows],
                          ["visual；audience=cold_unaware；look=看不出"])
         self.assertIn("成效未追蹤", rows[0]["learning_text"])
         self.assertNotIn("樣本", rows[0]["learning_text"])
@@ -493,13 +497,15 @@ class DowngradeRequiresComparableStrictBestTest(VisualLearningTestBase):
             self.conn, self.brand_id, source_track="visual", include_expired=True,
         )
         self.assertEqual(
-            [r for r in rows if r["applicability_scope"].endswith("look=看不出")], [],
+            [r for r in rows
+             if base_learning_scope(r["applicability_scope"]).endswith("look=看不出")], [],
         )
-        phone_rows = [r for r in rows if r["applicability_scope"].endswith("look=phone_raw")]
+        phone_rows = [r for r in rows
+                      if base_learning_scope(r["applicability_scope"]).endswith("look=phone_raw")]
         self.assertEqual(len(phone_rows), 2)
         self.assertFalse(any(r["expired"] for r in phone_rows))
         newest = max(phone_rows, key=lambda r: r["learned_at"])
-        self.assertEqual((newest["confidence"], newest["sample_size"]), ("likely", "低"))
+        self.assertEqual((newest["confidence"], newest["sample_size"]), ("observed", "低"))
 
     def test_new_best_downgrades_every_compared_loser_the_low_sample_one_included(self):
         self._establish_phone_raw_winner()
@@ -531,13 +537,15 @@ class DowngradeRequiresComparableStrictBestTest(VisualLearningTestBase):
         rows = bi_repo.list_learnings(
             self.conn, self.brand_id, source_track="visual", include_expired=True,
         )
-        studio_rows = [r for r in rows if r["applicability_scope"].endswith("look=studio_hero")]
+        studio_rows = [r for r in rows if base_learning_scope(
+            r["applicability_scope"]).endswith("look=studio_hero")]
         self.assertEqual(len(studio_rows), 1)
         self.assertFalse(studio_rows[0]["expired"])
         self.assertEqual(studio_rows[0]["sample_size"], "低")  # the smallest compared bucket
-        phone_rows = [r for r in rows if r["applicability_scope"].endswith("look=phone_raw")]
+        phone_rows = [r for r in rows
+                      if base_learning_scope(r["applicability_scope"]).endswith("look=phone_raw")]
         self.assertEqual(len(phone_rows), 1)
-        self.assertTrue(phone_rows[0]["expired"])  # the low-sample loser was compared too
+        self.assertFalse(phone_rows[0]["expired"])
 
 
 class DifferentAudiencesWriteNoVisualLearningTest(VisualLearningTestBase):

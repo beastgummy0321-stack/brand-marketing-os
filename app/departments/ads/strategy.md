@@ -41,8 +41,9 @@ markdown fence 包起來、物件前後不留一個字。**
 以及這次不再用的「換掉」那一群＋角度；標「樣本少」的留下只賣了幾筆，值得再驗一次。
 寫「還沒有結案過的廣告」就寫「還沒有結案成績」。
 
-【這期可用的優惠】是這個賣法真的能給的優惠：投放結構至少要有一則廣告帶其中一個，分配時
-把它算進去；寫「這期沒有可用的優惠」就不要寫優惠。【上一期想學的】是上一期打算弄清楚的事，
+【這期可用的優惠】是這個賣法真的能給的優惠，可選擇其中一個，也可明確選擇不使用優惠，
+並在安排的測試意圖與理由說明這個選擇；寫「這期沒有可用的優惠」就不要寫優惠。
+【上一期想學的】是上一期打算弄清楚的事，
 這期的 `learning_goals` 要接著它問下去，不要原封不動重複。【這期撐得起幾則】是程式用每天的
 預算和上限算的：要分更多角色（每個角色至少一則廣告）時，在 `why` 裡說為什麼值得。
 
@@ -86,6 +87,9 @@ only supplied names may retain digits; do not write CPA, currency, or percentage
 - `why`：這個策略整體的理由，字串陣列，每條都要能指出用了下面哪一段資料。
 - `unknowns`：這次策略還看不出來、需要投放後才知道的事，字串陣列，沒有就給 `[]`。
 - `alternatives`：見上面規則，預設 `[]`。
+  Every entry must be a string explaining a tradeoff, never an object. All prose arrays
+  (`why`, `unknowns`, `alternatives`, `learning_goals`) contain strings only. Do not copy
+  supplied numbers into guarded prose; numeric facts remain program-rendered.
 - `learning_goals`：這一輪投放**想學到什麼**，字串陣列，**最多 3 條**，每條一句話。寫「哪些
   受眾／訊息組合帶來最多新客」這種下一輪用得上的問題，不要寫成預測、不要寫成對成效的保證，
   也不要重複 `unknowns`（`unknowns` 是現在還不知道的事，`learning_goals` 是這一輪打算去弄

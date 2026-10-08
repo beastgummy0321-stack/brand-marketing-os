@@ -17,7 +17,7 @@ from datetime import timedelta
 from fastapi.testclient import TestClient
 
 import app.main as main
-from app.ads import closeout, coverage, external_repository, jobs, plan
+from app.ads import ads_learnings, closeout, coverage, external_repository, jobs, plan
 from app.ads import repository as ads_repo
 from app.brand_intelligence import repository as bi_repo
 from app.core import db as coredb
@@ -123,6 +123,10 @@ class BeatTargetClosesAchievedTest(CloseoutTestBase):
         learnings = bi_repo.list_learnings(self.conn, self.brand_id)
         self.assertEqual(len(learnings), 1)
         self.assertEqual(learnings[0]["confidence"], "observed")
+        source = ads_learnings.stored_evidence(learnings[0])
+        self.assertEqual(source["source_kind"], "campaign")
+        self.assertEqual(source["period"], {"start": start.isoformat(),
+                                         "end": self.complete_day.isoformat()})
         self.assertIn("每筆成本上限 300", learnings[0]["learning_text"])
         self._facts_and_rules_untouched()
 
@@ -256,7 +260,8 @@ class LowSampleIsShownNeverAVerdictSwitchTest(CloseoutTestBase):
         closeout.close(self.conn, self.org_id, self.brand_id, again["id"], actor=ACTOR)
         by_cycle = {row["source_cycle_id"]: row for row in bi_repo.list_learnings(
             self.conn, self.brand_id)}
-        self.assertEqual(by_cycle[again["id"]]["confidence"], "likely")
+        # Repeated unknown-source fixtures, without launch conditions, cannot certify support.
+        self.assertEqual(by_cycle[again["id"]]["confidence"], "observed")
 
 
 class MetaUntrackedPurchasesCloseInconclusiveNamingUntrackedTest(CloseoutTestBase):
@@ -343,7 +348,7 @@ class SecondCampaignSameDirectionUpgradesLearningTest(CloseoutTestBase):
         self._three_days(campaign, spend=1000.0, purchases=5, revenue=2500.0)
         return campaign
 
-    def test_second_campaign_in_the_same_direction_makes_the_next_learning_likely(self):
+    def test_same_verdict_without_actual_source_conditions_does_not_promote(self):
         first = self._achieved_campaign()
         closeout.close(self.conn, self.org_id, self.brand_id, first["id"], actor=ACTOR)
         second = self._achieved_campaign()
@@ -353,7 +358,7 @@ class SecondCampaignSameDirectionUpgradesLearningTest(CloseoutTestBase):
         self.assertEqual(len(learnings), 2)
         by_cycle = {row["source_cycle_id"]: row for row in learnings}
         self.assertEqual(by_cycle[first["id"]]["confidence"], "observed")
-        self.assertEqual(by_cycle[second["id"]]["confidence"], "likely")
+        self.assertEqual(by_cycle[second["id"]]["confidence"], "observed")
 
     def test_same_verdict_with_another_result_kind_is_another_cohort(self):
         # F28-I01: the cohort is same brand + same result kind + same verdict.

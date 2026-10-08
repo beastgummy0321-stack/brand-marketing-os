@@ -156,8 +156,8 @@ export function PauseLearnCard({ status, candidates, angle, customOpen, busy, on
     <LearnCard
       title="這則主打什麼？"
       aside={trimmed
-        ? <>暫停後記入品牌學習<br /><b className="text-foreground">「{trimmed}」對這群受眾無效</b></>
-        : "選一個，暫停後記入品牌學習"}
+        ? <>這次暫停的操作標籤<br /><b className="text-foreground">「{trimmed}」</b><br />成效原因尚未確認</>
+        : "可選操作標籤；成效原因尚未確認"}
     >
       {onRetry && (
         <div className="mb-2">

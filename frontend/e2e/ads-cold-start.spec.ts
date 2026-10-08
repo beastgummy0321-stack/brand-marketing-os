@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 /** Cold start, self-seeding (2026-09-26 ruling: runs in the normal `npm run e2e`, no context file, no `/__f13`).
  * A fresh account + brand + product (same setup as `ads-target.spec.ts`), then the user journey through the UI:
  * wizard create with an own PNG uploaded in 進階 (its preview made by the worker's task body, below) → 系統這樣理解 →
- * 產生策略 → 自己填總額 → cap → 照這個方式進行 → placement revised and confirmed → the confirmed version placed into
+ * 產生策略 → 自己填總額 → cap → 確認策略，查看投放結構 → placement revised and confirmed → the confirmed version placed into
  * every planned ad (one per group; the scripted provider follows the roles the prompt offers) through the slot upload
  * (F41-I01: each ad gets its own placement of that original, confirmed and assigned) → reload and re-read →
  * confirm a real local month envelope → first publish list without editing launch settings. A disconnected
@@ -118,7 +118,7 @@ test("冷啟動：建立精靈帶自己的圖 → 策略 → 自己填總額 →
   await page.getByRole("button", { name: "產生策略 →", exact: true }).click();
   await successful(strategy);
 
-  // --- 策略分頁：自己填總額（超過預算上限就第二次同意）、設上限、照這個方式進行 -------------------------------
+  // --- 策略分頁：自己填總額（超過預算上限就第二次同意）、設上限、確認策略，查看投放結構 -------------------------------
   await page.getByRole("button", { name: "自己填總額", exact: true }).click();
   await page.getByLabel("自己填這一期的總預算", { exact: true }).fill("30000");
   const budget = responseFor(page, `/campaigns/${created.id}/strategy/scenario`);
@@ -130,7 +130,7 @@ test("冷啟動：建立精靈帶自己的圖 → 策略 → 自己填總額 →
   await page.getByRole("button", { name: "儲存上限", exact: true }).click();
   await successful(capSaved);
   const plan = responseFor(page, `/campaigns/${created.id}/plan`);
-  await page.getByRole("button", { name: "照這個方式進行 →", exact: true }).click();
+  await page.getByRole("button", { name: "確認策略，查看投放結構 →", exact: true }).click();
   const planResponse = await successful(plan);
   const planned = (await planResponse.json()).campaign;
   expect(planned.status).toBe("ready");

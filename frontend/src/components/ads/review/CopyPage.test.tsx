@@ -136,7 +136,7 @@ function changeItem(overrides: Partial<ChangeItem> = {}): ChangeItem {
     id: "adx_1", kind: "copy", target_id: "aex_1", after: {}, reason: "文案偏離",
     target: { id: "aex_1", name: "晨光隨行杯・隨時有你", platform: "meta", source_account: "acc_1", native_kind: "ad", native_id: "native_1" },
     before: {}, verification_state: "deviated", evidence_json: {}, reported_at: null,
-    first_observed_at: null, verified_at: null, platform_url: null,
+    first_observed_at: null, verified_at: null, learning: {recorded: false, confidence: null, count: 0, evidence: null}, platform_url: null,
     ...overrides,
   };
 }

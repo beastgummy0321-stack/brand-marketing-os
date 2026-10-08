@@ -134,25 +134,36 @@ class AdsLearningFlowTest(unittest.TestCase):
         checked = self.confirm(approved, ad)
         self.assertEqual(checked["items"][0]["verification_state"], "confirmed")
         self.assertEqual(
-            checked["items"][0]["learning"], {"recorded": False, "confidence": None, "count": 0}
+            checked["items"][0]["learning"],
+            {"recorded": False, "confidence": None, "count": 0, "evidence": None}
         )
         self.assertEqual(self.learnings(), [])
 
-    def test_first_second_third_same_angle_promote_confidence(self):
-        expected = [("observed", 1), ("likely", 2), ("validated", 3)]
+    def test_repeated_pause_receipts_never_promote_market_confidence(self):
+        expected = [("observed", 0)] * 3
         for confidence, count in expected:
             ad = self.ad()
             approved = self.create_pause(ad["id"], angle="沒興趣的舊客")
             checked = self.confirm(approved, ad)
             self.assertEqual(checked["items"][0]["verification_state"], "confirmed")
             self.assertEqual(
-                checked["items"][0]["learning"],
+                {key: checked["items"][0]["learning"][key]
+                 for key in ("recorded", "confidence", "count")},
                 {"recorded": True, "confidence": confidence, "count": count},
             )
+            self.assertEqual(checked["items"][0]["learning"]["evidence"]["provenance"],
+                             "operation_readback")
+            self.assertEqual(checked["items"][0]["learning"]["evidence"]["allowed_uses"], [])
+            evidence = checked["items"][0]["learning"]["evidence"]
+            self.assertEqual(evidence["sources"][0]["kind"], "pause")
+            self.assertIsNotNone(evidence["sources"][0]["period"]["start"])
+            self.assertEqual(evidence["sources"][0]["period"]["start"],
+                             evidence["sources"][0]["period"]["end"])
         rows = self.learnings()
         self.assertEqual(len(rows), 3)
-        self.assertTrue(all(r["learning_text"] == "「沒興趣的舊客」對這群受眾無效" for r in rows))
-        self.assertEqual([r["confidence"] for r in rows], ["observed", "likely", "validated"])
+        self.assertTrue(all(r["learning_text"] ==
+                            "已暫停「沒興趣的舊客」，操作已核對；成效原因未知" for r in rows))
+        self.assertEqual([r["confidence"] for r in rows], ["observed"] * 3)
         # F48 Contract W: an imported campaign has no sell-way, so its rows are brand level.
         self.assertEqual({r["product_id"] for r in rows}, {None})
 
@@ -168,8 +179,11 @@ class AdsLearningFlowTest(unittest.TestCase):
         rows = self.learnings()
         self.assertEqual(len(rows), 1)
         self.assertEqual(
-            again["items"][0]["learning"], {"recorded": True, "confidence": "observed", "count": 1}
+            {key: again["items"][0]["learning"][key]
+             for key in ("recorded", "confidence", "count")},
+            {"recorded": True, "confidence": "observed", "count": 0}
         )
+        self.assertEqual(again["items"][0]["learning"]["evidence"]["id"], rows[0]["id"])
 
     def sell(self) -> str:
         """Give the campaign a sell-way (`context_json.product_ids`, `sell_way.of_campaign`)."""
@@ -255,13 +269,13 @@ class AdsLearningFlowTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         body = response.json()["learnings"]
         self.assertEqual(len(body), 2)
-        self.assertEqual(body[0]["text"], "「晚鳥族」對這群受眾無效")
-        self.assertEqual(body[1]["text"], "「早鳥族」對這群受眾無效")
+        self.assertEqual(body[0]["text"], "已暫停「晚鳥族」，操作已核對；成效原因未知")
+        self.assertEqual(body[1]["text"], "已暫停「早鳥族」，操作已核對；成效原因未知")
         for row in body:
             self.assertEqual(row["campaign_id"], self.campaign)
             self.assertIsNotNone(row["campaign_name"])
             self.assertEqual(row["confidence"], "observed")
-            self.assertEqual(row["count"], 1)
+            self.assertEqual(row["count"], 0)
             # F27-I27: same `repository.campaign_objective_family` rule the month summary and
             # `CampaignChip` elsewhere already use -- this fixture's root entity is platform
             # "fake" (never "meta"), so the family always falls back to "other", never a guess.

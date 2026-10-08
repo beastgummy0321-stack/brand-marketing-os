@@ -1,3 +1,23 @@
+import type { LearningEvidence, LearningEvidenceContext } from "@/lib/adsLearningEvidence";
+
+function learningEvidence(id = "learning-fixture"): LearningEvidence {
+  return {
+    schema_version: 1, id, meaning_revision: "meaning-fixture", display_text: "歷史紀錄",
+    support_label: "來源尚未核實", provenance: "unknown",
+    sources: [{kind: null, id: null, version: null, period: {start: null, end: null}, label: null}],
+    scope: {product_id: null, product_label: null, audience_key: null, customer_group_id: null,
+      claim_key: null, claim_family: null, objective_family: null, result_kind: null, currency: null, attribution: null},
+    conditions: {price_version: null, offer_key: null, offer_version: null, material_version: null,
+      target_version: null, valid_until: null},
+    sample: {result_events: null, sufficient: null}, independent_count: 0, same_direction_count: 0,
+    contrary_count: 0, use_state: "history", reason_codes: ["unknown_source"],
+    reason_labels: ["來源尚未核實，保留為歷史"], allowed_uses: [], limits: ["conditions_unknown"],
+  };
+}
+const evidenceContext: LearningEvidenceContext = {
+  schema_version: 1, revision: "context-fixture", scope_product_id: null, scope_label: null,
+  eligible_count: 0, items: [], omitted: 0,
+};
 /** F28-I10: campaign detail graded against the cap (prototype v9 `tabPerf()`). Covers the header cap chip, the ruler
  * card (title, window chip, missing-days chip, 去改上限, 打平 mark, empty ruler without a cap), default folds, the
  * rows' actions and ruler-dot navigation, `?ad=` deep links, and the three reads failing independently. Realistic
@@ -716,16 +736,16 @@ function campaignDetail(o: Partial<CampaignDetail> = {}, ads?: AdRow[]): Campaig
 }
 /** F46 Contract L for `?campaign_id=cmp_1` as served after the close: cap 450, one ad under it, one never sold. */
 const LEARNED: CoordinateLearnings = {
-  campaigns: [{
+  evidence_context: evidenceContext, campaigns: [{
     campaign_id: "cmp_1", campaign_name: "10 月第一期・讀書與運動", sell_way_id: "prd_box",
     start_date: "2026-09-26", end_date: "2026-10-02", closed_on: "2026-10-03", cap: 450, currency: "TWD",
     spend: 4720, sales: 9, cost_per_sale: 524.4, counts: { keep: 1, replace: 1 },
     rule_text: "1 則每筆低於上限 450 → 留下；其餘換掉", empty_reason: null,
     rows: [
       { rank: 1, of: 2, ad_id: "l1", ad_name: "運動後與忙碌日常", customer_group: { id: "pcg_gym", who: "下班運動族" }, coordinates: [],
-        spend: 3120, sales: 9, cost_per_sale: 346.7, verdict: "keep", verdict_label: "留下", flags: [], learning_id: "lrn_1" },
+        spend: 3120, sales: 9, cost_per_sale: 346.7, verdict: "keep", verdict_label: "留下", flags: [], evidence: learningEvidence(), learning_id: "lrn_1" },
       { rank: 2, of: 2, ad_id: "l4", ad_name: "上班日午休", customer_group: null, coordinates: [],
-        spend: 1600, sales: 0, cost_per_sale: null, verdict: "replace", verdict_label: "換掉", flags: [], learning_id: "lrn_2" },
+        spend: 1600, sales: 0, cost_per_sale: null, verdict: "replace", verdict_label: "換掉", flags: [], evidence: learningEvidence(), learning_id: "lrn_2" },
     ],
   }],
   groups: [{ customer_group_id: "pcg_gym", who: "下班運動族", ads: 1, spend: 3120, sales: 9, cap: 450, cost_per_sale: 346.7 }],

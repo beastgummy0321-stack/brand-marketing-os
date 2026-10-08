@@ -14,7 +14,7 @@ function item(overrides: Partial<ChangeItem> = {}): ChangeItem {
     target: { id: "placement_1", name: "New approved ad", platform: "fixture", source_account: "account_1", native_kind: "ad", native_id: "B2" },
     before: {}, after: {}, reason: "New proposition", verification_state: "confirmed",
     verification_label: "已核對相符", evidence_json: {}, reported_at: "2026-09-22T02:00:00Z",
-    first_observed_at: null, verified_at: null, platform_url: null, ...overrides,
+    first_observed_at: null, verified_at: null, learning: {recorded: false, confidence: null, count: 0, evidence: null}, platform_url: null, ...overrides,
   };
 }
 

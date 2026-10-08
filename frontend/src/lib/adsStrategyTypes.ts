@@ -4,6 +4,7 @@
  * `app/ads/coordinate_learning.py` (`learning_rows`). */
 
 import type { CoordinateLearnings } from "./adsLearningsApi";
+import type { LearningEvidence, LearningEvidenceContext } from "./adsLearningEvidence";
 
 export type StrategyRole = "new" | "retarget" | "explore";
 
@@ -89,6 +90,7 @@ export interface StrategyBasisPrice {
 }
 
 export interface StrategyBasisLearning {
+  evidence: LearningEvidence;
   id: string;
   text: string;
   level: string;
@@ -143,6 +145,7 @@ export interface PlanCapacity {
 
 /** 查看策略依據：這個策略用到哪些品牌事實／商品價格／學習／llm_task，畫面照這個列。 */
 export interface StrategyBasis {
+  evidence_context: LearningEvidenceContext;
   knowledge_item_ids: string[];
   llm_task_id: string;
   input_context_hash: string;

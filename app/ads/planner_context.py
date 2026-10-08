@@ -16,6 +16,9 @@ from copy import deepcopy
 
 from app import workbench
 from app.ads import (
+    ads_learnings as learning_service,
+)
+from app.ads import (
     budget,
     calendar_tw,
     coordinate_learning,
@@ -23,6 +26,7 @@ from app.ads import (
     learning_rank,
     learning_view,
     targets,
+    triage,
     triage_capacity,
 )
 from app.ads import repository as ads_repo
@@ -271,7 +275,8 @@ def newest_per_product(rows: list[dict]) -> list[dict]:
     seen: set = set()
     kept = []
     for row in rows:
-        if not (row.get("applicability_scope") or "").startswith(_EVENT_SCOPE_PREFIX):
+        scope = workbench.base_learning_scope(row.get("applicability_scope"))
+        if not scope.startswith(_EVENT_SCOPE_PREFIX):
             if row.get("product_id") in seen:
                 continue
             seen.add(row.get("product_id"))
@@ -279,22 +284,32 @@ def newest_per_product(rows: list[dict]) -> list[dict]:
     return kept
 
 
-def ads_learnings(conn, brand_id: str, product_id: str | None = None) -> list[dict]:
+def ads_learnings(conn, brand_id: str, product_id: str | None = None, *, rows=None,
+                 evidence_context=None) -> list[dict]:
     """The `ads`-track learnings a planner reads, newest first, at most `_MAX_LEARNINGS`. With a
     sell-way: that sell-way's rows plus brand-level ones (an imported campaign has no sell-way);
-    another product's never apply. Without one: every row of the brand."""
-    rows = bi_repo.list_learnings(conn, brand_id, limit=_LEARNING_SCAN, source_track="ads")
-    if product_id is not None:
-        rows = [row for row in rows if row.get("product_id") in (product_id, None)]
-    return newest_per_product(rows)[:_MAX_LEARNINGS]
+    another product's never apply. Without a selected product: brand-level rows only."""
+    if rows is None:
+        rows = bi_repo.list_learnings(conn, brand_id, limit=_LEARNING_SCAN, source_track="ads",
+                                      include_expired=True)
+    rows = [row for row in rows if row.get("product_id") in (product_id, None)]
+    kept = newest_per_product(rows)[:_MAX_LEARNINGS]
+    if kept:
+        projected = evidence_context or learning_service.evidence_context(
+            conn, kept[0]["org_id"], brand_id, product_id, rows=rows, cap=_LEARNING_SCAN,
+        )
+        by_id = {item["id"]: item for item in projected["items"]}
+        kept = [{**row, "evidence": by_id[row["id"]]} for row in kept]
+    return kept
 
 
 def learnings_text(rows: list[dict]) -> str:
     if not rows:
         return LEARNINGS_HEADER + "（這個品牌還沒有任何學習記錄）"
     lines = [
-        f"- {row['learning_text']}（{row['confidence']}"
-        + ("，需要重新驗證" if row["needs_revalidation"] else "") + "）"
+        f"- {row['learning_text']}（{row['evidence']['support_label']}；"
+        + ("本期可用" if row["evidence"]["use_state"] == "usable"
+           else "歷史／待核對，不能作本期市場支持") + "）"
         for row in rows
     ]
     return LEARNINGS_HEADER + "\n" + "\n".join(lines)
@@ -303,7 +318,7 @@ def learnings_text(rows: list[dict]) -> str:
 def learnings_basis(rows: list[dict]) -> list[dict]:
     return [
         {"id": row["id"], "text": row["learning_text"], "level": row["confidence"],
-         "needs_revalidation": row["needs_revalidation"]}
+         "needs_revalidation": row["needs_revalidation"], "evidence": row["evidence"]}
         for row in rows
     ]
 
@@ -426,11 +441,21 @@ def planner_context(conn, org_id: str, brand_id: str, product_id: str | None, *,
     product = _product(blocks, product_id)
     known = product_id if product is not None else None
     customers_text, listed = customer_groups.prompt_groups(conn, org_id, brand_id, scope)
-    view = coordinate_learning.prompt_view(conn, org_id, brand_id)
+    current = learning_service.current_conditions(conn, org_id, brand_id, known, campaign=campaign)
+    raw_learnings = bi_repo.list_learnings(conn, brand_id, limit=_LEARNING_SCAN, source_track="ads",
+                                          include_expired=True)
+    view = coordinate_learning.prompt_view(conn, org_id, brand_id, sell_way_id=known,
+                                          current=current, additional_rows=raw_learnings,
+                                          context_cap=None)
+    view = learning_view.scoped_view(view, known)
     ranked_text, ranked_ids = coordinate_learning.ranked_section(
         conn, org_id, brand_id, scope, view=view, listed=listed,
     )
-    rows = ads_learnings(conn, brand_id, known)
+    full_evidence = view["evidence_context"]
+    rows = ads_learnings(conn, brand_id, known, rows=raw_learnings, evidence_context=full_evidence)
+    evidence = {**full_evidence, "items": full_evidence["items"][:30],
+                "omitted": max(len(full_evidence["items"]) - 30, 0)}
+    view["evidence_context"] = evidence
     cap = capacity = None
     if campaign is not None:
         cap = targets.resolve(conn, org_id, brand_id, campaign)["value"]
@@ -466,7 +491,8 @@ def planner_context(conn, org_id: str, brand_id: str, product_id: str | None, *,
         "offers": _offers(conn, brand_id, product_id, the_menu["rows"]),
         "customer_groups": listed,
         "customers_text": customers_text,
-        "learnings": {"ads": rows, "ranked": view},
+        "learnings": {"ads": rows, "ranked": view, "evidence_context": evidence},
+        "learning_current": current,
         "ranked_text": ranked_text,
         "ranked_ids": ranked_ids,
         "previous": _previous(conn, org_id, brand_id, known),
@@ -524,6 +550,9 @@ def creative_basis(ctx: dict) -> dict:
             "results": results,
             "controls": controls,
             "learnings": learnings_basis(ctx["learnings"]["ads"]),
+            "evidence_context": ctx["learnings"].get("evidence_context"),
+            "learning_current": ctx.get("learning_current"),
+            "learning_min_result_events": triage.MIN_RESULT_EVENTS,
             "calendar": ctx.get("calendar_evidence") or [],
             "calendar_windows": ctx.get("calendar_windows") or [],
             "offers": ctx.get("offers") or [],
@@ -542,6 +571,9 @@ def creative_projection(basis: dict, offer_key: str | None) -> dict:
         {
             **{name: basis[name][:cap] for name, cap in _CREATIVE_CAPS.items()},
             "previous_goals": basis["previous_goals"][:6],
+            "evidence_context": basis.get("evidence_context"),
+            "learning_current": basis.get("learning_current"),
+            "learning_min_result_events": basis.get("learning_min_result_events"),
             "selected_offer": {
                 "key": key,
                 "sentence": offers[0]["sentence"] if offers else None,

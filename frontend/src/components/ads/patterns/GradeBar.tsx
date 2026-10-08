@@ -28,19 +28,20 @@ export function GradeBar({ buckets, withMoney = false, thinLabel, rules = true, 
 }) {
   const merged = ORDER.map((o) => {
     const own = buckets.filter((b) => b.grade === o.key || (o.key === "no_target" && b.grade === "ungraded"));
-    const known = own.filter((b) => b.amount !== null);
-    const units = new Set(own.filter((b) => b.count > 0 || (b.amount ?? 0) > 0).map((b) => b.currency ?? null));
+    const known = own.filter((b) => typeof b.amount === "number" && Number.isFinite(b.amount));
+    const units = new Set(own.map((b) => typeof b.currency === "string" && b.currency.trim() ? b.currency : null));
     const currency = units.size === 1 ? [...units][0] : null;
-    const amount = own.length === 1 ? own[0].amount
+    const amount = own.length === 1 ? known[0]?.amount ?? null
       : own.length && known.length === own.length && currency ? known.reduce((s, b) => s + (b.amount as number), 0) : null;
     return {
       ...o,
       count: own.reduce((s, b) => s + b.count, 0),
       currency,
       amount,
-      width: amount ?? 0,
+      supplied: own.length > 0,
+      width: amount ?? 0, // ZERO_OK: absent width is geometry only; comparable requires every supplied amount known before summing widths.
     };
-  }).filter((o) => o.count > 0 || o.width > 0);
+  }).filter((o) => o.supplied);
   const units = new Set(merged.map((o) => o.currency));
   const comparable = merged.length > 0 && units.size === 1 && !units.has(null) && merged.every((o) => o.amount !== null);
   const total = comparable ? merged.reduce((s, o) => s + o.width, 0) : 0;

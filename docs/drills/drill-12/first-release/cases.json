@@ -1,0 +1,157 @@
+{
+  "schema_version": 1,
+  "feature": "F53",
+  "status": "frozen-carve-expectations-pending-approval",
+  "release_environment": "windows-local-private",
+  "timezone": "Asia/Taipei",
+  "source_head": "2375e161d06da0455977e87a8010db6dc4f7137f",
+  "provenance": "synthetic-fixtures-not-market-results",
+  "ruler": "docs/architecture/ads.md#655-supervised-first-release-evidence-contract-f53-planned-2026-10-07",
+  "periods": [
+    {
+      "id": "P1",
+      "start": "2026-07-01",
+      "end": "2026-07-31",
+      "events": 2,
+      "cost_per_result": 200,
+      "expect": "Thin observation; no support promotion; explicit none-offer test and faithful adopted bindings."
+    },
+    {
+      "id": "P2",
+      "start": "2026-08-01",
+      "end": "2026-08-31",
+      "events": 10,
+      "cost_per_result": 200,
+      "expect": "One independent compatible trial only; derivatives/overlap/product B cannot promote; next proposal changes executable choice or justifies retaining it."
+    },
+    {
+      "id": "P3",
+      "start": "2026-09-01",
+      "end": "2026-09-30",
+      "events": 10,
+      "cost_per_result": 400,
+      "expect": "Contrary sufficient trial lowers same-direction support; preserve historical rankings; new hypothesis or qualified retention."
+    }
+  ],
+  "fixture": {
+    "brands": 1,
+    "products": [
+      "A",
+      "B"
+    ],
+    "customer_groups": [
+      "A1",
+      "A2"
+    ],
+    "cost_cap": 300,
+    "currency": "TWD",
+    "attribution": "fixed-known-fixture",
+    "min_result_events": 10
+  },
+  "cases": [
+    {
+      "id": "C03",
+      "expect": "Other-product campaign verdicts cannot promote product A."
+    },
+    {
+      "id": "E01",
+      "expect": "Identical event text from product B cannot promote product A."
+    },
+    {
+      "id": "C04",
+      "expect": "Simulation cannot become real-market support on any track."
+    },
+    {
+      "id": "R02",
+      "expect": "400-day performance history is not current usable evidence."
+    },
+    {
+      "id": "R04",
+      "expect": "Revalidation is enforced by planners and adoption, not just a displayed flag."
+    },
+    {
+      "id": "D02",
+      "expect": "Same-ID actual learning_text/support/source/eligibility edit invalidates the displayed revision."
+    },
+    {
+      "id": "D03",
+      "expect": "Explicit none-offer is valid even when registered offers exist."
+    },
+    {
+      "id": "N01",
+      "expect": "Unknown/null/zero scope, money and provenance remain explicit; no inferred effectiveness."
+    },
+    {
+      "id": "N02",
+      "expect": "Tenant/result/currency/attribution cohorts do not mix."
+    },
+    {
+      "id": "N03",
+      "expect": "Campaign/coordinate/visual/A-B/settle derivatives, overlap and replay do not add independent trials."
+    },
+    {
+      "id": "N04",
+      "expect": "Contrary latest comparable result lowers support; historical results and current-verdict selection remain distinct."
+    },
+    {
+      "id": "N05",
+      "expect": "Malformed/unknown scope trailer stays conservative; legacy visual/coordinate scope round-trip remains readable."
+    },
+    {
+      "id": "N06",
+      "expect": "Relevant offer expiry and price/material/target changes block stale confirmation; brand facts have no universal age expiry."
+    },
+    {
+      "id": "N07",
+      "expect": "Deleted/removed audience and product never silently receive a fallback binding."
+    },
+    {
+      "id": "N08",
+      "expect": "Sorting and org-midnight reads do not make revision depend on row order or read timestamp."
+    },
+    {
+      "id": "N09",
+      "expect": "Thin sample preserves verdict and rank, with no promotion or automatic scaling."
+    },
+    {
+      "id": "N10",
+      "expect": "Duplicate action check writes no duplicate learning; action success is not a causal result."
+    },
+    {
+      "id": "N11",
+      "expect": "Adoption receipt and actual audience/offer/carry/test assignments match; exact original copy/images survive."
+    },
+    {
+      "id": "N12",
+      "expect": "Ordinary same-scope retry recovers failure, retains last good data and unsaved input."
+    },
+    {
+      "id": "UI01",
+      "expect": "All three HTML-reference screens match fresh build at 1024 and 1920; five questions and keyboard/source panels pass."
+    },
+    {
+      "id": "UI02",
+      "expect": "Loading, cold start, failed reads, retry, contrary results and stale proposals are distinct and preserve input."
+    },
+    {
+      "id": "M01",
+      "expect": "Diagnose previous timeout; at most one real-provider attempt within 60 seconds; qualified facts/bindable slots/none-offer, no automatic retry."
+    },
+    {
+      "id": "O01",
+      "expect": "Genuine local Auth expiry and ordinary login recover supported saved work without forged token."
+    },
+    {
+      "id": "O02",
+      "expect": "Isolated Postgres backup restore checks schema, rows, tenant separation and Storage asset references/actual bytes; shared public unchanged."
+    },
+    {
+      "id": "F01",
+      "expect": "Source-matched clean integration and one combined packet; all gates explicit; F48-F52 still open; no readiness percentage or extra drill."
+    }
+  ],
+  "failures": "Fabrication, wrong scope/confidence/money, inconsistent accepted bindings, silent input loss, unsupported recovery, absent required model/auth/restore proof keep F53 open.",
+  "allowed_alternatives": "Reasoned allocations/retention; no required profit, prose/image polish or single optimal strategy.",
+  "repeat_policy": "Rerun only after a relevant change/failure/concern; preserve frozen expectations and raw failed receipts.",
+  "fixture_mode": "Injected platform reader for market-qualification branches; entire receipt synthetic. Separate actual simulation-provenance cases stay excluded."
+}

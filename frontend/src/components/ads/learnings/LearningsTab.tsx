@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { Button } from "@/components/layout/ui/button";
 import { Skeleton } from "@/components/layout/Skeleton";
@@ -7,29 +7,41 @@ import { ReadFailed } from "../patterns/ReadFailed";
 import { figure, useAdsRules } from "../patterns/rules";
 import { GroupSummary } from "./GroupSummary";
 import { LearningsTable } from "./LearningsTable";
+import {Disclosure, formatAmount} from "../patterns";
+import {QualifiedLearningList} from "./QualifiedLearningList";
+import {useLearningScope} from "./useLearningScope";
 
 export type LearningsLoad =
   | { status: "loading" }
   | { status: "error"; message: string }
-  | { status: "ready"; data: CoordinateLearnings };
+  | { status: "ready"; data: CoordinateLearnings; refreshing?: boolean; error?: string };
 
 /** One read of Contract L for the brand. The host owns it so a sub-nav count can show once read. */
 export function useCoordinateLearnings(brandId: string): { state: LearningsLoad; reload: () => void } {
   const [state, setState] = useState<LearningsLoad>({ status: "loading" });
   const [round, setRound] = useState(0);
+  const saved = useRef<{brandId: string; data: CoordinateLearnings} | null>(null);
+  const [owner, setOwner] = useState(brandId);
   useEffect(() => {
     const ctrl = new AbortController();
-    setState({ status: "loading" });
+    const previous = saved.current?.brandId === brandId ? saved.current.data : null;
+    setOwner(brandId);
+    setState(previous ? {status: "ready", data: previous, refreshing: true} : { status: "loading" });
     getCoordinateLearnings(brandId, {}, ctrl.signal)
-      .then((data) => setState({ status: "ready", data }))
+      .then((data) => {
+        if (ctrl.signal.aborted) return;
+        saved.current = {brandId, data};
+        setState({ status: "ready", data });
+      })
       .catch((err: unknown) => {
         if (ctrl.signal.aborted) return;
-        setState({ status: "error", message: err instanceof Error ? err.message : "讀取失敗，請稍後再試。" });
+        const message = err instanceof Error ? err.message : "讀取失敗，請稍後再試。";
+        setState(previous ? {status: "ready", data: previous, error: message} : { status: "error", message });
       });
     return () => ctrl.abort();
   }, [brandId, round]);
   const reload = useCallback(() => setRound((n) => n + 1), []);
-  return { state, reload };
+  return { state: owner === brandId ? state : {status: "loading"}, reload };
 }
 
 /** Ranked rows across every listed campaign: the 投放學到的 sub-nav count. */
@@ -41,8 +53,8 @@ function Heading({ action }: { action?: ReactNode }) {
   return (
     <div className="flex flex-wrap items-center justify-between gap-3">
       <div>
-        <h2 className="text-[15px] font-semibold">投放學到的</h2>
-        <p className="mt-0.5 text-[13px] text-muted-foreground">每期結案時，每則廣告照每筆成本排名，決定下一期留下或換掉</p>
+        <h2 className="text-[25px] font-semibold">投放學到的</h2>
+        <p className="mt-1 text-[13px] text-muted-foreground">查看能用來規劃下一期的經驗與適用範圍。</p>
       </div>
       {action}
     </div>
@@ -60,11 +72,25 @@ export function LearningsTab({ brandId, state, onRetry, highlightCampaignId }: {
   highlightCampaignId?: string | null;
 }) {
   const ready = state.status === "ready";
+  const scope = useLearningScope(brandId, ready ? state.data : null);
+  const [rankOpen, setRankOpen] = useState(false);
+  const located = useRef<string | null>(null);
+  const validHighlight = ready && state.data.campaigns.some(c => c.campaign_id === highlightCampaignId) ? highlightCampaignId : null;
   const rules = useAdsRules();
   useEffect(() => {
-    if (!ready || !highlightCampaignId) return;
-    document.getElementById(`camp-${highlightCampaignId}`)?.scrollIntoView?.({ block: "start" });
-  }, [ready, highlightCampaignId]);
+    if (validHighlight && located.current !== validHighlight) setRankOpen(true);
+  }, [validHighlight]);
+  useEffect(() => {
+    if (!rankOpen || !validHighlight || located.current === validHighlight) return;
+    const frame = requestAnimationFrame(() => {
+      const element = document.getElementById(`camp-${validHighlight}`);
+      if (element) {
+        element.scrollIntoView?.({block: "start"});
+        located.current = validHighlight;
+      }
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [rankOpen, validHighlight]);
 
   if (state.status === "loading") {
     return (
@@ -84,31 +110,42 @@ export function LearningsTab({ brandId, state, onRetry, highlightCampaignId }: {
       </div>
     );
   }
-  const { campaigns, groups, next } = state.data;
+  const { campaigns, groups } = state.data;
+  const evidence = scope.data;
+  const next = scope.product && evidence && !scope.busy && !scope.optionsError && !scope.error
+    ? evidence.next?.sell_way_id === scope.product.id ? evidence.next.new_campaign_href
+      : `/brands/${encodeURIComponent(brandId)}/ads/new?sell_way=${encodeURIComponent(scope.product.id)}`
+    : null;
+  const retry = () => { onRetry(); scope.reload(); };
   // The 怎麼判 strip names how one campaign was judged — the highlighted one (from a closeout), else the newest with
   // ranked rows — in its served `rule_text`, then the brand-wide sample flag from the served rules.
   const focus = campaigns.find((c) => c.campaign_id === highlightCampaignId && c.rule_text)
     ?? campaigns.find((c) => c.rule_text) ?? null;
   const adsHome = `/brands/${encodeURIComponent(brandId)}/ads`;
-  if (campaigns.length === 0) {
-    return (
-      <div className="flex flex-col gap-[18px]">
-        <Heading />
-        <div data-slot="learnings-empty" className="flex flex-col items-center gap-2 px-5 py-9 text-center">
-          <b>還沒有結案的活動</b>
-          <span className="text-[13px] text-muted-foreground">活動結案後，每則廣告會照每筆成本排在這裡。</span>
-          <Button asChild variant="outline" size="sm"><Link to={adsHome}>到投放中心</Link></Button>
-        </div>
-      </div>
-    );
-  }
   return (
-    <div className="flex flex-col gap-[18px]">
+    <div data-slot="learning-screen" className="flex min-w-0 flex-col gap-5">
       <Heading
-        action={next && (
-          <Button asChild variant="outline" size="sm"><Link to={next.new_campaign_href}>用這些學習排下一期 →</Link></Button>
-        )}
+        action={next ? <Button asChild><Link to={next}>用可參考資料規劃下一期 →</Link></Button>
+          : <Button disabledReason={scope.busy ? "正在核對商品與歷史" : "先選擇有效商品，並重新讀取可參考範圍"}>用可參考資料規劃下一期 →</Button>}
       />
+      <div className="surface flex flex-wrap items-center justify-between gap-3 px-4 py-3 text-[13px] text-muted-foreground">
+        <span>目前商品 <b className="text-foreground">{scope.product?.name ?? "請先選擇商品範圍"}</b></span>
+        <span>{evidence?.evidence_context ? `${formatAmount(evidence.evidence_context.eligible_count)} 條可參考 · 其餘資料保留在歷史` : "歷史適用性尚未核實"}</span>
+      </div>
+      <Disclosure label="下一期商品範圍">
+        <label className="flex min-w-0 flex-col gap-2 text-sm">選擇商品
+          <select aria-label="選擇商品" value={scope.selection} onChange={event => scope.setSelection(event.target.value)} className="h-10 w-full min-w-0 rounded-md border border-border bg-background px-3">
+            <option value="">請選擇商品</option>
+            {scope.selection && !scope.product && <option value={scope.selection}>原選擇已不可用，請核對</option>}
+            {scope.products?.map(product => <option key={product.id} value={product.id}>{product.name}</option>)}
+          </select>
+        </label>
+        <p className="mt-2 text-xs text-muted-foreground">選擇保留在本頁；按上方規劃下一期，才會帶入新活動草稿。</p>
+      </Disclosure>
+      {(scope.optionsError || scope.error || state.error) && <ReadFailed what={`${scope.optionsError ?? scope.error ?? state.error}；保留同商品上次讀取的資料與你的選擇，尚未核實最新狀態。`} onRetry={retry} retryLabel="重新讀取" />}
+      {(scope.busy || state.refreshing) && <p role="status" className="text-sm text-muted-foreground">正在讀取；上次資料保留，尚未核實最新狀態。</p>}
+      <QualifiedLearningList key={scope.selection} data={evidence} onRetry={retry} loading={scope.busy}>
+      <Disclosure label="每期廣告排名" open={rankOpen} onOpenChange={setRankOpen}>
       <div aria-label="怎麼判" className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5 rounded-lg bg-background px-3 py-2 text-[12.5px] text-muted-foreground">
         <b className="font-semibold text-foreground">怎麼判</b>
         {focus && (
@@ -141,6 +178,9 @@ export function LearningsTab({ brandId, state, onRetry, highlightCampaignId }: {
           />
         ))}
       </section>
+      {campaigns.length === 0 && <div data-slot="learnings-empty" className="flex flex-col items-center gap-2 px-5 py-9 text-center"><b>還沒有結案的活動</b><span className="text-[13px] text-muted-foreground">活動結案後，每則廣告會照每筆成本排在這裡。</span><Button asChild variant="outline" size="sm"><Link to={adsHome}>到投放中心</Link></Button></div>}
+      </Disclosure>
+      </QualifiedLearningList>
     </div>
   );
 }

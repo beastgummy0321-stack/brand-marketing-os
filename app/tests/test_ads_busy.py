@@ -8,7 +8,6 @@ brief parse are refused the same way while their lock is held.
 """
 
 import datetime
-import json
 import threading
 import unittest
 from unittest import mock
@@ -24,15 +23,9 @@ from app.brand_intelligence import repository as bi_repo
 from app.core import db as coredb
 from app.llm import providers
 
-ACTOR = "測試員"
+from .test_ads_strategy_decision import bind_fixture
 
-_COORDS = {dim: f"{dim}_x" for dim in
-           ("audience", "pain", "angle", "hook", "proof", "offer", "format")}
-_PLAN_REPLY = json.dumps({"groups": [
-    {"role": "new", "name": "新客組", "ads": [{
-        "name": "新客-廣告一", "coordinates": _COORDS, "scene": "上班族午休在辦公室滑手機找點心",
-    }]},
-]}, ensure_ascii=False)
+ACTOR = "測試員"
 
 
 class _HeldProvider:
@@ -42,15 +35,15 @@ class _HeldProvider:
 
     def __init__(self):
         self.entered, self.release = threading.Event(), threading.Event()
+        self.delivery = providers.ScriptedProvider(providers.SCRIPTED_REPLIES["ads_delivery_plan"])
 
     def complete(self, *, model, system, messages, max_tokens, timeout_s=120.0, effort=None,
                  tools=None, org_id=None):
         self.entered.set()
         self.release.wait(30)
-        return providers.ProviderResponse(
-            output_text=_PLAN_REPLY, structured=None,
-            usage=providers.Usage(input_tokens=100, output_tokens=50), stop_reason="end_turn",
-        )
+        return self.delivery.complete(model=model, system=system, messages=messages,
+                                      max_tokens=max_tokens, timeout_s=timeout_s, effort=effort,
+                                      tools=tools, org_id=org_id)
 
 
 class BusyTestBase(unittest.TestCase):
@@ -110,20 +103,44 @@ class SessionLockTest(BusyTestBase):
 
 
 class ConcurrentAdoptTest(BusyTestBase):
+    def setUp(self):
+        super().setUp()
+        self.revision = bind_fixture(web.conn, self.org_id, self.brand_id, self.campaign["id"])
+        self.approval = {"operation_id": "busy-adopt", "expected_revision": self.revision}
+        web.conn.commit()
+
+    def test_missing_confirmation_or_stale_revision_never_enters_provider(self):
+        provider = _HeldProvider()
+        plan.PROVIDER = provider
+        client = TestClient(main.app)
+        for approval, code in (
+            ({}, "strategy_confirmation_required"),
+            ({"operation_id": "missing-revision"}, "strategy_confirmation_required"),
+            ({**self.approval, "expected_revision": "old"}, "strategy_changed"),
+        ):
+            with self.subTest(approval=approval):
+                response = client.post(self._path("/plan"), json=approval)
+                self.assertEqual((response.status_code, response.json()["error"]["code"]),
+                                 (409, code))
+                self.assertFalse(provider.entered.is_set())
+                self.assertIsNone(client.get(self._path()).json()["campaign"]["busy"])
+
     def test_one_adopt_runs_the_other_is_409_and_the_read_serves_busy_until_it_ends(self):
         provider = _HeldProvider()
         plan.PROVIDER = provider
         first: dict = {}
 
         def adopt():
-            first["response"] = TestClient(main.app).post(self._path("/plan"))
+            first["response"] = TestClient(main.app).post(self._path("/plan"), json=self.approval)
 
         worker = threading.Thread(target=adopt)
         worker.start()
         try:
             self.assertTrue(provider.entered.wait(20))
             client = TestClient(main.app)
-            second = client.post(self._path("/plan"))
+            second = client.post(self._path("/plan"), json={
+                **self.approval, "operation_id": "competing-adopt",
+            })
             self.assertEqual(second.status_code, 409)
             self.assertEqual(second.json()["error"]["code"], "campaign_busy")
             self.assertEqual(second.json()["error"]["message"], "上一次還在處理，等它好了再看。")
@@ -145,6 +162,20 @@ class ConcurrentAdoptTest(BusyTestBase):
 
         self.assertEqual(first["response"].status_code, 200, first["response"].text)
         self.assertEqual(first["response"].json()["campaign"]["status"], "ready")
+        adopted = first["response"].json()["campaign"]
+        decision = adopted["budget_basis_json"]["strategy"]["decision"]
+        self.assertEqual(decision["state"], "adopted")
+        accepted = decision["receipt"]
+        self.assertEqual(accepted["operation_id"], self.approval["operation_id"])
+        self.assertEqual(accepted["revision"], self.revision)
+        receipt = accepted["slots"]
+        self.assertEqual({s["slot_id"] for s in receipt}, {s["id"] for s in decision["slots"]})
+        self.assertEqual(len(adopted["groups"]), 1)
+        self.assertEqual(adopted["groups"][0]["role"], "new")
+        self.assertEqual(len(adopted["groups"][0]["ads"]), 1)
+        self.assertEqual(receipt[0]["group_id"], adopted["groups"][0]["id"])
+        self.assertEqual(receipt[0]["ad_id"], adopted["groups"][0]["ads"][0]["id"])
+        self.assertIsNone(receipt[0]["carry_from_ad_id"])
         self.assertIsNone(first["response"].json()["campaign"]["busy"])
         self.assertIsNone(TestClient(main.app).get(self._path()).json()["campaign"]["busy"])
 

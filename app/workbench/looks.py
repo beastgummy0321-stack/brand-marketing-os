@@ -6,9 +6,18 @@ decided (Decision 21). Catalogue copied verbatim from
 order is the catalogue order used as the final tiebreak in `allocate()`.
 """
 
+import hashlib
+import json
 import random
+from copy import deepcopy
 
 from app.brand_intelligence import repository as bi_repo
+from app.core import settings
+from app.workbench import coordinate_vocabulary
+from app.workbench.learning_evidence import base_learning_scope, qualify_learning_evidence
+
+# F53 retains the source owner's ten-event rule. Brief payloads cannot change that policy.
+_MARKET_EVENTS = 10
 
 LOOKS: dict[str, tuple[str, str]] = {
     "phone_raw": (
@@ -171,43 +180,146 @@ def _parse_visual_scope(scope: str) -> tuple[str, str, str] | None:
     return audience, dimension, value
 
 
-def _within_180_days(learned_at, today) -> bool:
-    if learned_at is None or today is None:
-        return False
-    d1 = learned_at.date() if hasattr(learned_at, "date") else learned_at
-    d2 = today.date() if hasattr(today, "date") else today
-    return (d2 - d1).days <= 180
+def _version(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False,
+                                    separators=(",", ":"), default=str).encode()).hexdigest()
 
 
-def visual_learnings(conn, brand_id: str, audience_key: str | None, *, today) -> dict:
+def current_conditions(conn, org, brand, product_id, *, supplied=None):
+    """Recheck own brand facts; unavailable ads-owned inputs stay unknown, never inferred."""
+    product = bi_repo.get_product(conn, brand, product_id) if product_id else None
+    selected = product_id if product else None
+    # Enqueue-time ads inputs are historical context. This owner has no legal fresh target,
+    # measurement or material read; a matching product or timestamp cannot certify them today.
+    current = {}
+    today = settings.today_for_org(conn, org_id=org).isoformat()
+    economics = bi_repo.get_product_economics(conn, brand, selected) if selected else None
+    price = None
+    active = economics and (not economics.get("effective_from") or
+                           str(economics["effective_from"]) <= today) and (
+        not economics.get("effective_to") or str(economics["effective_to"]) >= today)
+    if economics and economics.get("status") == "confirmed" and active:
+        price = _version({k: economics.get(k) for k in (
+            "selling_price", "list_price", "currency", "effective_from", "effective_to",
+            "unit_variable_cost", "shipping_cost",
+        )})
+    sources = bi_repo.offer_sources(conn, brand, selected)
+    policies = bi_repo.list_brand_policies(conn, brand)
+    offers = []
+    for key in sorted({s["offer_key"] for s in sources}):
+        terms = sorted(s["sentence"] for s in sources if s["offer_key"] == key)
+        supporting = [p for p in policies if p["status"] == "confirmed" and p["offer_key"] == key
+                      and p["sentence"] in terms]
+        ends = [(p.get("params") or {}).get("valid_until") or
+                (p.get("params") or {}).get("end_date") for p in supporting]
+        offers.append({"key": key, "version": _version({
+            "terms": terms, "params": sorted((p.get("params") or {} for p in supporting),
+                                              key=lambda p: json.dumps(p, sort_keys=True)),
+        }), "valid_until": min((str(e) for e in ends if e), default=None)})
+    return {**current, "org_id": org, "brand_id": brand, "product_id": selected,
+            "org_day": today, "mode": "real", "result_kind": None,
+            "currency": None, "attribution": None,
+            "audience_keys": [r["key"] for r in coordinate_vocabulary.list_coordinate_vocabulary(
+                conn, org, brand) if r["dimension"] == "audience"],
+            "customer_group_ids": [g["id"] for g in bi_repo.list_customer_groups(
+                conn, brand, selected)] if selected else [],
+            "conditions": {"price_version": price, "offers": offers,
+                           "target_version": None, "materials": []}}
+
+
+def _context(projected, current):
+    return {"schema_version": 1, "revision": projected["revision"],
+            "scope_product_id": current.get("product_id"), "scope_label": None,
+            "eligible_count": projected["eligible_count"], "items": projected["items"][:30],
+            "omitted": max(len(projected["items"]) - 30, 0)}
+
+
+def qualified_creative(conn, org, brand, product_id, creative):
+    """Refresh proposed evidence only; accepted assignments and original controls stay exact."""
+    creative = deepcopy(creative)
+    comparison = creative.get("comparison") or {}
+    current = current_conditions(conn, org, brand, product_id,
+                                 supplied=comparison.get("learning_current"))
+    rows = bi_repo.list_learnings(conn, brand, limit=500, include_expired=True)
+    references = [{"id": row["id"], "text": row.get("text"), "evidence": row.get("evidence")}
+                  for row in comparison.get("learnings") or []]
+    references += [{"id": row.get("learning_id"), "text": row.get("ad_name"),
+                    "evidence": row.get("evidence")}
+                   for row in [*(comparison.get("results") or []),
+                       *((c.get("result") or {}) for c in comparison.get("controls") or [])]]
+    retained = {row["id"] for row in rows}
+    for row in references:
+        if row["id"] and row["id"] not in retained:
+            rows.append({"id": row["id"], "org_id": org, "brand_id": brand,
+                         "product_id": ((row.get("evidence") or {}).get("scope") or {}).get(
+                             "product_id"), "learning_text": row.get("text") or "",
+                         "applicability_scope": "", "needs_revalidation": True})
+            retained.add(row["id"])
+    full = qualify_learning_evidence(rows, current, min_result_events=_MARKET_EVENTS,
+                                     max_age_days=180)
+    by_id = {item["id"]: item for item in full["items"]}
+    raw = {row["id"]: row for row in rows}
+    for row in comparison.get("learnings") or []:
+        if row["id"] in by_id:
+            row.update(evidence=by_id[row["id"]], text=raw[row["id"]]["learning_text"])
+    for row in [*(comparison.get("results") or []),
+                *((c.get("result") or {}) for c in comparison.get("controls") or [])]:
+        if row.get("learning_id") in by_id:
+            row["evidence"] = by_id[row["learning_id"]]
+    comparison["evidence_context"] = {"schema_version": 1, "revision": full["revision"],
+        "scope_product_id": current["product_id"], "scope_label": None,
+        "eligible_count": full["eligible_count"], "items": full["items"][:30],
+        "omitted": max(len(full["items"]) - 30, 0)}
+    creative["comparison"] = comparison
+    return creative
+
+
+def visual_learnings(conn, brand_id: str, audience_key: str | None, *, today,
+                     product_id=None, current=None, min_result_events=None) -> dict:
     """Decision 23: learnings read for the slot plan and the prompt shell. No audience or an
     unknown audience -> nothing (there is nothing to match against)."""
     if audience_key is None:
         return {"winners": [], "lines": [], "omitted": 0, "ids": []}
 
-    rows = bi_repo.list_learnings(conn, brand_id, source_track="visual", limit=200)
+    rows = bi_repo.list_learnings(conn, brand_id, source_track="visual", limit=200,
+                                  include_expired=True)
+    current = current or {"brand_id": brand_id, "product_id": product_id, "conditions": {},
+                          "org_day": str(today.date() if hasattr(today, "date") else today)}
+    full = qualify_learning_evidence(rows, current, min_result_events=_MARKET_EVENTS,
+                                     max_age_days=180)
+    context = _context(full, current)
+    by_id = {item["id"]: item for item in full["items"]}
     matched = []
+    seen = set()
     for row in rows:
-        if row.get("confidence") not in ("likely", "validated"):
+        evidence = by_id[row["id"]]
+        if evidence["use_state"] != "usable" or not set(evidence["allowed_uses"]) & {
+            "test", "retain_control", "market_support",
+        } or evidence["same_direction_count"] < 2:
             continue
-        if not _within_180_days(row.get("learned_at"), today):
-            continue
-        parsed = _parse_visual_scope(row.get("applicability_scope") or "")
+        parsed = _parse_visual_scope(base_learning_scope(row.get("applicability_scope")))
         if parsed is None:
             continue
         audience, dimension, value = parsed
         if audience != audience_key or value == "看不出":
             continue
-        matched.append((row, dimension, value))
+        identity = (evidence["scope"]["claim_key"], dimension, value)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        matched.append(({**row, "evidence": evidence}, dimension, value))
 
-    lines = [row["learning_text"] for row, _dim, _value in matched[:5]]
+    lines = [f"{row['learning_text']}（{row['evidence']['support_label']}）"
+             for row, _dim, _value in matched[:5]]
     omitted = max(0, len(matched) - 5)
     winners: list[str] = []
     winner_ids: list[str] = []
     for row, dimension, value in matched:
-        if dimension == "look" and value not in winners:
+        if dimension == "look" and value not in winners and "market_support" in row[
+            "evidence"]["allowed_uses"] and row["evidence"]["same_direction_count"] >= 2:
             winners.append(value)
             winner_ids.append(row["id"])
     line_ids = [row["id"] for row, _dim, _value in matched[:5]]
     ids = list(dict.fromkeys([*line_ids, *winner_ids]))
-    return {"winners": winners, "lines": lines, "omitted": omitted, "ids": ids}
+    return {"winners": winners, "lines": lines, "omitted": omitted, "ids": ids,
+            "evidence_context": context}

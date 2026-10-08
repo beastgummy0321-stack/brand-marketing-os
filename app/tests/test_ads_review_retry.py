@@ -7,7 +7,14 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 import app.tests.test_ads_review_cycle as _cycle
-from app.ads import review_jobs, review_monitor, review_policy, review_rounds, triage
+from app.ads import (
+    review_evidence,
+    review_jobs,
+    review_monitor,
+    review_policy,
+    review_rounds,
+    triage,
+)
 from app.core import db, interrupts
 from app.main import app
 
@@ -48,6 +55,67 @@ class ReviewRetryTest(unittest.TestCase):
             self.conn, self.org, self.brand, self.campaign, self.ad["id"], self.start, self.end
         )
         return self.run_review(row)
+
+    def test_learning_changes_during_paid_call_link_and_settle_the_durable_task(self):
+        self.observation()
+        self.reply()
+        context = {"revision": "before", "items": []}
+        complete = self.fake.complete
+
+        def changed(*args, **kwargs):
+            response = complete(*args, **kwargs)
+            context["revision"] = "after"
+            return response
+
+        with patch.object(review_evidence, "learning_context",
+                          side_effect=lambda *a: dict(context)):
+            row = self.request()
+            with patch.object(self.fake, "complete", side_effect=changed):
+                done = self.run_review(row)
+            self.assertEqual(done["status"], "failed")
+            self.assertEqual(done["reservation_state"], "settled")
+            self.assertTrue(done["llm_task_id"])
+            self.assertEqual(done["result_json"]["recommendations"], [])
+            self.assertIn("適用條件", done["error"])
+            task = review_jobs.gateway.find_tasks_for_scope(
+                self.conn, org_id=self.org, brand_id=self.brand,
+                task_type=review_rounds.TASK_TYPE, context_scope={"review_id": row["id"]},
+            )[0]
+            self.assertEqual(task["id"], done["llm_task_id"])
+            self.assertIsNotNone(task["cost"])
+            review_jobs.recover(self.conn, int(db.now_utc().timestamp()), bootstrap=True)
+            self.assertEqual(self.get(row["id"])["reservation_state"], "settled")
+            self.assertEqual(len(self.fake.calls), 1)
+
+    def test_stale_unknown_cost_stays_recoverable_and_later_settles_without_resending(self):
+        self.observation()
+        self.reply()
+        context = {"revision": "before", "items": []}
+        complete = self.fake.complete
+        apply = review_jobs.apply_saved_task
+
+        def changed(*args, **kwargs):
+            response = complete(*args, **kwargs)
+            context["revision"] = "after"
+            return response
+
+        with patch.object(review_evidence, "learning_context",
+                          side_effect=lambda *a: dict(context)):
+            row = self.request()
+            with patch.object(self.fake, "complete", side_effect=changed), patch.object(
+                review_jobs, "apply_saved_task",
+                side_effect=lambda conn, review, task: apply(conn, review, {**task, "cost": None}),
+            ):
+                pending = self.run_review(row)
+            self.assertEqual(pending["status"], "unknown")
+            self.assertEqual(pending["reservation_state"], "held")
+            self.assertTrue(pending["llm_task_id"])
+            review_jobs.recover(self.conn, int(db.now_utc().timestamp()), bootstrap=True)
+            done = self.get(row["id"])
+            self.assertEqual(done["status"], "failed")
+            self.assertEqual(done["reservation_state"], "settled")
+            self.assertEqual(done["llm_task_id"], pending["llm_task_id"])
+            self.assertEqual(len(self.fake.calls), 1)
 
     def test_real_hedges_pass_and_positive_cause_or_digit_still_fail(self):
         for text in REAL_HEDGES:

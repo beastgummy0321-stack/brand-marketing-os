@@ -122,6 +122,21 @@ beforeEach(() => {
 
 describe("F52 served delivery and guidance", () => {
   const failedReason = "本次平台結構讀取失敗；保留上次成功讀取時間與已知廣告數量。";
+  it.each([
+    { optional: {}, present: false },
+    { optional: { off: 0, not_running: 0 }, present: false },
+    { optional: { off: 1 }, present: true },
+    { optional: { not_running: 2 }, present: true },
+  ])("empty judged rows use only supplied positive platform presence ($present)", async ({ optional, present }) => {
+    vi.mocked(getCampaignStructure).mockResolvedValue({ groups: [] });
+    vi.mocked(getQueue).mockResolvedValue(queue([]));
+    vi.mocked(getTriage).mockResolvedValue({ data: { status: { state: "no_rows", label: "還沒有成效紀錄。" } } } as never);
+    renderBody(detail({ origin: "imported" }), ws({ pending_count: 0, active_ads: 0, missing_days: ["2026-09-23"],
+      running: { count: 0, unknown: 0, read_at: null, stale: false, ...optional } }));
+    const text = present ? "已讀到平台廣告，這裡還沒有可判斷的成效資料。" : "這裡還沒有可判斷的廣告成效資料。";
+    expect(await screen.findByText(text)).toBeTruthy();
+    if (!present) expect(screen.queryByText(/已讀到平台廣告/)).toBeNull();
+  });
 
   it("retains a failed read's count as a past observation and offers its served exit", async () => {
     vi.mocked(getQueue).mockResolvedValue(queue([]));

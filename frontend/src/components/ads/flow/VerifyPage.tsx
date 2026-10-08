@@ -14,7 +14,7 @@ import {
 } from "@/lib/adsChangeApi";
 import { getQueue } from "@/lib/adsTriageApi";
 import { useApiRead } from "@/lib/useApiRead";
-import { ActionBar, CampaignChip, Chip, FlowHeader, LearnCard, ReadFailed, ResultHero, StatusRail, type FlowStep, type RailCell } from "../patterns";
+import { ActionBar, CampaignChip, FlowHeader, LearningReceipt, ReadFailed, ResultHero, StatusRail, type FlowStep, type RailCell } from "../patterns";
 import { reviewRoundPath } from "../review/reviewFlow";
 import { AbLearnedCard, useAbContext } from "./AbEvidence";
 import { cleanupSteps } from "./CleanupProposal";
@@ -31,7 +31,6 @@ import {
   formatTargetAmount,
   isAbSet,
   isCleanupTriageItem,
-  itemAngle,
   nextOpenQueueItem,
   proposePausePath,
   stepFromChangeSet,
@@ -97,8 +96,8 @@ function timelineRailCells(item: ChangeItem, kind: Kind): RailCell[] {
         ? { title: "花費停止", note: "已確認停止", ok: true }
         : { title: "花費停止", note: "明天確認" },
       item.learning?.recorded
-        ? { title: "已記入品牌學習", note: `第 ${item.learning.count} 次觀察`, ok: true }
-        : { title: "品牌學習", note: "沒標主打，未記入" },
+        ? { title: "已記入品牌學習", note: "本次操作已留紀錄", ok: true }
+        : { title: "品牌學習", note: "本次操作尚未留紀錄" },
     ];
   }
   if (kind === "budget") {
@@ -116,29 +115,8 @@ function timelineRailCells(item: ChangeItem, kind: Kind): RailCell[] {
   ];
 }
 
-const CONFIDENCE_LABEL: Record<string, string> = { observed: "觀察到", likely: "可能成立", validated: "成立" };
-// `learning.count`（Contract D，1-indexed：第一次記錄就是 1）跟 promotion 門檻一一對應——
-// `app/ads/ads_learnings.py::_confidence_for_count` 是 `prior>=2 -> validated / prior>=1 -> likely
-// / 否則 observed`，`prior` 正好是這次寫入前已有的同文字筆數，也就是「這次的 count − 1」；門檻
-// 剛好每次只差 1，所以「再出現幾次會升級」永遠是 1 次，不用另外算距離。
-const NEXT_CONFIDENCE_LABEL: Record<string, string> = { observed: "可能成立", likely: "成立" };
-
-/** 暫停確認已核對、且這則廣告有標主打時的品牌學習卡（v7 原型 `verify()` confirmed 分支的
- * `.learn`，跟 rail 的「已記入品牌學習」格是同一份資料的兩種畫法）。 */
 function PauseLearningCard({ item }: { item: ChangeItem }) {
-  const angle = itemAngle(item);
-  const confidence = item.learning?.confidence ?? "observed";
-  const nextLabel = NEXT_CONFIDENCE_LABEL[confidence];
-  return (
-    <LearnCard
-      title={<>「{angle ?? ""}」對這群受眾無效</>}
-      aside={<Chip>{CONFIDENCE_LABEL[confidence] ?? confidence}</Chip>}
-    >
-      <p className="text-[13px] text-muted-foreground">
-        下次規劃素材時會避開{nextLabel && <>・再出現 1 次同方向結果會升為「{nextLabel}」</>}
-      </p>
-    </LearnCard>
-  );
+  return <LearningReceipt recorded={item.learning?.recorded === true} evidence={item.learning?.evidence ?? null}/>;
 }
 
 /** deviated 的「你核准的 / 平台目前」對照：文案是逐行標記差異（跟 `ConfirmPage`／`handoff()`
@@ -446,8 +424,10 @@ export function VerifyPage({ brandId, campaignId, setId }: {
       ...(item.evidence_json.setting_matches === true
         ? [{ title: "設定相符", note: confirmedRailNote(item, kind), ok: true }]
         : []),
-      ...(kind === "new_ad" && (item.evidence_json.peers?.length ?? 0) <= 1
-        ? [{ title: "素材核對", note: materialProofText(item.evidence_json.peers?.[0]?.material_evidence) }]
+      ...(kind === "new_ad" && (!Array.isArray(item.evidence_json.peers) || item.evidence_json.peers.length <= 1)
+        ? [{ title: "素材核對", note: Array.isArray(item.evidence_json.peers)
+          ? materialProofText(item.evidence_json.peers[0]?.material_evidence)
+          : "素材清單尚未提供，素材尚未確認" }]
         : []),
       // An A/B pause has no angle: its notebook line is the card below, not the angle cell.
       ...(abSet ? timeline.slice(0, 1) : timeline),
@@ -456,12 +436,12 @@ export function VerifyPage({ brandId, campaignId, setId }: {
     // v7 原型 verify() confirmed 分支：`i.kind==="pause"&&A[q.ad]?.angle` 才畫這張卡——跟 rail 的
     // 「已記入品牌學習」格同一個資料來源（`item.learning.recorded`），只是這裡是展開版。
     // F29-I14: an A/B set shows the line it writes into the notebook (prototype v10 `stepChk()` kind `ab`).
-    if (abSet && changeSet.ab) learnCard = <AbLearnedCard ab={changeSet.ab} item={item} />;
+    if (abSet && changeSet.ab) learnCard = <AbLearnedCard ab={changeSet.ab} item={item} context={abContext} />;
     else if (kind === "pause" && item.learning?.recorded) learnCard = <PauseLearningCard item={item} />;
     bar = (
       <ActionBar>
         {again}
-        {nextOrHome}
+        {learnCard ? <>{nextOrHomeQuiet}<Button asChild><Link to={`/brands/${encodeURIComponent(brandId)}/library?tab=ads-learnings`}>查看品牌學習 →</Link></Button></> : nextOrHome}
       </ActionBar>
     );
   } else if (state === "deviated") {
@@ -520,7 +500,7 @@ export function VerifyPage({ brandId, campaignId, setId }: {
   }
 
   return (
-    <div className="flex min-h-[calc(100dvh-108px)] flex-col gap-4 xl:min-h-[calc(100dvh-120px)]">
+    <div data-slot="verify-screen" className="flex min-h-[calc(100dvh-108px)] min-w-0 flex-col gap-5 xl:min-h-[calc(100dvh-120px)]">
       <Breadcrumb items={crumb} />
       <FlowHeader steps={steps} current={2} title="核對結果" purpose={STEP_PURPOSE} context={context} />
       {queueFailed}

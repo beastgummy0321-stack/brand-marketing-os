@@ -276,10 +276,11 @@ def check(conn, org, brand, campaign, set_id, action_id, actor):
         # re-check of an already-confirmed item (`app/ads/runtime.py`) never duplicates.
         from app.ads import ads_learnings
 
+        recorded_action = {**action, "evidence_json": evidence, "verified_at": verified}
         if action.get("angle"):
-            ads_learnings.record_for_item(conn, org, brand, campaign, set_id, action)
+            ads_learnings.record_for_item(conn, org, brand, campaign, set_id, recorded_action)
         # F29-I04 Contract F: the confirmed pause of an A/B set writes its comparison result.
-        ads_learnings.record_for_ab_item(conn, org, brand, campaign, current, action)
+        ads_learnings.record_for_ab_item(conn, org, brand, campaign, current, recorded_action)
     if state == "confirmed":
         # F49 Contract Q: once the confirmation has committed, the queue row this set answers
         # (a cleanup row, a review copy set's `worse` row) leaves the inbox if it is done now.

@@ -1,0 +1,327 @@
+{
+  "schema_version": 1,
+  "feature": "F53",
+  "cases_sha256": "48ada4e752fa4c2e5848b7b986e3af7146c9ede0aa712b7a72460b5d53505339",
+  "hashes": {
+    "product": "8418ba94b5db2b17a1d22a94c86b9eb4877ba11a7e952be7c514dcef2f04c8c0",
+    "ui": "0ebac54d6adfdaaa1f080fac2ef92075078e70f9c34f8e3096af3de8336145e6",
+    "probe": "e5d8aae6bf083cbbb7357bf2b1cc6a5ac98eb5bd4ea2a389e94bf4510d8688a5",
+    "runtime_config": "3826657d9f99c968c0a509b9d4513952c5f1d5c6ea1ebaed4da658de47c4ef53"
+  },
+  "gates": {
+    "G1": {
+      "status": "pass",
+      "evidence": [
+        {
+          "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\repair-combined-20261008-r2\\fixed-cycle.json",
+          "bytes": 7345629,
+          "sha256": "cffb4d4436e7353a885ab477270e856c441ee888a32d6f8d16b5b5c82d802fe7"
+        },
+        {
+          "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\repair-combined-20261008-r2\\qualification-cases.json",
+          "bytes": 159032,
+          "sha256": "d3cd1b2424db99db2ca2a7304dc0edbb4cc4d9f2b6bece3d826c1fb3779800b0"
+        },
+        {
+          "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\repair-combined-20261008-r2\\source-boundaries.json",
+          "bytes": 79196,
+          "sha256": "ac936f69fe1186d1c4597a9a9cb87a7d2d17692ce88e46ca45612f02e39c6716"
+        },
+        {
+          "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\repair-combined-20261008-r2\\http-events.jsonl",
+          "bytes": 4624300,
+          "sha256": "75b61a3a6ec714b7b920c9b91e89d9a1fee11c19bf6310f355d28a3ad4190193"
+        },
+        {
+          "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\repair-combined-20261008-r2\\cleanup.json",
+          "bytes": 113,
+          "sha256": "cddd00fb21b01bbaccd639839d6384ade76cc03b766735157c1164009c1d60dc"
+        }
+      ],
+      "finished_at": "2026-10-08T07:30:49.261261+00:00",
+      "hashes": {
+        "product": "8418ba94b5db2b17a1d22a94c86b9eb4877ba11a7e952be7c514dcef2f04c8c0",
+        "ui": "0ebac54d6adfdaaa1f080fac2ef92075078e70f9c34f8e3096af3de8336145e6",
+        "probe": "e5d8aae6bf083cbbb7357bf2b1cc6a5ac98eb5bd4ea2a389e94bf4510d8688a5",
+        "runtime_config": "3826657d9f99c968c0a509b9d4513952c5f1d5c6ea1ebaed4da658de47c4ef53"
+      },
+      "limitations": [
+        "Canned provider contract only; synthetic reader"
+      ],
+      "cleanup": {
+        "process_stopped": true,
+        "storage": true,
+        "schema": true
+      },
+      "run_id": "ca0939256cf34d608fb24b92dbc177a8"
+    },
+    "G2": {
+      "status": "pass",
+      "evidence": [
+        {
+          "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\repair-combined-20261008-r2\\fixed-cycle.json",
+          "bytes": 7345629,
+          "sha256": "cffb4d4436e7353a885ab477270e856c441ee888a32d6f8d16b5b5c82d802fe7"
+        },
+        {
+          "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\repair-combined-20261008-r2\\qualification-cases.json",
+          "bytes": 159032,
+          "sha256": "d3cd1b2424db99db2ca2a7304dc0edbb4cc4d9f2b6bece3d826c1fb3779800b0"
+        },
+        {
+          "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\repair-combined-20261008-r2\\source-boundaries.json",
+          "bytes": 79196,
+          "sha256": "ac936f69fe1186d1c4597a9a9cb87a7d2d17692ce88e46ca45612f02e39c6716"
+        },
+        {
+          "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\repair-combined-20261008-r2\\http-events.jsonl",
+          "bytes": 4624300,
+          "sha256": "75b61a3a6ec714b7b920c9b91e89d9a1fee11c19bf6310f355d28a3ad4190193"
+        },
+        {
+          "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\repair-combined-20261008-r2\\cleanup.json",
+          "bytes": 113,
+          "sha256": "cddd00fb21b01bbaccd639839d6384ade76cc03b766735157c1164009c1d60dc"
+        }
+      ],
+      "finished_at": "2026-10-08T07:30:49.411320+00:00",
+      "hashes": {
+        "product": "8418ba94b5db2b17a1d22a94c86b9eb4877ba11a7e952be7c514dcef2f04c8c0",
+        "ui": "0ebac54d6adfdaaa1f080fac2ef92075078e70f9c34f8e3096af3de8336145e6",
+        "probe": "e5d8aae6bf083cbbb7357bf2b1cc6a5ac98eb5bd4ea2a389e94bf4510d8688a5",
+        "runtime_config": "3826657d9f99c968c0a509b9d4513952c5f1d5c6ea1ebaed4da658de47c4ef53"
+      },
+      "limitations": [
+        "Canned provider contract only; synthetic reader"
+      ],
+      "cleanup": {
+        "process_stopped": true,
+        "storage": true,
+        "schema": true
+      },
+      "run_id": "ca0939256cf34d608fb24b92dbc177a8"
+    },
+    "G3": {
+      "status": "pass",
+      "evidence": [
+        {
+          "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\repair-combined-20261008-r2\\fixed-cycle.json",
+          "bytes": 7345629,
+          "sha256": "cffb4d4436e7353a885ab477270e856c441ee888a32d6f8d16b5b5c82d802fe7"
+        },
+        {
+          "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\repair-combined-20261008-r2\\qualification-cases.json",
+          "bytes": 159032,
+          "sha256": "d3cd1b2424db99db2ca2a7304dc0edbb4cc4d9f2b6bece3d826c1fb3779800b0"
+        },
+        {
+          "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\repair-combined-20261008-r2\\source-boundaries.json",
+          "bytes": 79196,
+          "sha256": "ac936f69fe1186d1c4597a9a9cb87a7d2d17692ce88e46ca45612f02e39c6716"
+        },
+        {
+          "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\repair-combined-20261008-r2\\http-events.jsonl",
+          "bytes": 4624300,
+          "sha256": "75b61a3a6ec714b7b920c9b91e89d9a1fee11c19bf6310f355d28a3ad4190193"
+        },
+        {
+          "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\repair-combined-20261008-r2\\cleanup.json",
+          "bytes": 113,
+          "sha256": "cddd00fb21b01bbaccd639839d6384ade76cc03b766735157c1164009c1d60dc"
+        }
+      ],
+      "finished_at": "2026-10-08T07:30:49.559334+00:00",
+      "hashes": {
+        "product": "8418ba94b5db2b17a1d22a94c86b9eb4877ba11a7e952be7c514dcef2f04c8c0",
+        "ui": "0ebac54d6adfdaaa1f080fac2ef92075078e70f9c34f8e3096af3de8336145e6",
+        "probe": "e5d8aae6bf083cbbb7357bf2b1cc6a5ac98eb5bd4ea2a389e94bf4510d8688a5",
+        "runtime_config": "3826657d9f99c968c0a509b9d4513952c5f1d5c6ea1ebaed4da658de47c4ef53"
+      },
+      "limitations": [
+        "Canned provider contract only; synthetic reader"
+      ],
+      "cleanup": {
+        "process_stopped": true,
+        "storage": true,
+        "schema": true
+      },
+      "run_id": "ca0939256cf34d608fb24b92dbc177a8"
+    },
+    "G4": {
+      "status": "pass",
+      "evidence": [
+        {
+          "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\repair-combined-20261008-r2\\fixed-cycle.json",
+          "bytes": 7345629,
+          "sha256": "cffb4d4436e7353a885ab477270e856c441ee888a32d6f8d16b5b5c82d802fe7"
+        },
+        {
+          "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\repair-combined-20261008-r2\\qualification-cases.json",
+          "bytes": 159032,
+          "sha256": "d3cd1b2424db99db2ca2a7304dc0edbb4cc4d9f2b6bece3d826c1fb3779800b0"
+        },
+        {
+          "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\repair-combined-20261008-r2\\source-boundaries.json",
+          "bytes": 79196,
+          "sha256": "ac936f69fe1186d1c4597a9a9cb87a7d2d17692ce88e46ca45612f02e39c6716"
+        },
+        {
+          "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\repair-combined-20261008-r2\\http-events.jsonl",
+          "bytes": 4624300,
+          "sha256": "75b61a3a6ec714b7b920c9b91e89d9a1fee11c19bf6310f355d28a3ad4190193"
+        },
+        {
+          "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\repair-combined-20261008-r2\\cleanup.json",
+          "bytes": 113,
+          "sha256": "cddd00fb21b01bbaccd639839d6384ade76cc03b766735157c1164009c1d60dc"
+        }
+      ],
+      "finished_at": "2026-10-08T07:30:49.703516+00:00",
+      "hashes": {
+        "product": "8418ba94b5db2b17a1d22a94c86b9eb4877ba11a7e952be7c514dcef2f04c8c0",
+        "ui": "0ebac54d6adfdaaa1f080fac2ef92075078e70f9c34f8e3096af3de8336145e6",
+        "probe": "e5d8aae6bf083cbbb7357bf2b1cc6a5ac98eb5bd4ea2a389e94bf4510d8688a5",
+        "runtime_config": "3826657d9f99c968c0a509b9d4513952c5f1d5c6ea1ebaed4da658de47c4ef53"
+      },
+      "limitations": [
+        "Canned provider contract only; synthetic reader"
+      ],
+      "cleanup": {
+        "process_stopped": true,
+        "storage": true,
+        "schema": true
+      },
+      "run_id": "ca0939256cf34d608fb24b92dbc177a8"
+    },
+    "G7": {
+      "status": "pass",
+      "evidence": [
+        {
+          "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\repair-combined-20261008-r2\\auth-receipt.json",
+          "bytes": 2507,
+          "sha256": "fa18da30ee3f83359c150a02cb0eb441666958f66cafa7daea8954d92d80c473"
+        },
+        {
+          "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\repair-combined-20261008-r2\\restore-receipt.json",
+          "bytes": 136029,
+          "sha256": "a8ae0feb9042fb3db9046bf4a92e69b6287bba921007d186b9055b2af9c7e7c7"
+        }
+      ],
+      "finished_at": "2026-10-08T07:32:29.236399+00:00",
+      "hashes": {
+        "product": "8418ba94b5db2b17a1d22a94c86b9eb4877ba11a7e952be7c514dcef2f04c8c0",
+        "ui": "0ebac54d6adfdaaa1f080fac2ef92075078e70f9c34f8e3096af3de8336145e6",
+        "probe": "e5d8aae6bf083cbbb7357bf2b1cc6a5ac98eb5bd4ea2a389e94bf4510d8688a5",
+        "runtime_config": "3826657d9f99c968c0a509b9d4513952c5f1d5c6ea1ebaed4da658de47c4ef53"
+      },
+      "limitations": [
+        "Private Windows owned fixture; not public deployment proof"
+      ],
+      "cleanup": {
+        "auth": true,
+        "restore": true
+      },
+      "run_id": "ca0939256cf34d608fb24b92dbc177a8"
+    },
+    "G5": {
+      "status": "pass",
+      "evidence": [
+        {
+          "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\repair-combined-20261008-r2\\ui-manifest.json",
+          "bytes": 794,
+          "sha256": "eb09b5bf326b27e6f447ee7025a4328349e1d07e3b827747bb9ed076f8299bfd"
+        }
+      ],
+      "finished_at": "2026-10-08T07:39:14.907635+00:00",
+      "hashes": {
+        "product": "8418ba94b5db2b17a1d22a94c86b9eb4877ba11a7e952be7c514dcef2f04c8c0",
+        "ui": "0ebac54d6adfdaaa1f080fac2ef92075078e70f9c34f8e3096af3de8336145e6",
+        "probe": "e5d8aae6bf083cbbb7357bf2b1cc6a5ac98eb5bd4ea2a389e94bf4510d8688a5",
+        "runtime_config": "3826657d9f99c968c0a509b9d4513952c5f1d5c6ea1ebaed4da658de47c4ef53"
+      },
+      "limitations": [
+        "Actual human five-question acceptance remains pending"
+      ],
+      "cleanup": {
+        "read_only_assembly": true
+      },
+      "run_id": "ca0939256cf34d608fb24b92dbc177a8"
+    },
+    "G6": {
+      "status": "pass",
+      "evidence": [
+        {
+          "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\repair-combined-20261008-r2\\provider-receipt.json",
+          "bytes": 6962,
+          "sha256": "15176ea33ac9480eab516ddf9edc42de0e8b1fc39ff140ca068addf899f8b671"
+        },
+        {
+          "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\repair-combined-20261008-r2\\provider-semantic-review.json",
+          "bytes": 3513,
+          "sha256": "85fdf12c9b337e9641e2b295ac1e2e51cb2f001c5ed70caf4b2e7952f6ccf54d"
+        }
+      ],
+      "finished_at": "2026-10-08T07:48:06.520683+00:00",
+      "hashes": {
+        "product": "8418ba94b5db2b17a1d22a94c86b9eb4877ba11a7e952be7c514dcef2f04c8c0",
+        "ui": "0ebac54d6adfdaaa1f080fac2ef92075078e70f9c34f8e3096af3de8336145e6",
+        "probe": "e5d8aae6bf083cbbb7357bf2b1cc6a5ac98eb5bd4ea2a389e94bf4510d8688a5",
+        "runtime_config": "3826657d9f99c968c0a509b9d4513952c5f1d5c6ea1ebaed4da658de47c4ef53"
+      },
+      "limitations": [
+        "One synthetic-context model sample; not market/economic proof"
+      ],
+      "cleanup": {
+        "gateway_returned": true
+      },
+      "run_id": "ca0939256cf34d608fb24b92dbc177a8"
+    }
+  },
+  "human_acceptance": "pending",
+  "release_eligible": false,
+  "G8": {
+    "status": "pending",
+    "sidecar": ".harness/scratch/F53/final"
+  },
+  "disposition": {
+    "fixed": [
+      "Workbench import cycle",
+      "Deterministic observation identity comparison",
+      "Manual-cap, completed-day and confirmed-concurrency test fixtures",
+      "Strict actual provider request and production executable-decision validation",
+      "Prompt source binding and rendered ordinary-login saved-work recovery",
+      "Preserved cleanup currency/comparability and guarded brief/cost previews",
+      "Honest unknown collections and precise test-only reachability guards"
+    ],
+    "remaining": [
+      "Actual human five-question screen acceptance",
+      "F48-F52 remain open"
+    ],
+    "unverified": [
+      "G8 actual integration pending until ignored sidecar is sealed"
+    ]
+  },
+  "provenance": "Synthetic API/market-shaped source fixtures; not live-market proof",
+  "context": {
+    "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\repair-combined-20261008-r2\\context.json",
+    "bytes": 33747,
+    "sha256": "2f76ff9b25df67a0e510c7656c6503513297fbf4e6eb823d827a472d9bb0732a"
+  },
+  "status": "G1-G7 verified; actual G8 integration and human acceptance remain separate",
+  "ui_gallery": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\final-ui-repair-20261008-r2\\index.html",
+  "historical_failure": {
+    "source_head": "266c02209d2fcc13f01883dad92fa01f88511a06",
+    "context": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\final-combined-20261008-a5\\context.json",
+    "integration": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\final-integration-20261008",
+    "sidecar": "D:\\0UserProfile\\Desktop\\marketing\\.harness\\scratch\\F53\\final-prior-20261008"
+  },
+  "prior_repair_integration": {
+    "source_head": "1d47fa341e4b8f897fe1dd37ce7339afd89d751d",
+    "context": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\repair-combined-20261008-r1\\context.json",
+    "integration": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\repair-integration-20261008-r1",
+    "preserved_packet": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\repair-round-20261008\\r1-integration-history\\acceptance-result.json",
+    "backend_passed": 4283,
+    "frontend_failed": 13,
+    "status": "Original valid model retained; full integration failed; no G8 seal"
+  }
+}

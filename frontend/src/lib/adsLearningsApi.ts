@@ -8,8 +8,10 @@
 import { apiFetch, readJson } from "./http";
 import { BASE } from "./adsApi";
 import type { CampaignObjectiveFamily } from "./adsTriageApi";
+import type { LearningEvidence, LearningEvidenceContext } from "./adsLearningEvidence";
 
 export interface AdsLearning {
+  evidence: LearningEvidence;
   id: string;
   text: string;
   confidence: "observed" | "likely" | "validated";
@@ -25,10 +27,21 @@ export interface AdsLearning {
   learned_at: string;
 }
 
+export interface AdsLearningsResponse {
+  learnings: AdsLearning[];
+  evidence_context: LearningEvidenceContext;
+}
+
+export async function getAdsLearningResponse(
+  brandId: string, filter: {sellWayId?: string} = {}, signal?: AbortSignal,
+): Promise<AdsLearningsResponse> {
+  const query = filter.sellWayId ? `?sell_way_id=${encodeURIComponent(filter.sellWayId)}` : "";
+  const res = await apiFetch(`${BASE}/brands/${encodeURIComponent(brandId)}/learnings${query}`, { signal });
+  return readJson<AdsLearningsResponse>(res, "讀取品牌學習紀錄失敗。");
+}
+
 export async function getAdsLearnings(brandId: string, signal?: AbortSignal): Promise<AdsLearning[]> {
-  const res = await apiFetch(`${BASE}/brands/${encodeURIComponent(brandId)}/learnings`, { signal });
-  const data = await readJson<{ learnings: AdsLearning[] }>(res, "讀取品牌學習紀錄失敗。");
-  return data.learnings;
+  return (await getAdsLearningResponse(brandId, {}, signal)).learnings;
 }
 
 /** One coordinate of a ranked ad; dimensions the ad did not set are omitted by the server. */
@@ -44,6 +57,7 @@ export interface LearningCoordinate {
 export type LearningVerdict = "keep" | "keep_relative" | "replace";
 
 export interface LearningRow {
+  evidence: LearningEvidence;
   /** As served: sold rows by cost per sale, 沒賣出 last. Print it, never re-sort. */
   rank: number;
   of: number;
@@ -101,6 +115,7 @@ export interface LearningGroup {
 }
 
 export interface CoordinateLearnings {
+  evidence_context: LearningEvidenceContext;
   /** Closed internal campaigns, newest closed first. */
   campaigns: LearningCampaign[];
   /** Sorted by cost per sale, 沒賣出 last. */

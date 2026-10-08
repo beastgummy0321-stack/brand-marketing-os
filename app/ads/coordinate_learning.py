@@ -186,6 +186,12 @@ def write_coordinate_learnings(conn: _AnyConn, org_id: str, brand_id: str, campa
             sample_size="低" if row["few"] or row["cost_per_sale"] is None else "高",
             source_cycle_id=cycle_id, source_track=SOURCE_TRACK,
             needs_revalidation=needs_revalidation,
+            evidence=ads_learnings.source_evidence(
+                conn, org_id, brand_id, detail, kind="coordinate", window=window, ad=ad,
+                observations=by_ad.get(ad["id"], []), claim_key=ads_learnings.message_claim(ad),
+                direction=("support" if row["cost_per_sale"] is not None and row["cap"] is not None
+                           and row["cost_per_sale"] <= row["cap"] else "contrary"),
+            ),
         ))
         existing.add(cycle_id)
     return written
@@ -197,9 +203,12 @@ HEADER = "【上幾期的排名（程式排的；每筆＝花費÷成交）】"
 EMPTY_SECTION = "【上幾期的排名】（還沒有結案過的廣告）"
 
 
-def prompt_view(conn: _AnyConn, org_id: str, brand_id: str) -> dict:
+def prompt_view(conn: _AnyConn, org_id: str, brand_id: str, *, sell_way_id=None, current=None,
+                additional_rows=None, context_cap: int | None = 30) -> dict:
     """The view both planners prompt with: the newest `PROMPT_CAMPAIGNS` closed campaigns."""
-    return learning_view.learnings_view(conn, org_id, brand_id, limit=PROMPT_CAMPAIGNS)
+    return learning_view.learnings_view(conn, org_id, brand_id, limit=PROMPT_CAMPAIGNS,
+                                       sell_way_id=sell_way_id, current=current,
+                                       additional_rows=additional_rows, context_cap=context_cap)
 
 
 def _group_name(group: dict | None, numbers: dict) -> str:
@@ -232,7 +241,8 @@ def ranked_section(conn: _AnyConn, org_id: str, brand_id: str, campaign: dict, *
     list does not carry reads 「這期沒列：〈who〉」, an ad without one 「未指定」. `view` = an
     already-read `prompt_view()` (strategy stores it), read here when omitted."""
     if view is None:
-        view = prompt_view(conn, org_id, brand_id)
+        view = prompt_view(conn, org_id, brand_id, sell_way_id=sell_way.of_campaign(campaign))
+    view = learning_view.scoped_view(view, sell_way.of_campaign(campaign))
     ids = learning_view.learning_ids(view)
     if not ids:
         return EMPTY_SECTION, []
@@ -262,11 +272,16 @@ def ranked_section(conn: _AnyConn, org_id: str, brand_id: str, campaign: dict, *
         )
         for row in campaign_view["rows"]:
             verdict = "・".join([row["verdict_label"], *row["flags"]])
+            evidence = row.get("evidence") or {}
+            qualification = evidence.get("support_label") or "來源尚未核實；僅作歷史對照"
+            usage = ("本期可用" if evidence.get("use_state") == "usable"
+                     else "歷史／待核對，不能作本期市場支持")
             lines.append(
                 f"- {campaign_view['campaign_name']}第 {row['rank']}／{row['of']} 名｜{verdict}"
                 f"｜顧客群 {_group_name(row['customer_group'], numbers)}｜「{row['ad_name']}」"
                 f"｜每筆 {_money_or(row['cost_per_sale'], '沒賣出')}｜賣 {row['sales']} 筆"
                 f"｜花 {learning_rank.whole(row['spend'])}｜{_prompt_coordinates(row, labels)}"
+                f"｜{usage}：{qualification}"
             )
     return "\n".join(lines), ids
 
@@ -366,6 +381,10 @@ def gate_pairs(view: dict, listed_ids: set) -> tuple[set, set]:
         found = set()
         for campaign_view in campaigns:
             for row in campaign_view["rows"]:
+                if not set((row.get("evidence") or {}).get("allowed_uses") or []) & {
+                    "test", "retain_control", "market_support",
+                }:
+                    continue
                 group, angle = row["customer_group"], _angle(row)
                 if group is None or angle is None or group["id"] not in listed_ids:
                     continue

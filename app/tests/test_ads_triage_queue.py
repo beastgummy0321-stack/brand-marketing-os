@@ -1547,6 +1547,16 @@ class GradedCleanupEndToEndTest(unittest.TestCase):
             [self.ids[n] for n in ("w1", "w2", "w3", "w4", "fit", "pricey")],
         )
         self.assertEqual([ad["rank"] for ad in cleanup["keep"]], [1, 2, 3, 4, 5, 6])
+        classified = {
+            item["entity_id"]: item
+            for item in triage.classify(self.conn, self.org, self.brand, self.campaign)["items"]
+        }
+        for ad in cleanup["ads"] + cleanup["keep"]:
+            source = classified[ad["entity_id"]]
+            self.assertEqual(ad["currency"], source["current"]["currency"])
+            self.assertEqual(ad["currency"], "TWD")
+            self.assertEqual(ad["cap_comparison"], source["cap_comparison"])
+            self.assertIsNone(ad["cap_comparison"]["reason"])
         self.assertEqual(cleanup["short"], 0)
         self.assertEqual(cleanup["daily_saving"], 220 + 617)
         self.assertIsNone(cleanup["scale_owner_id"])
@@ -1571,11 +1581,12 @@ class _RealCampaignQueue(unittest.TestCase):
             db.now_utc().astimezone(ZoneInfo(ACCOUNT_TZ)) - timedelta(days=1)
         ).date()
 
-    def _internal(self, name, *, end_date):
+    def _internal(self, name, *, end_date, manual_cap=True):
         campaign_id = repository.create_campaign(self.conn, self.org, self.brand, {
             "name": name, "goal_text": "g", "objective": "購買", "target_cost": 100,
             "start_date": self.cutoff - timedelta(days=60), "end_date": end_date,
             "status": "live",
+            "context_json": {"field_sources": {"cap": "user"}} if manual_cap else {},
         }, created_by="test")["id"]
         self.conn.commit()
         return campaign_id
@@ -1638,6 +1649,16 @@ class EndedCampaignQueueTest(_RealCampaignQueue):
     """F49 Contract Q, decision 6: an ended campaign gets a closeout row instead of new proposals;
     a row raised before the end stays until closeout; an imported ended campaign leaves the
     queue."""
+
+    def test_unknown_cap_provenance_does_not_raise_a_cleanup_proposal(self):
+        campaign = self._internal("Unknown cap", end_date=self.cutoff + timedelta(days=5),
+                                  manual_cap=False)
+        self._entity(campaign, "campaign", "c_unknown_cap")
+        self._wasted_ad(campaign, "c_unknown_cap", "a_unknown_cap", self.cutoff)
+        self.assertIsNone(triage.campaign_cleanup(self.conn, self.org, self.brand, campaign))
+        queue = triage.refresh_queue(self.conn, self.org, self.brand)
+        self.assertEqual(self._rows(queue, "cleanup"), [])
+        self.assertEqual(self._open("cleanup"), [])
 
     def test_a_row_raised_before_the_end_stays_and_the_closeout_row_joins_it(self):
         campaign = self._internal("夏季活動", end_date=self.cutoff + timedelta(days=5))

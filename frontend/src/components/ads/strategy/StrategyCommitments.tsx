@@ -1,4 +1,5 @@
 import type { StrategyDecision, StrategyRole } from "@/lib/adsStrategyTypes";
+import { Chip } from "../patterns/Chip";
 
 /** Bindings and counts are served together; the browser neither pairs names nor estimates capacity. */
 export function StrategyCommitments({ decision, role, stale, details = false }: {
@@ -6,17 +7,19 @@ export function StrategyCommitments({ decision, role, stale, details = false }: 
 }) {
   const slots = decision?.slots.filter((slot) => slot.role === role) ?? [];
   return (
-    <ul className="mt-2 space-y-2">
+    <ul className="space-y-3">
       {slots.map((slot) => (
-        <li key={slot.id} data-slot="strategy-commitment" className="border-l-2 border-border pl-3 text-[13px] [overflow-wrap:anywhere]">
-          <p className="font-medium">{slot.display?.customer_group_label ?? "顧客群名稱未提供"}・{slot.display?.offer_label ?? "優惠名稱未提供"}</p>
+        <li key={slot.id} data-slot="strategy-commitment" className="text-[13px] [overflow-wrap:anywhere]">
+          <p className="text-[15px] font-semibold">{slot.display?.customer_group_label ?? "顧客群名稱未提供"}</p>
+          <div className="mt-2"><Chip>{slot.display?.offer_label ?? "優惠名稱未提供"}</Chip></div>
           {!details && <p className="text-muted-foreground">
             {slot.carry_from_ad_id === null ? `新測試：${slot.test_intent ?? "測試目的未提供"}` : `保留原廣告：${slot.display?.carried_ad_label ?? "原廣告名稱未提供"}`}
           </p>}
           {details && !stale && <p className="mt-1">{typeof slot.rationale === "string" ? slot.rationale : "安排理由未提供"}</p>}
           {details && !stale && <div className="mt-1 text-xs text-muted-foreground">
             {(slot.display?.evidence ?? []).map((ref) => <p key={`${ref.kind}:${ref.id}`} title={ref.id}>依據：{ref.label}</p>)}
-            {(slot.evidence_refs?.length ?? 0) === 0 && <p>沒有可引用的投放紀錄；這則安排是待驗證的新假設。</p>}
+            {!Array.isArray(slot.evidence_refs) && <p>引用依據尚未提供；請重新讀取或產生策略。</p>}
+            {Array.isArray(slot.evidence_refs) && slot.evidence_refs.length === 0 && <p>本次安排未列引用依據；這則安排仍待驗證。</p>}
             {!!slot.display?.evidence_omitted && <p>另有 {slot.display.evidence_omitted} 項依據，此處只顯示前三項。</p>}
           </div>}
         </li>

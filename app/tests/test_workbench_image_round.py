@@ -949,7 +949,7 @@ class AllocationInputsTest(_ImageRoundTestBase):
 # -- L1-L3／W1／M16：視覺學習餵進工作單、只有真的勝出的風格才會被排進主力 --------------------
 
 class LearningsTest(_ImageRoundTestBase):
-    def test_learnings_seed_lines_and_winner_look(self):
+    def test_legacy_visual_winners_remain_history_without_promoting_the_slot_plan(self):
         audience = self._key_row("audience", "cold_unaware")
         dims = [
             ("look", "soft_lifestyle"), ("device", "contrast"), ("layout", "candid_scene"),
@@ -968,14 +968,18 @@ class LearningsTest(_ImageRoundTestBase):
         self._run_worker()
 
         prompt_sent = provider.calls[-1]
-        self.assertIn("已知的視覺學習：", prompt_sent)
-        self.assertIn("另有 1 條沒列出", prompt_sent)
-        self.assertEqual(prompt_sent.count("- 學習"), 5)
+        self.assertIn("學習來源與本期適用範圍", prompt_sent)
+        self.assertIn("已知的視覺學習：（無）", prompt_sent)
+        self.assertEqual(prompt_sent.count("- 學習"), 0)
 
         rows = self._outputs(brief_id)
         round_dict = rows[0]["body_json"]["round"]
-        self.assertEqual(round_dict["look_order"]["exploit"], ["soft_lifestyle"])
-        self.assertTrue(round_dict["learning_ids"])
+        self.assertNotEqual(round_dict["look_order"]["exploit"], ["soft_lifestyle"])
+        self.assertEqual(round_dict["learning_ids"], [])
+        context = round_dict["learning_context"]
+        self.assertEqual(context["eligible_count"], 0)
+        self.assertEqual(len(context["items"]), 6)
+        self.assertTrue(all(row["allowed_uses"] == [] for row in context["items"]))
 
 
 # -- H1／H2：同一個受眾第二輪的探索格要跟第一輪不一樣（history 真的有讀到） -----------------

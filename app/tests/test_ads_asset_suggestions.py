@@ -3,6 +3,7 @@
 import json
 import unittest
 from concurrent.futures import ThreadPoolExecutor
+from copy import deepcopy
 from datetime import date
 from unittest.mock import patch
 
@@ -12,12 +13,85 @@ from app import background, workbench
 from app.ads import asset_suggestion_policy as policy
 from app.ads import asset_suggestions as suggestions
 from app.ads import external_repository as external
-from app.ads import plan, slots
+from app.ads import plan, review_rounds, slots
 from app.ads import repository as campaigns
 from app.ads import user_assets_repository as assets
 from app.brand_intelligence import repository as brands
 from app.core import db, settings
 from app.llm import providers
+
+
+class LearningInputBudgetTest(unittest.TestCase):
+    def context(self):
+        rows = [{"id": f"legacy-{n}", "org_id": "org", "brand_id": "brand",
+                 "product_id": "product", "learning_text": "Retained observation " + "x" * 300,
+                 "applicability_scope": ""} for n in range(30)]
+        result = workbench.qualify_learning_evidence(
+            rows, {"org_id": "org", "brand_id": "brand", "product_id": "product",
+                   "conditions": {}}, min_result_events=10, max_age_days=180,
+        )
+        return {"schema_version": 1, "revision": result["revision"], "eligible_count": 0,
+                "scope_product_id": "product", "scope_label": "Product",
+                "items": result["items"], "omitted": 0}
+
+    def test_review_model_budget_preserves_full_digest_and_mandatory_original_evidence(self):
+        context = self.context()
+        evidence = {"learning_context": context, "current": {"spend": 123, "purchases": 4},
+                    "previous": {"spend": 222}, "native_original": "Exact control",
+                    "limitations": ["Existing mandatory evidence"]}
+        original = deepcopy(evidence)
+        content = review_rounds.model_input(evidence)
+        self.assertLessEqual(len(review_rounds.PROMPT.read_text(encoding="utf-8"))
+                             + len(content) + 32, policy.INPUT_CHARS)
+        sent = json.loads(content)
+        self.assertEqual(sent["current"], evidence["current"])
+        self.assertEqual(sent["native_original"], "Exact control")
+        self.assertEqual(sent["learning_context"]["revision"], context["revision"])
+        self.assertEqual(len(sent["learning_context"]["items"])
+                         + sent["learning_context"]["omitted"], 30)
+        self.assertGreater(sent["learning_context"]["omitted"], 0)
+        self.assertEqual(evidence, original)
+        digest = review_rounds.evidence_digest(evidence)
+        evidence["learning_context"]["items"][-1]["text"] = "Changed omitted meaning"
+        self.assertNotEqual(review_rounds.evidence_digest(evidence), digest)
+
+    def test_five_placements_large_machine_menu_is_model_only_and_each_provider_fits(self):
+        context = self.context()
+        creative = {"input_hash": "Full original fingerprint", "assignment": {"offer_key": "none"},
+                    "comparison": {"evidence_context": context,
+                                   "learning_current": {"conditions": {"materials": [
+                                       {"ad_id": f"ad-{n}", "version": "x" * 100}
+                                       for n in range(100)]}},
+                                   "learning_min_result_events": 10,
+                                   "controls": [{"creative": {"copy_fields": {
+                                       "body": "Exact unchanged original"}}}],
+                                   "learnings": [{"id": item["id"], "evidence": item}
+                                                 for item in context["items"]], "results": []}}
+        data = {"context": "Mandatory brand", "sources": [{"id": "fact", "text": "Confirmed"}],
+                "forbidden": ["Cannot promise"], "campaign": {"id": "campaign"},
+                "summary": "User description", "placements": [
+                    {"id": f"placement-{n}", "creative_brief": deepcopy(creative)}
+                    for n in range(5)]}
+        for provider in ("anthropic", "codex_cli"):
+            with self.subTest(provider=provider):
+                data["provider"] = provider
+                original = deepcopy(data)
+                content = suggestions._messages(data)[0]["content"]
+                size = len(suggestions.PROMPT.read_text(encoding="utf-8")) + len(content)
+                self.assertLessEqual(size + (32 if provider == "codex_cli" else 0),
+                                     policy.INPUT_CHARS)
+                sent = json.loads(content)
+                self.assertEqual(sent["confirmed_sources"], data["sources"])
+                for placement in sent["placements"]:
+                    comparison = placement["creative_brief"]["comparison"]
+                    self.assertNotIn("learning_current", comparison)
+                    self.assertNotIn("learning_min_result_events", comparison)
+                    self.assertEqual(comparison["controls"], creative["comparison"]["controls"])
+                    self.assertEqual(comparison["evidence_context"]["revision"],
+                                     context["revision"])
+                    self.assertEqual(len(comparison["evidence_context"]["items"])
+                                     + comparison["evidence_context"]["omitted"], 30)
+                self.assertEqual(data, original)
 
 
 class SuggestionsTest(unittest.TestCase):

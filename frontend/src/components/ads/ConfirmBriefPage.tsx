@@ -12,6 +12,7 @@ import { generateStrategy, getCampaign, patchCampaign, type CampaignDetail, type
 import type { CampaignFieldSources, FieldSource } from "@/lib/adsCampaignTypes";
 import { fetchChannels } from "@/lib/adsLaunchApi";
 import { putTarget } from "@/lib/adsTriageApi";
+import type { CapView } from "@/lib/adsTriageApi";
 import { getWizardOptions } from "@/lib/adsWizardApi";
 import { useApiRead } from "@/lib/useApiRead";
 import { cn } from "@/lib/utils";
@@ -37,11 +38,27 @@ const numericBudget = (budget: unknown) => (typeof budget === "number" && Number
 
 /** Cap comparisons share the rounding and basis with the strategy editor. */
 const fmt = (v: number | null | undefined) => formatAmount(v) ?? "未知";
-function capCompareText(value: number, breakEven: number | null, price: number | null) {
+const unitMoney = (value: number, currency: string | null | undefined) => formatMoney(value, currency ?? "幣別未知");
+const comparisonReason = "售價、打平線與上限的幣別不同或尚未核實，暫時不能比較。";
+function capCompareText(value: number, cap: CapView, currency: string | null) {
+  const { break_even: breakEven, price } = cap;
+  const breakEvenCurrency = cap.break_even_unit?.currency ?? null;
+  const priceCurrency = cap.price_unit?.currency ?? null;
+  const compareBreakEven = Boolean(currency && breakEvenCurrency === currency);
+  const comparePrice = Boolean(currency && priceCurrency === currency);
   return <>
-    {breakEven !== null && (value >= breakEven ? `比打平 ${fmt(breakEven)} 高 ${fmt(value - breakEven)}` : `比打平 ${fmt(breakEven)} 低 ${fmt(breakEven - value)}`)}
-    {price !== null && <>{breakEven !== null ? "・" : ""}ROAS <Figure basis="roas_at_cap" value={roasAtCap(price, value)} /></>}
+    {breakEven !== null && compareBreakEven && (value >= breakEven ? `比打平 ${unitMoney(breakEven, currency)} 高 ${fmt(value - breakEven)}` : `比打平 ${unitMoney(breakEven, currency)} 低 ${fmt(breakEven - value)}`)}
+    {price !== null && comparePrice && <>{breakEven !== null && compareBreakEven ? "・" : ""}ROAS <Figure basis="roas_at_cap" value={roasAtCap(price, value)} /></>}
+    {(breakEven !== null && !compareBreakEven || price !== null && !comparePrice) && comparisonReason}
   </>;
+}
+function breakEvenHint(cap: CapView) {
+  if (cap.break_even === null) return "";
+  const currency = cap.break_even_unit?.currency ?? null;
+  if (cap.basis !== "break_even" || !currency || cap.cap_unit?.currency !== currency) return comparisonReason;
+  return cap.price !== null && cap.price_unit?.currency === currency
+    ? `先不填就用打平 ${formatMoney(cap.break_even, currency)}：售價 ${formatMoney(cap.price, currency)} 扣成本、運費後的一筆利潤`
+    : `目前暫用打平 ${formatMoney(cap.break_even, currency)}；${comparisonReason}`;
 }
 
 const CAP_LABEL = "每賣一筆最多花";
@@ -212,12 +229,12 @@ export function ConfirmBriefPage({ brandId, campaignId }: { brandId: string; cam
         onDone={(v) => done("audience", "audience", v !== groupPick, { customer_group_ids: v === ALL_GROUPS ? [] : [v] })} />,
     },
     {
-      key: "cap", source: null, label: CAP_LABEL, value: cap.own_value === null ? "" : formatMoney(cap.own_value, "TWD"), editable: true,
+      key: "cap", source: null, label: CAP_LABEL, value: cap.own_value === null ? "" : unitMoney(cap.own_value, cap.cap_unit?.currency), editable: true,
       hint: cap.own_value === null
-        ? (cap.break_even !== null ? `先不填就用打平 ${formatMoney(cap.break_even, "TWD")}：售價 ${fmt(cap.price)} 扣成本、運費後的一筆利潤` : "")
-        : capCompareText(cap.own_value, cap.break_even, cap.price),
+        ? breakEvenHint(cap)
+        : capCompareText(cap.own_value, cap, cap.cap_unit?.currency ?? null),
       // An empty 完成 keeps whatever was there (no clear action here); an unchanged value just closes.
-      editor: <CapEditor initial={cap.own_value} breakEven={cap.break_even} price={cap.price} busy={saving} onCancel={cancel}
+      editor: <CapEditor cap={cap} busy={saving} onCancel={cancel}
         onDone={(v) => { if (v === null || v === cap.own_value) cancel(); else void saveCap(v); }} />,
     },
   ];
@@ -227,7 +244,8 @@ export function ConfirmBriefPage({ brandId, campaignId }: { brandId: string; cam
   // F50: a cap the model read from the 一句話 sentence (`parsed`) is a guess like any other parsed field.
   const capGuessed = capTagHolds && sources.cap === "parsed";
   const guesses = fields.filter((f) => f.source !== null && guessed(f.source)).length + (capGuessed ? 1 : 0);
-  const capUnfilled = cap.own_value === null && cap.break_even !== null;
+  const capUnfilled = cap.own_value === null && cap.break_even !== null && cap.basis === "break_even"
+    && Boolean(cap.cap_unit?.currency && cap.cap_unit.currency === cap.break_even_unit?.currency);
   const barHint = [guesses ? `有 ${guesses} 項是猜的` : null, capUnfilled ? "上限沒填會先用打平" : null].filter(Boolean).join("・") || undefined;
 
   async function handleGenerate() {
@@ -324,25 +342,34 @@ function BudgetEditor({ initial, busy, onDone, onCancel }: {
 
 /** The cap editor (prototype: `.money` input, 「用打平 N」, the live preview line, 完成／取消). Enter saves, Escape
  * cancels. `onDone(null)` = the input was left empty (the caller keeps the previous value; nothing is cleared). */
-function CapEditor({ initial, breakEven, price, busy, onDone, onCancel }: {
-  initial: number | null; breakEven: number | null; price: number | null; busy: boolean;
+function CapEditor({ cap, busy, onDone, onCancel }: {
+  cap: CapView; busy: boolean;
   onDone: (value: number | null) => void; onCancel: () => void;
 }) {
-  const [value, setValue] = useState(initial);
+  const { break_even: breakEven } = cap;
+  const breakEvenCurrency = cap.break_even_unit?.currency ?? null;
+  const [value, setValue] = useState(cap.own_value);
+  // An unchanged value keeps its original source/unit; only a different manual value is TWD.
+  const inputCurrency = value !== null && value === cap.own_value ? cap.cap_unit?.currency ?? null : "TWD";
+  const fillReason = breakEvenCurrency === "TWD" ? undefined : breakEvenCurrency
+    ? `打平線是 ${breakEvenCurrency}，不能直接作為 TWD 上限`
+    : "打平線的幣別尚未核實，不能直接作為 TWD 上限";
   const invalid = value !== null && value < 1;
   const preview = value === null
-    ? <span className="text-muted-foreground">{breakEven !== null ? `填一個整數金額；留空＝先用打平 ${fmt(breakEven)}` : "填一個整數金額"}</span>
+    ? <span className="text-muted-foreground">{breakEven !== null && cap.basis === "break_even" && cap.cap_unit?.currency && cap.cap_unit.currency === breakEvenCurrency
+      ? `填一個整數金額；留空＝先用打平 ${formatMoney(breakEven, breakEvenCurrency)}` : "填一個整數金額；留空保留目前設定"}</span>
     : invalid
       ? <span className="text-danger">請填大於 0 的整數金額</span>
-      : <span className="text-muted-foreground">{capCompareText(value, breakEven, price)}</span>;
+      // The existing own-target writer records explicit manual input as TWD.
+      : <span className="text-muted-foreground">{capCompareText(value, cap, inputCurrency)}</span>;
   const beFill = breakEven !== null ? Math.round(breakEven) : null;
   const submit = () => { if (!invalid && !busy) onDone(value); };
   return (
     <>
       <div onKeyDown={onEscape(onCancel)} className="flex min-w-0 flex-1 flex-col gap-1">
         <div className="flex flex-wrap items-center gap-2">
-          <MoneyInput label={CAP_LABEL} value={value} onChange={setValue} invalid={invalid} onEnter={submit} />
-          {beFill !== null && <Button size="sm" variant="outline" busy={busy} onClick={() => setValue(beFill)}>用打平 {fmt(beFill)}</Button>}
+          <MoneyInput label={CAP_LABEL} currency={inputCurrency ?? "幣別未知"} value={value} onChange={setValue} invalid={invalid} onEnter={submit} />
+          {beFill !== null && <Button size="sm" variant="outline" busy={busy} disabledReason={fillReason} onClick={() => setValue(beFill)}>用打平 {unitMoney(beFill, breakEvenCurrency)}</Button>}
         </div>
         <div className="min-h-4 text-xs" aria-live="polite">{preview}</div>
       </div>

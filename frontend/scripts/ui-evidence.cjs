@@ -14,6 +14,9 @@
  *     [--acts approve,report]   prototype-only: click these data-act buttons first (a step reachable only through earlier steps)
  *                               — runs after --demos and --hash
  *     [--app brands/brd_bughunt/ads/campaigns/cmp_x/detail --base http://127.0.0.1:8732 --mocks mocks.json]
+ *     [--app-acts "查看依據 →,查看來源與限制 →"] reach a separately named panel evidence screen.
+ *     [--scenario changed] select an approved first-release prototype scenario; not a production control.
+ *     [--screen "[data-slot=strategy-screen]"] scope built facts to the issue body, retaining the full screenshot.
  *
  * --mocks: JSON object { "<url glob>": <response json> }, e.g. { "**" + "/api/ads/brands/*" + "/queue": {...} }.
  * The app side needs a backend serving this worktree's build on --base (own port, §1.7 item 8) and `supabase start`.
@@ -34,7 +37,7 @@ const APP = args.app && "/" + args.app.replace(/^\//, "");
 const WIDTHS = [1024, 1920];
 fs.mkdirSync(OUT, { recursive: true });
 
-function facts() {
+function facts(screenSelector) {
   const vis = (e) => e.getClientRects().length > 0;
   const label = (e) => e.tagName.toLowerCase() + (e.id ? "#" + e.id : "") + (typeof e.className === "string" && e.className ? "." + e.className.trim().split(/\s+/).slice(0, 3).join(".") : "");
   const out = ["## containers (max-width, rendered width)"];
@@ -43,7 +46,7 @@ function facts() {
     if (mw !== "none" && vis(e) && e.getBoundingClientRect().width >= 400) out.push(`${label(e)}  max-width:${mw}  width:${Math.round(e.getBoundingClientRect().width)}`);
   }
   // Screen content only: the app's <main>, or the prototype's #app (its crumb and back bar are shell). The shell is not part of a screen issue.
-  const roots = document.querySelector("#main-content") ? [document.querySelector("#main-content")] : [...document.querySelectorAll("#app")];
+  const roots = document.querySelector("#main-content") ? [document.querySelector(screenSelector || "#main-content")].filter(Boolean) : [...document.querySelectorAll("#app")];
   const within = (sel) => roots.flatMap((r) => [...r.querySelectorAll(sel)]);
   out.push("", "## folds (default state)");
   for (const d of within("details")) if (vis(d)) out.push(`${d.open ? "OPEN  " : "CLOSED"} ${(d.querySelector("summary")?.innerText || "").replace(/\s+/g, " ").slice(0, 100)}`);
@@ -61,9 +64,11 @@ function facts() {
     if (e.closest(".rl, .sc, [data-slot=target-ruler], [data-slot=scenario-bars]") && !e.matches(".chip, [data-slot=chip]")) continue; // ruler dots and scenario rows are part of their piece
     const c = e.classList;
     let piece = null;
+    if (e.closest(".filters, [data-slot=segmented]")) continue;
     if (e.dataset.slot === "button") piece = `Button ${e.dataset.variant}`;
     else if (e.dataset.slot === "chip") piece = `Chip ${e.dataset.tone}`;
     else if (e.dataset.slot === "badge") piece = `Badge ${e.dataset.variant}`;
+    else if (e.tagName === "BUTTON" && e.hasAttribute("aria-controls") && e.hasAttribute("aria-expanded")) piece = "Disclosure";
     else if (c.contains("btn")) piece = `Button ${c.contains("pri") ? "default" : c.contains("warnp") ? "warn" : c.contains("ghost") ? "ghost" : "outline"}`; // warnp -> patterns/ConfirmSheet WarnButton
     else if (c.contains("lnk")) piece = "Button link";
     else if (c.contains("chip")) piece = `Chip ${c.contains("nr") ? "unread" : c.contains("over") ? "over" : c.contains("stop") ? "stop" : c.contains("ok") ? "ok" : c.contains("warn") ? "warn" : c.contains("bad") ? "bad" : c.contains("v") ? "accent" : "neutral"}`; // v9 grade chips: patterns/Chip GradeChip
@@ -71,7 +76,7 @@ function facts() {
     if (piece) out.push(`${piece} | ${e.innerText.replace(/\s+/g, " ").slice(0, 50)}`);
   }
   // Non-control pieces (components/ads/patterns/FlowPieces): prototype class -> piece, built side by data-slot.
-  const BLOCKS = { camp: "CampaignChip", tag: "TagToggle", learn: "LearnCard", rec: "RecoverSteps", tiles: "ThumbTiles", days: "DayTiles", ev: "EvidenceRow", ladder: "Ladder", opt: "OptionCard", old: "CopyBlock", new: "CopyBlock", dots: "FlowHeader", kind: "KindMark", meter: "Meter", todo: "TodoRow", hero: "ResultHero", rail: "StageRail", seg: "Segmented", sheet: "DecisionSheet" };
+  const BLOCKS = { "evidence-mini": "LearningEvidenceCard", "learning-row": "LearningEvidenceCard", filters: "Segmented", camp: "CampaignChip", tag: "TagToggle", learn: "LearnCard", rec: "RecoverSteps", tiles: "ThumbTiles", days: "DayTiles", ev: "EvidenceRow", ladder: "Ladder", opt: "OptionCard", old: "CopyBlock", new: "CopyBlock", dots: "FlowHeader", kind: "KindMark", meter: "Meter", todo: "TodoRow", hero: "ResultHero", rail: "StageRail", seg: "Segmented", sheet: "DecisionSheet" };
   const SLOTS = { "campaign-chip": "CampaignChip", "tag-toggle": "TagToggle", "learn-card": "LearnCard", "recover-steps": "RecoverSteps", "thumb-tiles": "ThumbTiles", "day-tiles": "DayTiles", "evidence-row": "EvidenceRow", ladder: "Ladder", "option-card": "OptionCard", "copy-block": "CopyBlock", "flow-header": "FlowHeader", "kind-mark": "KindMark", meter: "Meter", "todo-row": "TodoRow", "result-hero": "ResultHero", "status-rail": "StatusRail", "stage-rail": "StageRail", segmented: "Segmented", "decision-sheet": "DecisionSheet",
     "target-ruler": "TargetRuler", "grade-band": "GradeBand", "money-meter": "MoneyMeter", "pace-chart": "PaceChart", "next-up-strip": "NextUpStrip", "scenario-bars": "ScenarioBars", "allocation-bar": "AllocationBar", "confirm-sheet": "ConfirmSheet", "diff-row": "DiffRow", "cap-dots": "CapDots", "progress-segments": "ProgressSegments",
     // v10 kit (F29-I09)
@@ -80,7 +85,7 @@ function facts() {
     "settings-grid": "SettingsGrid", "setting-field": "SettingField", "readback-row": "ReadbackRow",
     // F30-I03 kit
     "source-list": "SourceList", "source-row": "SourceRow", "day-grid": "DayGrid", legend: "Legend", "copy-fields": "CopyFields", "copy-field": "CopyField",
-    "slot-grid": "SlotGrid", "slot-tile": "SlotTile", "tree-rows": "TreeRows", "change-timeline": "ChangeTimeline", "pick-group": "PickGroup", "pick-card": "PickCard", "money-input": "MoneyInput" };
+    "slot-grid": "SlotGrid", "slot-tile": "SlotTile", "tree-rows": "TreeRows", "change-timeline": "ChangeTimeline", "pick-group": "PickGroup", "pick-card": "PickCard", "money-input": "MoneyInput", "learning-evidence": "LearningEvidenceCard", "learning-source": "LearningEvidenceSource", "learning-receipt": "LearningReceipt" };
   const VARIANT = { kind: ["stop", "worse", "up", "fresh", "cut"], todo: ["ok"], hero: ["ok", "warn", "bad"], opt: ["pick"], old: ["old"], new: ["new"] };
   const NOVARIANT = new Set(["campaign-chip", "tag-toggle", "learn-card", "recover-steps", "thumb-tiles", "day-tiles", "meter", "evidence-row", "ladder", "option-card",
     "grade-band", "pace-chart", "next-up-strip", "scenario-bars", "allocation-bar", "diff-row", "cap-dots", "progress-segments",
@@ -99,6 +104,7 @@ function facts() {
   ];
   // v10 pieces (F29-I09): prototype element -> piece; the built side reports them by data-slot above.
   const V10 = [
+    [(e) => e.matches(".receipt") && e.querySelector("[data-act=pause-source]"), () => "LearningReceipt"],
     // F30-I03 kit: prototype class -> piece
     [(e) => e.matches(".src"), () => "SourceRow"], [(e) => e.matches(".calg"), () => "DayGrid"], [(e) => e.matches(".lg") && !e.querySelector(":scope > span:nth-child(4) > .term"), () => "Legend"],
     [(e) => e.matches(".fl"), () => "CopyField"], [(e) => e.matches(".slots"), () => "SlotGrid"], [(e) => e.matches(".slot"), () => "SlotTile"],
@@ -159,7 +165,7 @@ async function shoot(context, url, kind, setup, acts = [], demos = []) {
   for (const width of WIDTHS) {
     const page = await context.newPage();
     await page.setViewportSize({ width, height: 1200 });
-    page.on("pageerror", (e) => console.log(`[pageerror ${kind} ${width}]`, e.message));
+    page.on("pageerror", (e) => console.log(`[pageerror ${kind} ${width}]`, e.stack || e.message));
     if (setup) await setup(page);
     if (demos.length) {
       // --demos: load the prototype without the hash, click the demo buttons in order, then route to --hash in place
@@ -177,11 +183,17 @@ async function shoot(context, url, kind, setup, acts = [], demos = []) {
       await page.goto(url);
     }
     await page.waitForLoadState("networkidle");
+    if (kind === "reference" && args.scenario) await page.getByLabel("預覽情境").selectOption(args.scenario);
     await page.waitForTimeout(Number(args.settle) || 400); // --settle <ms>: a prototype screen that finishes an async demo state
     // --acts: prototype `data-act` names clicked in order to REACH a screen that only exists after earlier steps.
-    for (const act of acts) { await page.locator(`[data-act="${act}"]`).first().click(); await page.waitForTimeout(300); }
+    for (const act of acts) {
+      if (kind === "built") await page.getByRole("button", {name: act, exact: true}).first().click();
+      else if (act.startsWith("detail:")) await page.locator(`[data-detail="${act.slice(7)}"]`).first().click();
+      else await page.locator(`[data-act="${act}"]`).first().click();
+      await page.waitForTimeout(300);
+    }
     await page.screenshot({ path: `${OUT}/${kind}-${args.name}-${width}.png`, fullPage: true });
-    text += `# ${kind} ${args.name} @${width}\n${await page.evaluate(facts)}\n\n`;
+    text += `# ${kind} ${args.name} @${width}\n${await page.evaluate(facts, args.screen)}\n\n`;
     await page.close();
   }
   fs.writeFileSync(`${OUT}/facts-${kind}-${args.name}.txt`, text, "utf-8");
@@ -204,8 +216,10 @@ async function main() {
     await page.waitForURL((u) => !u.pathname.includes("/login"), { timeout: 15000 });
     await page.close();
     await shoot(context, `${BASE}/app${APP}`, "built", async (p) => {
+      // Fixture previews must never submit writes to the real provider or database.
+      if (args.mocks) await p.route("**/api/**", (route) => route.request().method() === "GET" ? route.continue() : route.abort());
       for (const [glob, json] of Object.entries(mocks)) await p.route(glob, (route) => route.fulfill({ json }));
-    });
+    }, list(args["app-acts"]));
 
     const page2 = await context.newPage();
     for (const width of WIDTHS) {

@@ -1,0 +1,115 @@
+{
+  "schema_version": 1,
+  "feature": "F53",
+  "gate": "G6",
+  "status": "pass",
+  "run_id": "ca0939256cf34d608fb24b92dbc177a8",
+  "hashes": {
+    "product": "8418ba94b5db2b17a1d22a94c86b9eb4877ba11a7e952be7c514dcef2f04c8c0",
+    "ui": "0ebac54d6adfdaaa1f080fac2ef92075078e70f9c34f8e3096af3de8336145e6",
+    "probe": "e5d8aae6bf083cbbb7357bf2b1cc6a5ac98eb5bd4ea2a389e94bf4510d8688a5",
+    "runtime_config": "3826657d9f99c968c0a509b9d4513952c5f1d5c6ea1ebaed4da658de47c4ef53"
+  },
+  "raw_receipt": {
+    "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\repair-combined-20261008-r2\\provider-receipt.json",
+    "bytes": 6962,
+    "sha256": "15176ea33ac9480eab516ddf9edc42de0e8b1fc39ff140ca068addf899f8b671"
+  },
+  "semantic_review": {
+    "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\repair-combined-20261008-r2\\provider-semantic-review.json",
+    "bytes": 3513,
+    "sha256": "85fdf12c9b337e9641e2b295ac1e2e51cb2f001c5ed70caf4b2e7952f6ccf54d"
+  },
+  "diagnosis": {
+    "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\repair-combined-20261008-r2\\provider-diagnosis.json",
+    "bytes": 1002,
+    "sha256": "b353549e07b4efd895189ec917aae2aac425624d187c6a7e375352ac243dd0ee"
+  },
+  "options": {
+    "max_retries": 0,
+    "timeout_s": 60,
+    "tools": null
+  },
+  "attempts": 1,
+  "task_status": "succeeded",
+  "validation": {
+    "status": "contract-pass",
+    "semantic_acceptance": "pending-independent-review",
+    "payload": {
+      "slots": [
+        {
+          "id": "slot-workday-new",
+          "role": "new",
+          "customer_group_id": "A1",
+          "offer_key": "none",
+          "carry_from_ad_id": null,
+          "test_intent": "測試工作日零食購買者對單盒獨立包裝零食的購買假設，這次不使用優惠以隔離商品訊息。",
+          "rationale": "這個安排直接使用單盒內含獨立包裝零食的品牌事實，對應工作日零食購買者；目前觀察樣本偏薄，只適合把它當成初步測試，市場效果仍未知。",
+          "evidence_refs": [
+            {
+              "kind": "brand_fact",
+              "id": "synthetic-fact-snack"
+            }
+          ]
+        }
+      ],
+      "allocation": [
+        {
+          "role": "new",
+          "label": "新客",
+          "pct": 100.0,
+          "rationale": "以單盒內含獨立包裝零食的事實，先測試工作日零食購買者是否接受這個購買假設。"
+        }
+      ],
+      "why": [
+        "以單盒內含獨立包裝零食的品牌事實，測試工作日零食購買者對 supplied buyer hypothesis 的反應。",
+        "只安排一個角色，符合目前可服務的投放上限，也避免把有限測試量分散到另一個顧客群。",
+        "選擇不使用優惠，讓本輪先觀察商品與顧客群組合本身的反應。"
+      ],
+      "unknowns": [
+        "市場是否接受這個購買假設仍未知。",
+        "目前觀察不足以判斷工作日零食購買者是否比其他顧客群更適合。"
+      ],
+      "alternatives": [],
+      "learning_goals": [
+        "釐清工作日零食購買者對單盒獨立包裝零食的購買訊息是否值得下一輪延續。",
+        "了解不使用優惠時，商品訊息本身能否帶來新客反應。"
+      ]
+    },
+    "decision": {
+      "schema_version": 1,
+      "revision": "8a39767047027e4368fa0eb6eec0d299272c7d69a98bf7a451fd9b34bf84f74b",
+      "state": "proposed",
+      "slots": [
+        {
+          "id": "slot-workday-new",
+          "role": "new",
+          "customer_group_id": "A1",
+          "offer_key": "none",
+          "carry_from_ad_id": null,
+          "test_intent": "測試工作日零食購買者對單盒獨立包裝零食的購買假設，這次不使用優惠以隔離商品訊息。",
+          "rationale": "這個安排直接使用單盒內含獨立包裝零食的品牌事實，對應工作日零食購買者；目前觀察樣本偏薄，只適合把它當成初步測試，市場效果仍未知。",
+          "evidence_refs": [
+            {
+              "kind": "brand_fact",
+              "id": "synthetic-fact-snack"
+            }
+          ]
+        }
+      ],
+      "feasibility": {
+        "state": "ready",
+        "reasons": []
+      }
+    }
+  },
+  "started_at": "2026-10-08T07:39:39.174060+00:00",
+  "finished_at": "2026-10-08T07:39:51.676267+00:00",
+  "limits": [
+    "One freshly authorized unchanged-model subscription sample after diagnosed repair",
+    "Synthetic context and disclosed synthetic capacity; no market/economic proof",
+    "Original rejected a5 output remains immutable; no output normalization"
+  ],
+  "human_acceptance": "pending",
+  "release_eligible": false
+}

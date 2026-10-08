@@ -5,12 +5,16 @@ divergent definition of "connected"/"synced" for the home's cards.
 """
 
 import unittest
+from copy import deepcopy
 from unittest.mock import patch
+
+from fastapi.testclient import TestClient
 
 from app.ads import channels, repository
 from app.ads import external_repository as external
 from app.brand_intelligence import repository as brands
 from app.core import db
+from app.main import app
 
 
 class _Reader:
@@ -51,6 +55,39 @@ class ListCampaignsSyncDataTest(unittest.TestCase):
     def _card(self, campaign_id):
         cards = repository.list_campaigns(self.conn, self.org, self.brand)
         return next(card for card in cards if card["id"] == campaign_id)
+
+    def test_get_old_accepted_basis_adds_unknown_evidence_without_rewriting_snapshot(self):
+        product = brands.create_product(self.conn, self.brand, name="Original product",
+                                        actor="test")
+        campaign = repository.create_campaign(self.conn, self.org, self.brand, {
+            "name": "Accepted old plan", "goal_text": "x", "objective": "購買",
+            "start_date": "2026-10-01", "end_date": "2026-10-10", "status": "ready",
+            "budget_planned": 3000, "budget_scenario": "custom",
+            "context_json": {"product_ids": [product["id"]]},
+        }, created_by="test")
+        original = {"strategy": {"allocation": [], "why": [], "unknowns": [], "alternatives": []},
+                    "basis": {"planner_context": {"product_id": product["id"]},
+                              "learnings": [{"id": "old-id", "text": "Accepted original text",
+                                             "level": "validated"}],
+                              "ranked_learnings": {"campaigns": [{"sell_way_id": product["id"],
+                                  "rows": [{"learning_id": "old-rank", "ad_name": "Original rank",
+                                            "rank": 1, "spend": 500, "sales": 2}]}]}}}
+        repository.save_strategy(self.conn, self.org, self.brand, campaign["id"],
+                                 budget_basis_json=deepcopy(original))
+        self.conn.commit()
+        response = TestClient(app).get(f"/api/ads/brands/{self.brand}/campaigns/{campaign['id']}")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["campaign"]["status"], "ready")
+        self.assertEqual(response.json()["campaign"]["budget_planned"], 3000)
+        shown = response.json()["campaign"]["budget_basis_json"]["basis"]
+        self.assertEqual(shown["learnings"][0]["text"], "Accepted original text")
+        self.assertEqual(shown["learnings"][0]["evidence"]["allowed_uses"], [])
+        self.assertEqual(shown["evidence_context"]["eligible_count"], 0)
+        rank = shown["ranked_learnings"]["campaigns"][0]["rows"][0]
+        self.assertEqual((rank["rank"], rank["spend"], rank["sales"]), (1, 500, 2))
+        self.assertEqual(rank["evidence"]["allowed_uses"], [])
+        self.assertEqual(repository.get_campaign(self.conn, self.org, self.brand, campaign["id"])[
+            "budget_basis_json"], original)
 
     def test_never_synced_card_carries_never_state(self):
         campaign_id = self._campaign()

@@ -22,8 +22,14 @@ router = APIRouter(prefix="/api/ads", dependencies=[Depends(_guard)])
 
 
 @router.get("/brands/{brand_id}/learnings")
-def list_learnings(brand_id: str):
-    return {"learnings": service.list_for_brand(db.current(), brand_id)}
+def list_learnings(request: Request, brand_id: str, sell_way_id: str | None = None):
+    org_id = web.require_actor(request).org_id
+    scope = sell_way_id
+    if scope is None:
+        view = learning_view.learnings_view(db.current(), org_id, brand_id)
+        scope = (view.get("next") or {}).get("sell_way_id")
+    return {"learnings": service.list_for_brand(db.current(), brand_id, product_id=scope),
+            "evidence_context": service.evidence_context(db.current(), org_id, brand_id, scope)}
 
 
 @router.get("/brands/{brand_id}/coordinate-learnings")

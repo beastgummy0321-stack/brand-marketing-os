@@ -49,6 +49,15 @@ docstring for why "explicit None" and "omitted" are not the same thing here).
 from fastapi import FastAPI
 
 from app.shared.web import app_path
+from app.workbench.learning_evidence import (
+    base_learning_scope as base_learning_scope,
+)
+from app.workbench.learning_evidence import (
+    encode_learning_scope as encode_learning_scope,
+)
+from app.workbench.learning_evidence import (
+    qualify_learning_evidence as qualify_learning_evidence,
+)
 
 
 def prepare_material_pack(conn, org_id, brand_id, pack):
