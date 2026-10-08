@@ -144,14 +144,24 @@ def _resolve(host: str, port: int, deadline: float):
 
 class _DeadlineReader(io.RawIOBase):
     def __init__(self, sock, deadline):
+        super().__init__()
         self.sock, self.deadline = sock, deadline
+        # SocketIO owns a standard makefile reference: HTTPConnection may close
+        # its socket after headers while HTTPResponse still needs the body.
+        self.raw = sock.makefile("rb", buffering=0)
 
     def readable(self):
         return True
 
     def readinto(self, buffer):
         self.sock.settimeout(_remaining(self.deadline))
-        return self.sock.recv_into(buffer)
+        return self.raw.readinto(buffer)
+
+    def close(self):
+        try:
+            self.raw.close()
+        finally:
+            super().close()
 
 
 class _ResponseSocket:

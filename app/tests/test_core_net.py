@@ -63,6 +63,18 @@ class Socket:
     def recv_into(self, buffer):
         return self.content.readinto(buffer)
 
+    def makefile(self, mode, buffering=0):
+        sock = self
+
+        class Reader(io.RawIOBase):
+            def readable(self):
+                return True
+
+            def readinto(self, buffer):
+                return sock.recv_into(buffer)
+
+        return Reader()
+
     def close(self):
         self.closed = True
 
@@ -225,6 +237,7 @@ def test_socket_reader_reduces_timeout_for_slow_header_bytes():
         with pytest.raises(TimeoutError):
             reader.readinto(bytearray(1))
     assert sock.timeouts == [10.0, 4.0]
+    reader.close()
 
 
 def test_tls_handshake_cannot_reset_the_request_send_deadline(public_dns):
@@ -297,3 +310,94 @@ def test_busy_dns_workers_do_not_accept_an_unbounded_queue(monkeypatch):
         assert net.read_url(URL) == (False, "", net.REASON_TIMEOUT)
         dns.assert_not_called()
     slots.release()
+
+
+@pytest.fixture
+def socketpair_transport(monkeypatch, public_dns):
+    pairs, workers = [], []
+    release = threading.Event()
+
+    def serve(wire, *, hold_open=False):
+        client, server = socket.socketpair()
+        pairs.append((client, server))
+
+        def respond():
+            try:
+                server.settimeout(1)
+                request = bytearray()
+                while b"\r\n\r\n" not in request:
+                    chunk = server.recv(4096)
+                    if not chunk:
+                        return
+                    request.extend(chunk)
+                server.sendall(wire)
+                if hold_open:
+                    release.wait(1)
+            except OSError:
+                pass  # The client may close immediately after rejecting headers.
+            finally:
+                server.close()
+
+        worker = threading.Thread(target=respond)
+        workers.append(worker)
+        worker.start()
+
+        def connect(connection):
+            client.settimeout(net._remaining(connection.deadline))
+            connection.sock = client
+
+        monkeypatch.setattr(net._PinnedConnection, "connect", connect)
+        return client
+
+    yield serve
+    release.set()
+    for worker in workers:
+        worker.join(2)
+        assert not worker.is_alive()
+    for client, server in pairs:
+        try:
+            assert client.fileno() == -1
+            assert server.fileno() == -1
+        finally:
+            client.close()
+            server.close()
+
+
+@pytest.mark.parametrize("framing", ["close", "http10", "eof", "chunked"])
+def test_real_socket_body_outlives_http_connection_close(socketpair_transport, framing):
+    body = b"<p>" + b"Public page " * 2000 + b"</p>"
+    if framing == "close":
+        wire = (b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: "
+                + str(len(body)).encode() + b"\r\n\r\n" + body)
+    elif framing == "http10":
+        wire = b"HTTP/1.0 200 OK\r\n\r\n" + body
+    elif framing == "eof":
+        wire = b"HTTP/1.1 200 OK\r\n\r\n" + body
+    else:
+        wire = (b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
+                + f"{len(body):x}\r\n".encode() + body + b"\r\n0\r\n\r\n")
+    client = socketpair_transport(wire)
+    assert net._read_public("http://shop.example/") == body
+    assert client.fileno() == -1
+
+
+@pytest.mark.parametrize("wire", [
+    b"invalid HTTP status\r\n\r\n",
+    b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\ninvalid chunk\r\n",
+    b"HTTP/1.1 200 OK\r\nContent-Length: 500001\r\n\r\n",
+])
+def test_real_socket_exception_closes_every_io_reference(socketpair_transport, wire):
+    client = socketpair_transport(wire)
+    assert net.read_url("http://shop.example/")[0] is False
+    assert client.fileno() == -1
+
+
+@pytest.mark.parametrize("wire", [
+    b"HTTP/1.1 200 OK\r\nContent-Len",
+    b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 20000\r\n\r\npartial body",
+])
+def test_real_socket_timeout_closes_every_io_reference(socketpair_transport, monkeypatch, wire):
+    monkeypatch.setattr(net, "URL_FETCH_TIMEOUT_S", 0.05)
+    client = socketpair_transport(wire, hold_open=True)
+    assert net.read_url("http://shop.example/") == (False, "", net.REASON_TIMEOUT)
+    assert client.fileno() == -1
