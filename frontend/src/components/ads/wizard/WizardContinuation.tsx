@@ -32,9 +32,9 @@ export function useContinuation(brand: string, query: ContinuationQuery) {
       read.data.revision === selection.revision && selection.campaign_ids.every(id => read.data.source_campaigns.some(c => c.campaign_id === id))};
 }
 
-export function WizardContinuation({source, brand, productChosen, confirmed, onConfirm, locked}: {
+export function WizardContinuation({source, brand, productChosen, confirmed, onConfirm, locked, submitted = false}: {
   source: ReturnType<typeof useContinuation>; brand: string; productChosen: boolean;
-  confirmed: boolean; onConfirm: (value: boolean) => void; locked: boolean;
+  confirmed: boolean; onConfirm: (value: boolean) => void; locked: boolean; submitted?: boolean;
 }) {
   if (source.query.status === "none") return null;
   const selection = source.selection;
@@ -52,7 +52,7 @@ export function WizardContinuation({source, brand, productChosen, confirmed, onC
           {source.read.data.source_campaigns.some(c => selection?.campaign_ids.includes(c.campaign_id) && c.mapping_required) && <>
             <label className="flex items-start gap-2"><input type="checkbox" checked={confirmed} disabled={locked || !productChosen} onChange={e => onConfirm(e.target.checked)} />
               我確認選定歷史活動推的是目前選擇的商品</label>
-            <p className="text-xs text-muted-foreground">{confirmed ? "已記錄你的關聯確認，素材資格仍待送出時由系統核實。" : "未確認關聯時仍可開始新測試，商品專屬成功素材不會自動沿用。"}這不是訂單歸因證明。</p>
+            <p className="text-xs text-muted-foreground">{submitted ? confirmed ? "沿用原送出的商品關聯確認；素材資格仍由系統重新核實。" : "目前商品關聯未確認；原送出確認不可改寫，商品變更須重新核實，不能自動沿用成功素材。" : confirmed ? "已記錄你的關聯確認，素材資格仍待送出時由系統核實。" : "未確認關聯時仍可開始新測試，商品專屬成功素材不會自動沿用。"}這不是訂單歸因證明。</p>
           </>}
           <Disclosure label="查看來源資格與限制">
             <p className="text-xs [overflow-wrap:anywhere]">版本 {source.read.data.revision}</p>

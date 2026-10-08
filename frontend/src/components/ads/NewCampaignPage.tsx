@@ -13,7 +13,7 @@ import type { CampaignCreateExtras } from "@/lib/adsCampaignTypes";
 import { fetchChannels } from "@/lib/adsLaunchApi";
 import { putTarget } from "@/lib/adsTriageApi";
 import { attachUpload, getUploadBatch, type AssetUpload } from "@/lib/adsUserAssetsApi";
-import { createCampaignFromPicks, getWizardOptions, readContinuationQuery, type CampaignPicks, type WizardProduct } from "@/lib/adsWizardApi";
+import { createCampaignFromPicks, getWizardOptions, readContinuationQuery, withContinuationQuery, type CampaignPicks, type WizardProduct } from "@/lib/adsWizardApi";
 import { useApiRead } from "@/lib/useApiRead";
 import { cn } from "@/lib/utils";
 import { UserAssetsLibrary } from "./UserAssetsLibrary";
@@ -113,8 +113,14 @@ function CampaignWizard({ brandId, draftKey }: { brandId: string; draftKey: stri
   const homeHref = `/brands/${brandId}/ads`;
   const [search, setSearch] = useSearchParams();
   const attempt = useRef(readAttempt(draftKey));
-  const createdId = attempt.current?.createdId ?? search.get("created") ?? null;
-  const continuation = useContinuation(brandId, readContinuationQuery(search));
+  const [created, setCreated] = useState<CampaignDetail | null>(null);
+  const createdId = attempt.current ? attempt.current.createdId ?? null : search.get("created");
+  const urlSource = readContinuationQuery(search);
+  const originalSource = attempt.current?.payload.continuation ?? created?.context_json?.next_period_source;
+  const recoveryQuery = readContinuationQuery(withContinuationQuery(new URLSearchParams(), originalSource ?? null));
+  const continuation = useContinuation(brandId, attempt.current || originalSource ? recoveryQuery : urlSource);
+  const sourceMismatch = !!originalSource && JSON.stringify(urlSource) !== JSON.stringify(recoveryQuery);
+  const originalProduct = attempt.current?.payload.product_ids[0] ?? created?.context_json?.next_period_source?.product_id;
   const sourceSignature = JSON.stringify(continuation.selection);
   const sellWayParam = search.get("sell_way");
   const life = useRef(new AbortController());
@@ -147,7 +153,6 @@ function CampaignWizard({ brandId, draftKey }: { brandId: string; draftKey: stri
   const [uploadBusy, setUploadBusy] = useState(false);
   const [attached, setAttached] = useState<Set<string>>(new Set(attempt.current?.attached ??
     (initial.attachment?.campaignId === createdId ? initial.attachment.ids : [])));
-  const [created, setCreated] = useState<CampaignDetail | null>(null);
   const finished = useRef(false);
   const [restoring, setRestoring] = useState(!!createdId);
   const [restoreFailed, setRestoreFailed] = useState<string | null>(null);
@@ -471,16 +476,18 @@ function CampaignWizard({ brandId, draftKey }: { brandId: string; draftKey: stri
       <FlowHeader steps={wizardSteps(brandId)} current={0} title="建立活動" purpose="選要推什麼、推多久、花多少；其他照上一期或商品建檔帶入" />
       {attempt.current && !created && !restoring && <div className="surface px-5 py-4 text-sm">
         <p>上次送出結果尚未確認；先找回原活動，再將你的修改套用到同一個活動。</p>
-        <p className="mt-1 text-xs text-muted-foreground">上次來源：{attempt.current.payload.continuation?.month}；先核對已保存的原送出內容，來源重新讀不到也可確認結果。</p>
+        <p className="mt-1 text-xs text-muted-foreground [overflow-wrap:anywhere]">上次來源：{originalSource?.month}；活動 {originalSource?.campaign_ids.join("、")}；先核對已保存的原送出內容，來源重新讀不到也可確認結果。</p>
         <Button variant="outline" busy={busy} onClick={() => void submit()}>確認上次送出結果</Button>
       </div>}
       <WizardContinuation source={continuation} brand={brandId} productChosen={!!productId}
-        confirmed={mappingProductId === productId && mappingScope === sourceSignature}
-        onConfirm={value => {setMappingProductId(value ? productId : null); setMappingScope(sourceSignature);}} locked={locked} />
+        confirmed={originalSource ? !!originalSource.product_mapping_confirmed && originalProduct === productId : mappingProductId === productId && mappingScope === sourceSignature}
+        onConfirm={value => {setMappingProductId(value ? productId : null); setMappingScope(sourceSignature);}} locked={locked || !!attempt.current || !!createdId}
+        submitted={!!attempt.current || !!createdId} />
+      {sourceMismatch && <p role="status" className="text-sm text-muted-foreground">網址來源與恢復紀錄不同；畫面與重試沿用上次送出的 {originalSource?.month} 來源，不會改寫原送出內容。</p>}
       {created && <p className="text-sm text-muted-foreground">已建立「{created.name || created.id}」；修改與素材加入都會續接同一個活動。</p>}
       {created && uploads.length > 0 && <p className="text-sm text-muted-foreground">已確認加入 {uploads.filter(upload => attached.has(upload.id)).length}／{uploads.length} 檔；重試只處理未確認加入的素材。</p>}
-      {attempt.current?.createdId && search.get("created") && search.get("created") !== attempt.current.createdId &&
-        <p role="status" className="text-sm text-muted-foreground">網址活動與恢復紀錄不同；以已核實的活動 {attempt.current.createdId} 繼續。</p>}
+      {attempt.current && search.get("created") && search.get("created") !== attempt.current.createdId &&
+        <p role="status" className="text-sm text-muted-foreground">網址活動與恢復紀錄不同；{attempt.current.createdId ? `以已核實的活動 ${attempt.current.createdId} 繼續。` : "先確認上次送出結果，不會讀取或更新網址中的活動。"}</p>}
       {restoreFailed && <ReadFailed what={`已建立的活動讀不到（${restoreFailed}）；不會重建活動`} onRetry={() => setRestoreKey((k) => k + 1)} />}
       {options.status === "error" ? (
         <ReadFailed what={`賣法和目標清單讀不到（${options.error}）`} onRetry={options.reload} />
@@ -545,7 +552,7 @@ function CampaignWizard({ brandId, draftKey }: { brandId: string; draftKey: stri
             <Input id="new-end" type="date" value={endDate} disabled={locked} onChange={(e) => setEndDate(e.target.value)} className="h-[42px] w-full rounded-lg" />
           </Field>
           <Field id="new-platform" label="平台" tag={platformTag && <SourceTag kind={platformTag} title={platformTag === "copied" && prev ? `上一期：${prev.campaign_name}` : undefined} />}
-            hint={platformShown ? undefined : "品牌還沒接上帳戶"}>
+            hint={platformShown ? undefined : channels.status !== "ready" ? "帳戶連線尚未核實" : channels.data?.some(c => c.connected) ? "尚未選擇平台" : "已核實，目前沒有已連線帳戶"}>
             <select id="new-platform" className={SELECT} value={platformShown ?? ""} disabled={locked || !channels.data} onChange={(e) => setPlatform(e.target.value || null)}>
               {!platformShown && <option value="" disabled>請選擇</option>}
               {(channels.data ?? []).map((c) => <option key={c.key} value={c.key}>{c.label}（{c.connected ? "已接上" : "還沒接上"}）</option>)}
@@ -567,7 +574,7 @@ function CampaignWizard({ brandId, draftKey }: { brandId: string; draftKey: stri
             {previous && startDate && <p className="text-xs text-muted-foreground">日期接在上一期後面（上一期 {md(previous.start)}～{md(previous.end)}）</p>}
           </div>
         )}
-        {channels.status === "error" && <div className="surface-body pt-0"><ReadFailed what={`平台清單讀不到（${channels.error}）；平台先照品牌已接上的帳戶，其他照常`} onRetry={channels.reload} /></div>}
+        {channels.status === "error" && <div className="surface-body pt-0"><ReadFailed what={`平台清單讀不到（${channels.error}）；帳戶連線尚未核實，其他已知內容保留`} onRetry={channels.reload} /></div>}
       </section>
       <Disclosure label="進階：這期不一樣（受眾、落地頁）">
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">

@@ -450,7 +450,7 @@ describe("「進階：這期不一樣」 (F43-I15; F46-I08 keeps 受眾 and 落�
     const user = userEvent.setup();
     view();
     await user.click(await screen.findByRole("radio", { name: /三盒組/ }));
-    expect(screen.getByText("品牌還沒接上帳戶")).toBeTruthy();
+    expect(screen.getByText("已核實，目前沒有已連線帳戶")).toBeTruthy();
     expect(value("平台")).toBe("");
     expect(tagOf("平台")).toBeNull();
     await user.selectOptions(screen.getByLabelText("平台"), "meta");
@@ -634,6 +634,25 @@ const preparation = (): NextPeriodPreparation => ({month: "2026-08", window: {st
   source_campaigns: [{campaign_id: "native", name: "既有平台活動", origin: "imported", mapping_required: true, result_kind: "purchase", currency: "TWD"}],
   eligible_learning_refs: [], excluded: [{owner: "result", ref: "native-ad", reason_code: "above_target"}]});
 describe("completed-source wizard recovery", () => {
+  it("pending original B wins over created A and a different URL source, preserving replay and identity", async () => {
+    const payload={product_ids:["sw_three"] as [string],objective:"購買",budget:30000,continuation:{month:"2026-08",campaign_ids:["native"],revision:"source-v1",request_id:"b7ac6be2-fda5-4f58-9dd4-43b33b9d8dc6",product_mapping_confirmed:true}};
+    saveDraft("campaign-draft:u:o:b1",{productId:"sw_three",objective:"購買",budget:35000,startDate:"",endDate:"",goalText:""});saveAttempt("campaign-draft:u:o:b1",{payload,uploads:[],attached:[]});
+    vi.mocked(getNextPeriod).mockResolvedValue(preparation());vi.mocked(createCampaignFromPicks).mockResolvedValue(draft({id:"cmp_B"}));vi.mocked(patchCampaign).mockResolvedValue(draft({id:"cmp_B"}));
+    view("b1","/brands/b1/ads/new?created=cmp_A&source_month=2026-07&source_campaign=other&source_revision=other-v1");const user=userEvent.setup();
+    await screen.findByText("既有平台活動・既有平台活動・TWD");expect(getNextPeriod).toHaveBeenCalledWith("b1","2026-08",expect.any(AbortSignal));expect(getCampaign).not.toHaveBeenCalled();
+    expect(screen.getByText(/網址來源/)).toBeTruthy();const originalBox=screen.getByRole("checkbox",{name:/我確認選定歷史活動/});expect(originalBox).toHaveProperty("disabled",true);expect(originalBox).toHaveProperty("checked",true);
+    await user.click(screen.getByRole("button",{name:"確認上次送出結果"}));await screen.findByText("第二步頁面");
+    expect(createCampaignFromPicks).toHaveBeenCalledWith("b1",payload);expect(patchCampaign).toHaveBeenCalledWith("b1","cmp_B",expect.any(Object));expect(getCampaign).not.toHaveBeenCalledWith("b1","cmp_A");
+  });
+  it.each(["connected","unconnected","unverified"])("failed options keep platform status %s honest",async state=>{
+    vi.mocked(getWizardOptions).mockRejectedValue(new Error("options unavailable"));if(state==="unverified")vi.mocked(fetchChannels).mockRejectedValue(new Error("channels unavailable"));else vi.mocked(fetchChannels).mockResolvedValue([{key:"meta",label:"Meta",connected:state==="connected",state_text:""}]);
+    view();await screen.findByText(/賣法和目標清單讀不到/);expect(await screen.findByText(state==="connected" ? "尚未選擇平台" : state==="unconnected" ? "已核實，目前沒有已連線帳戶" : "帳戶連線尚未核實")).toBeTruthy();expect(screen.queryByText("品牌還沒接上帳戶")).toBeNull();
+  });
+  it.each([undefined,"cmp_B"])("a changed product cannot re-confirm the submitted immutable mapping (created=%s)",async createdId=>{
+    const payload={product_ids:["sw_three"] as [string],objective:"購買",budget:30000,continuation:{month:"2026-08",campaign_ids:["native"],revision:"source-v1",request_id:"b7ac6be2-fda5-4f58-9dd4-43b33b9d8dc6",product_mapping_confirmed:true}};
+    saveDraft("campaign-draft:u:o:b1",{productId:"sw_duo",objective:"購買",budget:30000,startDate:"",endDate:"",goalText:""});saveAttempt("campaign-draft:u:o:b1",{payload,createdId,uploads:[],attached:[]});vi.mocked(getNextPeriod).mockResolvedValue(preparation());vi.mocked(getCampaign).mockResolvedValue(draft({id:"cmp_B"}));
+    view("b1",`/brands/b1/ads/new?${sourceQuery}`);await screen.findByText(/目前商品關聯未確認/);const box=screen.getByRole("checkbox",{name:/我確認選定歷史活動/});expect(box).toHaveProperty("checked",false);expect(box).toHaveProperty("disabled",true);expect(readAttempt("campaign-draft:u:o:b1")?.payload).toEqual(payload);
+  });
   it("uses the shared Chinese objective exclusion without changing source qualification", async () => {
     vi.mocked(getNextPeriod).mockResolvedValue({...preparation(),excluded:[{owner:"result",ref:"native-ad",reason_code:"objective_family_mismatch"}]});
     view("b1",`/brands/b1/ads/new?${sourceQuery}`);const user=userEvent.setup();

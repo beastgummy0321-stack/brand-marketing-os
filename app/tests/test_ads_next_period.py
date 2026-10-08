@@ -424,6 +424,48 @@ def test_timeout_replay_precedes_changed_deleted_source_and_model(source, monkey
     assert conflict.json()["error"]["code"] == "continuation_request_conflict"
 
 
+@pytest.mark.parametrize("mapping", ["unchanged", "other", "missing", "source_missing"])
+def test_planner_confirmation_is_bound_to_the_original_product(source, mapping):
+    response = create(source, payload(source))
+    assert response.status_code == 200, response.text
+    conn, org, brand = (source[k] for k in ("conn", "org", "brand"))
+    campaign = repository.get_campaign(conn, org, brand, response.json()["campaign"]["id"])
+    original = campaign["context_json"]["next_period_source"]
+    if mapping == "source_missing":
+        original.pop("product_id")
+    if mapping == "other":
+        # Same knowledge product means the same customer groups, but a different sell-way identity.
+        parent = brands.get_product(conn, brand, source["product"])["parent_id"]
+        other = brands.create_product(
+            conn, brand, name="Other identical-price sell-way", parent_id=parent, actor="test"
+        )["id"]
+        brands.save_product_economics(
+            conn, brand, other, selling_price=500, currency="TWD", unit_variable_cost=150,
+            shipping_cost=0, actor="test", confirmed_by="test", effective_from="2026-09-01"
+        )
+        current = other
+    else:
+        current = None if mapping == "missing" else source["product"]
+    ctx = {**campaign["context_json"], "product_ids": [current] if current else []}
+    conn.execute(
+        "UPDATE ads_campaign SET context_json=%s WHERE org_id=%s AND brand_id=%s AND id=%s",
+        (db.jsonb(ctx), org, brand, campaign["id"]),
+    )
+    conn.commit()
+    campaign = repository.get_campaign(conn, org, brand, campaign["id"])
+    qualified = next_period.planner_source(conn, org, brand, original, campaign)
+    assert bool(qualified["eligible_learning_refs"]) is (mapping == "unchanged"), qualified
+    assert bool(qualified["carried_candidates"]) is (mapping == "unchanged"), qualified
+    assert campaign["context_json"]["next_period_source"].get("product_id") == (
+        None if mapping == "source_missing" else source["product"]
+    )
+    if mapping != "unchanged":
+        assert "mapping_required" in {e["reason_code"] for e in qualified["excluded"]}
+    if current:
+        planner = planner_context.planner_context(conn, org, brand, current, campaign=campaign)
+        assert bool(planner["carried_candidates"]) is (mapping == "unchanged"), planner
+
+
 @pytest.mark.parametrize("change", ["metrics", "currency", "mapping", "asset", "target"])
 def test_fresh_request_rejects_changed_source_without_partial_draft(source, change):
     body = payload(source)

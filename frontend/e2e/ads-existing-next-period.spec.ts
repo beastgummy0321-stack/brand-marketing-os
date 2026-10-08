@@ -208,9 +208,15 @@ test("sessionStorage throw and lost reply survive full reload, edits, failed fre
   await page.getByLabel("這個活動最多花",{exact:true}).fill("35000");
   await expect.poll(()=>page.evaluate(()=>history.state.usr?.campaignWizard && Object.values(history.state.usr.campaignWizard).some((v:any)=>v?.value?.budget===35000))).toBe(true);
   state.sourceFailed=true;state.optionsFailed=true;await page.reload();
-  await expect(page.getByText(/賣法和目標清單讀不到/)).toBeVisible();await wizardCapture(page,"built-reload-pending-source-failed");
+  const wrong=`/app/brands/${SETTLE_BRAND}/ads/new?created=cmp_A&source_month=2026-07&source_campaign=other&source_revision=other-v1`;
+  const wrongCalls:string[]=[];page.on("request",request=>{if(new URL(request.url()).pathname.includes("/campaigns/cmp_A"))wrongCalls.push(request.method());});
+  await page.evaluate(url=>history.replaceState(history.state,"",url),wrong);await page.reload();
+  await expect(page.getByText(/賣法和目標清單讀不到/)).toBeVisible();await expect(page.getByText("尚未選擇平台")).toBeVisible();
+  await expect(page.getByText(/網址來源與恢復紀錄不同/)).toBeVisible();await expect(page.getByText(/上次來源：2026-08；活動 native/)).toBeVisible();
+  await expect(page.getByText(/不會讀取或更新網址中的活動/)).toBeVisible();await wizardCapture(page,"built-reload-pending-source-failed");
   await page.getByRole("button",{name:"確認上次送出結果"}).click();await expect(page.getByText(/已確認上次建立的活動/)).toBeVisible();
   expect(state.posts).toHaveLength(2);expect(state.posts[1]).toEqual(state.posts[0]);expect(state.ids.size).toBe(1);
+  expect(wrongCalls).toEqual([]);
   state.optionsFailed=false;state.sourceFailed=false;state.revisionChanged=true;
   await page.locator('[data-slot="read-failed"]').filter({hasText:"賣法和目標清單讀不到"}).getByRole("button",{name:"重試"}).click();
   await expect(page.getByRole("radio",{name:/單杯 1,580 TWD/})).toBeVisible();await expect(page.getByLabel("這個活動最多花",{exact:true})).toHaveValue("35000");
@@ -230,6 +236,18 @@ test("both durable stores unavailable block the first POST through a full reload
   await page.getByRole("button",{name:/下一步：系統理解/}).click();await expect(page.getByText(/尚未送出/)).toBeVisible();
   await expect(page.getByLabel("這個活動最多花",{exact:true})).toHaveValue("30000");expect(state.posts).toEqual([]);await wizardCapture(page,"built-storage-blocked");
   await page.reload();await wizardPicks(page);await page.getByRole("button",{name:/下一步：系統理解/}).click();await expect(page.getByText(/尚未送出/)).toBeVisible();expect(state.posts).toEqual([]);
+});
+
+test("options failure does not invent an account disconnection",async({page})=>{
+  const state=await recoverySetup(page);state.optionsFailed=true;
+  await page.goto(sourceWizard);await expect(page.getByText("尚未選擇平台")).toBeVisible();
+  await wizardCapture(page,"built-platform-connected-options-failed");
+  await page.route("**/channels",route=>route.fulfill({json:{channels:[{key:"meta",label:"Meta",connected:false,state_text:"已確認未連線"}]}}));
+  await page.reload();await expect(page.getByText("已核實，目前沒有已連線帳戶")).toBeVisible();
+  await wizardCapture(page,"built-platform-unconnected-options-failed");
+  await page.route("**/channels",route=>route.fulfill({status:503,json:{detail:"Fixture channels unavailable"}}));
+  await page.reload();await expect(page.getByText("帳戶連線尚未核實")).toBeVisible();
+  await wizardCapture(page,"built-platform-unverified-options-failed");expect(state.posts).toEqual([]);
 });
 test("source retry, unknown and zero inputs, loading, and long names retain keyboard and layout",async({page})=>{
   const state=await recoverySetup(page,{long:true});await page.goto(sourceWizard);
