@@ -36,6 +36,9 @@ function Kv({ label, value, note, tone = "mut" }: { label: string; value: string
 /** Where the whole period's cost per result sits against the campaigns' own caps (prototype `cppNote`). */
 function cppNote(view: SettleView): { tone: keyof typeof TONE_TEXT; text: string } {
   if (view.result_comparison?.reason !== null) return {tone: "mut", text: "成果與歸因口徑不同或尚未核實，不能合算成本"};
+  if (view.rows.some(row => row.reason_code === "result_kind_mismatch")) {
+    return {tone: "mut", text: "成果類型與活動目標不同，不能比較上限"};
+  }
   const capped = view.campaigns.filter((c) => c.cap !== null);
   if (view.cost_per_result === null) return { tone: "mut", text: "還算不出來" };
   if (capped.length === 0) return { tone: "mut", text: "活動都還沒設上限，不比較" };

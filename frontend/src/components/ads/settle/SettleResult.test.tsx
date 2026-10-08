@@ -70,6 +70,22 @@ describe("settle served money evidence", () => {
     expect(numbers.textContent).toContain("不能比較");
     expect(numbers.textContent).not.toContain("在每個活動自己的上限內");
   });
+  it("does not endorse an aggregate cap comparison rejected by the row target kind", () => {
+    const row: SettleRow = {...observed("TWD"), spend: 200, results: 10, sales: 10, cost_per_result: 20,
+      cap: 100, grade: "insufficient", grade_label: "資料不足", reason_code: "result_kind_mismatch", fate: "skip"};
+    const summary = {...view([row]), spent: 200, results: 10, cost_per_result: 20, on_target_results: 0};
+    render(<MemoryRouter><SettleResult view={summary} header={null} homeHref="/" angleHref="/" noteHref="/" /></MemoryRouter>);
+    const numbers = screen.getByRole("region", {name: "這期數字"});
+    expect(within(numbers).getByText("10 筆")).toBeTruthy();
+    expect(within(numbers).getByText("20 TWD")).toBeTruthy();
+    expect(numbers.textContent).toContain("成果類型與活動目標不同，不能比較上限");
+    expect(numbers.textContent).not.toContain("在每個活動自己的上限內");
+    expect(within(numbers).getByText("成果類型與活動目標不同，不能比較上限").className).toContain("text-muted-foreground");
+    expect(screen.getByRole("region", {name: "TWD活動"}).textContent).toContain("每筆 20 TWD");
+    expect(summary.result_comparison).toEqual({reason: null});
+    expect(summary.result_definition?.kind).toBe("purchase");
+  });
+
   it.each(["purchase", "lead"])("keeps %s cost and cap but shows economics only as a hypothesis", (kind) => {
     const row = {...observed("TWD"), result_kind: kind, result_label: kind === "lead" ? "名單" : "購買"};
     if (kind === "lead") {row.grade = "insufficient"; row.reason_code = "result_kind_mismatch"; row.fate = "skip";}
