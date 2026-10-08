@@ -30,6 +30,7 @@ class SimulationRecoveryTest(SimulatedPublishTestBase):
             end_date=self.today,
             groups=1,
             ads_per_group=2,
+            manual_cap=True,
         )
         self.args = (web.conn, self.org_id, self.brand_id, self.c["id"])
         self.ads = repository.campaign_detail(*self.args)["groups"][0]["ads"]
@@ -93,21 +94,32 @@ class SimulationRecoveryTest(SimulatedPublishTestBase):
 
     def test_zero_and_missing_are_distinct_and_resend_does_not_accumulate(self):
         self.start()
+        completed_day = self.today - timedelta(days=1)
         zero = self.row(spend=0.0, impressions=0, clicks=0, purchases=0, revenue=0.0)
-        self.save([zero])
-        self.save([zero])
-        read = simulation_recovery.read_day(*self.args, self.today)
+        self.save([zero], day=completed_day)
+        self.save([zero], day=completed_day)
+        read = simulation_recovery.read_day(*self.args, completed_day)
         self.assertEqual(read["revision"], 1)
         self.assertEqual(len(read["rows"]), 1)
-        self.assertEqual(read["receipts"][str(self.today)]["missing_ad_count"], 1)
+        self.assertEqual(read["receipts"][str(completed_day)]["missing_ad_count"], 1)
         self.assertEqual(float(read["rows"][0]["spend"]), 0)
         self.assertEqual(len(self._outcome_rows(self.c["id"])), 2)
-        self.save([self.row(), self.row(1)], revision=1)
+        self.save([self.row(), self.row(1)], revision=1, day=completed_day)
         self.assertEqual(outcome.summary(*self.args)["totals"]["spend"], 200)
         with self.assertRaisesRegex(ValueError, "其他操作"):
-            self.save([zero], revision=1)
-        self.save([], revision=2)
+            self.save([zero], revision=1, day=completed_day)
+        self.save([], revision=2, day=completed_day)
         self.assertEqual(self._outcome_rows(self.c["id"]), [])
+
+    def test_today_is_saved_but_excluded_from_completed_period_totals(self):
+        self.start()
+        self.save([self.row(), self.row(1)])
+        read = simulation_recovery.read_day(*self.args, self.today)
+        self.assertEqual(len(read["rows"]), 2)
+        self.assertEqual({row["day"] for row in self._outcome_rows(self.c["id"])}, {self.today})
+        self.assertIsNone(outcome.summary(*self.args)["totals"]["spend"])
+        self.save([self.row()], day=self.today - timedelta(days=1))
+        self.assertEqual(outcome.summary(*self.args)["totals"]["spend"], 100)
 
     def test_rejects_wrong_dates_coordinates_and_cumulative_mode(self):
         self.start()
@@ -176,12 +188,13 @@ class SimulationRecoveryTest(SimulatedPublishTestBase):
         self.assertEqual(
             closeout.close(*self.args, actor="tester")["verdict_json"], closed["verdict_json"]
         )
-        # Two consistent campaigns lift the next-round learning to likely.
+        # Both simulated campaigns remain retained history, never real market support.
         second = self._campaign(
             start_date=self.today - timedelta(days=6),
             end_date=self.today,
             groups=1,
             ads_per_group=1,
+            manual_cap=True,
         )
         args2 = (web.conn, self.org_id, self.brand_id, second["id"])
         simulation_recovery.start(*args2, actor="tester", confirm_isolation=True)
@@ -199,10 +212,29 @@ class SimulationRecoveryTest(SimulatedPublishTestBase):
         text, basis = strategy._learnings_section(web.conn, self.brand_id)
         self.assertIn("隔離模擬，非市場實證", text)
         self.assertTrue(basis)
+        self.assertTrue(all("market_support" not in row["evidence"]["allowed_uses"]
+                            for row in basis))
         other = bi_repo.create_brand(
             web.conn, org_id=self.org_id, name="other", actor="tester", client_name=None
         )
         self.assertEqual(strategy._learnings_section(web.conn, other["id"])[1], [])
+
+    def test_complete_days_with_unknown_cap_source_cannot_claim_achievement(self):
+        campaign = self._campaign(start_date=self.today - timedelta(days=6),
+                                  end_date=self.today, groups=1, ads_per_group=1)
+        args = (web.conn, self.org_id, self.brand_id, campaign["id"])
+        simulation_recovery.start(*args, actor="tester", confirm_isolation=True)
+        ad = repository.campaign_detail(*args)["groups"][0]["ads"][0]["id"]
+        for i in range(7):
+            simulation_recovery.save_day(*args, self.today - timedelta(days=i),
+                                         [self.row(ad_id=ad)], revision=0,
+                                         mode="daily_increment", actor="tester")
+        summary = outcome.summary(*args)
+        self.assertEqual(summary["totals"]["spend"], 600)
+        self.assertEqual(summary["cap_comparison"]["reason"], "cap_currency_unknown")
+        closed = closeout.close(*args, actor="tester")
+        self.assertEqual(closed["verdict"], "看不出")
+        self.assertEqual(closed["verdict_json"]["data_source"], "isolated_simulation")
 
     def test_partial_recovery_cannot_be_judged_as_complete(self):
         self.start()
