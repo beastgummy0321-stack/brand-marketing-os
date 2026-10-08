@@ -276,6 +276,60 @@ class OnlyBoundPlatformRowsReachTheNumbersTest(OutcomeTestBase):
     node with no platform id has no row, and a monthly account-budget row is never a day of
     delivery."""
 
+    def test_same_retained_ad_facts_need_separate_group_representation_for_campaign_total(self):
+        from app.ads import closeout
+        from scripts.drill import first_release_acceptance as runner
+
+        detail, _, _ = self._bound_campaign(cap=300)
+        group, ad = detail["groups"][0], detail["groups"][0]["ads"][0]
+        bound = outcome_seed.bind_platform(web.conn, self.org_id, self.brand_id, detail)
+        raw_ad = external_repository.upsert_observation(
+            web.conn, self.org_id, self.brand_id, detail["id"], {
+                "entity_id": bound[ad["id"]], "day": self.complete_day, "metric_scope": "ad",
+                "spend": 400, "purchases": 2, "revenue": None, "impressions": 1000,
+                "clicks": 30, "source": "graph", "currency": "TWD",
+                "attribution_key": "fixed-known-fixture",
+            }, result_kind="purchase", result_count=2, result_action="omni_purchase",
+            result_attribution="fixed-known-fixture",
+        )
+        web.conn.commit()
+        ad_rows = ads_repo.performance_rows(
+            web.conn, self.org_id, self.brand_id, detail["id"], "ad"
+        )
+        self.assertEqual([(r["entity_id"], float(r["spend"]), r["purchases"]) for r in ad_rows],
+                         [(ad["id"], 400, 2)])
+        self.assertEqual(ads_repo.performance_rows(
+            web.conn, self.org_id, self.brand_id, detail["id"], "group"
+        ), [])
+        ad_only = ads_repo.campaign_detail(web.conn, self.org_id, self.brand_id, detail["id"])
+        self.assertEqual(ad_only["outcome"]["row_count"], 0)
+        self.assertIsNone(ad_only["outcome"]["spend"])
+        self.assertEqual(ad_only["outcome"]["scope"]["reason"], "no_data")
+        reports = runner.fixture_group_reports(
+            web.conn, self.org_id, self.brand_id, detail, bound, [raw_ad]
+        )
+        web.conn.commit()
+        self.assertEqual(reports["group_membership"][0]["child_observation_ids"], [raw_ad["id"]])
+        self.assertEqual(reports["group_membership"][0]["trial_id"], detail["id"])
+        group_rows = ads_repo.performance_rows(
+            web.conn, self.org_id, self.brand_id, detail["id"], "group"
+        )
+        self.assertEqual([(r["entity_id"], float(r["spend"]), r["purchases"]) for r in group_rows],
+                         [(group["id"], 400, 2)])
+        projected = outcome.period_projection(
+            web.conn, self.org_id, self.brand_id, detail, group_rows, ad_rows
+        )
+        self.assertEqual(projected["totals"]["spend"], 400)
+        self.assertEqual(projected["totals"]["purchases"], 2)
+        self.assertEqual(projected["totals"]["cpa"], 200)
+        self.assertIsNone(projected["totals"]["revenue"])
+        closed = closeout.close(web.conn, self.org_id, self.brand_id, detail["id"], actor=ACTOR)
+        self.assertEqual(closed["verdict_json"]["actual"], 200)
+        self.assertEqual(closed["verdict_json"]["sample"]["purchases"], 2)
+        self.assertEqual(len(outcome.rows(
+            web.conn, self.org_id, self.brand_id, detail["id"], "ad"
+        )), 1)
+
     def test_rows_of_a_node_without_a_platform_id_are_not_returned(self):
         detail, _group_ext, ad_ext = self._bound_campaign()
         ad = detail["groups"][0]["ads"][0]

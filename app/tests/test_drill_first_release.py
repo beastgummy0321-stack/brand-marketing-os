@@ -627,6 +627,114 @@ def test_complete_migration_admission_refuses_sql_beyond_pattern_match(tmp_path,
         runner.migration_audit(tmp_path)
 
 
+def grain_period_fixture(period=None):
+    """Hand-authored retained reports: two children in one group, one zero child in another."""
+    period = period or cases.frozen_cases()["periods"][0]
+    count = period["events"] // 2
+    campaign_id = "grain-" + period["id"]
+    groups = [
+        {"id": "group-A", "external_id": "native-group-A", "ads": [
+            {"id": "ad-A1", "external_id": "native-ad-A1"},
+            {"id": "ad-A2", "external_id": "native-ad-A2"},
+        ]},
+        {"id": "group-B", "external_id": "native-group-B", "ads": [
+            {"id": "ad-B1", "external_id": "native-ad-B1"},
+        ]},
+    ]
+    common = {"org_id": "owned-org", "brand_id": "owned-brand", "campaign_id": campaign_id}
+    entities, raw_ads, raw_groups, members = [], [], [], []
+    for group_index, group in enumerate(groups):
+        group_entity = "entity-" + group["id"]
+        entities.append({**common, "id": group_entity, "native_kind": "adset",
+                         "native_id": group["external_id"], "platform": "test",
+                         "source_account": "test"})
+        children = []
+        for ad in group["ads"]:
+            entity_id = "entity-" + ad["id"]
+            entities.append({**common, "id": entity_id, "native_kind": "ad",
+                             "native_id": ad["external_id"], "parent_native_kind": "adset",
+                             "parent_native_id": group["external_id"], "platform": "test",
+                             "source_account": "test"})
+            row = {
+                **common, "id": "source-" + ad["id"], "entity_id": entity_id,
+                "metric_scope": "ad", "day": period["end"], "source": "graph",
+                "currency": "TWD", "attribution_key": "fixed-known-fixture",
+                "result_attribution": "fixed-known-fixture", "result_kind": "purchase",
+                "result_action": "omni_purchase", "revenue": None,
+                "spend": count * period["cost_per_result"] if group_index == 0 else 0,
+                "purchases": count if group_index == 0 else 0,
+                "result_count": count if group_index == 0 else 0,
+                "impressions": 1000, "clicks": 30,
+            }
+            children.append(row)
+            raw_ads.append(row)
+        group_count = period["events"] if group_index == 0 else 0
+        report = {**children[0], "id": "source-" + group["id"], "entity_id": group_entity,
+                  "metric_scope": "adset", "spend": group_count * period["cost_per_result"],
+                  "purchases": group_count, "result_count": group_count,
+                  "impressions": 2000 if group_index == 0 else 1000,
+                  "clicks": 60 if group_index == 0 else 30}
+        raw_groups.append(report)
+        members.append({
+            "group_id": group["id"], "group_entity_id": group_entity,
+            "group_native_id": group["external_id"], "group_observation_id": report["id"],
+            "child_ad_ids": [ad["id"] for ad in group["ads"]],
+            "child_entity_ids": [row["entity_id"] for row in children],
+            "child_native_ids": [ad["external_id"] for ad in group["ads"]],
+            "child_observation_ids": [row["id"] for row in children], "trial_id": campaign_id,
+        })
+    return {"period": period, "accepted": {"id": campaign_id, "groups": groups,
+                                          "org_id": "owned-org", "brand_id": "owned-brand"},
+            "observations": {"raw_observations": raw_ads, "raw_group_observations": raw_groups,
+                             "bound_entities": entities, "bound_groups": groups,
+                             "group_membership": members}}
+
+
+@pytest.mark.parametrize("mutation", [
+    "missing-group", "duplicate-group", "missing-ad", "duplicate-ad", "wrong-group",
+    "wrong-source-row", "wrong-local-ad-binding", "wrong-value", "grain-mixing", "double-total",
+    "new-trial", "wrong-day", "unknown-revenue-as-zero", "wrong-account", "foreign-owner-packet",
+])
+def test_raw_group_reports_cannot_duplicate_or_change_frozen_child_facts(mutation):
+    period = grain_period_fixture()
+    runner.verify_observation_grains(period)
+    data = period["observations"]
+    if mutation == "missing-group":
+        data["raw_group_observations"].pop()
+    elif mutation == "duplicate-group":
+        data["raw_group_observations"].append(dict(data["raw_group_observations"][0]))
+    elif mutation == "missing-ad":
+        data["raw_observations"].pop()
+    elif mutation == "duplicate-ad":
+        data["raw_observations"].append(dict(data["raw_observations"][0]))
+    elif mutation == "wrong-group":
+        data["bound_entities"][1]["parent_native_id"] = "native-group-B"
+    elif mutation == "wrong-source-row":
+        data["group_membership"][0]["child_observation_ids"][0] = "source-ad-B1"
+    elif mutation == "wrong-local-ad-binding":
+        data["bound_groups"][0]["ads"][0]["external_id"] = "another-native-ad"
+    elif mutation == "wrong-value":
+        data["raw_group_observations"][0]["spend"] = 401
+    elif mutation == "grain-mixing":
+        data["raw_group_observations"][0]["metric_scope"] = "ad"
+    elif mutation == "double-total":
+        data["raw_observations"].extend(data["raw_group_observations"])
+    elif mutation == "new-trial":
+        data["group_membership"][0]["trial_id"] = "new-independent-trial"
+    elif mutation == "wrong-day":
+        data["raw_group_observations"][0]["day"] = "2026-07-30"
+    elif mutation == "unknown-revenue-as-zero":
+        data["raw_group_observations"][0]["revenue"] = 0
+    elif mutation == "wrong-account":
+        data["bound_entities"][0]["source_account"] = "foreign-account"
+    else:
+        for row in [*data["raw_observations"], *data["raw_group_observations"],
+                    *data["bound_entities"]]:
+            row["org_id"], row["brand_id"] = "foreign-org", "foreign-brand"
+    with pytest.raises(runner.ReceiptError):
+        runner.verify_observation_grains(period)
+
+
 def http_cycle_fixture():
     """Raw reader/HTTP fixture only: does not execute a cycle or claim real acceptance."""
     from copy import deepcopy
@@ -665,7 +773,7 @@ def http_cycle_fixture():
             ],
         }
         proposal = {
-            "id": "campaign-" + str(index),
+            "id": "grain-" + period["id"],
             "budget_basis_json": {"strategy": {"decision": decision}},
         }
         raw = {
@@ -700,7 +808,11 @@ def http_cycle_fixture():
                 "period": period,
                 "proposal": proposal,
                 "reader": {"evidence_context": {"items": [item, b, *derivative_items[:-1]]}},
-                "observations": {"controlled_learning": {"id": identity}},
+                "accepted": grain_period_fixture(period)["accepted"],
+                "observations": {
+                    **grain_period_fixture(period)["observations"],
+                    "controlled_learning": {"id": identity},
+                },
                 "derivatives": {
                     "injected": injected,
                     "original": {"id": identity},
