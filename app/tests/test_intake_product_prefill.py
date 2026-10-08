@@ -21,6 +21,7 @@ import app.main as main
 import app.shared.web as web
 from app.brand_intelligence import repository as bi_repo
 from app.core import db as coredb
+from app.core import net
 from app.core import settings as coresettings
 from app.intake import ai as intake_ai
 from app.intake import product_prefill
@@ -148,6 +149,18 @@ class _Base(unittest.TestCase):
 
 
 class ProductPrefillTest(_Base):
+    def test_public_product_hostname_resolving_private_is_not_read_or_sent_to_model(self):
+        product_prefill.read_url = net.read_url
+        with mock.patch.object(net.socket, "getaddrinfo", return_value=[
+            (2, 1, 6, "", ("127.0.0.1", 443))
+        ]), mock.patch.object(net, "_PinnedConnection") as transport:
+            pid = self._create()
+            self._work()
+        self.assertEqual(self._row(pid)["status"], "failed")
+        self.assertIn(net.REASON_BLOCKED, self._row(pid)["prefill_json"]["error"])
+        self.assertEqual(self._calls(), [])
+        transport.assert_not_called()
+
     def test_create_with_page_url_reads_the_page_and_stores_the_checked_proposal(self):
         pid = self._create()
         self.assertEqual(self._status(pid)["prefill_status"], "running")

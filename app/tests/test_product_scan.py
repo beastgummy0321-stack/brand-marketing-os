@@ -19,8 +19,10 @@ import app.shared.web as web
 from app.brand_intelligence import repository as bi_repo
 from app.brand_web import product_ai_calls as product_ai
 from app.core import interrupts as core_interrupts
+from app.core import net
 from app.core import settings as coresettings
 from app.core.db import DEV_ORG_ID  # noqa: E402
+from app.llm import gateway
 from app.llm.providers import (
     MISSING_KEY_MESSAGE,
     AnthropicProvider,
@@ -104,6 +106,36 @@ class _BaseProductScanTest(unittest.TestCase):
 
 
 class ProductScanTest(_BaseProductScanTest):
+    def test_legacy_credentials_are_redacted_from_prompt_and_task_context(self):
+        product_ai.fetch_url = net.fetch_url
+        product_ai.PROVIDER = FakeProvider(response=_fake_response(_GOOD_FACTS))
+        product = bi_repo.create_product(web.conn, self.brand["id"], name="Safe", actor=ACTOR)
+        ok, _result = product_ai.run_product_scan(
+            web.conn, self.brand["id"], product["id"], "Safe",
+            "https://user:SECRET@example.com/", [])
+        self.assertTrue(ok)
+        call = product_ai.PROVIDER.calls[0]
+        self.assertNotIn("SECRET", json.dumps(call, default=str))
+        self.assertIn(net.REDACTED_URL, call["messages"][0]["content"])
+        tasks = gateway.find_tasks_for_scope(
+            web.conn, org_id=DEV_ORG_ID, brand_id=self.brand["id"], task_type="product_scan",
+            context_scope={"product_id": product["id"]})
+        self.assertNotIn("SECRET", json.dumps(tasks, default=str))
+        self.assertEqual(tasks[0]["context_scope_json"]["product_scan_url"], net.REDACTED_URL)
+
+    def test_private_product_hostname_never_reaches_transport_or_provider_as_page_content(self):
+        product_ai.fetch_url = net.fetch_url
+        product_ai.PROVIDER = FakeProvider(response=_fake_response(_GOOD_FACTS))
+        product = bi_repo.create_product(web.conn, self.brand["id"], name="Safe", actor=ACTOR)
+        with mock.patch.object(net.socket, "getaddrinfo", return_value=[
+            (2, 1, 6, "", ("10.0.0.1", 443))
+        ]), mock.patch.object(net, "_PinnedConnection") as transport:
+            ok, _result = product_ai.run_product_scan(
+                web.conn, self.brand["id"], product["id"], "Safe", "https://product.example/", [])
+        self.assertTrue(ok)
+        transport.assert_not_called()
+        self.assertIn("沒有抓到", product_ai.PROVIDER.calls[0]["messages"][0]["content"])
+
     def test_scan_success_creates_product_and_pending_facts_with_source(self):
         product_ai.PROVIDER = FakeProvider(response=_fake_response(_GOOD_FACTS))
         product_id, state = self._post()
