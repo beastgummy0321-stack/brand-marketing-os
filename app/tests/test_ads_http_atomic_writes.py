@@ -10,6 +10,7 @@ from app import main
 from app.ads import brief, manual_settings, material_tasks, repository
 from app.brand_intelligence import repository as brands
 from app.core import db
+
 from .identity_test_helpers import mint_hs256
 
 
