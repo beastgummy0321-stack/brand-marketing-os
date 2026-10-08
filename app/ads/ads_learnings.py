@@ -24,8 +24,8 @@ from datetime import datetime
 from typing import cast
 
 from app import workbench
+from app.ads import customer_groups, sell_way
 from app.ads import repository as ads_repo
-from app.ads import sell_way
 from app.brand_intelligence import repository as bi_repo
 from app.core import settings as coresettings
 from app.core.db import Conn, ConnProxy
@@ -177,7 +177,11 @@ def current_conditions(conn, org, brand, product_id, *, campaign=None) -> dict:
         materials.extend({"ad_id": ad["id"], "version": material_version(
                          {**ad, "material_evidence": bound_material(conn, org, brand, ad)},
                          (launched.get(ad["id"]) or {}).get("outputs"))} for ad in ads)
-    groups = bi_repo.list_customer_groups(conn, brand, selected) if selected else []
+    groups = []
+    if selected:
+        groups = [group
+                  for knowledge_id in customer_groups.knowledge_product_ids(conn, brand, [selected])
+                  for group in bi_repo.list_customer_groups(conn, brand, knowledge_id)]
     return {"org_id": org, "brand_id": brand, "product_id": selected,
             "org_day": coresettings.today_for_org(conn, org_id=org).isoformat(),
             "audience_keys": [r["key"] for r in ads_repo.coordinate_vocabulary(conn, org, brand)
