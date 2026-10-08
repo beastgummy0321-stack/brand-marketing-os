@@ -1547,6 +1547,16 @@ class GradedCleanupEndToEndTest(unittest.TestCase):
             [self.ids[n] for n in ("w1", "w2", "w3", "w4", "fit", "pricey")],
         )
         self.assertEqual([ad["rank"] for ad in cleanup["keep"]], [1, 2, 3, 4, 5, 6])
+        classified = {
+            item["entity_id"]: item
+            for item in triage.classify(self.conn, self.org, self.brand, self.campaign)["items"]
+        }
+        for ad in cleanup["ads"] + cleanup["keep"]:
+            source = classified[ad["entity_id"]]
+            self.assertEqual(ad["currency"], source["current"]["currency"])
+            self.assertEqual(ad["currency"], "TWD")
+            self.assertEqual(ad["cap_comparison"], source["cap_comparison"])
+            self.assertIsNone(ad["cap_comparison"]["reason"])
         self.assertEqual(cleanup["short"], 0)
         self.assertEqual(cleanup["daily_saving"], 220 + 617)
         self.assertIsNone(cleanup["scale_owner_id"])

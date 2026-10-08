@@ -64,13 +64,15 @@ export function CleanupGrade({ ad, reasonCode }: { ad: QueueCleanupAd; reasonCod
 }
 
 // F47-I06: a cost per sale prints through the one per-sale rule (whole yuan).
-const money = (v: number | null) => (perSaleAmount(v) === null ? "未知" : `${perSaleAmount(v)} 元`);
+const unit = (currency: string | null | undefined) => currency === "TWD" ? "元" : currency ?? "幣別未知";
+const money = (v: number | null, currency: string | null | undefined) => (perSaleAmount(v) === null ? "未知" : `${perSaleAmount(v)} ${unit(currency)}`);
+const breakEvenComparable = (ad: QueueCleanupAd, currency: string | null) => Boolean(ad.currency && currency && ad.currency === currency);
 
 /** The number cell of a row: 沒賣出 prints its result count, an ungraded ad prints its grade word (`word`, from
  * `reason_code`; not a cost yet), the rest print cost per result with its money tag against break-even (v10 `mt(a)`;
  * hidden when either number is unknown) and the served sales count. */
-export function CostCell({ ad, word, withCaption = false, breakEven = null }: {
-  ad: QueueCleanupAd; word: string; withCaption?: boolean; breakEven?: number | null;
+export function CostCell({ ad, word, withCaption = false, breakEven = null, breakEvenCurrency = null }: {
+  ad: QueueCleanupAd; word: string; withCaption?: boolean; breakEven?: number | null; breakEvenCurrency?: string | null;
 }): ReactNode {
   if (ad.grade === "wasted") {
     const count = ad.result_count === null ? "未知" : `${ad.result_count} 筆`;
@@ -82,8 +84,9 @@ export function CostCell({ ad, word, withCaption = false, breakEven = null }: {
   return (
     <>
       {withCaption && <span className="block text-[11.5px] text-muted-foreground">每賣一筆</span>}
-      <b className="text-[15px]">{money(ad.cost_per_result)}</b>
-      <MoneyTag cost={ad.cost_per_result} breakEven={breakEven} className="block" />
+      <b className="text-[15px]">{money(ad.cost_per_result, ad.currency)}</b>
+      <MoneyTag cost={ad.cost_per_result} breakEven={breakEvenComparable(ad, breakEvenCurrency) ? breakEven : null} className="block" />
+      {breakEven !== null && !breakEvenComparable(ad, breakEvenCurrency) && <span className="block text-[11.5px] text-muted-foreground">幣別不同或尚未核實，不比較打平線。</span>}
       {ad.sales != null && <span data-part="sales" className="block text-[11.5px] text-muted-foreground">成交 {ad.sales} 筆</span>}
     </>
   );
@@ -96,7 +99,7 @@ export function RejectedBeforeNote({ ad, label }: { ad: QueueCleanupAd; label: s
 }
 
 function capOf(target: TriageTargetView): RulerCap | null {
-  return target.value === null || target.basis === null ? null : { value: target.value, basis: target.basis };
+  return target.value === null || target.basis === null ? null : { value: target.value, basis: target.basis, currency: target.cap_unit?.currency ?? null };
 }
 
 /** 「每日 1,200 撐 6 則」: the daily budget is only on the campaign triage (`data.capacity`), read on its own so a
@@ -125,11 +128,11 @@ function shortTitle(cleanup: QueueCleanup, scale: boolean): string {
 }
 
 /** A pick row's numbers (v10 `.pickrow` right cell): 沒賣出 = spend and results, else cost per result + money tag. */
-function pickAside(ad: QueueCleanupAd, breakEven: number | null): ReactNode {
+function pickAside(ad: QueueCleanupAd, breakEven: number | null, breakEvenCurrency: string | null): ReactNode {
   if (ad.grade === "wasted") {
-    return `花 ${formatAmount(ad.spend) ?? "未知"}・${ad.result_count === null ? "未知" : `${ad.result_count} 筆`}`;
+    return `花 ${formatAmount(ad.spend) ?? "未知"} ${unit(ad.currency)}・${ad.result_count === null ? "未知" : `${ad.result_count} 筆`}`;
   }
-  return <>每筆 {money(ad.cost_per_result)}<MoneyTag cost={ad.cost_per_result} breakEven={breakEven} plain className="block" /></>;
+  return <>每筆 {money(ad.cost_per_result, ad.currency)}<MoneyTag cost={ad.cost_per_result} breakEven={breakEvenComparable(ad, breakEvenCurrency) ? breakEven : null} plain className="block" /></>;
 }
 
 export function CleanupProposal({ brandId, campaignId, item, position, homeHref, pick }: {
@@ -151,9 +154,12 @@ export function CleanupProposal({ brandId, campaignId, item, position, homeHref,
   const verdict = rules?.labels.verdict;
   const cap = capOf(triage.target);
   const breakEven = triage.target.break_even ?? null;
+  const breakEvenCurrency = triage.target.break_even_unit?.currency ?? null;
   const rulerAds: RulerAd[] = all.map((ad) => ({
     id: ad.entity_id, name: ad.name ?? "（未命名廣告）", grade: ad.grade, gradeLabel: label(ad),
     costPerResult: ad.cost_per_result, spend: ad.spend, thumbnailUrl: ad.thumbnail_url,
+    currency: ad.currency, comparisonReason: ad.cap_comparison?.reason,
+    comparisonMessage: ad.cap_comparison?.message,
   }));
   const scaleHref = cleanup.scale_owner_id ? proposeBudgetPath(brandId, campaignId, cleanup.scale_owner_id) : null;
   const capText = capacityText(cleanup, extras.daily);
@@ -191,10 +197,10 @@ export function CleanupProposal({ brandId, campaignId, item, position, homeHref,
             <h2 className="text-[15px] font-semibold">對照上限</h2>
             <div className="flex flex-wrap gap-x-4 gap-y-1.5 text-xs text-muted-foreground">
               <span className="inline-flex items-center gap-1.5"><i aria-hidden="true" className="inline-block size-2 rounded-sm bg-danger" />要關的</span>
-              {cap && <span>{cap.basis === "break_even" ? "暫用打平" : "上限"} {formatAmount(cap.value)}</span>}
+              {cap && <span>{cap.basis === "break_even" ? "暫用打平" : "上限"} {formatAmount(cap.value)} {unit(cap.currency)}</span>}
             </div>
           </div>
-          <TargetRuler ads={rulerAds} cap={cap} breakEven={breakEven} size="full" highlight={{ mode: "close", ids: [...closeIds] }} />
+          <TargetRuler ads={rulerAds} cap={cap} breakEven={breakEven} breakEvenCurrency={triage.target.break_even_unit?.currency ?? null} size="full" highlight={{ mode: "close", ids: [...closeIds] }} />
           <GradeRules breakEven={breakEven} />
         </section>
 
@@ -235,7 +241,7 @@ export function CleanupProposal({ brandId, campaignId, item, position, homeHref,
                   thumbnailUrl={ad.thumbnail_url}
                   grade={ad.grade}
                   gradeLabel={label(ad)}
-                  aside={pickAside(ad, breakEven)}
+                  aside={pickAside(ad, breakEven, breakEvenCurrency)}
                 />
               ))}
               {pick.changed && (
@@ -264,7 +270,7 @@ export function CleanupProposal({ brandId, campaignId, item, position, homeHref,
                     <CleanupName ad={ad} word={label(ad)} />
                   </div>
                   <CleanupGrade ad={ad} reasonCode={reason(ad)} />
-                  <div className="numeric text-right"><CostCell ad={ad} word={label(ad)} breakEven={breakEven} /></div>
+                  <div className="numeric text-right"><CostCell ad={ad} word={label(ad)} breakEven={breakEven} breakEvenCurrency={breakEvenCurrency} /></div>
                   <Chip tone={closing ? "bad" : mine ? "accent" : "ok"}>{closing ? "關" : mine ? "留・你改的" : "留"}</Chip>
                 </li>
               );

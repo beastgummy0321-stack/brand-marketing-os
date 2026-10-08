@@ -65,7 +65,11 @@ const field = (key: string) => document.querySelector(`[data-field="${key}"]`) a
 function capView(overrides: Partial<CapView> = {}): CapView {
   return {
     value: 559, basis: "break_even", own_value: null, break_even: 559, price: 999, product_id: "prd_2",
-    result_kind: "purchase", result_label: "購買", missing: [], revision: 3, ...overrides,
+    result_kind: "purchase", result_label: "購買", missing: [], revision: 3,
+    cap_unit: {basis: "break_even", currency: "TWD", source: "product_economics", unit_basis: "confirmed_product_economics"},
+    break_even_unit: {basis: "break_even", currency: "TWD", source: "product_economics", unit_basis: "confirmed_product_economics"},
+    price_unit: {basis: "break_even", currency: "TWD", source: "product_economics", unit_basis: "confirmed_product_economics"},
+    ...overrides,
   };
 }
 
@@ -373,7 +377,7 @@ describe("ConfirmBriefPage cap chip 「每賣一筆最多花」 (F36-I04)", () =
     await screen.findByText(LONG);
     const chip = field("cap");
     expect(within(chip).getByText("還沒填（選填）")).toBeTruthy();
-    expect(within(chip).getByText("先不填就用打平 559 TWD：售價 999 扣成本、運費後的一筆利潤")).toBeTruthy();
+    expect(within(chip).getByText("先不填就用打平 559 TWD：售價 999 TWD 扣成本、運費後的一筆利潤")).toBeTruthy();
     expect(within(chip).queryByText("猜的，請確認")).toBeNull();
     expect(chip.className).toContain("border-dashed");
     expect(chip.className).not.toContain("border-grade-watch");
@@ -392,13 +396,13 @@ describe("ConfirmBriefPage cap chip 「每賣一筆最多花」 (F36-I04)", () =
     await user.click(screen.getByRole("button", { name: "改每賣一筆最多花" }));
     const chip = field("cap");
     expect(chip.className).toContain("md:col-span-2");
-    expect(within(chip).getByText("填一個整數金額；留空＝先用打平 559")).toBeTruthy();
+    expect(within(chip).getByText("填一個整數金額；留空＝先用打平 559 TWD")).toBeTruthy();
     await user.type(within(chip).getByLabelText("每賣一筆最多花"), "600");
-    expect(within(chip).getByText(textIs("比打平 559 高 41・ROAS 1.67x 花到上限時"))).toBeTruthy();
+    expect(within(chip).getByText(textIs("比打平 559 TWD 高 41・ROAS 1.67x 花到上限時"))).toBeTruthy();
     await user.click(within(chip).getByRole("button", { name: "完成" }));
     expect(putTarget).toHaveBeenCalledWith("brd_1", "cmp_1", { basis: "own", value: 600, expected_revision: 3 });
     expect(await within(field("cap")).findByText("600 TWD")).toBeTruthy();
-    expect(within(field("cap")).getByText(textIs("比打平 559 高 41・ROAS 1.67x 花到上限時"))).toBeTruthy();
+    expect(within(field("cap")).getByText(textIs("比打平 559 TWD 高 41・ROAS 1.67x 花到上限時"))).toBeTruthy();
     expect(getCampaign).toHaveBeenCalledTimes(2);
     expect(screen.getByText("有 1 項是猜的")).toBeTruthy();
     expect(screen.queryByText(/上限沒填會先用打平/)).toBeNull();
@@ -415,8 +419,8 @@ describe("ConfirmBriefPage cap chip 「每賣一筆最多花」 (F36-I04)", () =
     await user.click(screen.getByRole("button", { name: "改每賣一筆最多花" }));
     const input = within(field("cap")).getByLabelText("每賣一筆最多花") as HTMLInputElement;
     await user.type(input, "500");
-    expect(within(field("cap")).getByText(textIs("比打平 559 低 59・ROAS 2.00x 花到上限時"))).toBeTruthy();
-    await user.click(within(field("cap")).getByRole("button", { name: "用打平 559" }));
+    expect(within(field("cap")).getByText(textIs("比打平 559 TWD 低 59・ROAS 2.00x 花到上限時"))).toBeTruthy();
+    await user.click(within(field("cap")).getByRole("button", { name: "用打平 559 TWD" }));
     expect(input.value).toBe("559");
     await user.type(input, "{Enter}");
     expect(putTarget).toHaveBeenCalledWith("brd_1", "cmp_1", { basis: "own", value: 559, expected_revision: 3 });
@@ -458,7 +462,7 @@ describe("ConfirmBriefPage cap chip 「每賣一筆最多花」 (F36-I04)", () =
     expect(screen.getByText("有 1 項是猜的")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "改每賣一筆最多花" }));
     expect(within(field("cap")).queryByRole("button", { name: /用打平/ })).toBeNull();
-    expect(within(field("cap")).getByText("填一個整數金額")).toBeTruthy();
+    expect(within(field("cap")).getByText("填一個整數金額；留空保留目前設定")).toBeTruthy();
     await user.type(within(field("cap")).getByLabelText("每賣一筆最多花"), "500");
     expect(within(field("cap")).getByText(textIs("ROAS 2.00x 花到上限時"))).toBeTruthy();
   });
@@ -570,6 +574,119 @@ it("cap ROAS uses identical rounding on the brief and strategy, with independent
   render(<MemoryRouter><CapBlock brandId="brd_1" campaign={c} onCampaignChange={vi.fn()} /></MemoryRouter>);
   expect(screen.getAllByText("2.01x")).toHaveLength(2);
   expect(screen.getAllByText("花到上限時")).toHaveLength(2);
+});
+
+it.each([undefined, null, "USD"])("rejects foreign or unverified price/break-even units in brief previews: %s", async currency => {
+  const c = campaign({cap: capView({value: 600, own_value: 600, basis: "own",
+    price_unit: currency === undefined ? undefined : {basis: "break_even", currency},
+    break_even_unit: currency === undefined ? undefined : {basis: "break_even", currency}})});
+  vi.mocked(getCampaign).mockResolvedValue(c);
+  const user = userEvent.setup();
+  renderPage();
+  await screen.findByText(LONG);
+  const capField = field("cap");
+  expect(within(capField).queryByText(/ROAS|比打平/)).toBeNull();
+  expect(within(capField).getByText(/幣別不同或尚未核實/)).toBeTruthy();
+  await user.click(screen.getByRole("button", {name: "改每賣一筆最多花"}));
+  const fill = within(capField).getByRole("button", {name: /用打平/});
+  expect(fill.hasAttribute("disabled")).toBe(true);
+  await user.click(fill);
+  const input = within(capField).getByLabelText("每賣一筆最多花") as HTMLInputElement;
+  expect(input.value).toBe("600");
+  await user.clear(input);
+  await user.type(input, "500");
+  expect(within(capField).queryByText(/ROAS|比打平/)).toBeNull();
+  await user.type(input, "{Escape}");
+  expect(putTarget).not.toHaveBeenCalled();
+  expect(within(capField).getByText("600 TWD")).toBeTruthy();
+});
+
+it.each([undefined, null, "USD"])("does not relabel an unchanged stored own cap as a new TWD input: %s", async currency => {
+  const c = campaign({cap: capView({value: 600, own_value: 600, basis: "own",
+    cap_unit: currency === undefined ? undefined : {basis: "own", currency}})});
+  vi.mocked(getCampaign).mockResolvedValue(c);
+  const user = userEvent.setup();
+  renderPage();
+  await screen.findByText(LONG);
+  expect(within(field("cap")).getByText(`600 ${currency ?? "幣別未知"}`)).toBeTruthy();
+  expect(within(field("cap")).queryByText(/ROAS|比打平/)).toBeNull();
+  await user.click(screen.getByRole("button", {name: "改每賣一筆最多花"}));
+  const input = within(field("cap")).getByLabelText("每賣一筆最多花") as HTMLInputElement;
+  expect(field("cap").querySelector('[data-slot="money-input"] span')?.textContent).toBe(currency ?? "幣別未知");
+  expect(within(field("cap")).queryByText(/ROAS|比打平/)).toBeNull();
+  await user.type(input, "{Enter}");
+  expect(putTarget).not.toHaveBeenCalled();
+  await user.click(screen.getByRole("button", {name: "改每賣一筆最多花"}));
+  const same = within(field("cap")).getByLabelText("每賣一筆最多花") as HTMLInputElement;
+  await user.clear(same);
+  await user.type(same, "600");
+  expect(field("cap").querySelector('[data-slot="money-input"] span')?.textContent).toBe(currency ?? "幣別未知");
+  await user.click(within(field("cap")).getByRole("button", {name: "完成"}));
+  expect(putTarget).not.toHaveBeenCalled();
+  await user.click(screen.getByRole("button", {name: "改每賣一筆最多花"}));
+  const edited = within(field("cap")).getByLabelText("每賣一筆最多花") as HTMLInputElement;
+  await user.clear(edited);
+  await user.type(edited, "500");
+  expect(field("cap").querySelector('[data-slot="money-input"] span')?.textContent).toBe("TWD");
+  expect(within(field("cap")).getByText(textIs("比打平 559 TWD 低 59・ROAS 2.00x 花到上限時"))).toBeTruthy();
+  await user.clear(edited);
+  await user.click(within(field("cap")).getByRole("button", {name: "完成"}));
+  expect(putTarget).not.toHaveBeenCalled();
+  expect(within(field("cap")).getByText(`600 ${currency ?? "幣別未知"}`)).toBeTruthy();
+});
+
+it.each([null, "USD"])("a failed new manual cap preserves the stored %s source until a successful server read", async currency => {
+  const original = campaign({cap: capView({value: 600, own_value: 600, basis: "own",
+    cap_unit: {basis: "own", currency}})});
+  vi.mocked(getCampaign).mockResolvedValueOnce(original).mockResolvedValueOnce(campaign({
+    cap: capView({value: 500, own_value: 500, basis: "own", revision: 4,
+      cap_unit: {basis: "own", currency: "TWD", source: "user", unit_basis: "manual_ntd_input"}})}));
+  vi.mocked(putTarget).mockRejectedValueOnce(new Error("上限儲存失敗")).mockResolvedValueOnce({} as never);
+  const user = userEvent.setup();
+  renderPage();
+  await screen.findByText(LONG);
+  await user.click(screen.getByRole("button", {name: "改每賣一筆最多花"}));
+  const input = within(field("cap")).getByLabelText("每賣一筆最多花") as HTMLInputElement;
+  await user.clear(input);
+  await user.type(input, "500{Enter}");
+  expect(await screen.findByText("上限儲存失敗")).toBeTruthy();
+  expect(input.value).toBe("500");
+  expect(field("cap").querySelector('[data-slot="money-input"] span')?.textContent).toBe("TWD");
+  expect(getCampaign).toHaveBeenCalledTimes(1);
+  expect(original.cap.cap_unit?.currency).toBe(currency);
+  await user.click(within(field("cap")).getByRole("button", {name: "取消"}));
+  expect(within(field("cap")).getByText(`600 ${currency ?? "幣別未知"}`)).toBeTruthy();
+  await user.click(screen.getByRole("button", {name: "改每賣一筆最多花"}));
+  const retry = within(field("cap")).getByLabelText("每賣一筆最多花");
+  await user.clear(retry);
+  await user.type(retry, "500{Enter}");
+  expect(await within(field("cap")).findByText("500 TWD")).toBeTruthy();
+  expect(putTarget).toHaveBeenLastCalledWith("brd_1", "cmp_1", {basis: "own", value: 500, expected_revision: 3});
+  expect(getCampaign).toHaveBeenCalledTimes(2);
+});
+
+it("compares a known USD read in USD but refuses using its break-even as a manual TWD value", async () => {
+  const c = campaign({cap: capView({value: 500, own_value: 500, basis: "own", price: 1002.5,
+    cap_unit: {basis: "own", currency: "USD"}, break_even_unit: {basis: "break_even", currency: "USD"},
+    price_unit: {basis: "break_even", currency: "USD"}})});
+  vi.mocked(getCampaign).mockResolvedValue(c);
+  renderPage();
+  await screen.findByText("2.01x");
+  expect(within(field("cap")).getByText("500 USD")).toBeTruthy();
+  await userEvent.click(screen.getByRole("button", {name: "改每賣一筆最多花"}));
+  expect(within(field("cap")).getByRole("button", {name: "用打平 559 USD"}).hasAttribute("disabled")).toBe(true);
+});
+
+it.each([undefined, null, "USD"])("an unresolved break-even does not promise a blank-input fallback: %s", async currency => {
+  vi.mocked(getCampaign).mockResolvedValue(campaign({cap: capView({
+    break_even_unit: currency === undefined ? undefined : {basis: "break_even", currency}})}));
+  renderPage();
+  await screen.findByText(LONG);
+  expect(within(field("cap")).queryByText(/先不填就用打平/)).toBeNull();
+  expect(screen.queryByText(/上限沒填會先用打平/)).toBeNull();
+  await userEvent.click(screen.getByRole("button", {name: "改每賣一筆最多花"}));
+  expect(within(field("cap")).getByText("填一個整數金額；留空保留目前設定")).toBeTruthy();
+  expect(within(field("cap")).getByRole("button", {name: /用打平/}).hasAttribute("disabled")).toBe(true);
 });
 
 it("the generate action explains why it is unavailable before the campaign loads", () => {

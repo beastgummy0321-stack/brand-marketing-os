@@ -643,6 +643,7 @@ export function ConfirmPage({ brandId, campaignId, entityId, setId, proposeKind 
             <CleanupEvidence
               cleanup={triageItem?.cleanup ?? null} items={changeSet?.items ?? []} drift={drift}
               picked={isCleanupPropose ? pick.ticked : undefined} breakEven={triageItem?.triage.target.break_even ?? null}
+              breakEvenCurrency={triageItem?.triage.target.break_even_unit?.currency ?? null}
             />
             <GradeRules breakEven={triageItem?.triage.target.break_even ?? null} />
           </div>

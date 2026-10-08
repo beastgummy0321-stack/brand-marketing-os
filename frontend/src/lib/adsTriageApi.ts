@@ -348,6 +348,8 @@ export interface QueueCleanupAd {
   spend_7d: number | null;
   grade: TriageGrade; cost_per_result: number | null; spend: number | null;
   result_count: number | null; daily_spend: number | null;
+  /** The exact graded-window unit and comparison; absent legacy fields remain unknown. */
+  currency?: string | null; cap_comparison?: CapComparison | null;
   // F29-I01 Contract B: null unless this ad was rejected before and its grade got worse since
   // (always null on `keep` entries).
   rejected_before: RejectedBefore | null;
