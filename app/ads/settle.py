@@ -126,13 +126,20 @@ def _written_view(written: dict):
     if not written:
         return None
     rows = sorted(written.values(), key=lambda row: row["created_at"])
-    effective = sum(1 for row in rows if (
-        ";settle_fate=effective" in ads_learnings.workbench.base_learning_scope(
-            row["applicability_scope"])
-        if ads_learnings.stored_evidence(row) else row["learning_text"].endswith("有效")))
+    effective = ineffective = 0
+    for row in rows:
+        base = ads_learnings.workbench.base_learning_scope(row["applicability_scope"])
+        evidence = ads_learnings.stored_evidence(row)
+        if ";settle_basis=absolute" in base:
+            effective += int(";settle_fate=effective" in base)
+            ineffective += int(";settle_fate=ineffective" in base)
+        elif evidence.get("direction") == "contrary":
+            ineffective += 1
+        # Legacy relative winners and unretained text have no absolute success proof.
     return {
         "at": rows[-1]["created_at"], "by": rows[-1]["created_by"], "count": len(rows),
-        "effective": effective, "ineffective": len(rows) - effective,
+        "effective": effective, "ineffective": ineffective,
+        "unknown": len(rows) - effective - ineffective,
     }
 
 
@@ -159,12 +166,12 @@ def _place(ranked) -> dict:
 
 
 def _fate(row, ranked) -> tuple[str, str | None]:
-    """F48 Contract R "derived rulers": 留下 (`keep`／`keep_relative`) -> effective, 換掉 ->
-    ineffective, a row the ranking cannot place -> skip; a known zero still under the 沒賣出 line
-    (`learning_rank.waiting`, F48-I13) names that as its reason."""
-    if ranked is None:
+    """Absolute cost decides learning; relative rank remains an independent comparison."""
+    if row["grade"] == "no_target":
+        return "skip", "尚未設定可比較的上限，這期只作歷史對照"
+    if row["grade"] == "insufficient" or ranked is None:
         return "skip", WAITING_REASON if learning_rank.waiting(row) else UNRANKED_REASON
-    return ("effective" if learning_rank.is_keep(ranked["verdict"]) else "ineffective"), None
+    return ("effective" if row["grade"] == "on_target" else "ineffective"), None
 
 
 def _rank_order(rows) -> list[dict]:
@@ -215,14 +222,14 @@ def _totals(rows, budget) -> dict:
     currency = next(iter(currencies)) if len(currencies) == 1 else None
     spent = summary["spent"]
     results = _known_total([row["results"] for row in rows]) if rows else None
-    # 「有效」 = the rows the ranking keeps (留下), the same rows a settle writes as effective.
-    on_target = [row for row in rows if row["verdict"] and learning_rank.is_keep(row["verdict"])]
+    # Absolute on-target rows are effective; the relative ranking stays independent.
+    on_target = [row for row in rows if row["grade"] == "on_target" and row["fate"] == "effective"]
     on_target_spend = _known_total([row["spend"] for row in on_target])
     return {
         "currency": currency, "spent": spent,
         # The month budget only when it is in the same currency as the spend (never compared
         # across two currencies).
-        "budget": budget[0] if budget and (currency is None or budget[1] == currency) else None,
+        "budget": budget[0] if budget and currency is not None and budget[1] == currency else None,
         "results": results,
         "cost_per_result": spent / results if spent is not None and results else None,
         "on_target_results": _known_total([row["results"] for row in on_target]) if rows else None,
@@ -432,7 +439,7 @@ def _scope(row, group_id) -> str:
     """The stored scope: the campaign and the customer group the ad spoke to (Contract R; the
     learning text says 「這群受眾」, so the scope names which)."""
     return (f"ads;campaign={row['campaign_id']};group={group_id or learning_rank.MISSING}"
-            f";settle_fate={row['fate']}")
+            f";settle_fate={row['fate']};settle_basis=absolute")
 
 
 def _resolve_queue_rows(conn, org_id, brand_id, end, actor) -> None:
@@ -466,11 +473,11 @@ def write(conn, org_id, brand_id, month, picks, actor) -> dict:
         campaign_id = row["campaign_id"]
         if campaign_id not in sell_ways:
             sell_ways[campaign_id] = sell_way.of_campaign_id(conn, org_id, brand_id, campaign_id)
-        comparable = row["cost_per_result"] is not None and row["cap"] is not None
+        comparable = row["grade"] in triage.GRADED
         within = row["cost_per_result"] <= row["cap"] if (
             row["cost_per_result"] is not None and row["cap"] is not None) else False
         text = learning_text("effective" if within else "ineffective", angle)
-        if not comparable:
+        if not comparable or row["cost_per_result"] is None:
             text = f"「{angle}」本期無法計算每筆成本與上限的差距；成效原因未知"
         detail = repository.campaign_detail(conn, org_id, brand_id, campaign_id)
         if detail is None:

@@ -212,6 +212,7 @@ class CreateCampaignRequest(BaseModel):
     cap: Any = None
     landing_url: Any = None
     customer_group_ids: Any = None
+    continuation: Any = None
 
 
 LANDING_URL_INVALID_MESSAGE = "落地頁請填完整的 http 或 https 網址，不可包含密碼。"
@@ -252,6 +253,23 @@ def create_campaign(request: Request, brand_id: str, body: CreateCampaignRequest
         "platform": body.platform, "audience_hint": body.audience_hint, "cap": body.cap,
         "landing_url": body.landing_url, "customer_group_ids": body.customer_group_ids,
     }
+    if "continuation" in body.model_fields_set:
+        from app.ads import next_period
+
+        try:
+            campaign = next_period.create(
+                web.conn, actor.org_id, brand_id, goal_text=body.goal_text or "",
+                start_date=body.start_date or "", end_date=body.end_date or "",
+                constraints=body.constraints, actor=str(actor.user_id),
+                picks={**picks, "continuation": body.continuation},
+            )
+        except next_period.ContinuationError as exc:
+            raise web.ApiError(exc.status, exc.code, exc.message) from None
+        except ValueError as exc:
+            code = str(exc)
+            status, message = _CREATE_CAMPAIGN_ERRORS.get(code, (400, code))
+            raise web.ApiError(status, code, message) from exc
+        return {"campaign": _with_readiness(actor, brand_id, campaign)}
     try:
         # F50 Contract J: a second create while this brand's parse runs is refused (no campaign
         # exists yet, so the lock is the brand's).

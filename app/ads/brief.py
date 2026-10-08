@@ -489,7 +489,7 @@ def _compose_goal_text(picks: dict, start: date, end: date) -> str:
 
 def create_draft(conn, org_id: str, brand_id: str, *, goal_text: str, start_date: str,
                   end_date: str, constraints: dict | None, actor: str,
-                  picks: dict | None = None) -> dict:
+                  picks: dict | None = None, next_period_source: dict | None = None) -> dict:
     """一句話 -> 一列 `status='draft'` 的 `ads_campaign`。回傳值是 `campaign_detail()` 的
     形狀再加一個 `parsed` 鍵（這次呼叫解析成功與否，不落地，只是這次回應的旗標）。
 
@@ -502,6 +502,12 @@ def create_draft(conn, org_id: str, brand_id: str, *, goal_text: str, start_date
     也收）。F43-I04：結構化路徑另收 `customer_group_ids`（這個賣法的顧客群）；沒帶的從賣法
     帶入（`_sell_way_defaults`）。F46-I08：平台、上限、預算先看同一個賣法的上一期（模組說明）。"""
     picks = dict(picks or {})
+    if "continuation" in picks and next_period_source is None:
+        from app.ads import next_period
+
+        return next_period.create(conn, org_id, brand_id, goal_text=goal_text,
+            start_date=start_date, end_date=end_date, constraints=constraints,
+            actor=actor, picks=picks)
     structured = any(picks.get(key) is not None for key in _STRUCTURED_KEYS)
     if not structured and (not isinstance(goal_text, str) or not goal_text.strip()):
         raise ValueError("goal_text_required")
@@ -737,6 +743,8 @@ def create_draft(conn, org_id: str, brand_id: str, *, goal_text: str, start_date
     }
     if customer_group_ids is not None:
         campaign["context_json"]["customer_group_ids"] = customer_group_ids
+    if next_period_source is not None:
+        campaign["context_json"]["next_period_source"] = next_period_source
     row =ads_repo.create_campaign(conn, org_id, brand_id, campaign, created_by=actor)
     detail = ads_repo.campaign_detail(conn, org_id, brand_id, row["id"])
     assert detail is not None  # 剛剛才插入的那一列，一定讀得到

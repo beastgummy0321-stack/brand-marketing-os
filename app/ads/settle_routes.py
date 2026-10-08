@@ -25,6 +25,18 @@ class SettleRequest(BaseModel):
 router = APIRouter()
 
 
+@router.get("/brands/{brand_id}/next-period")
+def get_next_period(request: Request, brand_id: str, month: str):
+    from app.ads import next_period
+
+    actor = web.require_actor(request)
+    web.require_brand(brand_id, actor)
+    try:
+        return next_period.prepare(web.conn, actor.org_id, brand_id, month)
+    except next_period.ContinuationError as exc:
+        raise web.ApiError(exc.status, exc.code, exc.message) from None
+
+
 def _error(exc: settle.SettleError) -> web.ApiError:
     return web.ApiError(exc.status, exc.code, exc.message)
 

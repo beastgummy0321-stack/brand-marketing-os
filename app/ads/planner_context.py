@@ -11,6 +11,7 @@ wording (`customer_groups.HEADER`, `coordinate_learning.HEADER`, 【這期可用
 「- offer=〈key〉｜〈sentence〉」 lines), so `providers.ScriptedProvider`'s parsers keep working.
 """
 
+import json
 import math
 from copy import deepcopy
 
@@ -442,11 +443,28 @@ def planner_context(conn, org_id: str, brand_id: str, product_id: str | None, *,
     known = product_id if product is not None else None
     customers_text, listed = customer_groups.prompt_groups(conn, org_id, brand_id, scope)
     current = learning_service.current_conditions(conn, org_id, brand_id, known, campaign=campaign)
-    raw_learnings = bi_repo.list_learnings(conn, brand_id, limit=_LEARNING_SCAN, source_track="ads",
-                                          include_expired=True)
-    view = coordinate_learning.prompt_view(conn, org_id, brand_id, sell_way_id=known,
-                                          current=current, additional_rows=raw_learnings,
-                                          context_cap=None)
+    source = (scope.get("context_json") or {}).get("next_period_source")
+    continuation = None
+    if source:
+        from app.ads import next_period
+
+        continuation = next_period.planner_source(conn, org_id, brand_id, source, scope)
+    raw_learnings = (bi_repo.list_learnings(
+        conn, brand_id, limit=_LEARNING_SCAN, source_track="ads", include_expired=True,
+    ) if continuation is None else [])
+    if continuation is not None:
+        raw_learnings = continuation["records"]
+        view = continuation["view"]
+        items = [row["evidence"] for row in raw_learnings]
+        view["evidence_context"] = {
+            "schema_version": 1, "revision": continuation["revision"], "scope_product_id": known,
+            "items": items, "omitted": 0,
+            "eligible_count": sum(bool(i["allowed_uses"]) for i in items),
+        }
+    else:
+        view = coordinate_learning.prompt_view(conn, org_id, brand_id, sell_way_id=known,
+                                              current=current, additional_rows=raw_learnings,
+                                              context_cap=None)
     view = learning_view.scoped_view(view, known)
     ranked_text, ranked_ids = coordinate_learning.ranked_section(
         conn, org_id, brand_id, scope, view=view, listed=listed,
@@ -465,10 +483,12 @@ def planner_context(conn, org_id: str, brand_id: str, product_id: str | None, *,
     # The delivery plan's menu (and the offers it keeps) for the caller's sell-way.
     the_menu = menu(conn, org_id, brand_id, product_id,
                     campaign is None or campaign.get("end_date") is not None)
-    carried = coordinate_learning.keep_ads(conn, org_id, brand_id, product_id) if campaign else []
+    carried = (continuation["carried_candidates"] if continuation is not None
+               else coordinate_learning.keep_ads(conn, org_id, brand_id, product_id,
+                                                 destination=campaign) if campaign else [])
     for item in carried:
         creative = item["creative"]
-        reasons = []
+        reasons = list((item.get("eligibility") or {}).get("reasons") or [])
         if creative is not None:
             checked = workbench.validate_claims(conn, org_id, brand_id, product_id,
                 creative["copy_fields"], offer_key=item["ad"].get("offer_key") or "none")
@@ -495,7 +515,14 @@ def planner_context(conn, org_id: str, brand_id: str, product_id: str | None, *,
         "learning_current": current,
         "ranked_text": ranked_text,
         "ranked_ids": ranked_ids,
-        "previous": _previous(conn, org_id, brand_id, known),
+        "previous": ({"campaign_id": continuation["source_campaigns"][0]["campaign_id"],
+                      "name": "、".join(c["name"] for c in continuation["source_campaigns"]),
+                      "learning_goals": [], "closed_count": len(continuation["source_campaigns"]),
+                      "best": None} if continuation is not None
+                     else _previous(conn, org_id, brand_id, known)),
+        "continuation": None if continuation is None else {
+            k: continuation[k] for k in ("month", "window", "revision", "source_campaigns",
+                                         "eligible_learning_refs", "excluded")},
         "cap": cap,
         "capacity": capacity,
         "budget_advice": campaign.get("budget_advice") if campaign else None,
@@ -634,6 +661,9 @@ def section_text(ctx: dict, which: str) -> str:
         return learnings_text(ctx["learnings"]["ads"])
     if which == "ranked":
         return ctx["ranked_text"]
+    if which == "previous" and ctx.get("continuation"):
+        source = ctx["continuation"]
+        return "【明確選中的上一期來源】\n" + json.dumps(source, ensure_ascii=False, default=str)
     if which == "previous":
         return _previous_text(ctx["previous"])
     if which == "capacity":

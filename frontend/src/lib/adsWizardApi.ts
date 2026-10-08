@@ -108,7 +108,35 @@ export interface WizardOptions {
 
 /** F43-I04: the 「進階：這期不一樣」 overrides ride along (`CampaignCreateExtras`); a missing one comes from the brand
  * and the picked sell-way (`field_sources` `"sell_way"`), a sent one is the user's. */
+export interface ContinuationInput {
+  month: string;
+  campaign_ids: string[];
+  revision: string;
+  request_id: string;
+  product_mapping_confirmed?: boolean;
+}
+export interface ContinuationProjection {
+  month: string;
+  window: { start: string; end: string };
+  revision: string;
+  source_campaigns: { campaign_id: string; origin: string; name: string }[];
+  eligible_learning_refs: { owner: string; ref: string; campaign_id: string }[];
+  excluded: { owner: string; ref: string; reason_code: string }[];
+}
+export interface NextPeriodPreparation extends ContinuationProjection {
+  source_campaigns: (ContinuationProjection["source_campaigns"][number] & {
+    mapping_required: boolean; result_kind: string | null; currency: string | null;
+  })[];
+}
+export interface NextPeriodSource extends ContinuationProjection, ContinuationInput {
+  product_id: string;
+  payload_digest: string;
+  native_entities: { id: string; campaign_id: string; platform: string;
+    source_account: string; native_kind: string; native_id: string }[];
+}
+
 export interface CampaignPicks extends CampaignCreateExtras {
+  continuation?: ContinuationInput;
   /** Exactly one id, taken from `WizardOptions.products` (anything else is `product_unknown`). */
   product_ids: [string];
   objective: string;
@@ -140,4 +168,10 @@ export async function createCampaignFromPicks(
   });
   const data = await readJson<{ campaign: CampaignDraft }>(res, "建立活動失敗。");
   return data.campaign;
+}
+
+/** Read-only completed org-month evidence; exclusions are supplied by the backend. */
+export async function getNextPeriod(brandId: string, month: string): Promise<NextPeriodPreparation> {
+  const res = await apiFetch(`${brandPath(brandId)}/next-period?month=${encodeURIComponent(month)}`);
+  return readJson<NextPeriodPreparation>(res, "讀取下一期來源失敗。");
 }

@@ -9,6 +9,7 @@ import type { ManualHandoff } from "./adsLaunchApi";
 // touches `triage_capacity.py`/`triage_scale.py`, already documented there) -- imported back
 // here as a type only, so `CampaignData.capacity` keeps the one shared shape.
 import type { CampaignCapacity, CampaignObjectiveFamily, CapView } from "./adsTriageApi";
+import type { NextPeriodSource } from "./adsWizardApi";
 import type { CampaignContextJson, CampaignCreateExtras } from "./adsCampaignTypes";
 import type { BudgetAdvice, BudgetPreview, BudgetScenarioRow, PlanCapacity, PlanMenuRow, ResplitRow, StrategyBasis, StrategyPayload, StrategyRole } from "./adsStrategyTypes";
 
@@ -209,7 +210,7 @@ export interface CampaignDetail extends EntityBinding, ExternalCampaignFields {
   /** 產生策略前是 `{}`；F03-I05 起是 `AdsBudgetBasisJson`——讀前先檢查 `.strategy` 存不存在。 */
   budget_basis_json: Partial<AdsBudgetBasisJson>;
   budget_total: number | null;
-  context_json: CampaignContextJson;
+  context_json: CampaignContextJson & { next_period_source?: NextPeriodSource };
   constraints_json: Record<string, unknown>;
   verdict: string | null;
   verdict_json: Record<string, unknown>;

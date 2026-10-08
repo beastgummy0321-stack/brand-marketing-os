@@ -28,6 +28,7 @@ from typing import cast
 
 from app.ads import (
     ads_learnings,
+    coverage,
     customer_groups,
     learning_rank,
     learning_view,
@@ -36,6 +37,7 @@ from app.ads import (
     period_grades,
     sell_way,
     targets,
+    triage,
 )
 from app.ads import asset_binding_repository as bindings
 from app.ads import learning as ads_learning
@@ -335,34 +337,78 @@ def _creative(conn: _AnyConn, org_id: str, brand_id: str, ad: dict) -> dict | No
     except ValueError:
         return None
     copy = _copy_of(bindings.effective_copy(placement)) or _live_copy(ad)
-    if copy is None or asset["status"] != "ready":
+    if (copy is None or asset["status"] != "ready" or not placement.get("confirmed_at")
+            or not placement.get("is_current")):
+        return None
+    from app.ads import next_period
+
+    if next_period.original_bytes(asset, org_id):
         return None
     return {"asset_id": placement["asset_id"], "copy_fields": copy,
             "placement_id": placement["id"], "placement_revision": placement["revision"]}
 
 
-def keep_ads(conn: _AnyConn, org_id: str, brand_id: str, sell_way_id: str | None) -> list[dict]:
-    """Contract K: the 留下／相對留下 rows of the newest closed campaign of this sell-way, in rank
-    order, each `{row, ad, role, creative}` -- `ad` the previous `ads_ad` row (through the row's
+def keep_ads(conn: _AnyConn, org_id: str, brand_id: str, sell_way_id: str | None, *,
+             destination: dict | None = None) -> list[dict]:
+    """Contract K: absolutely on-target, qualified 留下 rows of the newest closed sell-way
+    campaign in rank order, each `{row, ad, role, creative}`. `ad` is the previous row through
     `source_cycle_id` = `<campaign>:<ad>`), `role` its delivery group's role, `creative` its
     original and copy (None when not found). A row whose ad is gone is skipped."""
     campaign = _newest_closed(conn, org_id, brand_id, sell_way_id)
     if campaign is None:
         return []
+    source = ads_repo.get_campaign(conn, org_id, brand_id, campaign["id"])
+    if source is None:
+        return []
+    destination = destination or source
+    current = ads_learnings.current_conditions(conn, org_id, brand_id, sell_way_id,
+                                               campaign=destination)
     view = learning_view.learnings_view(conn, org_id, brand_id, campaign_id=campaign["id"],
-                                        limit=1)
+                                        limit=1, current=current)
+    target = targets.resolve(conn, org_id, brand_id, destination)
+    unit = outcome.cap_unit(conn, brand_id, target, campaign=destination)
+    window = outcome.period_window(conn, org_id, brand_id, source)
+    if not window.get("start") or not window.get("end"):
+        return []
+    start, end = date.fromisoformat(window["start"]), date.fromisoformat(window["end"])
+    read = coverage.load(conn, org_id, brand_id, source, start, end)
+    if read.missing(start, end, cap=None):
+        return []
+    observations = [dict(r) for r in conn.execute(
+        "SELECT d.*,e.native_id FROM ads_external_daily d JOIN ads_external_entity e"
+        " ON e.org_id=d.org_id AND e.brand_id=d.brand_id AND e.campaign_id=d.campaign_id"
+        " AND e.id=d.entity_id AND e.native_kind='ad' WHERE d.org_id=%s AND d.brand_id=%s"
+        " AND d.campaign_id=%s AND d.metric_scope='ad' AND d.day BETWEEN %s AND %s"
+        " ORDER BY d.id LIMIT 3001", (org_id, brand_id, source["id"], start, end),
+    ).fetchall()]
+    if len(observations) > 3000:
+        return []
     kept = []
     for campaign_view in view["campaigns"]:
         for row in campaign_view["rows"]:
             if not learning_rank.is_keep(row["verdict"]):
                 continue
+            if (row.get("cost_per_sale") is None or campaign_view.get("cap") is None
+                    or row["cost_per_sale"] > campaign_view["cap"]
+                    or "retain_control" not in (row.get("evidence") or {}).get("allowed_uses", [])):
+                continue
             ad = ads_repo.get_ad(conn, org_id, brand_id, row["ad_id"])
             if ad is None or ad["campaign_id"] != campaign["id"]:
+                continue
+            rows = [r for r in observations if r["native_id"] == ad.get("external_id")]
+            result, spend = triage._ad_window(rows, start, end)
+            currency = period_grades._currency(rows)
+            if (outcome.compare_cap_unit(unit, currency)["reason"] is not None
+                    or triage.grade_window(result, spend, target["value"],
+                                          (end - start).days + 1)[0] != "on_target"):
+                continue
+            creative = _creative(conn, org_id, brand_id, ad)
+            if creative is None:
                 continue
             group = ads_repo.get_group(conn, org_id, brand_id, ad["group_id"])
             kept.append({
                 "row": row, "ad": ad, "role": (group or {}).get("role"),
-                "creative": _creative(conn, org_id, brand_id, ad),
+                "creative": creative,
             })
     return kept
 

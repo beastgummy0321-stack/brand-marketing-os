@@ -64,6 +64,93 @@ def test_same_history_different_current_cost(evidence, cost, state, key):
     assert result["evidence"]["sample_flag"]["few"] is True
 
 
+@pytest.mark.parametrize("mode, expected", [
+    ("over", "repair_before_budget"), ("qualified", "retain"),
+    ("unconfirmed", "insufficient_evidence"), ("confirmed", "retain"),
+    ("wrong_product", "insufficient_evidence"), ("expired", "insufficient_evidence"),
+])
+def test_continuation_budget_uses_only_selected_completed_month(evidence, mode, expected):
+    conn, org, brand, current, selected, selected_ad = evidence
+    product = current["context_json"]["product_ids"][0]
+    other = _imported(conn, org, brand, "Unselected cheap source", "unselected",
+                      cap=100, product_id=product)
+    external_repository.upsert_entity(conn, org, brand, other, {
+        "platform": "meta", "source_account": "act_1", "native_kind": "campaign",
+        "native_id": "unselected", "objective": "OUTCOME_SALES", "budget_type": "daily",
+        "budget_amount": 200, "currency": "TWD", "native_status": "ACTIVE",
+    })
+    other_ad = _ad(conn, org, brand, other, "unselected-ad", "unselected")
+    conn.execute("UPDATE ads_campaign SET end_date=%s WHERE id=%s",
+                 (date(2026, 10, 2), other))
+    _obs(conn, org, brand, other, other_ad, date(2026, 10, 2), spend=20, count=1)
+    _obs(conn, org, brand, selected, selected_ad, date(2026, 9, 30),
+         spend=500 if mode == "over" else 20, count=1)
+    # The same still-live selected campaign has newer, cheap evidence outside the chosen month.
+    _obs(conn, org, brand, selected, selected_ad, date(2026, 10, 2), spend=20, count=1)
+    for campaign_id in (selected, other):
+        external_repository.record_sync(conn, org, brand, campaign_id,
+            section="observations", state={"status": "success", "coverage": {
+                "start": "2026-09-26", "end": "2026-10-02",
+            }})
+    if mode in {"unconfirmed", "confirmed", "wrong_product"}:
+        conn.execute("UPDATE ads_campaign SET context_json=context_json-'product_ids' WHERE id=%s",
+                     (selected,))
+    conn.commit()
+    current = {**current, "context_json": {**current["context_json"], "next_period_source": {
+        "campaign_ids": [selected], "month": "2026-08" if mode == "expired" else "2026-09",
+        "product_mapping_confirmed": mode in {"confirmed", "wrong_product"},
+        "product_id": "other-product" if mode == "wrong_product" else product,
+    }}}
+    before = conn.execute("SELECT native_id,native_status FROM ads_external_entity WHERE id=%s",
+                          (selected_ad,)).fetchone()
+    with _pinned(date(2026, 10, 3)):
+        result = budget.advice(conn, org, brand, current)
+    assert result["state"] == expected, result
+    assert result["evidence"]["window"]["campaign_id"] != other
+    if expected in {"repair_before_budget", "retain"}:
+        assert result["evidence"]["window"]["campaign_id"] == selected
+        assert result["evidence"]["window"]["end"] == "2026-09-30"
+        assert result["evidence"]["cost_per_result"] == (500 if mode == "over" else 20)
+    if expected == "retain":
+        assert result["recommended_key"] == "retain"
+    else:
+        assert result["recommended_key"] is None
+    if mode == "expired":
+        assert result["reason_codes"] == ["continuation_outside_recent_window"]
+    assert conn.execute("SELECT native_id,native_status FROM ads_external_entity WHERE id=%s",
+                        (selected_ad,)).fetchone() == before
+
+
+def test_empty_continuation_budget_revision_retains_selection_identity(evidence):
+    conn, org, brand, current, selected, _ = evidence
+    source = {"campaign_ids": [selected], "month": "2026-08",
+              "product_mapping_confirmed": False,
+              "product_id": current["context_json"]["product_ids"][0]}
+    revisions = set()
+    for changed in (source, {**source, "campaign_ids": ["missing"]},
+                    {**source, "month": "2026-07"},
+                    {**source, "product_mapping_confirmed": True},
+                    {**source, "product_id": "other-product"}):
+        candidate = {**current, "context_json": {**current["context_json"],
+                                                 "next_period_source": changed}}
+        result = budget.advice(conn, org, brand, candidate)
+        assert result["recommended_key"] is None
+        revisions.add(result["revision"])
+    assert len(revisions) == 5
+
+
+@pytest.mark.parametrize("month,ids", [("bad-month", ["selected"]), ("2026-08", [])])
+def test_invalid_stored_continuation_does_not_masquerade_as_read_failure(evidence, month, ids):
+    conn, org, brand, current, _, _ = evidence
+    current = {**current, "context_json": {**current["context_json"], "next_period_source": {
+        "month": month, "campaign_ids": ids,
+    }}}
+    result = budget.advice(conn, org, brand, current)
+    assert result["state"] == "insufficient_evidence"
+    assert result["recommended_key"] is None
+    assert result["reason_codes"] == ["continuation_source_unverified"]
+
+
 @pytest.mark.parametrize("root_order", ["before", "after", "missing"])
 def test_only_campaign_root_establishes_the_cohort_objective(evidence, root_order):
     conn, org, brand, current, _prior, _ad_id = evidence
