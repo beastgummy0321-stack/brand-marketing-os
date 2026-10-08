@@ -2,16 +2,19 @@ import { Link } from "react-router-dom";
 import { Button } from "@/components/layout/ui/button";
 import { Skeleton } from "@/components/layout/Skeleton";
 import type { CloseoutQueueRow, GradeMove, QueueCleanupAd, QueueItem, QueuePayload } from "@/lib/adsTriageApi";
-import { Chip, Disclosure, GradeTermChip, MoneyTag, ResultHero, Term, ThumbTiles, formatAmount, gradeWord, useAdsRules, type AdsRules } from "../patterns";
+import { Chip, Disclosure, GradeTermChip, ResultHero, Term, ThumbTiles, formatAmount, gradeWord, useAdsRules, type AdsRules } from "../patterns";
 import { trendNote } from "../detail/GradeGroups";
 import { cn } from "@/lib/utils";
 import { formatInstant, useOrgClock } from "@/lib/orgClock";
-import { wholeYuan } from "./MonthMoney";
+import { currencyPrefix, wholeYuan } from "./MonthMoney";
+import { CostBasis } from "./CostBasis";
 import { perSaleAmount } from "../patterns/csv";
 import { shortName } from "./NextDates";
 import { CloseoutRow, DoneChip, QueueRow, closeoutAction, closeoutNote, decisionTitle, homeAction } from "./QueueRow";
 import { SettleCard, SettleRow, settleRange } from "./SettleCard";
 import { decisionBoard, decisionCount, settleAction, type HomeDecision } from "./status";
+import type { HomeSync } from "@/lib/adsHomeApi";
+import type { WorkerHealth } from "@/lib/useWorkerHealth";
 
 /** v10 home 「需要你決定」 (prototype v10 `homeDecide()`): the brand queue's open decision rows — ad rows, the period
  * `settle` row and the ended campaigns' `closeout` rows — in their served `position` (F49 Contract Q: which rows are
@@ -55,21 +58,27 @@ type Props = {
   syncing: boolean;
   /** F27-I17: right after a worker gap every action is replaced by one honest placeholder. */
   recovering: boolean;
-  sync: { last_success_at: string | null; next_at: string | null } | null;
+  sync: Pick<HomeSync, "last_success_at" | "next_at"> & Partial<HomeSync> | null;
+  worker?: Pick<WorkerHealth, "state" | "recheck">;
+  fresh?: boolean;
   onRetry: () => void;
 };
 
-export function TodayDecisions({ brandId, state, syncing, recovering, sync, onRetry }: Props) {
+export function TodayDecisions({ brandId, state, syncing, recovering, sync, worker, fresh = true, onRetry }: Props) {
   const { timezone } = useOrgClock();
   const board = state.status === "ready" ? homeBoard(brandId, state.queue) : null;
   const open = board?.open ?? [];
   const done = board?.done ?? [];
-  const chip = syncing
+  const workerState = worker?.state ?? sync?.worker_health?.state ?? "unknown";
+  const waiting = syncing && workerState === "alive";
+  const primaryKey = open.find((d) => d.kind === "settle" ? settleAction(brandId, d.row).href
+    : d.kind === "closeout" ? closeoutAction(d.row).href : homeAction(brandId, d.item).href);
+  const chip = waiting
     ? <Chip tone="accent">同步中・完成後才判斷</Chip>
     : board && open.length ? <Chip>{board.count} 件</Chip> : null;
 
   let body;
-  if (syncing || state.status === "loading") {
+  if (waiting || state.status === "loading") {
     body = (
       <div className="grid grid-cols-1 gap-3.5 min-[1100px]:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]" aria-busy="true">
         {[0, 1].map((k) => (
@@ -92,15 +101,15 @@ export function TodayDecisions({ brandId, state, syncing, recovering, sync, onRe
     );
   } else if (!open.length) {
     const note = [
-      sync?.last_success_at ? `${stamp(sync.last_success_at, timezone)} 同步後判讀完成` : null,
-      sync?.next_at ? `下次同步 ${formatInstant(sync.next_at, timezone, "hm")}` : null,
+      sync?.last_success_at ? `最近成功讀取 ${stamp(sync.last_success_at, timezone)}` : null,
+      workerState === "alive" && fresh && sync?.next_at ? `下次同步預估 ${formatInstant(sync.next_at, timezone, "hm")}` : null,
     ].filter(Boolean).join("・");
     body = (
       <>
         <div className="flex items-center gap-4 rounded-xl border border-border bg-card px-6 py-7">
-          <div className="grid size-[52px] shrink-0 place-items-center rounded-full bg-success text-2xl text-white" aria-hidden="true">✓</div>
+          <div className="grid size-[52px] shrink-0 place-items-center rounded-full bg-muted text-2xl text-muted-foreground" aria-hidden="true">—</div>
           <div className="min-w-0 flex-1">
-            <b className="text-lg">今天沒有要決定的事</b>
+            <b className="text-lg">目前沒有待決定的項目</b>
             {note && <div className="mt-0.5 text-sm text-muted-foreground">{note}</div>}
           </div>
           <Button asChild variant="outline"><Link to={`/brands/${brandId}/ads/month`}>看每月回顧</Link></Button>
@@ -115,10 +124,10 @@ export function TodayDecisions({ brandId, state, syncing, recovering, sync, onRe
       <>
         <div className="grid grid-cols-1 gap-3.5 min-[1100px]:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]">
           {shown.map((d) => (d.kind === "settle"
-            ? <SettleCard key={keyOf(d)} brandId={brandId} row={d.row} recovering={recovering} />
+            ? <SettleCard key={keyOf(d)} brandId={brandId} row={d.row} recovering={recovering} primary={d === primaryKey} />
             : d.kind === "closeout"
-            ? <CloseoutCard key={keyOf(d)} row={d.row} recovering={recovering} />
-            : <DecisionCardFor key={keyOf(d)} brandId={brandId} item={d.item} recovering={recovering} />))}
+            ? <CloseoutCard key={keyOf(d)} row={d.row} recovering={recovering} primary={d === primaryKey} />
+            : <DecisionCardFor key={keyOf(d)} brandId={brandId} item={d.item} recovering={recovering} primary={d === primaryKey} />))}
         </div>
         {rest.length > 0 && (
           <Disclosure label={`還有 ${rest.length} 件要決定`}>
@@ -137,6 +146,11 @@ export function TodayDecisions({ brandId, state, syncing, recovering, sync, onRe
   return (
     <section className="flex flex-col gap-2.5" aria-labelledby="decide">
       <h2 id="decide" tabIndex={-1} className="flex scroll-mt-[72px] items-center gap-2 text-base font-semibold outline-none">需要你決定{chip}</h2>
+      {workerState !== "alive" && <div className="flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
+        <Chip tone={workerState === "stopped" ? "warn" : "neutral"}>{workerState === "stopped" ? "背景執行已停止" : "背景狀態未確認"}</Chip>
+        {sync?.eligible_at && <span>同步到期時間 {formatInstant(sync.eligible_at, timezone, "md_hm")}・執行時間尚無法確認</span>}
+        {worker && <Button variant="link" size="sm" onClick={() => void worker.recheck()}>重新確認背景狀態</Button>}
+      </div>}
       {body}
     </section>
   );
@@ -148,7 +162,7 @@ function doneLabel(d: HomeDecision, rules: AdsRules | null): string {
   if (d.kind === "closeout") return d.row.message;
   const item = d.item;
   if (item.kind_key === "cleanup") return `清理：${decisionTitle(item)}`;
-  if (item.kind_key === "worse") return `${moveText(item.triage.grade_move, rules)}：${item.triage.name ?? "未命名廣告"}`;
+  if (item.kind_key === "worse") return `${triggerText(item, rules)}：${item.triage.name ?? "未命名廣告"}`;
   return decisionTitle(item);
 }
 
@@ -164,7 +178,9 @@ function HandledFold({ brandId, done, recovering }: { brandId: string; done: Hom
         // drill-10 Q2: the chip opens the decision (a deferred one shows 「M/D 再看」 and leads back to its change set).
         return (
           <div key={keyOf(d)} className="flex flex-wrap items-center gap-3 border-t border-border py-2 first:border-t-0">
-            <span className="min-w-0 flex-1 text-sm [overflow-wrap:anywhere]">{doneLabel(d, rules)}</span>
+            <span className="min-w-0 flex-1 text-sm [overflow-wrap:anywhere]">{doneLabel(d, rules)}
+              {d.kind === "item" && d.item.proposal?.reason && <span className="block text-xs text-muted-foreground">{d.item.proposal.reason}</span>}
+            </span>
             {recovering ? <Chip>補完資料後更新</Chip> : <DoneChip action={action} />}
           </div>
         );
@@ -179,7 +195,7 @@ function CardHead({ label, className, campaign }: { label: string; className: st
   return (
     <div className="flex items-center justify-between gap-3">
       <Chip className={className}>{label}</Chip>
-      <span className="min-w-0 truncate text-sm text-muted-foreground" title={campaign}>{shortName(campaign)}</span>
+      <span className="min-w-0 text-right text-sm text-muted-foreground [overflow-wrap:anywhere]">{campaign}</span>
     </div>
   );
 }
@@ -206,32 +222,32 @@ function Thumb({ url, size }: { url: string | null; size: number }) {
     : <span className="shrink-0 rounded-lg bg-muted" style={style} aria-hidden="true" />;
 }
 
-function DecisionCardFor(props: { brandId: string; item: QueueItem; recovering: boolean }) {
+function DecisionCardFor(props: { brandId: string; item: QueueItem; recovering: boolean; primary: boolean }) {
   if (props.item.kind_key === "cleanup") return <CleanupCard {...props} />;
   if (props.item.kind_key === "worse") return <WorseCard {...props} />;
   return <RefreshCard {...props} />;
 }
 
 function CleanupFigure({ ad, breakEven }: { ad: QueueCleanupAd; breakEven: number | null }) {
-  if (ad.grade === "wasted") return <>花 {formatAmount(ad.spend) ?? "—"}・0 筆</>;
+  if (ad.grade === "wasted") return <>花 {currencyPrefix(ad.currency ?? null)}{formatAmount(ad.spend) ?? "—"}・0 筆</>;
   if (ad.cost_per_result === null) return <>每筆 —</>;
   return (
     <>
-      每筆 {wholeYuan(ad.cost_per_result)}
-      <MoneyTag cost={ad.cost_per_result} breakEven={breakEven} className="block" />
+      每筆 {currencyPrefix(ad.currency ?? null)}{wholeYuan(ad.cost_per_result)}{!ad.currency && "（幣別未確認）"}
+      <CostBasis value={breakEven} currency={ad.currency ?? null} />
     </>
   );
 }
 
 /** Prototype `cleanCard()`: the proposed cut, 沒賣出 first, with the daily saving when the last 7 days are known. */
-function CleanupCard({ brandId, item, recovering }: { brandId: string; item: QueueItem; recovering: boolean }) {
+function CleanupCard({ brandId, item, recovering, primary }: { brandId: string; item: QueueItem; recovering: boolean; primary: boolean }) {
   const cleanup = item.cleanup;
   const ads = cleanup?.ads ?? [];
   const red = ads.length > 0 && ads.every((a) => a.grade === "over" || a.grade === "wasted");
   const saving = cleanup?.daily_saving ?? null;
   const breakEven = item.triage.target.break_even ?? null;
   const title = ads.length
-    ? `${red ? "關掉色帶裡紅色的" : "關掉"} ${ads.length} 則${saving === null ? "" : `，每天省約 ${formatAmount(Math.round(saving / 10) * 10)} 元`}`
+    ? `${red ? "關掉色帶裡紅色的" : "關掉"} ${ads.length} 則${saving === null ? "" : `，每天省約 ${formatAmount(saving)}（幣別未確認）`}`
     : "預算放不下全部在投的廣告";
   return (
     <article className={cn(CARD, "border-danger/30")} aria-label={decisionTitle(item)}>
@@ -245,25 +261,26 @@ function CleanupCard({ brandId, item, recovering }: { brandId: string; item: Que
               <span className="min-w-0 text-sm [overflow-wrap:anywhere]">{ad.name ?? "未命名廣告"}</span>
               <GradeTermChip grade={ad.grade} />
               <span className="numeric min-w-[92px] text-right text-sm whitespace-nowrap text-muted-foreground">
-                <CleanupFigure ad={ad} breakEven={breakEven} />
+                <CleanupFigure ad={ad} breakEven={ad.currency && item.triage.target.break_even_unit?.currency === ad.currency ? breakEven : null} />
               </span>
             </div>
           ))}
         </div>
       )}
-      {recovering ? <Recovering /> : <CardAction brandId={brandId} item={item} primary />}
+      {recovering ? <Recovering /> : <CardAction brandId={brandId} item={item} primary={primary} />}
     </article>
   );
 }
 
 /** Prototype `worseCard()`: 變貴 is the grade moving against this campaign's cap (`grade_move`); the week-over-week
  * trend is only the footnote. */
-function WorseCard({ brandId, item, recovering }: { brandId: string; item: QueueItem; recovering: boolean }) {
+function WorseCard({ brandId, item, recovering, primary }: { brandId: string; item: QueueItem; recovering: boolean; primary: boolean }) {
   const t = item.triage;
   const rules = useAdsRules();
   const prev = t.previous.cost_per_result;
   const cur = t.current.cost_per_result;
   const cap = t.target.value;
+  const comparable = t.cap_comparison?.reason === null && t.target.cap_unit?.currency === t.current.currency && !!t.current.currency;
   const who = shortName(t.campaign_name);
   const capWord = t.target.basis === "break_even"
     ? <>{who}暫用<Term k="break_even" value={t.target.break_even}>打平線</Term></>
@@ -271,25 +288,32 @@ function WorseCard({ brandId, item, recovering }: { brandId: string; item: Queue
   const over = cap !== null && cur !== null && cur > cap;
   return (
     <article className={cn(CARD, "border-border")} aria-label={t.name ?? "未命名廣告"}>
-      <CardHead label={moveText(t.grade_move, rules)} className="bg-zone-watch text-warning-strong" campaign={t.campaign_name} />
+      <CardHead label={triggerText(item, rules)} className="bg-zone-watch text-warning-strong" campaign={t.campaign_name} />
       <div className="text-base font-semibold [overflow-wrap:anywhere]">{t.name ?? "未命名廣告"}</div>
       <div>
         <div className="numeric text-base font-semibold [overflow-wrap:anywhere]">
-          每筆 {prev !== null && `${perSaleAmount(prev)} → `}{perSaleAmount(cur) ?? "—"}
-          {cap !== null && cur !== null && <>，{over ? "超過" : "還在"}{capWord} {formatAmount(cap)}{over ? "" : " 內"}</>}
+          每筆 {currencyPrefix(t.current.currency ?? null)}{prev !== null && t.current.currency && t.previous.currency === t.current.currency && `${perSaleAmount(prev)} → `}{perSaleAmount(cur) ?? "—"}
+          {cur !== null && !t.current.currency && "（幣別未確認）"}
+          {comparable && cap !== null && cur !== null && <>，{over ? "超過" : "還在"}{capWord} {formatAmount(cap)}{over ? "" : " 內"}</>}
         </div>
-        <MoneyTag cost={cur} breakEven={t.target.break_even} className="block" />
+        <CostBasis value={t.target.break_even_unit?.currency === t.current.currency ? t.target.break_even ?? null : null} currency={t.current.currency ?? null} />
         <div className="mt-1 text-xs text-muted-foreground">{trendNote(t)}（只當參考）</div>
       </div>
       <div className="flex-1" />
-      {recovering ? <Recovering /> : <CardAction brandId={brandId} item={item} primary={false} />}
+      {recovering ? <Recovering /> : <CardAction brandId={brandId} item={item} primary={primary} />}
     </article>
   );
 }
 
+function triggerText(item: QueueItem, rules: AdsRules | null): string {
+  if (item.trigger_reason === "persistently_over_cap") return "成本持續超過上限";
+  if (item.trigger_reason === "currently_over_cap") return "成本超過上限";
+  return moveText(item.triage.grade_move, rules);
+}
+
 /** F49 Contract Q: an ended campaign's closeout decision, in the same card shape as the others — the served sentence
  * (「「X」已結束，待結案」), the end date and any ads still running on the platform, and 結案這一期 to the row's own link. */
-function CloseoutCard({ row, recovering }: { row: CloseoutQueueRow; recovering: boolean }) {
+function CloseoutCard({ row, recovering, primary }: { row: CloseoutQueueRow; recovering: boolean; primary: boolean }) {
   const action = closeoutAction(row);
   const note = closeoutNote(row);
   return (
@@ -299,14 +323,14 @@ function CloseoutCard({ row, recovering }: { row: CloseoutQueueRow; recovering: 
       {note && <div className="text-sm text-muted-foreground">{note}</div>}
       <div className="flex-1" />
       {recovering ? <Recovering /> : action.href && (
-        <Button asChild className="h-10 w-full"><Link to={action.href}>{action.label} →</Link></Button>
+        <Button asChild variant={primary ? "default" : "outline"} className="h-10 w-full"><Link to={action.href}>{action.label} →</Link></Button>
       )}
     </article>
   );
 }
 
 /** Not drawn by the prototype's home: the same card shape for a `refresh_creative` row (too few readable ads). */
-function RefreshCard({ brandId, item, recovering }: { brandId: string; item: QueueItem; recovering: boolean }) {
+function RefreshCard({ brandId, item, recovering, primary }: { brandId: string; item: QueueItem; recovering: boolean; primary: boolean }) {
   const refresh = item.refresh;
   const thumbs = refresh?.thumbnails.slice(0, 4) ?? [];
   return (
@@ -315,7 +339,7 @@ function RefreshCard({ brandId, item, recovering }: { brandId: string; item: Que
       <div className="text-base font-semibold">{decisionTitle(item)}</div>
       <ThumbTiles items={thumbs} size={32} hollow={4 - thumbs.length} />
       <div className="flex-1" />
-      {recovering ? <Recovering /> : <CardAction brandId={brandId} item={item} primary={false} />}
+      {recovering ? <Recovering /> : <CardAction brandId={brandId} item={item} primary={primary} />}
     </article>
   );
 }
