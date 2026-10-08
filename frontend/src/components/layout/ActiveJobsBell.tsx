@@ -252,7 +252,9 @@ export function ActiveJobsBell() {
             <p className="py-3 text-[13px] text-muted-foreground">讀取中…</p>
           ) : (
             <>
-              {workerHealthState(state.snapshot) !== "alive" && (
+              {(workerHealthState(state.snapshot) === "unknown" ||
+                (workerHealthState(state.snapshot) === "stopped" &&
+                  (state.snapshot.stalled === true || state.snapshot.data.length > 0))) && (
                 <div className="my-2">
                   <WorkerStoppedNotice state={workerHealthState(state.snapshot)} onRecheck={load} />
                 </div>

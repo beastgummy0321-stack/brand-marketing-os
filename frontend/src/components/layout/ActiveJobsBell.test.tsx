@@ -58,6 +58,19 @@ beforeEach(() => {
 });
 
 describe("ActiveJobsBell", () => {
+  it("a stopped worker with an empty queue keeps the stop pill without inventing waiting work", async () => {
+    vi.mocked(fetchActiveJobs).mockResolvedValue({ ...QUEUE, data: [], total: 0, other_count: 0,
+      worker_alive: false, stalled: false, worker_health: {
+        state: "stopped", checked_at: QUEUE.generated_at, last_heartbeat_at: null, reason_code: "heartbeat_stale",
+      } });
+    render(<MemoryRouter><ActiveJobsBell /></MemoryRouter>);
+    await userEvent.click(await screen.findByRole("button", { name: "背景程式停了" }));
+    const panel = screen.getByRole("dialog", { name: "背景工作" });
+    expect(panel.textContent).not.toContain("這件工作還排著");
+    expect(within(panel).queryByRole("alert")).toBeNull();
+    expect(panel.textContent).toContain("目前沒有你的背景工作在跑");
+  });
+
   it("unknown heartbeat overrides a legacy healthy flag and never gives an all-clear", async () => {
     vi.mocked(fetchActiveJobs).mockResolvedValue({ ...QUEUE, data: [], total: 0, worker_health: {
       state: "unknown", checked_at: QUEUE.generated_at, last_heartbeat_at: null, reason_code: "test_queue",
