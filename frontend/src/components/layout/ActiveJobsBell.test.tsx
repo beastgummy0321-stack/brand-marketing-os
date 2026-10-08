@@ -3,7 +3,7 @@ import { MemoryRouter, useLocation } from "react-router-dom";
  * v10 `topRight()`/`renderJobs()`, demos `jobs:ok` and `jobs:fail`): the top-bar pill says what
  * runs now and how many wait, the panel lists each job with its place in the whole queue and
  * today's done/failed line, and a failed read is its own state with 重試 — never 「沒有…」. */
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -50,6 +50,7 @@ const QUEUE: ActiveJobsSnapshot = {
   done_today: 12,
   failed_today: 0,
   generated_at: "2026-09-23T02:40:00Z",
+  worker_alive: true,
 };
 
 beforeEach(() => {
@@ -57,6 +58,51 @@ beforeEach(() => {
 });
 
 describe("ActiveJobsBell", () => {
+  it.each(["stopped", "unknown", "failed"] as const)("an older alive response cannot overwrite a newer %s read", async (newer) => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      let finishOlder!: (value: ActiveJobsSnapshot) => void;
+      vi.mocked(fetchActiveJobs).mockImplementationOnce(() => new Promise((resolve) => { finishOlder = resolve; }));
+      if (newer === "failed") vi.mocked(fetchActiveJobs).mockRejectedValue(new Error("unavailable"));
+      else vi.mocked(fetchActiveJobs).mockResolvedValue({ ...QUEUE, worker_alive: false, stalled: newer === "stopped", worker_health: {
+        state: newer, checked_at: QUEUE.generated_at, last_heartbeat_at: null,
+        reason_code: newer === "stopped" ? "heartbeat_stale" : "health_unavailable",
+      } });
+      render(<MemoryRouter><ActiveJobsBell /></MemoryRouter>);
+      await act(async () => { await vi.advanceTimersByTimeAsync(8000); });
+      const label = newer === "stopped" ? /背景程式停了/ : newer === "unknown" ? /背景程式狀態無法確認/ : /背景工作讀取失敗/;
+      expect(await screen.findByRole("button", { name: label })).toBeTruthy();
+      await act(async () => { finishOlder(QUEUE); });
+      expect(screen.getByRole("button", { name: label })).toBeTruthy();
+      expect(screen.queryByRole("button", { name: /正在同步成效/ })).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a stopped worker with an empty queue keeps the stop pill without inventing waiting work", async () => {
+    vi.mocked(fetchActiveJobs).mockResolvedValue({ ...QUEUE, data: [], total: 0, other_count: 0,
+      worker_alive: false, stalled: false, worker_health: {
+        state: "stopped", checked_at: QUEUE.generated_at, last_heartbeat_at: null, reason_code: "heartbeat_stale",
+      } });
+    render(<MemoryRouter><ActiveJobsBell /></MemoryRouter>);
+    await userEvent.click(await screen.findByRole("button", { name: "背景程式停了" }));
+    const panel = screen.getByRole("dialog", { name: "背景工作" });
+    expect(panel.textContent).not.toContain("這件工作還排著");
+    expect(within(panel).queryByRole("alert")).toBeNull();
+    expect(panel.textContent).toContain("目前沒有你的背景工作在跑");
+  });
+
+  it("unknown heartbeat overrides a legacy healthy flag and never gives an all-clear", async () => {
+    vi.mocked(fetchActiveJobs).mockResolvedValue({ ...QUEUE, data: [], total: 0, worker_health: {
+      state: "unknown", checked_at: QUEUE.generated_at, last_heartbeat_at: null, reason_code: "test_queue",
+    } });
+    render(<MemoryRouter><ActiveJobsBell /></MemoryRouter>);
+    await userEvent.click(await screen.findByRole("button", { name: /背景程式狀態無法確認/ }));
+    expect(screen.getByRole("alert").textContent).toContain("還不能確認工作是否繼續");
+    expect(screen.getByRole("alert").textContent).not.toContain("停了");
+  });
+
   it("pill: what runs now and how many of yours wait", async () => {
     vi.mocked(fetchActiveJobs).mockResolvedValue(QUEUE);
     render(<MemoryRouter><ActiveJobsBell /></MemoryRouter>);
@@ -125,7 +171,7 @@ describe("ActiveJobsBell", () => {
     await userEvent.click(pill);
 
     const panel = screen.getByRole("dialog", { name: "背景工作" });
-    expect(within(panel).getByRole("alert").textContent).toContain("排隊狀態讀不到；工作本身沒有停，做好的結果都在");
+    expect(within(panel).getByRole("alert").textContent).toContain("排隊狀態讀不到，還不能確認背景工作是否繼續；已填的資料保留");
     expect(panel.textContent).not.toMatch(/沒有.*背景工作|排隊 0 件/);
 
     await userEvent.click(within(panel).getByRole("button", { name: "重試" }));

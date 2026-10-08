@@ -30,6 +30,7 @@ describe("useWorkerHealth", () => {
     await act(async () => {});
     expect(mockJobs).not.toHaveBeenCalled();
     expect(result.current.stalled).toBe(false);
+    expect(result.current.unavailable).toBe(false);
   });
 
   it("reads at once while waiting and reports the server's stalled", async () => {
@@ -62,6 +63,8 @@ describe("useWorkerHealth", () => {
     await waitFor(() => expect(mockJobs).toHaveBeenCalled());
     await act(async () => {});
     expect(result.current.stalled).toBe(false);
+    expect(result.current.state).toBe("unknown");
+    expect(result.current.unavailable).toBe(true);
   });
 
   it("a response without the field (an older server) is not a stopped worker", async () => {
@@ -83,4 +86,34 @@ describe("useWorkerHealth", () => {
     expect(result.current.stalled).toBe(false);
     expect(mockJobs).toHaveBeenCalledTimes(2);
   });
+});
+
+it("unavailable and test queues override legacy healthy booleans", async () => {
+  mockJobs.mockResolvedValue({ ...snapshot(false), worker_health: {
+    state: "unknown", checked_at: "2026-10-08T00:00:00Z", last_heartbeat_at: null, reason_code: "test_queue",
+  } });
+  const { result } = renderHook(() => useWorkerHealth(true, 60_000));
+  await act(async () => {});
+  expect(result.current.state).toBe("unknown");
+  expect(result.current.unavailable).toBe(true);
+  mockJobs.mockResolvedValue(snapshot(false));
+  await act(async () => { await result.current.recheck(); });
+  expect(result.current.state).toBe("alive");
+  mockJobs.mockRejectedValue(new Error("unavailable"));
+  await act(async () => { await result.current.recheck(); });
+  expect(result.current.state).toBe("unknown");
+  expect(result.current.stalled).toBe(false);
+});
+
+it("a request from a previous wait cannot overwrite the new wait", async () => {
+  let finishOld!: (value: ActiveJobsSnapshot) => void;
+  mockJobs.mockImplementationOnce(() => new Promise((resolve) => { finishOld = resolve; }));
+  mockJobs.mockResolvedValue(snapshot(true));
+  const { result, rerender } = renderHook(({ waiting }) => useWorkerHealth(waiting, 60_000), { initialProps: { waiting: true } });
+  await act(async () => {});
+  rerender({ waiting: false });
+  rerender({ waiting: true });
+  await waitFor(() => expect(result.current.stalled).toBe(true));
+  await act(async () => { finishOld(snapshot(false)); });
+  expect(result.current.stalled).toBe(true);
 });

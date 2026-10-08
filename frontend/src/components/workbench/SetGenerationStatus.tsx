@@ -59,8 +59,8 @@ export function SetGenerationStatus({
           {set.generation?.status === "queued" ? "素材已排隊，等待生成。" : "素材生成中，完成後會自動更新。"}
         </p>
       )}
-      {generating && worker.stalled && (
-        <WorkerStoppedNotice onRecheck={() => Promise.all([worker.recheck(), onReload()])} />
+      {generating && (worker.stalled || worker.unavailable) && (
+        <WorkerStoppedNotice state={worker.state} onRecheck={() => Promise.all([worker.recheck(), onReload()])} />
       )}
       {pollError && <p role="alert" className="text-sm text-danger">{pollError}</p>}
       {failed && (

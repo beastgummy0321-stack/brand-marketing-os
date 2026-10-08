@@ -10,7 +10,10 @@ const WORKER_STOPPED_TEXT = "這件工作還排著，已填的資料沒丟。重
  * the work and the user's data are kept, and how it resumes. 「再檢查一次」 runs `onRecheck` — the
  * caller re-reads both the job state and its own page state — and says so while it runs. Layout
  * primitives only: the shell part may not import a feature kit. */
-export function WorkerStoppedNotice({ onRecheck }: { onRecheck: () => Promise<unknown> | void }) {
+export function WorkerStoppedNotice({ onRecheck, state = "stopped" }: {
+  onRecheck: () => Promise<unknown> | void;
+  state?: "alive" | "stopped" | "unknown";
+}) {
   const [checking, setChecking] = useState(false);
 
   async function recheck() {
@@ -35,7 +38,8 @@ export function WorkerStoppedNotice({ onRecheck }: { onRecheck: () => Promise<un
         !
       </div>
       <p className="min-w-[200px] flex-1 text-[13px] leading-relaxed">
-        <b className="text-[15px] font-semibold">背景程式停了</b>：{WORKER_STOPPED_TEXT}
+        <b className="text-[15px] font-semibold">{state === "unknown" ? "背景程式狀態無法確認" : "背景程式停了"}</b>：
+        {state === "unknown" ? "目前讀不到背景程式狀態，還不能確認工作是否繼續。已填的資料保留，請再檢查一次。" : WORKER_STOPPED_TEXT}
       </p>
       <Button type="button" variant="outline" size="sm" busy={checking} onClick={() => void recheck()}>
         {checking ? "檢查中…" : "再檢查一次"}

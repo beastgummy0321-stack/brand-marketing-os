@@ -170,7 +170,7 @@ export function ProductOnboarding({ brandId, productId }: { brandId: string; pro
     scanRow = (
       <>
         <IntakeJobRow job={{ status: "running", error: null }} runningLabel="正在讀商品頁…" actions={[]} />
-        {worker.stalled && <WorkerStoppedNotice onRecheck={() => Promise.all([worker.recheck(), load()])} />}
+        {(worker.stalled || worker.unavailable) && <WorkerStoppedNotice state={worker.state} onRecheck={() => Promise.all([worker.recheck(), load()])} />}
       </>
     );
   } else if (onboarding.prefill_status === "failed" && !scanDismissed) {

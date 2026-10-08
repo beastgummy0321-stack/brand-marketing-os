@@ -8,7 +8,7 @@ rem （同 app/tools/boot_launcher.py 的說明）。
 rem 這個檔必須是 CRLF 換行：cmd 讀 LF-only 的批次檔時，if/for 的括號區塊會解析錯亂。
 
 curl -s -o nul --max-time 2 http://127.0.0.1:8710/
-if not errorlevel 1 goto open
+if not errorlevel 1 goto launch
 
 if not exist ".venv\Scripts\python.exe" goto novenv
 
@@ -19,10 +19,10 @@ if errorlevel 1 goto nodb
 
 echo.
 echo 正在啟動行銷系統，請稍候（第一次會久一點）...
-rem 一定要用 .venv 裡的 python：系統的 python 沒有裝這個專案的套件（procrastinate 等），
-rem 會在啟動當下就掛掉。cmd /k 讓那個視窗留著，出事時看得到錯誤訊息。
-start "Marketing OS Server" cmd /k ".venv\Scripts\python.exe" -m uvicorn app.main:app --port 8710
-start /min "Marketing OS Worker" cmd /k ".venv\Scripts\python.exe" -m app.worker
+:launch
+if not exist ".venv\Scripts\pythonw.exe" goto novenv
+rem One hidden owner supervises its worker child; existing web/worker processes are retained.
+start "" ".venv\Scripts\pythonw.exe" -m app.tools.boot_launcher
 
 set /a WAITED=0
 :wait
@@ -35,7 +35,7 @@ if %WAITED% lss 60 goto wait
 
 echo.
 echo 等了 60 秒，行銷系統還是沒有起來。
-echo 請看標題「Marketing OS Server」那個黑視窗最後幾行字，問題會寫在那裡。
+echo 請查看 logs\boot_launcher.log 與 logs\worker.log，問題會寫在那裡。
 echo 最常見的原因：資料庫沒開。先執行 supabase start 再點一次這支。
 echo.
 pause

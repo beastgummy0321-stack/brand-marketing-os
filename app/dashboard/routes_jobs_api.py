@@ -133,6 +133,7 @@ def jobs_active(request: Request):
         "done_today": snapshot["done_today"].get(actor.org_id, 0),
         "failed_today": snapshot["failed_today"].get(actor.org_id, 0),
         "worker_alive": worker_alive,
-        "stalled": not worker_alive and org_waiting,
+        "stalled": snapshot["worker_health"]["state"] == "stopped" and org_waiting,
+        "worker_health": snapshot["worker_health"],
         "generated_at": now_iso(),
     }

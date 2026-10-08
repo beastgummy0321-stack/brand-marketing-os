@@ -157,6 +157,14 @@ describe("AssetsBody — the slots card", () => {
     expect(vi.mocked(getSlots).mock.calls.length).toBeGreaterThan(reads);
   });
 
+  it("unknown worker health retains processing slots without asserting a stop", async () => {
+    vi.mocked(fetchActiveJobs).mockRejectedValue(new Error("unavailable"));
+    renderBody();
+    expect(await screen.findByText("背景程式狀態無法確認")).toBeTruthy();
+    expect(screen.queryByText(/背景程式停了/)).toBeNull();
+    expect(within(screen.getByRole("list", { name: "A・廣泛受眾" })).getByText("處理中")).toBeTruthy();
+  });
+
   it("nothing 處理中: the worker state is never read", async () => {
     vi.mocked(getSlots).mockResolvedValue(slots({ groups: [{ group_id: "g", name: "A", slots: [slot({})] }] }));
     renderBody();

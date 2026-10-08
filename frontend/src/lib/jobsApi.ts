@@ -28,6 +28,20 @@ export interface ActiveJob {
   waited_seconds: number | null;
 }
 
+export interface WorkerHealthProjection {
+  state: "alive" | "stopped" | "unknown";
+  checked_at: string;
+  last_heartbeat_at: string | null;
+  reason_code: "heartbeat_fresh" | "heartbeat_stale" | "health_unavailable" | "test_queue";
+}
+
+export function workerHealthState(snapshot: ActiveJobsSnapshot): WorkerHealthProjection["state"] {
+  if (snapshot.worker_health) return snapshot.worker_health.state;
+  // Older servers still expose the explicit booleans; absence proves nothing.
+  if (snapshot.stalled === true || snapshot.worker_alive === false) return "stopped";
+  return snapshot.worker_alive === true ? "alive" : "unknown";
+}
+
 export interface ActiveJobsSnapshot {
   data: ActiveJob[];
   /** Every queued or running job, all tenants. */
@@ -37,6 +51,7 @@ export interface ActiveJobsSnapshot {
   done_today: number;
   failed_today: number;
   generated_at: string;
+  worker_health?: WorkerHealthProjection;
   /** F47 Contract C: some worker heartbeat within 60 s (memory-queue mode: always true).
    * Optional in the type only so fixtures written before F47 still compile; the server always sends it. */
   worker_alive?: boolean;

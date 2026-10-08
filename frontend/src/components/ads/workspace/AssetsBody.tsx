@@ -373,7 +373,7 @@ export function AssetsBody({ brandId, campaign: c, refreshKey, advanced, onPlace
               {shownNote.next && <Button size="sm" onClick={onOpenPlacements}>去確認安排 →</Button>}
             </div>)}
         <div className="mt-[18px] flex flex-col gap-4">
-          {worker.stalled && <WorkerStoppedNotice onRecheck={() => { reload(); return worker.recheck(); }} />}
+          {(worker.stalled || worker.unavailable) && <WorkerStoppedNotice state={worker.state} onRecheck={() => { reload(); return worker.recheck(); }} />}
           {data.groups.map((g, gi) => {
             const groupReady = g.slots.filter((s) => s.state === "ready").length;
             return (

@@ -862,6 +862,15 @@ describe("F40-I11 再生成按鈕說明是哪個部分在生成（drill-7 #16）
 });
 
 describe("F47-I04 worker stopped, failed round, override approval", () => {
+  it("unknown heartbeat keeps the queued round without claiming a stopped worker", async () => {
+    mockGetSet.mockResolvedValue(setDetail({ generation: { status: "queued", error: null }, products: { image_prompt: empty } }));
+    vi.mocked(fetchActiveJobs).mockRejectedValue(new Error("unavailable"));
+    renderStudio();
+    expect(await screen.findByText("背景程式狀態無法確認")).toBeTruthy();
+    expect(screen.queryByText(/背景程式停了/)).toBeNull();
+    expect(screen.getByText("素材已排隊，等待生成。")).toBeTruthy();
+  });
+
   const empty = { state: "未生成", selected: 0, required: 1, generation_settings: {}, versions: [] };
 
   it("a queued round with the worker stopped shows the notice; 再檢查一次 with a live worker re-reads the set and clears it", async () => {

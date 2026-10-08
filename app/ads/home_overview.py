@@ -30,6 +30,7 @@ from collections import defaultdict
 from datetime import datetime, time, timedelta
 from decimal import Decimal
 
+from app import background
 from app.ads import (
     budget,
     campaign_stage,
@@ -613,9 +614,13 @@ def _sync_block(conn, org_id, brand_id) -> dict:
         r["updated_at"] + timedelta(seconds=runtime.SYNC_SECONDS)
         for r in rows if r["status"] not in ("pending", "running") and r["updated_at"]
     ]
+    health = background.worker_health()
+    eligible = min(upcoming) if upcoming else None
     return {
         "last_success_at": max(successes) if successes else None,
-        "next_at": min(upcoming) if upcoming else None,
+        "eligible_at": eligible,
+        "next_at": eligible if health["state"] == "alive" else None,
+        "worker_health": health,
     }
 
 

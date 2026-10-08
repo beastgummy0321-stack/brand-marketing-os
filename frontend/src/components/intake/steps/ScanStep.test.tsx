@@ -196,6 +196,15 @@ describe("ScanStep", () => {
     expect(mockFetch.mock.calls.length).toBeGreaterThan(reads);
   });
 
+  it("unavailable worker health never labels a waiting scan as stopped", async () => {
+    mockFetch.mockResolvedValue(scan({ status: "running" }));
+    mockJobs.mockRejectedValue(new Error("unavailable"));
+    renderStep();
+    expect(await screen.findByText("背景程式狀態無法確認")).toBeTruthy();
+    expect(screen.queryByText(/背景程式停了/)).toBeNull();
+    expect(screen.getByRole("button", { name: "再檢查一次" })).toBeTruthy();
+  });
+
   it("does not read the worker state once the scan is done", async () => {
     mockFetch.mockResolvedValue(DONE);
     renderStep();

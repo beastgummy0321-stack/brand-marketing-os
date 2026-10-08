@@ -1,12 +1,10 @@
 """app/tools/boot_launcher.py — 票 F6：Windows 開機自動啟動用的無視窗啟動器。
 
-Windows 工作排程器（schtasks，trigger onlogon，見 docs/boot-autostart.md）叫的是這支，
-不是「啟動行銷系統.bat」——那支登入當下會開一個 cmd 視窗搶焦點、還會開瀏覽器分頁，
-兩者都不是登入那一刻該發生的事。這支做三件事：
+Both Windows logon scheduling and the manual batch use this hidden supervisor.
+The batch alone opens the browser after the web responds. This module does three things:
 
-1. port 8710 已經有人在聽（例如使用者自己手動點了 .bat）就直接結束，不重複啟動——
-   比照既有 .bat 的「netstat 找 LISTENING」邏輯，改用標準庫 `socket` 直接探測那個 port，
-   不必解析 netstat 的文字輸出（依系統語系而異，一直是隱性地雷）。
+1. Probe the web port independently of starting the worker. An existing web process
+   is left in place; this launcher supervises only its newly created worker child.
 2. 把 worker（`python -m app.worker`，ADR 0063）當這個 process 的**子行程**開起來——
    一定要是子行程，不能是 detached：`關閉行銷系統.bat` 用 `taskkill /PID … /T /F` 收掉
    聽 8710 那個 process，`/T` 才會連帶收掉它底下的子行程樹，worker 才會跟著死。
@@ -24,6 +22,7 @@ app/main.py 內該函式的說明）。
 """
 
 import contextlib
+import errno
 import os
 import socket
 import subprocess
@@ -37,6 +36,7 @@ _PORT = 8710
 _LOG_PATH = _REPO_ROOT / "logs" / "boot_launcher.log"
 _WORKER_LOG_PATH = _REPO_ROOT / "logs" / "worker.log"
 _RESTART_DELAYS = (2, 5, 15)
+_WEB_STOP_CONFIRMATIONS = 6
 
 
 class _WorkerWatchdog:
@@ -134,15 +134,25 @@ class _WorkerWatchdog:
             child.terminate()
 
 
+def _port_status(port: int, host: str = "127.0.0.1") -> str:
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.settimeout(0.5)
+            code = sock.connect_ex((host, port))
+        if code == 0:
+            return "alive"
+        # A timeout or probe error is uncertainty, not evidence the listener ended.
+        return "refused" if code in (errno.ECONNREFUSED, 10061) else "unknown"
+    except OSError:
+        return "unknown"
+
+
 def _port_is_listening(port: int, host: str = "127.0.0.1") -> bool:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.settimeout(0.5)
-        return sock.connect_ex((host, port)) == 0
+    return _port_status(port, host) == "alive"
 
 
 def main() -> None:
-    if _port_is_listening(_PORT):
-        return  # 已經有人在跑了（例如使用者自己手動開的），不重複啟動
+    web_alive = _port_is_listening(_PORT)
 
     _LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
     _WORKER_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -158,6 +168,17 @@ def main() -> None:
         watchdog = _WorkerWatchdog(worker_log)
         try:
             watchdog.start()
+            if web_alive:
+                # Keep this owned supervisor alive until its bounded watchdog exits
+                # (including singleton refusal), or the external web process stops.
+                refusals = 0
+                while watchdog.thread is not None and watchdog.thread.is_alive():
+                    status = _port_status(_PORT)
+                    refusals = refusals + 1 if status == "refused" else 0
+                    if refusals >= _WEB_STOP_CONFIRMATIONS:
+                        break
+                    watchdog.stop_event.wait(0.5)
+                return
             import uvicorn  # logs and import path must be ready before importing
 
             uvicorn.run("app.main:app", host="127.0.0.1", port=_PORT, log_config=None)

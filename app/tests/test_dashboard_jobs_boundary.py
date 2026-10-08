@@ -6,6 +6,7 @@ F29-I05（feature Contract G）：來源從 `llm_task` 的 running 列換成 pro
 doing——跟 `app/tests/test_background.py::IsActiveTest` 同一種寫法。"""
 
 import unittest
+from unittest import mock
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
@@ -208,6 +209,15 @@ class DashboardJobsTenantIsolationTest(QueueJobsTestCase):
         _in_queue("INSERT INTO procrastinate_workers (last_heartbeat) VALUES (now())")
         b = self._get(self.b_token)
         self.assertEqual((b["worker_alive"], b["stalled"]), (True, False))
+
+    def test_unknown_health_does_not_claim_stalled_or_alive(self):
+        health = {"state": "unknown", "checked_at": "2026-10-08T00:00:00+00:00",
+                  "last_heartbeat_at": None, "reason_code": "health_unavailable"}
+        with mock.patch.object(background, "worker_health", return_value=health):
+            b = self._get(self.b_token)
+        self.assertEqual(b["worker_health"], health)
+        self.assertEqual((b["worker_alive"], b["stalled"]), (False, False))
+        self.assertEqual(len(b["data"]), 1)
 
     def test_a_job_without_a_brand_still_stalls_its_org(self):
         # Not listed (no brand_id), but it waits on the same stopped worker.

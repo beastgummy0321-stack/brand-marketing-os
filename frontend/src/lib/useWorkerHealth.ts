@@ -1,20 +1,20 @@
-/** F47 Contract C: is the background worker stopped while this page waits on a job?
- *
- * A page that waits on a background job (a site read, a product-page read, copy generation, a
- * workbench set) passes `waiting` and its own polling interval. Only while `waiting` is true the
- * hook reads `GET /api/jobs/active` — at once, then every `intervalMs` — and reports `stalled`
- * (no live worker while this org has queued/running work). A failed read never reads as stopped;
- * `waiting` false resets it. `recheck()` reads once now (the notice's 「再檢查一次」). */
+/** Shared worker health while a page waits: poll immediately and at its own interval.
+ * Read failures are unknown; only an explicit stopped projection means stalled.
+ * Earlier requests cannot overwrite a newer request or a new waiting lifecycle. */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { fetchActiveJobs } from "./jobsApi";
+import { fetchActiveJobs, workerHealthState, type WorkerHealthProjection } from "./jobsApi";
 
 export interface WorkerHealth {
   stalled: boolean;
+  unavailable: boolean;
+  state: WorkerHealthProjection["state"];
   recheck: () => Promise<void>;
 }
 
 export function useWorkerHealth(waiting: boolean, intervalMs: number): WorkerHealth {
-  const [stalled, setStalled] = useState(false);
+  const [state, setState] = useState<WorkerHealthProjection["state"]>("unknown");
+  const epoch = useRef(0);
+  const requestId = useRef(0);
   const mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;
@@ -24,23 +24,31 @@ export function useWorkerHealth(waiting: boolean, intervalMs: number): WorkerHea
   }, []);
 
   const read = useCallback(async () => {
+    const generation = epoch.current;
+    const id = ++requestId.current;
     try {
       const snapshot = await fetchActiveJobs();
-      if (mounted.current) setStalled(snapshot.stalled === true);
+      if (mounted.current && generation === epoch.current && id === requestId.current) {
+        setState(workerHealthState(snapshot));
+      }
     } catch {
-      if (mounted.current) setStalled(false);
+      if (mounted.current && generation === epoch.current && id === requestId.current) setState("unknown");
     }
   }, []);
 
   useEffect(() => {
+    epoch.current += 1;
+    setState("unknown");
     if (!waiting) {
-      setStalled(false);
       return;
     }
     void read();
     const timer = window.setInterval(() => void read(), intervalMs);
-    return () => window.clearInterval(timer);
+    return () => {
+      epoch.current += 1;
+      window.clearInterval(timer);
+    };
   }, [waiting, intervalMs, read]);
 
-  return { stalled: waiting && stalled, recheck: read };
+  return { state, stalled: waiting && state === "stopped", unavailable: waiting && state === "unknown", recheck: read };
 }
