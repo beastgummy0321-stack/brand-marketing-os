@@ -136,10 +136,10 @@ function home(overrides: Partial<HomeOverview> = {}): HomeOverview {
     month: THIS, day_of_month: 24, days_in_month: 30, currency: "TWD", spent: 22000,
     commerce: null, money: {
       purchases: 158, cost_per_purchase: 139, cap: null, earn_after_cost_and_ads: null, earn_missing: [], estimate_basis: { kind: "platform_purchase_margin", assumptions: [], missing: [] }, excluded: [],
-      previous_same_period: { days: 23, purchases: 118, cost_per_purchase: 221 },
+      previous_same_period: { days: 23, purchases: 118, cost_per_purchase: 221, currency: "TWD", cost_comparison: {reason: null} },
     },
     pace: {
-      budget_amount: 60000, available: 38000, projected_month_end: 28700,
+      budget_amount: 60000, budget_currency: "TWD", budget_comparison: {reason: null}, available: 38000, projected_month_end: 28700,
       // 23 complete days: weeks 1–3 full, week 4 through day 23.
       daily: days(THIS, [...Array(7).fill(600), ...Array(7).fill(900), ...Array(7).fill(1000), 1500, 1700]),
     },
@@ -191,10 +191,10 @@ describe("MonthReviewPage — current month", () => {
   it("draws the weekly spend against the budget pace, with the unfinished weeks marked", async () => {
     renderPage();
     const weekly = await screen.findByRole("region", { name: "每週花費 vs 預算步調" });
-    expect(within(weekly).getByText("月預算 60,000 的步調")).toBeTruthy();
-    expect(within(weekly).getByText("已花 22,000")).toBeTruthy();
-    expect(within(weekly).getByText("4,200")).toBeTruthy(); // 7 × 600
-    expect(within(weekly).getByText("3,200")).toBeTruthy(); // week 4 through day 23
+    expect(within(weekly).getByText("月預算 60,000 TWD 的步調")).toBeTruthy();
+    expect(within(weekly).getByText("已花 22,000 TWD")).toBeTruthy();
+    expect(within(weekly).getByText("4,200 TWD")).toBeTruthy(); // 7 × 600
+    expect(within(weekly).getByText("3,200 TWD")).toBeTruthy(); // week 4 through day 23
     expect(within(weekly).getByText(`到 ${THIS.slice(5)}/23`)).toBeTruthy();
     expect(within(weekly).getByText("還沒到")).toBeTruthy();
   });
@@ -219,7 +219,7 @@ describe("MonthReviewPage — current month", () => {
     await waitFor(() => expect(screen.queryByRole("region", { name: "補 2 則新素材" })).toBeNull());
   });
 
-  it("F46 next_plan: the card's button reads 用這些學習排下一期 → to the create page; other kinds keep 看提議; 先不要 works the same", async () => {
+  it("next_plan in an incomplete source month cannot enter next-period planning; dismissal stays available", async () => {
     const user = userEvent.setup();
     const next = suggestion({
       key: "next_plan:adc_B", kind: "next_plan", campaign_id: "adc_B", campaign_name: "三盒組・09/19～10/01",
@@ -230,7 +230,7 @@ describe("MonthReviewPage — current month", () => {
     renderPage();
     const card = await screen.findByRole("region", { name: "用「三盒組・09/19～10/01」學到的排下一期" });
     expect(within(card).getByText("留下 2 則（最好的「考前一週・書包一盒」每筆 555）、換掉 1 則")).toBeTruthy();
-    expect(within(card).getByRole("link", { name: "用這些學習排下一期 →" }).getAttribute("href")).toBe("/brands/brd_bughunt/ads/new?sell_way=prd_box");
+    expect(within(card).getByRole("button", { name: "來源月份尚未完成" }).getAttribute("disabled")).not.toBeNull();
     expect(within(card).queryByText("看提議（核准或拒絕）→")).toBeNull();
     expect(within(screen.getByRole("region", { name: "補 2 則新素材" })).getByRole("link", { name: "看提議（核准或拒絕）→" })).toBeTruthy();
     await user.click(within(card).getByRole("button", { name: "先不要" }));
@@ -247,7 +247,7 @@ describe("MonthReviewPage — current month", () => {
     expect(within(card).getByRole("link", { name: "看提議（核准或拒絕）→" }).getAttribute("href"))
       .toBe("/brands/brd_bughunt/ads/campaigns/cmp_daily/propose/cleanup/cmp_daily");
     expect(screen.getByText("你拒絕過的另外 2 件沒有變差，這裡不再提。")).toBeTruthy();
-    expect(screen.getByText(`比 ${PREV} 月同期（只當參考，不影響判斷）：購買多 40 筆・每筆便宜 37%`)).toBeTruthy();
+    expect(screen.getByText(new RegExp(`比 ${PREV} 月同期.*平台購買多 40 筆・每筆便宜 37%`))).toBeTruthy();
 
     await user.click(within(card).getByRole("button", { name: "先不要" }));
     expect(mockDismiss).toHaveBeenCalledWith("brd_bughunt", THIS, "cleanup:cmp_daily");
@@ -399,10 +399,10 @@ describe("month CSV", () => {
     const rows = [...MIXED_ROWS, row({ entity_id: "u", name: "跨幣別,廣告", spend: null, results: null, cost_per_result: null, cap: null, grade: "no_target", grade_label: "未判斷" })];
     const csv = toCsv(monthCsvRows(rows));
     const lines = csv.trimEnd().split("\r\n");
-    expect(lines[0]).toBe("活動,廣告,花費,購買,每賣一筆,上限,等級");
-    expect(lines[1]).toBe("日常商品推廣,通勤情境單圖,8000,20,400,450,划算");
-    expect(lines[5]).toBe("日常商品推廣,節慶限定圖,1480,0,,450,沒賣出");
-    expect(lines[7]).toBe('日常商品推廣,"跨幣別,廣告",,,,,未判斷');
+    expect(lines[0]).toBe("活動,廣告,花費,平台成果數,每筆成果成本,上限,等級,花費幣別,上限幣別,上限比較限制");
+    expect(lines[1]).toBe("日常商品推廣,通勤情境單圖,8000,20,400,450,划算,TWD,,");
+    expect(lines[5]).toBe("日常商品推廣,節慶限定圖,1480,0,,450,沒賣出,TWD,,");
+    expect(lines[7]).toBe('日常商品推廣,"跨幣別,廣告",,,,,未判斷,TWD,,');
     expect(lines).toHaveLength(8);
     expect(monthCsvName("2026-08")).toBe("2026-08回顧.csv");
   });
@@ -420,7 +420,7 @@ describe("month CSV", () => {
 describe("weekBars", () => {
   it("splits cumulative spend into weeks; a null cumulative makes its week unknown", () => {
     const daily = days("2026-09", [100, 100, 100, 100, 100, 100, 100, 50, 50]);
-    const bars = weekBars("2026-09", 30, daily, 30000);
+    const bars = weekBars("2026-09", 30, daily, 30000, true);
     expect(bars.map((b) => b.label)).toEqual(["09/01–07", "09/08–14", "09/15–21", "09/22–28", "09/29–30"]);
     expect(bars[0]).toMatchObject({ state: "known", spend: 700, pace: 7000, through: null });
     expect(bars[1]).toMatchObject({ state: "known", spend: 100, through: "到 09/09" });
@@ -430,4 +430,119 @@ describe("weekBars", () => {
     expect(unknown[0]).toMatchObject({ state: "unknown", spend: null, pace: null });
     expect(unknown[1].state).toBe("known");
   });
+});
+
+function commerce(amount: number | null = 1200) {
+  return { scope: "brand" as const, start: `${THIS}-01`, end: `${THIS}-22`,
+    order_summary: {count: 12, non_void_count: 11, void_count: 1, unpaid_count: 4,
+      unknown_payment_count: 3, refunded_count: 2, unknown_amount_count: 3,
+      known_net_count: 8, paid_count: 5, known_paid_net_count: 2,
+      order_net_amount: 9999, paid_net_amount: amount, reported_currencies: ["TWD"], latest_import_at: null,
+      currency: null, currency_basis: "unknown" as const, coverage: "unknown" as const},
+    channels: [{channel: "website", source: "mirror", source_type: "order_mirror" as const,
+      currency: null, amount: 9999, row_count: 12, unknown_amount_count: 3}],
+    attribution: "unavailable" as const, limitations: ["來源覆蓋未知"]};
+}
+function paidOrders(amount: number | null = 1200): NonNullable<MonthSummary["orders"]> {
+  return {this_net: amount, this_count: 2, previous_net: 800, previous_count: 1, change_pct: null,
+    amount_basis: "paid_net_amount", comparison_missing: ["currency", "coverage", "payment", "amount"],
+    order_book: {this_net: 9999, this_count: 8, previous_net: 8800, previous_count: 7},
+    this_evidence: commerce(amount), previous_evidence: {...commerce(800), order_summary: {...commerce(800).order_summary, known_paid_net_count: 1}, start: `${LAST}-01`, end: `${LAST}-22`}};
+}
+
+describe("F54 monthly money boundaries", () => {
+  it("shows only collected paid subtotal, keeps pending/refund/unknown details folded and never adds mirror income", async () => {
+    mockSummary.mockResolvedValue(summary({orders: paidOrders()}));
+    renderPage();
+    const paid = await screen.findByRole("region", {name: "已收集的已付款訂單淨額"});
+    expect(within(paid).getByText("1,200（幣別未核實）")).toBeTruthy();
+    expect(within(paid).getByText("5 筆已付款・2 筆金額已知・2 筆已退款")).toBeTruthy();
+    expect(within(paid).queryByText(/9,999/)).toBeNull();
+    expect(within(paid).queryByText(/4 筆待付款/)).toBeNull();
+    await userEvent.setup().click(within(paid).getByRole("button", {name: "訂單來源與狀態"}));
+    expect(within(paid).getAllByText("4 筆待付款・3 筆付款狀態未知")).toHaveLength(2);
+    expect(within(paid).getAllByText("4 筆待付款・3 筆付款狀態未知")[0]).toBeTruthy();
+    expect(within(paid).getAllByText("3 筆金額未知・1 筆取消或作廢")[0]).toBeTruthy();
+    expect(within(paid).getByText(/品牌訂單，未歸因單一廣告/)).toBeTruthy();
+    expect(within(paid).queryByText(/成長.*%/)).toBeNull();
+  });
+  it.each([0, -1200, null])("preserves paid subtotal %s without turning unknown into zero", async (amount) => {
+    mockSummary.mockResolvedValue(summary({orders: paidOrders(amount)})); renderPage();
+    const paid = await screen.findByRole("region", {name: "已收集的已付款訂單淨額"});
+    expect(within(paid).getByText(amount === null ? "付款金額尚未確認" : `${amount === 0 ? "0" : "-1,200"}（幣別未核實）`)).toBeTruthy();
+  });
+  it("cannot aggregate reported mixed currencies or label missing evidence as zero", async () => {
+    const orders = paidOrders(); orders.this_evidence.order_summary.reported_currencies = ["TWD", "USD"];
+    mockSummary.mockResolvedValue(summary({orders})); renderPage();
+    expect(await screen.findByText("多幣別，無法合計")).toBeTruthy();
+    expect(screen.queryByText("1,200（幣別未核實）")).toBeNull();
+  });
+  it("does not draw a shared scale for USD spend and TWD budget, preserves configured funds", async () => {
+    const value = home(); value.currency = "USD"; value.pace = {...value.pace!, budget_currency: "TWD", budget_comparison: {reason: "currency_mismatch"}};
+    mockHome.mockResolvedValue(value); renderPage();
+    const weekly = await screen.findByRole("region", {name: "每週花費 vs 預算步調"});
+    expect(within(weekly).getByText("已設月預算 60,000 TWD")).toBeTruthy();
+    expect(within(weekly).getByText("月預算與廣告花費幣別不同，暫不比較花費進度")).toBeTruthy();
+    expect(weekly.querySelector("[data-week]")).toBeNull();
+    expect(within(weekly).getByText("已花 22,000 USD")).toBeTruthy();
+  });
+  it("does not call foreign previous costs cheaper but retains their source amounts", async () => {
+    const value = home(); value.money!.previous_same_period = {days: 23, purchases: 118, cost_per_purchase: 221, currency: "USD", cost_comparison: {reason: "currency_mismatch"}};
+    mockHome.mockResolvedValue(value); renderPage();
+    await screen.findByText(/前期每筆成本 221 USD/);
+    expect(screen.queryByText(/每筆便宜|每筆貴/)).toBeNull();
+    expect(screen.getByText(/本期 139 TWD/)).toBeTruthy();
+  });
+  it("routes a completed month through canonical settle before next-period confirmation", async () => {
+    mockSummary.mockResolvedValue(summary({month: LAST})); mockHome.mockResolvedValue(home({month: LAST}));
+    renderPage(`/brands/brd_bughunt/ads/month?month=${LAST}`);
+    expect((await screen.findByRole("link", {name: "回顧本期，準備下一期 →"})).getAttribute("href"))
+      .toBe(`/brands/brd_bughunt/ads/settle/${LAST}?step=result`);
+  });
+});
+
+describe("F54 month qualification edge cases", () => {
+  it("old snapshots do not compare budget or prior cost, and complete days are not coverage", async () => {
+    const value = home(); delete value.pace!.budget_currency; delete value.pace!.budget_comparison;
+    delete value.money!.previous_same_period!.currency; delete value.money!.previous_same_period!.cost_comparison;
+    mockHome.mockResolvedValue(value); renderPage();
+    expect(await screen.findByText("已設月預算 60,000（幣別未核實）")).toBeTruthy();
+    expect(screen.getByText(/22 個已過完整日；不代表資料已完整讀取/)).toBeTruthy();
+    expect(screen.queryByText(/每筆便宜|每筆貴/)).toBeNull();
+  });
+  it("null orders remain a neutral unavailable block while platform figures remain visible", async () => {
+    renderPage(); expect(await screen.findByText("目前無法確認訂單證據")).toBeTruthy();
+    expect(screen.getByText("已花 22,000 TWD")).toBeTruthy();
+    expect(screen.queryByText(/已付款.*0/)).toBeNull();
+  });
+  it("a failed home read retries independently and preserves the summary payment evidence", async () => {
+    mockSummary.mockResolvedValue(summary({orders: paidOrders()}));
+    mockHome.mockRejectedValueOnce(new Error("timeout")).mockResolvedValue(home()); renderPage();
+    expect(await screen.findByText(/每週花費讀不到/)).toBeTruthy();
+    expect(screen.getByText("1,200（幣別未核實）")).toBeTruthy();
+    await userEvent.setup().click(screen.getByRole("button", {name: "重試"}));
+    expect(await screen.findByText("已花 22,000 TWD")).toBeTruthy();
+    expect(mockSummary).toHaveBeenCalledTimes(1);
+  });
+  it("keeps raw zero and negative previous costs without dividing by zero or advertising a saving", async () => {
+    const value = home(); value.money!.purchases = null;
+    value.money!.previous_same_period = {days: 23, purchases: null, cost_per_purchase: 0, currency: "TWD", cost_comparison: {reason: null}};
+    value.money!.cost_per_purchase = -20; mockHome.mockResolvedValue(value); renderPage();
+    expect(await screen.findByText(/前期每筆成本 0 TWD，本期 -20 TWD/)).toBeTruthy();
+    expect(screen.queryByText(/每筆便宜|每筆貴/)).toBeNull();
+  });
+  it("week bars never produce budget amounts without an explicit comparison qualification", () => {
+    expect(weekBars("2026-09", 30, days("2026-09", [0, -20]), 30000).every((bar) => bar.pace === null)).toBe(true);
+    const bars = weekBars("2026-09", 30, days("2026-09", [0, -20]), null);
+    expect(bars[0].spend).toBe(-20);
+    expect(weekBars("2026-09", 30, days("2026-09", [0]), 0, true)[0]).toMatchObject({spend: 0, pace: 0});
+  });
+});
+
+it("CSV uses neutral platform outcome labels for a non-purchase campaign without changing values", () => {
+  const lead = row({campaign_id: "lead_campaign", campaign_name: "名單收集", results: 20, cost_per_result: 50, spend: 1000});
+  const csv = monthCsvRows([lead]);
+  expect(csv[0]).toContain("平台成果數"); expect(csv[0]).toContain("每筆成果成本");
+  expect(csv[0]).not.toContain("購買"); expect(csv[0]).not.toContain("每賣一筆");
+  expect(csv[1].slice(0,7)).toEqual(["名單收集", lead.name, 1000, 20, 50, 450, "划算"]);
 });

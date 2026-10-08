@@ -25,6 +25,7 @@ export interface MonthCampaignRow {
   configured_cap?: HomeConfiguredCap | null;
   cap_comparison?: CapComparison;
 }
+/** Collected brand paid subtotals, not ad revenue. Evidence windows retain their own units and limitations. */
 export interface MonthOrders {
   this_net: number | null; this_count: number; previous_net: number | null;
   previous_count: number; change_pct: number | null;
@@ -90,6 +91,7 @@ export interface MonthSummary {
   closed_this_month: number | null; closed_tracking_since: string;
   suggestions: MonthSuggestion[];
   days_covered: number; days_elapsed: number;
+  /** Elapsed complete platform days, not read coverage; calendar counts stay independent. */
   data_days: number; window: { start: string; end: string | null };
   grades: MonthGrades; rejected: MonthRejected;
 }
