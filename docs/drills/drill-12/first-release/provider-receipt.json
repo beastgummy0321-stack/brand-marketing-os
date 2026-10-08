@@ -3,27 +3,27 @@
   "feature": "F53",
   "gate": "G6",
   "status": "pass",
-  "run_id": "e0a98046ec294350be4f9193d629d1d3",
+  "run_id": "ca0939256cf34d608fb24b92dbc177a8",
   "hashes": {
-    "product": "a268cd03225b23aa09aa6c9838127f1b9651a19bb563ce88062efbbc07a4d036",
-    "ui": "b01c806e52870fd7a243577f84a97f06579ab63d3a79f51e46d7fb81ddecf8f9",
+    "product": "8418ba94b5db2b17a1d22a94c86b9eb4877ba11a7e952be7c514dcef2f04c8c0",
+    "ui": "0ebac54d6adfdaaa1f080fac2ef92075078e70f9c34f8e3096af3de8336145e6",
     "probe": "e5d8aae6bf083cbbb7357bf2b1cc6a5ac98eb5bd4ea2a389e94bf4510d8688a5",
     "runtime_config": "3826657d9f99c968c0a509b9d4513952c5f1d5c6ea1ebaed4da658de47c4ef53"
   },
   "raw_receipt": {
-    "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\repair-combined-20261008-r1\\provider-receipt.json",
-    "bytes": 6197,
-    "sha256": "fd306d0b5ac3a9ab718c67455e8943f5e41f97232127336a2fafab8195c6c8ea"
+    "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\repair-combined-20261008-r2\\provider-receipt.json",
+    "bytes": 6962,
+    "sha256": "15176ea33ac9480eab516ddf9edc42de0e8b1fc39ff140ca068addf899f8b671"
   },
   "semantic_review": {
-    "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\repair-combined-20261008-r1\\provider-semantic-review.json",
-    "bytes": 2859,
-    "sha256": "204649a42eddca47a462f39c5b11f2d9a2d14dab27209ef6076a8e2f1be94d18"
+    "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\repair-combined-20261008-r2\\provider-semantic-review.json",
+    "bytes": 3513,
+    "sha256": "85fdf12c9b337e9641e2b295ac1e2e51cb2f001c5ed70caf4b2e7952f6ccf54d"
   },
   "diagnosis": {
-    "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\repair-combined-20261008-r1\\provider-diagnosis.json",
+    "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\repair-combined-20261008-r2\\provider-diagnosis.json",
     "bytes": 1002,
-    "sha256": "523719b545543985e9e3809bea10acb658c73c4297b464d88332782cc85f3c2e"
+    "sha256": "b353549e07b4efd895189ec917aae2aac425624d187c6a7e375352ac243dd0ee"
   },
   "options": {
     "max_retries": 0,
@@ -38,13 +38,13 @@
     "payload": {
       "slots": [
         {
-          "id": "slot-new-workday-snack",
+          "id": "slot-workday-new",
           "role": "new",
           "customer_group_id": "A1",
           "offer_key": "none",
           "carry_from_ad_id": null,
-          "test_intent": "測試工作日零食買家對單盒獨立包裝零食的購買反應，不使用優惠。",
-          "rationale": "這個安排把唯一可用的測試角色放在工作日零食買家，沿用獨立包裝零食的品牌事實；目前觀察樣本稀薄，成效仍未知。",
+          "test_intent": "測試工作日零食購買者對單盒獨立包裝零食的購買假設，這次不使用優惠以隔離商品訊息。",
+          "rationale": "這個安排直接使用單盒內含獨立包裝零食的品牌事實，對應工作日零食購買者；目前觀察樣本偏薄，只適合把它當成初步測試，市場效果仍未知。",
           "evidence_refs": [
             {
               "kind": "brand_fact",
@@ -58,35 +58,37 @@
           "role": "new",
           "label": "新客",
           "pct": 100.0,
-          "rationale": "以獨立包裝零食的商品事實，先測試工作日零食買家的購買反應。"
+          "rationale": "以單盒內含獨立包裝零食的事實，先測試工作日零食購買者是否接受這個購買假設。"
         }
       ],
       "why": [
-        "以單盒內含獨立包裝零食的商品事實，測試工作日零食買家的購買假設。",
-        "目前只有一個可服務安排，因此集中測試單一受眾與不使用優惠的訊息組合。"
+        "以單盒內含獨立包裝零食的品牌事實，測試工作日零食購買者對 supplied buyer hypothesis 的反應。",
+        "只安排一個角色，符合目前可服務的投放上限，也避免把有限測試量分散到另一個顧客群。",
+        "選擇不使用優惠，讓本輪先觀察商品與顧客群組合本身的反應。"
       ],
       "unknowns": [
-        "獨立包裝訊息對工作日零食買家的市場成效仍未知。",
-        "不使用優惠時的購買反應仍未知。"
+        "市場是否接受這個購買假設仍未知。",
+        "目前觀察不足以判斷工作日零食購買者是否比其他顧客群更適合。"
       ],
       "alternatives": [],
       "learning_goals": [
-        "釐清獨立包裝訊息對工作日零食買家的新客吸引力。"
+        "釐清工作日零食購買者對單盒獨立包裝零食的購買訊息是否值得下一輪延續。",
+        "了解不使用優惠時，商品訊息本身能否帶來新客反應。"
       ]
     },
     "decision": {
       "schema_version": 1,
-      "revision": "7f39ab38d0b5d5ee4377e7960d932a940d94866438ff84d1fd52674f7fb46c3c",
+      "revision": "8a39767047027e4368fa0eb6eec0d299272c7d69a98bf7a451fd9b34bf84f74b",
       "state": "proposed",
       "slots": [
         {
-          "id": "slot-new-workday-snack",
+          "id": "slot-workday-new",
           "role": "new",
           "customer_group_id": "A1",
           "offer_key": "none",
           "carry_from_ad_id": null,
-          "test_intent": "測試工作日零食買家對單盒獨立包裝零食的購買反應，不使用優惠。",
-          "rationale": "這個安排把唯一可用的測試角色放在工作日零食買家，沿用獨立包裝零食的品牌事實；目前觀察樣本稀薄，成效仍未知。",
+          "test_intent": "測試工作日零食購買者對單盒獨立包裝零食的購買假設，這次不使用優惠以隔離商品訊息。",
+          "rationale": "這個安排直接使用單盒內含獨立包裝零食的品牌事實，對應工作日零食購買者；目前觀察樣本偏薄，只適合把它當成初步測試，市場效果仍未知。",
           "evidence_refs": [
             {
               "kind": "brand_fact",
@@ -101,8 +103,8 @@
       }
     }
   },
-  "started_at": "2026-10-08T06:31:40.030732+00:00",
-  "finished_at": "2026-10-08T06:31:50.881529+00:00",
+  "started_at": "2026-10-08T07:39:39.174060+00:00",
+  "finished_at": "2026-10-08T07:39:51.676267+00:00",
   "limits": [
     "One freshly authorized unchanged-model subscription sample after diagnosed repair",
     "Synthetic context and disclosed synthetic capacity; no market/economic proof",

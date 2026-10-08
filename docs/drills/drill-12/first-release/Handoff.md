@@ -2,17 +2,17 @@
 
 Date: 2026-10-08. Branch: codex/first-release-evidence-learning.
 The human authorized clearing the recommended first-release delivery blockers and handing over
-the final screen acceptance. I01-I14 are merged. Current G1-G7 pass on the repaired source;
+the final screen acceptance. I01-I16 are merged. Current G1-G7 pass on the repaired source;
 actual G8 is recorded only in the ignored final sidecar after the lead's integration.
 Do not infer G8 from this pre-integration tracked document or prefill human acceptance.
 
 ## Current evidence
-- Current context: `.scratch/F53/repair-combined-20261008-r1/context.json`.
+- Current context: `.scratch/F53/repair-combined-20261008-r2/context.json`.
 - [Combined packet](acceptance-result.json), [provider](provider-receipt.json),
   [operations](operational-receipt.json) bind current product/UI/probe/config fingerprints.
 - Actual integration/seal/outcome: `.harness/scratch/F53/final/`.
-- UI gallery: `.scratch/F53/final-ui-20261008/index.html`, strategy/library/verify,
-  1024/1920, main/source views. Unchanged UI source evidence is reused by its exact fingerprint.
+- UI gallery: `.scratch/F53/final-ui-repair-20261008-r2/index.html`, strategy/library/verify,
+  fresh 1024/1920 main/source views and keyboard/state/recovery checks on the repaired build.
 - Source contracts: ads section 6.55, workbench section 5.19 and design-system section 1.7.
 
 ## Repairs and proof
@@ -21,6 +21,12 @@ all guards remain. Six other failures were repaired in test fixtures/comparisons
 business values, distinct observation identities, unknown-currency refusal, completed-day
 cutoff and confirmation/concurrency protections. No production monetary or eligibility rule
 was relaxed to obtain green tests.
+
+I15 preserves supplied row currency/comparability throughout cleanup and guards brief and
+per-result monetary comparisons. Merely opening or saving an unchanged foreign/unknown cap
+does not promote it to TWD; successful server readback supplies its saved unit. I16 distinguishes
+unknown collections/counts from supplied empty/zero values, restores currency-aware assertions,
+checks precise test-only fixture reachability and awaits actual asynchronous workspace reads.
 
 The provider runner now applies actual Contract S including executable_decision, captures the
 actually delivered request and verifies actual provider/model/task identity. Its new synthetic
@@ -44,6 +50,11 @@ Only then may Harness close F53; preserve the pre-close seal because closure cha
 ## Preserved history and limits
 The rejected a5 model reply and failed seven-test integration remain under `.scratch/F53/`;
 the prior ignored outcome is retained in `.harness/scratch/F53/final-prior-20261008/`.
+The valid r1 model and integration at `1d47fa341e4b8f897fe1dd37ce7339afd89d751d`
+remain under `repair-combined-20261008-r1` and `repair-integration-20261008-r1`: 4283 backend
+tests passed, 13 frontend tests failed, and no G8 seal was issued. I15/I16 repair those diagnosed
+delivery blockers. A single newly authorized unchanged-model r2 sample follows the source repair;
+the valid r1 output is not normalized or rebound to r2 fingerprints.
 All earlier a1-a4 and original carve/case/prototype artifacts remain immutable. Frozen cases
 SHA-256 is unchanged: `48ada4e752fa4c2e5848b7b986e3af7146c9ede0aa712b7a72460b5d53505339`.
 F48-F52 remain open; original F52 nine-dimension drill is paused/unrun. No push, public deploy,

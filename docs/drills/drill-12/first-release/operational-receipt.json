@@ -3,28 +3,28 @@
   "feature": "F53",
   "gate": "G7",
   "status": "pass",
-  "run_id": "e0a98046ec294350be4f9193d629d1d3",
+  "run_id": "ca0939256cf34d608fb24b92dbc177a8",
   "hashes": {
-    "product": "a268cd03225b23aa09aa6c9838127f1b9651a19bb563ce88062efbbc07a4d036",
-    "ui": "b01c806e52870fd7a243577f84a97f06579ab63d3a79f51e46d7fb81ddecf8f9",
+    "product": "8418ba94b5db2b17a1d22a94c86b9eb4877ba11a7e952be7c514dcef2f04c8c0",
+    "ui": "0ebac54d6adfdaaa1f080fac2ef92075078e70f9c34f8e3096af3de8336145e6",
     "probe": "e5d8aae6bf083cbbb7357bf2b1cc6a5ac98eb5bd4ea2a389e94bf4510d8688a5",
     "runtime_config": "3826657d9f99c968c0a509b9d4513952c5f1d5c6ea1ebaed4da658de47c4ef53"
   },
   "environment": "Windows local/private owned fixtures",
   "auth": {
-    "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\repair-combined-20261008-r1\\auth-receipt.json",
+    "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\repair-combined-20261008-r2\\auth-receipt.json",
     "bytes": 2507,
-    "sha256": "01cb12f32713b85d3431693d9c80d367f35eedeb67dee72b976f0560dda997b6"
+    "sha256": "fa18da30ee3f83359c150a02cb0eb441666958f66cafa7daea8954d92d80c473"
   },
   "auth_browser": {
-    "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\repair-combined-20261008-r1\\auth-browser-receipt.json",
+    "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\repair-combined-20261008-r2\\auth-browser-receipt.json",
     "bytes": 5870,
-    "sha256": "b476569483a1d29b02c5fb84bf8991795b8c8de736872d8807bf31e95c4bdc5a"
+    "sha256": "ba036b29d823411d94c4706b9e552db98bb0913d07381c121d89a80e17ac99c6"
   },
   "restore": {
-    "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\repair-combined-20261008-r1\\restore-receipt.json",
+    "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\repair-combined-20261008-r2\\restore-receipt.json",
     "bytes": 136029,
-    "sha256": "3bf59768a0d3e51b4ec0d16f5c47d7b12c06758614b5a08675811e045450ddfe"
+    "sha256": "a8ae0feb9042fb3db9046bf4a92e69b6287bba921007d186b9055b2af9c7e7c7"
   },
   "cleanup": {
     "auth": {
