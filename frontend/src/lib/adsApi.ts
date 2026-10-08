@@ -10,7 +10,7 @@ import type { ManualHandoff } from "./adsLaunchApi";
 // here as a type only, so `CampaignData.capacity` keeps the one shared shape.
 import type { CampaignCapacity, CampaignObjectiveFamily, CapView } from "./adsTriageApi";
 import type { CampaignContextJson, CampaignCreateExtras } from "./adsCampaignTypes";
-import type { BudgetAdvice, BudgetPreview, PlanCapacity, PlanMenuRow, ResplitRow, StrategyBasis, StrategyPayload, StrategyRole } from "./adsStrategyTypes";
+import type { BudgetAdvice, BudgetPreview, BudgetScenarioRow, PlanCapacity, PlanMenuRow, ResplitRow, StrategyBasis, StrategyPayload, StrategyRole } from "./adsStrategyTypes";
 
 export type CampaignStatus = "draft" | "ready" | "live" | "ended" | "closed";
 export type LocalState = "unbound" | "bound" | "detached" | "retired";
@@ -331,17 +331,6 @@ export interface PatchCampaignInput {
 export type BudgetScenarioMode = "cold_start" | "history";
 export type BudgetScenarioKey = "minimum" | "recommended" | "aggressive" | "conservative";
 
-export interface BudgetScenarioRow {
-  currency?: string | null;
-  source?: string | null;
-  key: string;
-  label: string;
-  daily: number | null;
-  total: number | null;
-  caption: string;
-  over_cap: number | null; // F28-I03: amount above the budget cap; 0 within, null = no cap／total unknown
-}
-
 /** `app/ads/budget.py::scenarios()` 的整包回傳——程式算的，AI 只預填百分比。 */
 export interface BudgetScenarios {
   advice?: BudgetAdvice;
@@ -353,7 +342,7 @@ export interface BudgetScenarios {
 }
 
 // F41-I04: the strategy shapes live in `adsStrategyTypes.ts` (this file's 800-line cap); re-exported here.
-export type { StrategyRole, StrategyAllocationItem, StrategyPayload, StrategyDecision, StrategyAssignmentFacts, StrategyFact, BudgetPreview, ResplitRow, PlanMenuRow, PlanCapacity, StrategyBasisFact, StrategyBasisPrice, StrategyBasisLearning, StrategyCoordinateLearning, StrategyBasis } from "./adsStrategyTypes";
+export type { BudgetScenarioRow, StrategyRole, StrategyAllocationItem, StrategyPayload, StrategyDecision, StrategyAssignmentFacts, StrategyFact, BudgetPreview, ResplitRow, PlanMenuRow, PlanCapacity, StrategyBasisFact, StrategyBasisPrice, StrategyBasisLearning, StrategyCoordinateLearning, StrategyBasis } from "./adsStrategyTypes";
 
 /** `ads_campaign.budget_basis_json` 的形狀（F03-I05 起）：策略＋預算情境＋依據，整包存在
  * Campaign 這一列，沒有另開表。 */

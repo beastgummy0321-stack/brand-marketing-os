@@ -8,6 +8,18 @@ import type { LearningEvidence, LearningEvidenceContext } from "./adsLearningEvi
 
 export type StrategyRole = "new" | "retarget" | "explore";
 
+export interface BudgetScenarioRow {
+  currency?: string | null;
+  source?: string | null;
+  reason?: string;
+  key: string;
+  label: string;
+  daily: number | null;
+  total: number | null;
+  caption: string;
+  over_cap: number | null;
+}
+
 export interface BudgetAdvice {
   state: "retain" | "repair_before_budget" | "insufficient_evidence" | "unaffordable";
   recommended_key: string | null;

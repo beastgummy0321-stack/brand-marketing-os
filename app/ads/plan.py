@@ -654,6 +654,14 @@ def _checked_decision(conn, org, brand, campaign, expected_revision):
         raise StrategyConflict("strategy_confirmation_required")
     if decision["revision"] != expected_revision:
         raise StrategyConflict("strategy_changed")
+    scenarios = (campaign.get("budget_basis_json") or {}).get("scenarios") or {}
+    key = campaign.get("budget_scenario")
+    row = next((r for r in scenarios.get("scenarios", []) if r["key"] == key), None)
+    if ((key == "retain" and (row is None or row.get("currency") != "TWD"))
+            or (row and row.get("currency") not in {None, "TWD"})
+            or (row and scenarios.get("mode") == "cold_start" and key != budget.CAP_KEY
+                and row.get("total") is None)):
+        raise StrategyConflict("strategy_changed")
     refreshed = {**payload}
     strategy.refresh_decision(conn, org, brand, campaign, refreshed)
     current = refreshed["decision"]

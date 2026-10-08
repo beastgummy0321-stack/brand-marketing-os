@@ -15,7 +15,13 @@ from app.tests.test_ads_home_overview import _ad, _brand, _imported, _obs, _pinn
 @pytest.fixture
 def evidence():
     conn, org = db.current(), db.DEV_ORG_ID
-    with _pinned(date(2026, 9, 23)):
+
+    class Reader:
+        def accounts(self, conn, org, brand):
+            return [{"account_id": "act_1", "currency": "TWD", "timezone_name": "Asia/Taipei"}]
+
+    with (_pinned(date(2026, 9, 23)), mock.patch.object(channels, "external_reader",
+                side_effect=lambda key: Reader() if key == "meta" else None)):
         brand = _brand(conn, org, "Budget advice counterexample")
         product = _product(conn, brand, unit_variable_cost=150)
         current = repository.create_campaign(conn, org, brand, {
@@ -31,7 +37,7 @@ def evidence():
             "budget_amount": 200, "currency": "TWD",
         })
         external_repository.record_sync(conn, org, brand, prior, section="observations", state={
-            "status": "success", "coverage": {"start": "2026-09-15", "end": "2026-09-21"},
+            "status": "success", "coverage": {"start": "2026-09-15", "end": "2026-09-22"},
         })
         ad = _ad(conn, org, brand, prior, "prior-ad", "prior")
         external_repository.upsert_entity(conn, org, brand, prior, {
@@ -134,6 +140,23 @@ def test_partial_read_does_not_establish_comparable_cohort(evidence):
     assert result["reason_codes"] == ["coverage_unverified"]
 
 
+def test_account_cutoff_requires_its_last_complete_day_to_be_read(evidence):
+    conn, org, brand, current, prior, ad = evidence
+    _obs(conn, org, brand, prior, ad, date(2026, 9, 21), spend=500, count=1)
+    conn.execute("UPDATE ads_campaign SET context_json=context_json-'external_sync' "
+                 "WHERE org_id=%s AND brand_id=%s AND id=%s", (org, brand, prior))
+    external_repository.record_sync(conn, org, brand, prior, section="observations", state={
+        "status": "success", "coverage": {"start": "2026-09-15", "end": "2026-09-21"},
+    })
+    incomplete = budget.advice(conn, org, brand, current)
+    assert incomplete["evidence"]["window"]["end"] == "2026-09-22"
+    assert incomplete["reason_codes"] == ["coverage_unverified"]
+    external_repository.record_sync(conn, org, brand, prior, section="observations", state={
+        "status": "success", "coverage": {"start": "2026-09-15", "end": "2026-09-22"},
+    })
+    assert budget.advice(conn, org, brand, current)["state"] == "repair_before_budget"
+
+
 def test_missing_other_judged_ad_does_not_get_hidden_by_one_good_ad(evidence):
     conn, org, brand, current, prior, ad = evidence
     _obs(conn, org, brand, prior, ad, date(2026, 9, 21), spend=20, count=1)
@@ -158,7 +181,7 @@ def test_unknown_or_mismatched_economics_unit_never_healthy(evidence):
     assert budget.advice(conn, org, brand, current)["state"] == "retain"
 
 
-def test_confirmed_usd_can_retain_with_same_currency_verified_funds(evidence):
+def test_confirmed_usd_keeps_cost_grade_but_cannot_enter_twd_planning(evidence):
     conn, org, brand, current, prior, ad = evidence
     product = current["context_json"]["product_ids"][0]
     conn.execute("UPDATE product_economics SET currency='USD' WHERE brand_id=%s AND product_id=%s",
@@ -173,9 +196,128 @@ def test_confirmed_usd_can_retain_with_same_currency_verified_funds(evidence):
              "uncertainties": [], "revision": 1, "confirmed_at": "2026-09-20"}
     with mock.patch.object(month_budget, "view", return_value=funds):
         result = budget.advice(conn, org, brand, current)
-    assert result["state"] == "retain"
-    assert result["retain"]["currency"] == "USD"
-    assert result["retain"]["daily"] == 20
+    assert result["state"] == "insufficient_evidence"
+    assert result["reason_codes"] == ["planning_currency_mismatch"]
+    assert result["evidence"]["grade"] == "on_target"
+    assert result["evidence"]["currency"] == "USD"
+    assert result["recommended_key"] is None
+    assert result["retain"] is None
+
+
+@pytest.mark.parametrize("owner_currency,reason", [
+    ("USD", "planning_currency_mismatch"), (None, "planning_currency_unverified"),
+])
+def test_foreign_or_unknown_owner_cannot_select_or_adopt_retain(evidence, owner_currency, reason):
+    conn, org, brand, current, prior, ad = evidence
+    product = current["context_json"]["product_ids"][0]
+    conn.execute("UPDATE product_economics SET currency='USD' WHERE brand_id=%s AND product_id=%s",
+                 (brand, product))
+    external_repository.upsert_entity(conn, org, brand, prior, {
+        "platform": "meta", "source_account": "act_1", "native_kind": "campaign",
+        "native_id": "prior", "budget_type": "daily", "budget_amount": 2000,
+        "currency": owner_currency,
+    })
+    conn.execute("UPDATE ads_campaign SET target_cost=NULL,target_basis='break_even',"
+                 "constraints_json='{}' WHERE org_id=%s AND brand_id=%s AND id=%s",
+                 (org, brand, current["id"]))
+    _obs(conn, org, brand, prior, ad, date(2026, 9, 21), spend=20, count=1, currency="USD")
+    funds = {"amount": 14000, "currency": "USD", "available": 14000,
+             "uncertainties": [], "revision": 1, "confirmed_at": "2026-09-20"}
+    provider = providers.ScriptedProvider(providers.SCRIPTED_REPLIES["ads_strategy"])
+    with (mock.patch.object(month_budget, "view", return_value=funds),
+          mock.patch.object(strategy, "PROVIDER", provider)):
+        generated = strategy.generate(conn, org, brand, current["id"], actor="test")
+        scenarios = generated["budget_basis_json"]["scenarios"]
+        assert scenarios["recommended"] is None
+        assert scenarios["advice"]["reason_codes"] == [reason]
+        assert scenarios["advice"]["evidence"]["grade"] == "on_target"
+        assert all(row["key"] != "retain" for row in scenarios["scenarios"])
+        assert all(row["amount"] is None
+                   for row in generated["budget_basis_json"]["strategy"]["allocation"])
+        for custom_total in (None, 14000):
+            with pytest.raises(ValueError, match="scenario_unknown"):
+                strategy.select_scenario(conn, org, brand, current["id"], scenario_key="retain",
+                                         custom_total=custom_total, actor="test")
+        assert repository.get_campaign(conn, org, brand, current["id"])["budget_planned"] is None
+        # A pre-fix persisted foreign retain is not authority to create NT$ groups.
+        basis = generated["budget_basis_json"]
+        basis["scenarios"]["scenarios"].append({
+            "key": "retain", "daily": 2000, "total": 14000, "currency": "USD",
+            "label": "Legacy retain", "caption": "Legacy", "over_cap": None,
+        })
+        revision = basis["strategy"]["decision"]["revision"]
+        repository.select_scenario(conn, org, brand, current["id"], scenario_key="retain",
+                                   budget_planned=14000, budget_basis_json=basis)
+        with mock.patch.object(plan, "PROVIDER", side_effect=AssertionError("No model call")):
+            with pytest.raises(plan.StrategyConflict, match="strategy_changed"):
+                plan.adopt_strategy(conn, org, brand, current["id"], actor="test",
+                                     expected_revision=revision, operation_id="foreign-retain")
+        assert repository.campaign_detail(conn, org, brand, current["id"])["groups"] == []
+        basis["scenarios"]["mode"] = "history"
+        basis["scenarios"]["scenarios"].append({
+            "key": "conservative", "daily": 20, "total": 140, "currency": "USD",
+            "label": "Foreign comparison", "caption": "Known USD", "over_cap": None,
+        })
+        repository.select_scenario(conn, org, brand, current["id"], scenario_key="conservative",
+                                   budget_planned=140, budget_basis_json=basis)
+        with pytest.raises(ValueError, match="scenario_amount_unknown"):
+            strategy.select_scenario(conn, org, brand, current["id"],
+                                     scenario_key="conservative", actor="test")
+        with mock.patch.object(plan, "PROVIDER", side_effect=AssertionError("No model call")):
+            with pytest.raises(plan.StrategyConflict, match="strategy_changed"):
+                plan.adopt_strategy(conn, org, brand, current["id"], actor="test",
+                                     expected_revision=revision, operation_id="foreign-comparison")
+
+
+@pytest.mark.parametrize("status,currency", [("confirmed", "USD"), ("pending", None)])
+def test_cold_start_foreign_or_unverified_cap_is_not_a_twd_amount(evidence, status, currency):
+    conn, org, brand, current, _prior, _ad_id = evidence
+    product = current["context_json"]["product_ids"][0]
+    conn.execute("UPDATE product_economics SET currency='USD',status=%s "
+                 "WHERE brand_id=%s AND product_id=%s", (status, brand, product))
+    conn.execute("UPDATE ads_campaign SET target_cost=NULL,target_basis='break_even' "
+                 "WHERE org_id=%s AND brand_id=%s AND id=%s", (org, brand, current["id"]))
+    provider = providers.ScriptedProvider(providers.SCRIPTED_REPLIES["ads_strategy"])
+    with mock.patch.object(strategy, "PROVIDER", provider):
+        generated = strategy.generate(conn, org, brand, current["id"], actor="test")
+    scenarios = generated["budget_basis_json"]["scenarios"]
+    assert scenarios["mode"] == "cold_start"
+    assert scenarios["recommended"] is None
+    choices = [row for row in scenarios["scenarios"] if row["key"] != budget.CAP_KEY]
+    assert len(choices) == 3
+    assert all("測試" in row["label"] and row["daily"] is None and row["total"] is None
+               and row["over_cap"] is None
+               and row["currency"] == currency for row in choices)
+    assert all(row["reason"] == ("planning_currency_mismatch" if currency
+                                else "planning_currency_unverified") for row in choices)
+    for custom_total in (None, 14000):
+        with pytest.raises(ValueError, match="scenario_amount_unknown"):
+            strategy.select_scenario(conn, org, brand, current["id"],
+                                     scenario_key="minimum", custom_total=custom_total,
+                                     actor="test")
+    chosen = strategy.select_scenario(conn, org, brand, current["id"],
+                                      scenario_key="cap", actor="test")
+    assert chosen["budget_planned"] == 1400
+    with pytest.raises(strategy.OverCapUnconfirmed):
+        strategy.select_scenario(conn, org, brand, current["id"],
+                                 scenario_key="custom", custom_total=14000, actor="test")
+    chosen = strategy.select_scenario(conn, org, brand, current["id"],
+                                      scenario_key="custom", custom_total=14000,
+                                      confirm_over_cap=True, actor="test")
+    assert chosen["budget_planned"] == 14000
+
+
+def test_twd_retain_remains_selectable(evidence):
+    conn, org, brand, current, prior, ad = evidence
+    _obs(conn, org, brand, prior, ad, date(2026, 9, 21), spend=20, count=1)
+    provider = providers.ScriptedProvider(providers.SCRIPTED_REPLIES["ads_strategy"])
+    with mock.patch.object(strategy, "PROVIDER", provider):
+        generated = strategy.generate(conn, org, brand, current["id"], actor="test")
+    assert generated["budget_basis_json"]["scenarios"]["recommended"] == "retain"
+    chosen = strategy.select_scenario(conn, org, brand, current["id"], scenario_key="retain",
+                                      actor="test")
+    assert chosen["budget_planned"] == 1400
+    assert chosen["budget_scenario"] == "retain"
 
 
 @pytest.mark.parametrize("amount,state", [(5800, "retain"), (5799, "unaffordable")])
@@ -255,7 +397,7 @@ def test_repair_null_survives_generate_read_and_explicit_choice_rechecks(evidenc
     scenarios = generated["budget_basis_json"]["scenarios"]
     decision = generated["budget_basis_json"]["strategy"]["decision"]
     assert scenarios["recommended"] is None
-    assert scenarios["advice"]["state"] == "repair_before_budget"
+    assert scenarios["advice"]["state"] == "repair_before_budget", scenarios["advice"]
     assert decision["budget_advice"] == generated["budget_advice"] == scenarios["advice"]
     assert all(row["amount"] is None
                for row in generated["budget_basis_json"]["strategy"]["allocation"])

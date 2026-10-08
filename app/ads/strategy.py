@@ -1058,14 +1058,19 @@ def select_scenario(conn, org_id: str, brand_id: str, campaign_id: str, *,
     if not scenario_result or not strategy_payload:
         raise ValueError("strategy_not_generated")
 
+    row = next((r for r in scenario_result["scenarios"] if r["key"] == scenario_key), None)
+    if scenario_key == "retain" and (row is None or row.get("currency") != "TWD"):
+        raise ValueError("scenario_unknown")
+    if row and (row.get("currency") not in {None, "TWD"}
+                or row.get("reason") in {
+                    "planning_currency_unverified", "planning_currency_mismatch",
+                }):
+        raise ValueError("scenario_amount_unknown")
     if custom_total is not None:
         if isinstance(custom_total, bool) or custom_total <= 0:
             raise ValueError("custom_total_invalid")
         total = custom_total
     else:
-        row = next(
-            (r for r in scenario_result["scenarios"] if r["key"] == scenario_key), None,
-        )
         if row is None:
             raise ValueError("scenario_unknown")
         if row["total"] is None:

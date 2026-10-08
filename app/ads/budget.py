@@ -131,7 +131,8 @@ def advice(conn, org_id, brand_id, campaign: dict) -> dict:
     affordable = total is not None and cap_known and cap is not None and total <= cap
     funds = None
     first, last = campaign.get("start_date"), campaign.get("end_date")
-    if (grade == "on_target" and total is not None and cap is None and first and last
+    if (grade == "on_target" and currency == "TWD" and total is not None
+            and cap is None and first and last
             and first.strftime("%Y-%m") == last.strftime("%Y-%m")):
         try:
             with conn.atomic():
@@ -157,6 +158,9 @@ def advice(conn, org_id, brand_id, campaign: dict) -> dict:
     state, key, reasons = "insufficient_evidence", None, [reason or "budget_unverified"]
     if grade in {"watch", "over", "wasted"}:
         state, reasons = "repair_before_budget", ["cost_" + grade]
+    elif grade == "on_target" and capacity["currency"] != "TWD":
+        reasons = ["planning_currency_unverified" if capacity["currency"] is None
+                   else "planning_currency_mismatch"]
     elif grade == "on_target" and affordable:
         state, key, reasons = "retain", "retain", ["on_target_affordable"]
     elif grade == "on_target" and total is not None and (
@@ -190,14 +194,22 @@ def advice(conn, org_id, brand_id, campaign: dict) -> dict:
         stable, sort_keys=True, default=str, ensure_ascii=False,
     ).encode()).hexdigest()
     return {**result, "retain": {"daily": daily, "total": total, "currency": currency,
-                                 "source": source} if daily is not None else None}
+                                 "source": source}
+            if daily is not None and currency == "TWD" else None}
 
 
 def apply_advice(result: dict, current: dict) -> dict:
     """Project the exact advice and its optional scoped choice; never restore a null pick."""
     rows = [row for row in result["scenarios"] if row["key"] != "retain"]
+    if result["mode"] == "cold_start":
+        currency = current["evidence"]["target"]["unit"]["currency"]
+        rows = [{**row, "currency": currency,
+                 **({"daily": None, "total": None, "over_cap": None,
+                     "reason": "planning_currency_unverified" if currency is None
+                     else "planning_currency_mismatch"} if currency != "TWD" else {})}
+                if row["key"] != CAP_KEY else {**row, "currency": "TWD"} for row in rows]
     retained = current.get("retain")
-    if retained:
+    if retained and retained["currency"] == "TWD":
         rows.append({"key": "retain", "label": "維持已知日預算", **retained,
                      "caption": "同賣法已知日預算；不是成長估算",
                      "over_cap": amount_over_cap(retained["total"], result.get("budget_cap"))
