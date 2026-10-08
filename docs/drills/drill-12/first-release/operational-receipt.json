@@ -3,33 +3,28 @@
   "feature": "F53",
   "gate": "G7",
   "status": "pass",
-  "environment": "Windows local/private owned fixtures",
-  "run_id": "f52124ac872d4a4e94802ab712867f11",
+  "run_id": "e0a98046ec294350be4f9193d629d1d3",
   "hashes": {
-    "product": "d4d4279bc841ef040cdc45028ca863eb4ec64073529d15100d92747a9d6fd517",
+    "product": "a268cd03225b23aa09aa6c9838127f1b9651a19bb563ce88062efbbc07a4d036",
     "ui": "b01c806e52870fd7a243577f84a97f06579ab63d3a79f51e46d7fb81ddecf8f9",
-    "probe": "b436fa658639121725cc020208e0867c3f4e34cc11161791c6d62cd1b6f671b2",
+    "probe": "e5d8aae6bf083cbbb7357bf2b1cc6a5ac98eb5bd4ea2a389e94bf4510d8688a5",
     "runtime_config": "3826657d9f99c968c0a509b9d4513952c5f1d5c6ea1ebaed4da658de47c4ef53"
   },
-  "context": {
-    "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\final-combined-20261008-a5\\context.json",
-    "bytes": 33834,
-    "sha256": "a17693ed9d3cc009ad3965d6d25151248b9be880ceb57b45afec55b9c45df55a"
-  },
+  "environment": "Windows local/private owned fixtures",
   "auth": {
-    "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\final-combined-20261008-a5\\auth-receipt.json",
-    "bytes": 2462,
-    "sha256": "9d1d2fa986a27eb3940d0387f96e37e854a7e364c12ecaae912632e4d569f040"
+    "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\repair-combined-20261008-r1\\auth-receipt.json",
+    "bytes": 2507,
+    "sha256": "01cb12f32713b85d3431693d9c80d367f35eedeb67dee72b976f0560dda997b6"
   },
   "auth_browser": {
-    "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\final-combined-20261008-a5\\auth-browser-receipt.json",
-    "bytes": 2959,
-    "sha256": "faeabe20bdd4dae8b795a216859973be6283089ddd098b1759df3aa86840a2c0"
+    "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\repair-combined-20261008-r1\\auth-browser-receipt.json",
+    "bytes": 5870,
+    "sha256": "b476569483a1d29b02c5fb84bf8991795b8c8de736872d8807bf31e95c4bdc5a"
   },
   "restore": {
-    "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\final-combined-20261008-a5\\restore-receipt.json",
-    "bytes": 136023,
-    "sha256": "836535aa136c1320ff3e79fe9792cdcce0d4737d40273066acbd813f1ceceae0"
+    "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\repair-combined-20261008-r1\\restore-receipt.json",
+    "bytes": 136029,
+    "sha256": "3bf59768a0d3e51b4ec0d16f5c47d7b12c06758614b5a08675811e045450ddfe"
   },
   "cleanup": {
     "auth": {
@@ -45,13 +40,10 @@
       "storage": true
     }
   },
-  "historical_operational_receipt": {
-    "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\closeout-history-20261008\\operational-receipt.json",
-    "bytes": 6538,
-    "sha256": "c8d87380aed828ec383d7a142c8f3da851be0e2f9957456d2774f5ec863c03ec"
-  },
   "limits": [
-    "Independent owned local databases/issuer/Storage objects; not public deployment proof",
-    "Ordinary browser login and identical saved-work API readback verified; recovered screenshot remains loading, not completed rendered-work proof"
-  ]
+    "Owned local issuer/database/Storage fixtures, not public deployment proof",
+    "Rendered saved-work heading and loaded body supplement identical API readback"
+  ],
+  "human_acceptance": "pending",
+  "release_eligible": false
 }

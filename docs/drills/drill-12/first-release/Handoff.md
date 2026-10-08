@@ -1,79 +1,51 @@
-# F53 first-release execution handoff
+# F53 repaired first-release handoff
 
-Date: 2026-10-08. Branch: `codex/first-release-evidence-learning`.
-Workspace: `D:/0UserProfile/Desktop/marketing`. The user approved the plan/prototype and
-the entire `/crank` queue on 2026-10-08 for this Windows host's local/private use.
-The nine approved issues and scoped fixture/group-resolution repairs are merged.
-This is the finite combined acceptance/report boundary, not authority for another drill.
+Date: 2026-10-08. Branch: codex/first-release-evidence-learning.
+The human authorized clearing the recommended first-release delivery blockers and handing over
+the final screen acceptance. I01-I14 are merged. Current G1-G7 pass on the repaired source;
+actual G8 is recorded only in the ignored final sidecar after the lead's integration.
+Do not infer G8 from this pre-integration tracked document or prefill human acceptance.
 
-## Current evidence and stopping boundary
+## Current evidence
+- Current context: `.scratch/F53/repair-combined-20261008-r1/context.json`.
+- [Combined packet](acceptance-result.json), [provider](provider-receipt.json),
+  [operations](operational-receipt.json) bind current product/UI/probe/config fingerprints.
+- Actual integration/seal/outcome: `.harness/scratch/F53/final/`.
+- UI gallery: `.scratch/F53/final-ui-20261008/index.html`, strategy/library/verify,
+  1024/1920, main/source views. Unchanged UI source evidence is reused by its exact fingerprint.
+- Source contracts: ads section 6.55, workbench section 5.19 and design-system section 1.7.
 
-Canonical [packet](acceptance-result.json), [provider](provider-receipt.json) and
-[operations](operational-receipt.json) retain actual raw references and source/config hashes.
-Final context: `D:/0UserProfile/Desktop/marketing/.scratch/F53/final-combined-20261008-a5/context.json`.
+## Repairs and proof
+The workbench vocabulary query now lives in a private shared leaf; public scope/order/shape and
+all guards remain. Six other failures were repaired in test fixtures/comparisons, preserving
+business values, distinct observation identities, unknown-currency refusal, completed-day
+cutoff and confirmation/concurrency protections. No production monetary or eligibility rule
+was relaxed to obtain green tests.
 
-| Gate | Current technical status |
-|---|---|
-| G1 | pass |
-| G2 | pass |
-| G3 | pass |
-| G4 | pass |
-| G5 | pass |
-| G6 | unverified |
-| G7 | pass |
+The provider runner now applies actual Contract S including executable_decision, captures the
+actually delivered request and verifies actual provider/model/task identity. Its new synthetic
+sample explicitly discloses daily budget and program-derived capacity. Department prompts are
+part of source fingerprints. One fresh gpt-5.6-luna subscription call uses max_retries=0,
+timeout_s=60, tools=None; its original response passed structure/bindings and independent
+semantic review without rewriting. This is not proof of optimal strategy or marketing success.
 
-G8 is intentionally a pending pointer in the tracked packet. The lead's actual finite
-integration result, timing/logs and successful seal or honest failed disposition live under
-`.harness/scratch/F53/final/`. Read that sidecar before asserting integration success.
-Queue completion and a successful subset do not close this feature or award release eligibility.
-Human acceptance remains pending; do not prefill it or close F53 without a fresh successful
-integration and the user's explicit five-question acceptance.
+Real local Auth recovery binds issuer refresh/revocation/expiry, ordinary password-form login,
+browser-originated original campaign GET, identical saved data, original DOM heading and a
+loaded strategy-or-empty body, plus screenshot and chronology. API-only/loading screenshots
+cannot pass. Postgres/Storage restore uses separate owned targets, tenant inventory and byte
+equality after source deletion. Cleanup is recorded; shared public and other tasks are untouched.
 
-The sole actual subscription-provider attempt returned successfully within its unchanged
-60-second limit, but production format checks rejected a numeral in prose and object
-alternatives where strings are required. G6 remains unverified; the independent rejection
-and original reply are preserved. This does not show provider unavailability or bad
-marketing judgment. No output was rewritten and no additional model attempt was made.
+## Final human acceptance
+After a successful current integration and exact seal, review the three screen comparisons.
+From each screen identify where you are, what the step does, what its main button does,
+next/back, and accept/reject/exit. Actual human approval alone satisfies this item.
+Only then may Harness close F53; preserve the pre-close seal because closure changes inputs.
 
-Implemented behavior: prepared source/support/applicability/revision qualification reaches
-strategy, copy and visual consumers; the three screens distinguish usable/history/unknown
-evidence, expose sources, retain drafts and refuse stale decisions until explicit refresh.
-Accepted audience/role/offer/carry/test assignments and original carried image/copy remain
-protected. Money/ranking rules and unknown-versus-zero semantics stay with existing owners.
-
-## Read order and artifact locations
-
-1. Root CLAUDE.md and latest human instruction.
-2. `.work/features/F53.md`, this packet and the actual ignored G8 sidecar.
-3. Ads section 6.55 and workbench section 5.19; their historical heading anchors are preserved.
-4. Final UI gallery: `.scratch/F53/final-ui-20261008/index.html`; select strategy/library/verify,
-   1024/1920 and main/source views. Technical screenshot/state/keyboard/draft-retention review
-   passed; the human five questions are still open.
-5. Prompt.md resumes this boundary without re-carving or repeating successful probes.
-
-From the screen alone, the human should identify where they are, what the step does, the
-main button's consequence, next/back, and accept/reject/exit. See design-system section 1.7.
-Known reference/build layout differences and honest unknown source costs are retained in the
-gallery's facts; no prototype sample values became production defaults.
-
-## Preserved history and authority limits
-
-Original preflight/prototype evidence remains under `.harness/scratch/launch-direction-probe-20261007/`
-and `.harness/scratch/prototype/first-release-learning/`. Frozen cases SHA-256 remains
-`48ada4e752fa4c2e5848b7b986e3af7146c9ede0aa712b7a72460b5d53505339`.
-Historical I09, a1, a2, a3 and a4 contexts under `.scratch/F53/` remain immutable. They exposed
-application-connection row shape, LoginPage selector, account metadata and ad/adset fixture
-representation defects, repeated canned names and duplicate original-asset insertion.
-Narrow independently reviewed tooling repairs changed no product
-guard, frozen fact, trial independence, date, formula, migration, model or timeout policy.
-I11 separately corrects the current-condition customer-group lookup through the existing
-brand-scoped sell-way-to-knowledge-product mapping; it changes no qualification policy.
-Old operational passes are historical after probe fingerprint drift, not interchangeable
-with current combined proof. Previous handoff/receipts are retained in `D:/0UserProfile/Desktop/marketing/.scratch/F53/closeout-history-20261008`.
-
-F48-F52 remain open; the unchanged original F52 three-period/nine-dimension drill remains
-paused and unrun. No new full repair campaign, blind generation retry, timeout extension,
-model/provider switch, paid direct API, public deployment, platform write or push is authorized.
-Synthetic local/API/browser/model evidence proves no live-market delivery, causality or revenue.
-Do not clean/reset unrelated trees or stop another task's service. The prototype's historical
-8764 helper is separate from nonce-owned acceptance processes; verify ownership before touching it.
+## Preserved history and limits
+The rejected a5 model reply and failed seven-test integration remain under `.scratch/F53/`;
+the prior ignored outcome is retained in `.harness/scratch/F53/final-prior-20261008/`.
+All earlier a1-a4 and original carve/case/prototype artifacts remain immutable. Frozen cases
+SHA-256 is unchanged: `48ada4e752fa4c2e5848b7b986e3af7146c9ede0aa712b7a72460b5d53505339`.
+F48-F52 remain open; original F52 nine-dimension drill is paused/unrun. No push, public deploy,
+paid direct API, platform mutation or autonomous marketing is authorized. Synthetic/local
+proof does not establish market delivery, causality or revenue. Protect shared ports/services.

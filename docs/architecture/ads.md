@@ -2480,8 +2480,15 @@ timeout extension/model switch. Output must respect facts, uncertainty, explicit
 and bindable slots; no optimal-strategy or profit claim. A fresh failed call stays unverified.
 A different model/provider, timeout policy or external cost is an unresolved change, not
 implicitly authorized by the queue.
+The authorized 2026-10-08 repair round preserves the rejected original sample and freezes
+one new synthetic request after deterministic correction. Require actual task provider/model/type,
+the actually delivered system/messages, strict format plus production executable_decision ready,
+and independent semantic review. Disclose the synthetic daily budget and derive shared capacity
+with existing capacity_of; never widen a ceiling from model output. Product fingerprints include
+the actual ads/workbench department prompts. No output rewriting or blind retries.
 G7: On the selected private release environment, prove genuine login/session-expiry and
-ordinary recovery without forged tokens, plus Postgres backup restore into a separate
+ordinary recovery without forged tokens, browser-originated original-work GET plus loaded
+DOM heading/body and capture/chronology (not API-only/loading proof), plus Postgres backup restore into a separate
 disposable target and schema/row/tenant/asset-reference checks, including restoration and
 byte-hash equality of sample Storage objects into an isolated owned destination. Do not overwrite shared public,
 delete another task's data or expose backup secrets. Existing provider availability is checked.

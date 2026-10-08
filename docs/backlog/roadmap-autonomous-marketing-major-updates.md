@@ -5,8 +5,8 @@
 ## First-release carve — 2026-10-07
 
 Status: the user approved the [F53 plan](../../.work/features/F53.md) and prototype on
-2026-10-08. The nine ordered issues and necessary evidence-backed tooling calibration are
-merged. This Windows local/private release remains subject to the actual combined packet,
+2026-10-08. The original queue and the newly authorized delivery-blocker repairs I12-I14 are
+merged; current technical proof is source-bound in the first-release packet. This Windows local/private release remains subject to the actual combined packet,
 G8 integration sidecar and pending human screen acceptance; queue completion is not closure.
 
 The settled evidence/source/applicability/support/revision/wire contract, complete writer/reader

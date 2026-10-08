@@ -627,7 +627,8 @@ other dead tables (`decision`, `strategy_hypothesis`, `campaign_period_budget_ve
 `brand_dismissed_calendar_category`) were dropped in F31-I09 (2026-09-26).
 
 Two cross-module raw-SQL reads exist and are deliberate, pre-dating the manifest:
-`app/workbench/repository.py::list_coordinate_vocabulary` reads `brand_coordinate`/`feedback`
+`app/workbench/repository.py::list_coordinate_vocabulary` delegates to the private
+`app/workbench/coordinate_vocabulary.py` leaf shared with looks; it reads `brand_coordinate`/`feedback`
 (schedule's tables) read-only rather than importing `app.schedule`, which would reverse the
 dependency direction. They are recorded here rather than declared as owned resources; the layer
 scan in `app/tests/test_architecture_boundaries.py` remains the tripwire for new ones.

@@ -2,51 +2,111 @@
   "schema_version": 1,
   "feature": "F53",
   "gate": "G6",
-  "status": "unverified",
-  "run_id": "f52124ac872d4a4e94802ab712867f11",
+  "status": "pass",
+  "run_id": "e0a98046ec294350be4f9193d629d1d3",
   "hashes": {
-    "product": "d4d4279bc841ef040cdc45028ca863eb4ec64073529d15100d92747a9d6fd517",
+    "product": "a268cd03225b23aa09aa6c9838127f1b9651a19bb563ce88062efbbc07a4d036",
     "ui": "b01c806e52870fd7a243577f84a97f06579ab63d3a79f51e46d7fb81ddecf8f9",
-    "probe": "b436fa658639121725cc020208e0867c3f4e34cc11161791c6d62cd1b6f671b2",
+    "probe": "e5d8aae6bf083cbbb7357bf2b1cc6a5ac98eb5bd4ea2a389e94bf4510d8688a5",
     "runtime_config": "3826657d9f99c968c0a509b9d4513952c5f1d5c6ea1ebaed4da658de47c4ef53"
   },
   "raw_receipt": {
-    "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\final-combined-20261008-a5\\provider-receipt.json",
-    "bytes": 4403,
-    "sha256": "6ef16bb323a2a0c64a2859e2b2f20fc71176ba9a0b87e3272bb38a27f5795f91"
-  },
-  "diagnosis": {
-    "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\final-combined-20261008-a5\\provider-diagnosis.json",
-    "bytes": 1002,
-    "sha256": "74c0c45d11b89c4fe05282f0665751a63060e2a7206e20ce1fa6b932543cbf6c"
+    "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\repair-combined-20261008-r1\\provider-receipt.json",
+    "bytes": 6197,
+    "sha256": "fd306d0b5ac3a9ab718c67455e8943f5e41f97232127336a2fafab8195c6c8ea"
   },
   "semantic_review": {
-    "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\final-combined-20261008-a5\\provider-semantic-review.json",
-    "bytes": 3097,
-    "sha256": "0662b19da97611a0289731621c1a9bba9736b8f51eaede47fb3c14c55872e1c8"
+    "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\repair-combined-20261008-r1\\provider-semantic-review.json",
+    "bytes": 2859,
+    "sha256": "204649a42eddca47a462f39c5b11f2d9a2d14dab27209ef6076a8e2f1be94d18"
   },
-  "attempts": 1,
+  "diagnosis": {
+    "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\repair-combined-20261008-r1\\provider-diagnosis.json",
+    "bytes": 1002,
+    "sha256": "523719b545543985e9e3809bea10acb658c73c4297b464d88332782cc85f3c2e"
+  },
   "options": {
     "max_retries": 0,
     "timeout_s": 60,
     "tools": null
   },
+  "attempts": 1,
   "task_status": "succeeded",
   "validation": {
-    "status": "unverified",
-    "reason": "gateway or contract output not accepted"
+    "status": "contract-pass",
+    "semantic_acceptance": "pending-independent-review",
+    "payload": {
+      "slots": [
+        {
+          "id": "slot-new-workday-snack",
+          "role": "new",
+          "customer_group_id": "A1",
+          "offer_key": "none",
+          "carry_from_ad_id": null,
+          "test_intent": "測試工作日零食買家對單盒獨立包裝零食的購買反應，不使用優惠。",
+          "rationale": "這個安排把唯一可用的測試角色放在工作日零食買家，沿用獨立包裝零食的品牌事實；目前觀察樣本稀薄，成效仍未知。",
+          "evidence_refs": [
+            {
+              "kind": "brand_fact",
+              "id": "synthetic-fact-snack"
+            }
+          ]
+        }
+      ],
+      "allocation": [
+        {
+          "role": "new",
+          "label": "新客",
+          "pct": 100.0,
+          "rationale": "以獨立包裝零食的商品事實，先測試工作日零食買家的購買反應。"
+        }
+      ],
+      "why": [
+        "以單盒內含獨立包裝零食的商品事實，測試工作日零食買家的購買假設。",
+        "目前只有一個可服務安排，因此集中測試單一受眾與不使用優惠的訊息組合。"
+      ],
+      "unknowns": [
+        "獨立包裝訊息對工作日零食買家的市場成效仍未知。",
+        "不使用優惠時的購買反應仍未知。"
+      ],
+      "alternatives": [],
+      "learning_goals": [
+        "釐清獨立包裝訊息對工作日零食買家的新客吸引力。"
+      ]
+    },
+    "decision": {
+      "schema_version": 1,
+      "revision": "7f39ab38d0b5d5ee4377e7960d932a940d94866438ff84d1fd52674f7fb46c3c",
+      "state": "proposed",
+      "slots": [
+        {
+          "id": "slot-new-workday-snack",
+          "role": "new",
+          "customer_group_id": "A1",
+          "offer_key": "none",
+          "carry_from_ad_id": null,
+          "test_intent": "測試工作日零食買家對單盒獨立包裝零食的購買反應，不使用優惠。",
+          "rationale": "這個安排把唯一可用的測試角色放在工作日零食買家，沿用獨立包裝零食的品牌事實；目前觀察樣本稀薄，成效仍未知。",
+          "evidence_refs": [
+            {
+              "kind": "brand_fact",
+              "id": "synthetic-fact-snack"
+            }
+          ]
+        }
+      ],
+      "feasibility": {
+        "state": "ready",
+        "reasons": []
+      }
+    }
   },
-  "started_at": "2026-10-08T00:33:52.023804+00:00",
-  "finished_at": "2026-10-08T00:34:07.257338+00:00",
-  "historical_diagnosis_receipt": {
-    "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\closeout-history-20261008\\provider-receipt.json",
-    "bytes": 4297,
-    "sha256": "c85d5206fcf6cf2c757cbd5e818b7fdedacfbbcdc4dfba49c5c8ae3d124b6b04"
-  },
+  "started_at": "2026-10-08T06:31:40.030732+00:00",
+  "finished_at": "2026-10-08T06:31:50.881529+00:00",
   "limits": [
-    "One synthetic-context subscription-provider sample; no retry",
-    "Prior direct-provider timeout cause remains unknown",
-    "No evidence of optimal strategy, delivery, causality or profit"
+    "One freshly authorized unchanged-model subscription sample after diagnosed repair",
+    "Synthetic context and disclosed synthetic capacity; no market/economic proof",
+    "Original rejected a5 output remains immutable; no output normalization"
   ],
   "human_acceptance": "pending",
   "release_eligible": false

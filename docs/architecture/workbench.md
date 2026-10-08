@@ -425,6 +425,11 @@ Statutory reminders remain distinct from forbidden facts; this work supplies no 
 
 ### 5.19 First-release learning qualification (F53, planned 2026-10-07)
 
+The repaired vocabulary DB readers share the private `coordinate_vocabulary` leaf; the
+repository entry point delegates with unchanged scope/order/projection and no seeding.
+This removes looks/repository mutual imports while leaving the pure qualifier DB-free.
+
+
 Status: implemented in the approved F53 queue (2026-10-08); release acceptance remains
 separate in the first-release packet. The authoritative
 evidence schema, compatibility, support, current applicability and gates are
