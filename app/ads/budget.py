@@ -1,28 +1,225 @@
-"""app/ads/budget.py — F03-I04: the money numbers are computed by the program, not by a model
-(ARCHITECTURE.md §0). Serves the strategy link of the golden path: input is `product_economics`
-(read through `app.brand_intelligence.repository` — the brand-permanent layer's own public
-functions, never raw SQL against its table) and this brand's own spend history; output is the
-three budget scenarios the strategy tab shows and the `basis` payload naming what each number came
-from and which parts are estimates. Pure functions: no HTTP, no model call, no write to any table,
-nothing here reads a rule card (ruling 4: AI only pre-fills, the arithmetic is ours).
+"""Program-owned budget arithmetic and read-only current advice (ARCHITECTURE.md §0).
 
-`history` design note (no other caller exists yet, so this is this issue's call): the last-30-day
-median CPA and the previous campaign's daily budget are aggregates over `ads_external_daily`
-through `repository.performance_rows`'s join (`repository.budget_history` computes them once);
-`scenarios()` takes the result as `history` (`None`/falsy when the brand has no settled spend
-yet) instead of querying it itself, so this file stays a pure dict-in/dict-out calculator that
-a unit test can drive without a database.
+Scenario arithmetic accepts supplied history as comparison choices. Advice independently reads
+the scoped current cohort and the existing coverage, result, target and money owners; only a
+comparable affordable amount can be recommended. Economics is read through its public facade.
+No HTTP, model call, table write or rule-card interpretation belongs here.
 """
 
+import hashlib
+import json
 import math
+from datetime import timedelta
 from typing import SupportsFloat, overload
 
 from app.brand_intelligence import repository as bi_repo
 from app.core import input_rules
 
+
+def advice(conn, org_id, brand_id, campaign: dict) -> dict:
+    """Current comparable evidence and affordability, without recursive campaign reads.
+
+    Brand/account history remains a comparison menu. Only one explicitly linked, recent
+    campaign supplies a retain amount; the canonical result reducer rejects mixed units,
+    actions and attribution. No growth multiplier is recommended here.
+    """
+    from app.ads import (
+        coverage,
+        lifecycle,
+        month_budget,
+        outcome,
+        repository,
+        targets,
+        triage,
+        triage_capacity,
+        triage_scale,
+    )
+    from app.core import settings
+
+    target = targets.resolve(conn, org_id, brand_id, campaign)
+    unit = outcome.cap_unit(conn, brand_id, target, campaign=campaign)
+    cutoff = coverage.last_complete_day(conn, org_id, brand_id)
+    start = cutoff - timedelta(days=6)
+    products = sorted(set((campaign.get("context_json") or {}).get("product_ids") or []))
+    candidates = conn.execute(
+        "SELECT * FROM ads_campaign WHERE org_id=%s AND brand_id=%s "
+        "ORDER BY (id=%s) DESC, end_date DESC NULLS LAST, id",
+        (org_id, brand_id, campaign["id"]),
+    ).fetchall()
+    cohort, rows, entities = None, [], []
+    covered = False
+    # Cross-campaign evidence needs one explicit sell-way; an unlinked current ID stands alone.
+    if len(products) <= 1 and target["result_kind"] is not None:
+        for raw in candidates:
+            candidate = dict(raw)
+            linked = sorted(set((candidate.get("context_json") or {}).get("product_ids") or []))
+            if (linked != products
+                    or targets.effective_result_kind(candidate) != target["result_kind"]
+                    or repository.campaign_objective_family(conn, org_id, brand_id, candidate)
+                    != repository.campaign_objective_family(conn, org_id, brand_id, campaign)):
+                continue
+            if not products and candidate["id"] != campaign["id"]:
+                continue
+            selected_start, selected_end = coverage.clip(candidate, start, cutoff)
+            selected = conn.execute(
+                "SELECT d.* FROM ads_external_daily d JOIN ads_external_entity e "
+                "ON e.id=d.entity_id AND e.org_id=d.org_id AND e.brand_id=d.brand_id "
+                "AND e.campaign_id=d.campaign_id WHERE d.org_id=%s AND d.brand_id=%s "
+                "AND d.campaign_id=%s AND d.metric_scope='ad' AND d.day BETWEEN %s AND %s "
+                "AND NOT EXISTS (SELECT 1 FROM ads_ad a WHERE a.org_id=d.org_id "
+                "AND a.brand_id=d.brand_id AND a.campaign_id=d.campaign_id "
+                "AND a.external_id=e.native_id AND a.product_id IS NOT NULL AND a.product_id<>%s) "
+                "ORDER BY d.day,d.id",
+                (org_id, brand_id, candidate["id"], selected_start, selected_end,
+                 products[0] if products else None),
+            ).fetchall()
+            if selected:
+                entities = [dict(entity) for entity in conn.execute(
+                    "SELECT * FROM ads_external_entity WHERE org_id=%s AND brand_id=%s "
+                    "AND campaign_id=%s AND native_kind='ad' ORDER BY id",
+                    (org_id, brand_id, candidate["id"]),
+                ).fetchall() if lifecycle.judged(dict(entity))]
+                ids = {entity["id"] for entity in entities}
+                cohort = candidate
+                rows = [dict(row) for row in selected if row["entity_id"] in ids]
+                read = coverage.load(
+                    conn, org_id, brand_id, candidate, selected_start, selected_end,
+                )
+                covered = (read.cleanly_read(selected_start, selected_end)
+                           and ids == {row["entity_id"] for row in rows})
+                start, cutoff = selected_start, selected_end
+                break
+    view, spend = triage._ad_window(rows, start, cutoff)
+    currency = view.get("currency") if view else None
+    comparison = outcome.compare_cap_unit(unit, currency)
+    grade, _, reason = triage.grade_window(view, spend, target["value"], 7)
+    if comparison["reason"] or (view and view["result_kind"] != target["result_kind"]):
+        grade, reason = "insufficient", comparison["reason"] or "result_kind_mismatch"
+    if view and (view.get("result_action") is None or view.get("result_attribution") is None):
+        grade, reason = "insufficient", "result_definition_unverified"
+    days_read = max((cutoff - start).days + 1, 0)
+    if not covered:
+        grade, reason = "insufficient", "coverage_unverified"
+    evidence = {
+        "window": {"start": start.isoformat(), "end": cutoff.isoformat(),
+                   "campaign_id": cohort["id"] if cohort else None},
+        "cost_per_result": view.get("cost_per_result") if view else None,
+        "target": {"value": target["value"], "basis": target["basis"],
+                   "revision": target["revision"], "unit": unit},
+        "grade": grade, "currency": currency,
+        "attribution": {"kind": view.get("result_kind"), "action": view.get("result_action"),
+                        "window": view.get("result_attribution")} if view else None,
+        "sample_flag": triage._sample_view(spend, view, target["value"], days_read),
+    }
+    daily = None
+    source = None
+    owners = triage_scale.owner_lookup(conn, org_id, brand_id) if cohort else {}
+    capacity = triage_capacity.capacity_view(
+        [{"entity_id": entity["id"]} for entity in entities], target["value"], owners,
+    )
+    if capacity["currency"] == currency:
+        daily = capacity["daily_budget"]
+        source = "observed_daily_owner" if daily is not None else None
+    if daily is not None and (not math.isfinite(daily) or daily <= 0):
+        daily = None
+    days = period_days(campaign)
+    total = total_of(daily, days)
+    selected_owners = {owners[e["id"]]["id"]: owners[e["id"]]
+                       for e in entities if e["id"] in owners}
+    cap = budget_cap_of(campaign.get("constraints_json"))
+    cap_known = currency == "TWD" and cap is not None
+    affordable = total is not None and cap_known and cap is not None and total <= cap
+    funds = None
+    first, last = campaign.get("start_date"), campaign.get("end_date")
+    if (grade == "on_target" and currency == "TWD" and total is not None
+            and cap is None and first and last
+            and first.strftime("%Y-%m") == last.strftime("%Y-%m")):
+        try:
+            with conn.atomic():
+                funds = month_budget.view(conn, org_id, brand_id, first.strftime("%Y-%m"))
+        except Exception:
+            funds = None
+        ongoing = {row["entity_id"]: row for row in (funds or {}).get("ongoing_owners", [])}
+        remaining_start = max(first, settings.today_for_org(conn, org_id=org_id))
+        remaining_days = max((last - remaining_start).days + 1, 0)
+        already_committed = bool(
+            cohort and cohort["id"] == campaign["id"] and selected_owners and remaining_days > 0
+            and all(oid in ongoing and ongoing[oid]["daily"] == float(owner["budget_amount"])
+                    and ongoing[oid]["days"] >= remaining_days
+                    and owner.get("start_date") is not None and owner["start_date"] <= first
+                    and owner.get("end_date") is not None and owner["end_date"] >= last
+                    for oid, owner in selected_owners.items())
+        )
+        required = 0 if already_committed else total
+        affordable = (funds is not None and funds["currency"] == currency
+                      and funds["amount"] is not None and funds["confirmed_at"] is not None
+                      and not funds["uncertainties"] and funds["available"] is not None
+                      and funds["available"] >= required)
+    state, key, reasons = "insufficient_evidence", None, [reason or "budget_unverified"]
+    if grade in {"watch", "over", "wasted"}:
+        state, reasons = "repair_before_budget", ["cost_" + grade]
+    elif grade == "on_target" and capacity["currency"] != "TWD":
+        reasons = ["planning_currency_unverified" if capacity["currency"] is None
+                   else "planning_currency_mismatch"]
+    elif grade == "on_target" and affordable:
+        state, key, reasons = "retain", "retain", ["on_target_affordable"]
+    elif grade == "on_target" and total is not None and (
+            cap_known or (funds is not None and funds["currency"] == currency
+                          and funds["amount"] is not None and funds["confirmed_at"] is not None
+                          and not funds["uncertainties"] and funds["available"] is not None)):
+        state, reasons = "unaffordable", ["period_budget_exceeded"]
+    result = {"state": state, "recommended_key": key, "reason_codes": reasons, "evidence": evidence}
+    stable = {**result, "products": products, "dates": [first, last],
+              "chosen": float(campaign["budget_planned"])
+              if campaign.get("budget_planned") is not None else None, "budget_cap": cap,
+              "prior": {"daily": daily, "source": source, "currency": currency,
+                        "owners": [{key: selected_owners[oid].get(key) for key in (
+                            "id", "native_kind", "budget_type", "budget_amount", "currency",
+                            "start_date", "end_date",
+                        )} for oid in sorted(selected_owners)]},
+              "coverage": {"verified": covered,
+                           "ranges": coverage.served(cohort) if cohort else []},
+              "entities": sorted(entity["id"] for entity in entities),
+              "sources": sorted({(r["entity_id"], r["source"], r["attribution_key"])
+                                 for r in rows}),
+              "funds": {key: funds.get(key) for key in (
+                  "amount", "currency", "available", "uncertainties", "revision", "confirmed_at",
+              )} if funds else None}
+    if funds:
+        stable["commitments"] = [{key: row.get(key) for key in (
+            "entity_id", "daily", "days", "commitment",
+        )} for row in sorted(funds.get("ongoing_owners", []), key=lambda row: row["entity_id"])
+                                 if row["entity_id"] in selected_owners]
+    result["revision"] = hashlib.sha256(json.dumps(
+        stable, sort_keys=True, default=str, ensure_ascii=False,
+    ).encode()).hexdigest()
+    return {**result, "retain": {"daily": daily, "total": total, "currency": currency,
+                                 "source": source}
+            if daily is not None and currency == "TWD" else None}
+
+
+def apply_advice(result: dict, current: dict) -> dict:
+    """Project the exact advice and its optional scoped choice; never restore a null pick."""
+    rows = [row for row in result["scenarios"] if row["key"] != "retain"]
+    if result["mode"] == "cold_start":
+        currency = current["evidence"]["target"]["unit"]["currency"]
+        rows = [{**row, "currency": currency,
+                 **({"daily": None, "total": None, "over_cap": None,
+                     "reason": "planning_currency_unverified" if currency is None
+                     else "planning_currency_mismatch"} if currency != "TWD" else {})}
+                if row["key"] != CAP_KEY else {**row, "currency": "TWD"} for row in rows]
+    retained = current.get("retain")
+    if retained and retained["currency"] == "TWD":
+        rows.append({"key": "retain", "label": "維持已知日預算", **retained,
+                     "caption": "同賣法已知日預算；不是成長估算",
+                     "over_cap": amount_over_cap(retained["total"], result.get("budget_cap"))
+                     if retained["currency"] == "TWD" else None})
+    exact = {key: value for key, value in current.items() if key != "retain"}
+    return {**result, "scenarios": rows, "recommended": current["recommended_key"], "advice": exact}
+
 # key, 中文 label, 每天想要的購買數 — ruling 4: 2 / 5 / 10; labels per F28 (keys unchanged).
 _COLD_START_EVENTS = (
-    ("minimum", "最低", 2), ("recommended", "穩定成長", 5), ("aggressive", "積極", 10),
+    ("minimum", "小額測試", 2), ("recommended", "一般測試", 5), ("aggressive", "較高額測試", 10),
 )
 
 # key, 中文 label, 上一期 daily budget 的乘數 — ruling 4: x0.6 / x1 / x1.6; labels per F28.
@@ -185,7 +382,7 @@ def _cold_start_scenarios(
         "assumption": "每天購買數（2／5／10）是假設，非實測",
     }
     return {
-        "mode": "cold_start", "scenarios": scenario_rows, "recommended": "recommended",
+        "mode": "cold_start", "scenarios": scenario_rows, "recommended": None,
         "basis": basis,
     }
 
@@ -206,14 +403,15 @@ def _history_scenarios(history: dict, days: int) -> dict:
             # 迴圈 or its bound ad account) — never a hard-coded platform name here.
             # F36-I05: printed unchanged — the day count (「有投放的 N 天」) already lives in
             # `source_text`; this caption never re-adds a 「30 天」 of its own.
-            "caption": f"{base_text} NT${whole(last_daily)} ×{mult:g}",
+            "caption": f"{base_text}（幣別未核實）{whole(last_daily)} ×{mult:g}",
+            "currency": None,
         })
     basis = {
         "mode": "history", "cpa": cpa, "source": history.get("source"),
         "sample_days": history.get("sample_days"), "sample_ads": history.get("sample_ads"),
     }
     return {
-        "mode": "history", "scenarios": scenario_rows, "recommended": "recommended",
+        "mode": "history", "scenarios": scenario_rows, "recommended": None,
         "basis": basis,
     }
 
@@ -267,8 +465,8 @@ def _with_budget_cap(result: dict, budget_cap: int | None, days: int) -> dict:
     a stored snapshot's earlier cap row and moved recommendation are dropped first."""
     rows = [r for r in result.get("scenarios", []) if r.get("key") != CAP_KEY]
     recommended = result.get("recommended")
-    if recommended == CAP_KEY or recommended not in {r["key"] for r in rows}:
-        recommended = "recommended"
+    if recommended not in {r["key"] for r in rows}:
+        recommended = None
     if budget_cap is not None:
         # Contract M: the cap row's daily is `daily_of(cap)` and its total what that daily really
         # spends, so `over_cap` is 0 by construction. Without a period there is no daily and the
@@ -287,14 +485,12 @@ def _with_budget_cap(result: dict, budget_cap: int | None, days: int) -> dict:
 
 
 def _recommended_with_amount(result: dict) -> str | None:
-    """F29 Contract D: the recommended row the screen shows always has an amount -- the
-    projected recommendation (the §6.32 over-cap rule already applied) when its total is known,
-    else the first row in display order with a known total, else `None`."""
+    """A recommended row must have an amount. Missing or suppressed picks stay null."""
     rows = result.get("scenarios", [])
     picked = next((r for r in rows if r["key"] == result.get("recommended")), None)
     if picked is not None and picked.get("total") is not None:
         return picked["key"]
-    return next((r["key"] for r in rows if r.get("total") is not None), None)
+    return None
 
 
 def current_scenarios(stored: dict, campaign: dict, conversion_label: str = "購買",
@@ -331,13 +527,8 @@ def period_days(campaign: dict) -> int:
 
 
 def reconcile_campaign(campaign: dict, conversion_label: str = "購買",
-                       *, cap: float | None = None) -> dict:
-    """Return an up-to-date projection. Never write budget_planned or group budgets.
-
-    This is the campaign read every screen gets its scenarios from, so the recommendation is
-    narrowed here to one that has an amount (`_recommended_with_amount`, may be `None`).
-    `current_scenarios` itself keeps a row key: `strategy.generate` looks its recommended row up
-    without a default (a total of `None` is fine there, a missing row is not).
+                       *, cap: float | None = None, current_advice: dict | None = None) -> dict:
+    """Return current choices and advice, preserving explicitly chosen/adopted amounts.
 
     F48 Contract M: serves `budget_preview` (`preview` of `budget_planned`). Allocation amounts
     are a projection only while nothing is chosen (`budget_planned is None`); once a total is
@@ -350,6 +541,8 @@ def reconcile_campaign(campaign: dict, conversion_label: str = "購買",
     if not stored:
         return campaign
     scenarios_now = current_scenarios(stored, campaign, conversion_label, cap=cap)
+    if current_advice is not None:
+        scenarios_now = apply_advice(scenarios_now, current_advice)
     scenarios_now["recommended"] = _recommended_with_amount(scenarios_now)
     strategy_now = dict(basis.get("strategy") or {})
     allocation = strategy_now.get("allocation") or []

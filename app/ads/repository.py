@@ -290,12 +290,14 @@ def get_campaign(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str) -
     cap = None
     stored = (campaign.get("budget_basis_json") or {}).get("scenarios") or {}
     if stored.get("mode") == "cold_start":
-        # F28-I01: a cold start is the one cap x purchases per day -- resolved only when the
-        # stored projection needs it, so a plain row read stays one query otherwise.
+        # Cold-start arithmetic needs the resolved cap; advice below independently checks
+        # current comparable evidence and affordability for every internal campaign read.
         from app.ads import targets
 
         cap = targets.resolve(conn, org_id, brand_id, campaign)["value"]
-    return budget.reconcile_campaign(campaign, labels["conversion"], cap=cap)
+    advice = budget.advice(conn, org_id, brand_id, campaign)
+    campaign["budget_advice"] = {key: value for key, value in advice.items() if key != "retain"}
+    return budget.reconcile_campaign(campaign, labels["conversion"], cap=cap, current_advice=advice)
 
 
 def require_internal_campaign(conn, org_id, brand_id, campaign_id) -> dict:
@@ -655,7 +657,7 @@ def campaign_objective_family(conn: _AnyConn, org_id: str, brand_id: str, campai
     if campaign.get("origin") == "imported":
         root = conn.execute(
             "SELECT platform, objective FROM ads_external_entity WHERE org_id=%s AND brand_id=%s "
-            "AND campaign_id=%s AND parent_native_id IS NULL",
+            "AND campaign_id=%s AND native_kind='campaign' AND parent_native_id IS NULL",
             (org_id, brand_id, campaign["id"]),
         ).fetchone()
         if root is None:
