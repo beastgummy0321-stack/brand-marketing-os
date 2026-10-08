@@ -21,6 +21,7 @@ import time
 import uuid
 from contextlib import contextmanager
 from datetime import UTC, datetime
+from functools import wraps
 from pathlib import Path
 from threading import Event, Thread
 from typing import Any, cast
@@ -338,6 +339,8 @@ def relevant_hashes(root=ROOT, environment=None):
                 "app/llm/",
                 "app/storage/",
                 "app/brand_intelligence/",
+                "app/departments/ads/",
+                "app/departments/workbench/",
                 "supabase/migrations/",
             )
         )
@@ -586,13 +589,52 @@ def verify_auth_receipt(receipt):
         or browser["requests_after_relogin"]
         != [r for r in browser["product_requests"] if r["at"] >= browser["login_at"]]
         or browser["requests_after_relogin"]
+        or browser["product_requests"]
         or not browser["expired_at"] <= browser["login_at"] <= browser["recovered_at"]
     ):
         raise ReceiptError("G7 ordinary login did not recover identical supported saved work")
     if receipt.get("refresh_success_control", {}).get("status") != 200:
         raise ReceiptError("G7 successful-refresh control absent")
+    verify_rendered_auth_work(browser, receipt.get("web_origin"))
     if not all(receipt.get("cleanup", {}).values()) or receipt.get("cleanup_errors"):
         raise ReceiptError("G7 Auth ownership cleanup incomplete")
+
+
+def verify_rendered_auth_work(browser, web_origin):
+    """The original campaign must be loaded by the page and visibly rendered, not API-only."""
+    saved = browser.get("saved_work") or {}
+    rendered = browser.get("rendered_work") or {}
+    match = re.fullmatch(r"/api/ads/brands/([^/]+)/campaigns/([^/]+)", saved.get("path", ""))
+    if not match or not rendered.get("response") or not rendered.get("capture"):
+        raise ReceiptError("G7 rendered original-work evidence absent")
+    brand, campaign_id = match.groups()
+    raw = dereference(rendered["response"])
+    campaign = json.loads(raw).get("campaign") or {}
+    strategy_state = "strategy" if (campaign.get("budget_basis_json") or {}).get("strategy") \
+        else "empty"
+    expected_body = "這期怎麼安排" if strategy_state == "strategy" else "這個活動還沒有策略建議"
+    expected_route = f"/app/brands/{brand}/ads/campaigns/{campaign_id}?tab=strategy"
+    if (rendered.get("boundary") != "browser-page-response"
+            or not isinstance(web_origin, str)
+            or not re.fullmatch(r"http://127\.0\.0\.1:\d+", web_origin)
+            or rendered.get("origin") != web_origin
+            or rendered.get("route") != expected_route
+            or rendered.get("response_path") != saved["path"]
+            or rendered.get("method") != "GET" or rendered.get("status") != 200
+            or rendered.get("resource_type") not in {"fetch", "xhr"}
+            or campaign.get("id") != saved.get("id") or campaign.get("id") != campaign_id
+            or campaign.get("brand_id") != brand or campaign.get("org_id") != saved.get("org_id")
+            or sha(raw) != saved.get("sha256") or sha(raw) != browser.get("page_work_sha256")
+            or not campaign.get("name") or rendered.get("heading") != campaign["name"]
+            or rendered.get("strategy_state") != strategy_state
+            or rendered.get("body_text") != expected_body):
+        raise ReceiptError("G7 rendered route/identity/content differs from original saved work")
+    chronology = [browser.get("login_at"), *(rendered.get(k) for k in (
+        "navigated_at", "response_at", "loaded_at", "captured_at")), browser.get("recovered_at")]
+    if any(not isinstance(t, (int, float)) for t in chronology) or chronology != sorted(chronology):
+        raise ReceiptError("G7 page-response/render/capture chronology absent or invalid")
+    if not dereference(rendered["capture"]).startswith(b"\x89PNG\r\n\x1a\n"):
+        raise ReceiptError("G7 rendered screen capture is not a retained PNG")
 
 
 def verify_restore_receipt(receipt):
@@ -726,8 +768,7 @@ def verify_raw_gate(gate, record):
             raise ReceiptError("G6 bounded one-attempt proof absent")
         if json.loads(dereference(model["input"])) != provider_input():
             raise ReceiptError("G6 frozen provider semantic input changed")
-        if validate_provider_output(model["task"])["status"] != "contract-pass":
-            raise ReceiptError("G6 actual gateway output failed structural/binding checks")
+        verify_provider_receipt(model)
         semantic = evidence_json(record, "provider-semantic-review.json")
         if (
             semantic.get("status") != "accepted"
@@ -1258,6 +1299,8 @@ def provider_schema(directory):
 
 
 def provider_input():
+    from app.ads import planner_context
+
     return {
         "schema_version": 1,
         "provenance": "synthetic-frozen-context",
@@ -1276,7 +1319,13 @@ def provider_input():
             "support": "thin, not market proof",
         },
         "cap": 300,
+        "daily_budget": 300,
+        "capacity": planner_context.capacity_of(300, 300),
         "currency": "TWD",
+        "campaign": {"id": "synthetic-provider-campaign", "objective": "購買",
+                     "goal_text": "Test the supplied buyer hypothesis",
+                     "start_date": "2026-10-08", "end_date": "2026-10-08",
+                     "budget_planned": 300},
         "allowed_roles": ["new", "explore"],
         "evidence_refs": [{"kind": "brand_fact", "id": "synthetic-fact-snack"}],
         "output_shape": {
@@ -1307,12 +1356,49 @@ def provider_input():
     }
 
 
-def validate_provider_output(task):
-    from app.ads import strategy
+def provider_decision_context(frozen):
+    """Build production decision inputs only from the exact disclosed synthetic context."""
+    from app.ads import planner_context
+
+    return {
+        "product_ids": [p["id"] for p in frozen["products"]],
+        "product_blocks": [{"knowledge": [{**p, "facts": frozen["facts"]}], "sell_ways": []}
+                           for p in frozen["products"]],
+        "customer_groups": frozen["customers"],
+        "offers": [{**o, "sentence": o["label"]} for o in frozen["offers"]],
+        "carried_candidates": frozen["carried"], "menu": [], "forbidden": [],
+        "capacity": planner_context.capacity_of(frozen["daily_budget"], frozen["cap"]),
+        "learnings": {"ads": [], "ranked": {"groups": [], "campaigns": []}},
+        "ranked_ids": [], "calendar_evidence": [], "previous": None,
+        "brand_facts": [{"id": r["id"], "value": " ".join(frozen["facts"])}
+                        for r in frozen["evidence_refs"] if r["kind"] == "brand_fact"],
+    }
+
+
+def provider_system():
+    """Use the actual production contract, with explicit array-shape instructions."""
+    return (ROOT / "app/departments/ads/strategy.md").read_text(encoding="utf-8") + (
+        "\n\nThis acceptance context is entirely synthetic. Return only the JSON object. "
+        "why, unknowns, alternatives and learning_goals must be arrays of strings; "
+        "alternatives defaults to [], never objects. allocation rationale, slot rationale, "
+        "test_intent and all prose arrays must contain no Arabic or fullwidth numerals, "
+        "percent/currency tokens or NT$, even copied from supplied facts. "
+        "Only supplied names may retain their digits. Use the served program capacity, "
+        "one customer per allocated role, distinct slot IDs, nonempty rationale and intent, "
+        "and exact supplied evidence refs. Include an explicit none-offer test. "
+        "Thin observations are uncertainty, not market proof; no causal/profit/optimal claim."
+    )
+
+
+def validate_provider_output(task, frozen=None):
+    from app.ads import planner_context, strategy
     from app.llm import gateway
 
+    frozen = provider_input() if frozen is None else frozen
+    ctx = provider_decision_context(frozen)
     reply = gateway.parse_json_reply(task.get("rendered_output"))
-    payload = strategy._validate_reply(reply, frozenset({"new", "explore"}))
+    payload = strategy._validate_reply(reply, frozenset(frozen["allowed_roles"]),
+                                       planner_context.quoted_names(ctx))
     if task.get("status") != "succeeded" or not payload:
         return {"status": "unverified", "reason": "gateway or contract output not accepted"}
     slots = payload.get("slots") or []
@@ -1321,26 +1407,94 @@ def validate_provider_output(task):
         and bool(slots)
         and all(
             isinstance(s, dict)
-            and s.get("customer_group_id") in {"A1", "A2"}
-            and s.get("offer_key") in {"none", "shipping"}
+            and s.get("customer_group_id") in {g["id"] for g in frozen["customers"]}
+            and s.get("offer_key") in {"none", *(o["key"] for o in frozen["offers"])}
             and s.get("carry_from_ad_id") is None
             and s.get("test_intent")
-            and s.get("role") in {"new", "explore"}
+            and s.get("role") in frozen["allowed_roles"]
             and s.get("id")
             and isinstance(s.get("evidence_refs"), list)
             and s["evidence_refs"]
-            and all(ref in provider_input()["evidence_refs"] for ref in s["evidence_refs"])
+            and all(ref in frozen["evidence_refs"] for ref in s["evidence_refs"])
             for s in slots
         )
     )
     if not bindable or not any(s["offer_key"] == "none" for s in slots):
         return {"status": "unverified", "reason": "bindable explicit none-offer test absent"}
+    decision = strategy.executable_decision(ctx, frozen["campaign"], payload)
+    if decision["feasibility"]["state"] != "ready":
+        return {"status": "unverified", "reason": "production decision is not executable",
+                "decision": decision}
     # Semantics are independently inspectable. Structural success never pre-fills human judgment.
     return {
         "status": "contract-pass",
         "semantic_acceptance": "pending-independent-review",
         "payload": payload,
+        "decision": decision,
     }
+
+
+@contextmanager
+def capture_provider_requests(path):
+    """Instrument the selected class in this isolated process; selection stays unchanged."""
+    from inspect import signature
+
+    from app.llm import providers
+
+    original = providers.CodexCliProvider.complete
+    calls = []
+
+    @wraps(original)
+    def complete(self, *args, **kwargs):
+        actual_signature = signature(original)
+        effective = actual_signature.bind(self, *args, **kwargs)
+        effective.apply_defaults()
+        calls.append({"at": now(), "provider": self.name, "arguments": kwargs,
+                      **{k: v for k, v in effective.arguments.items()
+                         if k != next(iter(actual_signature.parameters))}})
+        write(path, {"boundary": "selected-provider.complete", "calls": calls})
+        if len(calls) != 1:
+            raise ReceiptError("G6 permits exactly one provider invocation")
+        return original(self, *args, **kwargs)
+
+    providers.CodexCliProvider.complete = complete
+    try:
+        yield calls
+    finally:
+        providers.CodexCliProvider.complete = original
+        write(path, {"boundary": "selected-provider.complete", "calls": calls})
+
+
+def verify_provider_receipt(model):
+    """Recheck real task identity, delivered instructions and executable output, read-only."""
+    task = model.get("task") or {}
+    if (task.get("provider"), task.get("model"), task.get("task_type")) != (
+        "codex_cli", "gpt-5.6-luna", "ads_strategy",
+    ):
+        raise ReceiptError("G6 actual provider/model/task identity changed or absent")
+    if not model.get("request"):
+        raise ReceiptError("G6 actual selected-provider request evidence absent")
+    request = json.loads(dereference(model["request"]))
+    calls = request.get("calls") or []
+    if request.get("boundary") != "selected-provider.complete" or len(calls) != 1:
+        raise ReceiptError("G6 exactly one actual provider boundary is required")
+    call = calls[0]
+    arguments = call.get("arguments")
+    frozen = json.loads(dereference(model["input"]))
+    if (frozen != provider_input() or call.get("provider") != task["provider"]
+            or call.get("model") != task["model"] or call.get("system") != provider_system()
+            or call.get("messages") != [{"role": "user", "content": cases.canonical(frozen)}]
+            or call.get("timeout_s") != 60 or call.get("tools") is not None
+            or "tools" not in call or not call.get("at")
+            or call.get("org_id") != task.get("org_id")
+            or not isinstance(arguments, dict)
+            or not {"model", "system", "messages", "max_tokens", "timeout_s", "org_id"}
+            <= arguments.keys()
+            or any(call.get(k) != v for k, v in arguments.items())
+            or not model["started_at"] <= call["at"] <= model["finished_at"]):
+        raise ReceiptError("G6 delivered request does not bind frozen instructions/options/task")
+    if validate_provider_output(task, frozen)["status"] != "contract-pass":
+        raise ReceiptError("G6 actual gateway output failed structural/binding checks")
 
 
 def run_provider(context_path):
@@ -1363,7 +1517,8 @@ def run_provider(context_path):
 
     with provider_schema(directory) as (dsn, brand):
         # The default connect generic is TupleRow; app Conn's runtime contract is dict rows.
-        with psycopg.connect(dsn, row_factory=cast(Any, dict_row)) as raw_conn:
+        with psycopg.connect(dsn, row_factory=cast(Any, dict_row)) as raw_conn, \
+                capture_provider_requests(directory / "provider-request.json") as calls:
             conn = db.Conn(raw_conn)
             task = gateway.run_task(
                 conn,
@@ -1372,12 +1527,7 @@ def run_provider(context_path):
                 task_type="ads_strategy",
                 prompt_template_id="f53-first-release",
                 prompt_template_version="1",
-                system=(
-                    "Return one JSON strategy with allocation, slots, why, unknowns, alternatives. "
-                    "Use only the frozen facts. Keep thin-sample uncertainty. Include an explicit "
-                    "none-offer test. Use customer IDs, supplied roles and bound evidence refs. "
-                    "Do not invent results, causality or profit. Do not calculate money in prose."
-                ),
+                system=provider_system(),
                 messages=[{"role": "user", "content": cases.canonical(frozen)}],
                 context=gateway.TaskContext(
                     context_scope={"f53_run": value["run_id"]},
@@ -1394,7 +1544,8 @@ def run_provider(context_path):
         "options": {"max_retries": 0, "timeout_s": 60, "tools": None},
         "diagnosis": reference(directory / "provider-diagnosis.json"),
         "validation": validate_provider_output(task),
-        "provider_attempts": 1,
+        "provider_attempts": len(calls),
+        "request": reference(directory / "provider-request.json"),
     }
     receipt["schema"] = reference(directory / "provider-schema.json")
     write(directory / "provider-receipt.json", receipt)
@@ -3140,6 +3291,45 @@ import fs from "node:fs";
 const cfg = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
 const { chromium } = createRequire(cfg.frontend_package)("@playwright/test");
 const hash = s => crypto.createHash("sha256").update(s).digest("hex");
+const reference = filename => {const bytes=fs.readFileSync(filename);
+  return {path:filename, bytes:bytes.length, sha256:hash(bytes)};};
+async function recoverRenderedWork(page, cfg, saved, savedHash) {
+  const navigatedAt = Date.now();
+  // Page network events only: page.request controls cannot satisfy this promise.
+  const pending = page.waitForResponse(response => {
+    const url = new URL(response.url()), request = response.request();
+    return url.origin === cfg.origin && url.pathname === cfg.work_path &&
+      request.method() === "GET" && ["fetch", "xhr"].includes(request.resourceType()) &&
+      response.status() === 200;
+  }, {timeout:15000});
+  await page.goto(cfg.origin + cfg.work_route);
+  const response = await pending, responseAt = Date.now();
+  const restored = await response.json();
+  if (hash(JSON.stringify(restored)) !== savedHash)
+    throw Error("Browser page did not read the identical original saved work");
+  const heading = page.getByRole("heading", {level:1, name:saved.campaign.name, exact:true});
+  await heading.waitFor({state:"visible", timeout:15000});
+  const strategyState = saved.campaign.budget_basis_json?.strategy ? "strategy" : "empty";
+  const bodyTitle = strategyState === "strategy" ? "這期怎麼安排" : "這個活動還沒有策略建議";
+  const body = page.getByRole("heading", {level:2, name:bodyTitle, exact:true});
+  await body.waitFor({state:"visible", timeout:15000});
+  const headingText = (await heading.innerText()).trim();
+  const bodyText = (await body.innerText()).trim();
+  if (headingText !== saved.campaign.name || bodyText !== bodyTitle)
+    throw Error("Original saved screen did not finish rendering");
+  const loadedAt = Date.now();
+  const responsePath = cfg.directory + "/auth-recovered-page-response.json";
+  fs.writeFileSync(responsePath, JSON.stringify(restored));
+  const capturePath = cfg.directory + "/auth-recovered.png";
+  await page.screenshot({path:capturePath, fullPage:true});
+  const url = new URL(page.url());
+  return {restored, rendered:{boundary:"browser-page-response", origin:url.origin,
+    route:url.pathname + url.search, response_path:new URL(response.url()).pathname,
+    method:response.request().method(), resource_type:response.request().resourceType(),
+    status:response.status(), response:reference(responsePath), heading:headingText,
+    strategy_state:strategyState, body_text:bodyText, capture:reference(capturePath),
+    navigated_at:navigatedAt, response_at:responseAt, loaded_at:loadedAt, captured_at:Date.now()}};
+}
 let stage = "containment", browser = null;
 const diagnostic = (status, errorType = null) => fs.writeFileSync(
   cfg.directory + "/auth-browser-stage.json",
@@ -3231,12 +3421,11 @@ const login = async () => {
   stage = "relogin"; diagnostic("running");
   await login();
   stage = "saved-work-recovery"; diagnostic("running");
-  await page.goto(cfg.origin + cfg.work_route);
+  const {restored:pageRestored, rendered} = await recoverRenderedWork(page,cfg,saved,savedHash);
   const recovered = await page.request.get(cfg.origin + cfg.work_path, {headers:headers()});
   const restored = await recovered.json();
   if (recovered.status() !== 200 || hash(JSON.stringify(restored)) !== savedHash)
     throw Error("Original saved work changed after ordinary login");
-  await page.screenshot({path:cfg.directory + "/auth-recovered.png", fullPage:true});
   const receipt = {status:"pass", auth_js_version:cfg.auth_js_version,
     issuances, actual_refresh_events:events,
     auto_refresh:"unchanged SDK default; all issuances tracked",
@@ -3249,6 +3438,7 @@ const login = async () => {
     saved_work:{id:saved.campaign?.id, org_id:cfg.org, path:cfg.work_path, sha256:savedHash},
     recovered_work:{id:restored.campaign?.id, org_id:cfg.org,
       sha256:hash(JSON.stringify(restored))},
+    rendered_work:rendered, page_work_sha256:hash(JSON.stringify(pageRestored)),
     browser_login:"ordinary signInWithPassword form; no signOut/event fabrication",
     product_requests:productRequests,
     requests_after_relogin:productRequests.filter(r => r.at >= loginAt)};
@@ -3327,6 +3517,7 @@ def auth_probe(context_path, auth_port, web_port):
         "key_fingerprint": sha(secret.encode()),
         "shared_expiry_policy": "untouched",
         "proxy": "transparent /auth/v1 -> GoTrue root",
+        "web_origin": origin,
         "cleanup": {
             "container": False,
             "database": False,
