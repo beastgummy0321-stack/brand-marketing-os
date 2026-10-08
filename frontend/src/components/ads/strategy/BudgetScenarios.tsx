@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/layout/ui/button";
 import { selectScenario, setBudgetCap, type BudgetScenarioRow, type CampaignDetail, type ResplitRow, type SelectScenarioResult } from "@/lib/adsApi";
 import { daysBetween } from "@/lib/orgClock";
 import { Chip, ConfirmSheet, Disclosure, ScenarioBars, WarnButton, formatAmount, type ScenarioRow } from "../patterns";
+import { BudgetAdviceView } from "./StrategyQualification";
 
 /** F28-I09: the strategy tab's 「這一期的總預算」 card (prototype v9 `budgetBlock()`): the API's budget scenarios as bars
  * against the campaign's budget cap (`budget_cap`, `over_cap`, the 照預算上限 row — Feature F28 "Budget scenarios"),
@@ -29,6 +30,7 @@ const fmt = (v: number | null | undefined) => formatAmount(v) ?? "未知";
 const mmdd = (iso: string) => `${iso.slice(5, 7)}/${iso.slice(8, 10)}`;
 const errorText = (err: unknown, fallback: string) => (err instanceof Error ? err.message : fallback);
 const WHOLE = /^[1-9]\d*$/;
+const summaryLabel = (label: string) => Array.from(label).length > 20 ? `${Array.from(label).slice(0, 20).join("")}…` : label;
 
 function periodDays(start: string | null, end: string | null): number | null {
   if (!start || !end) return null;
@@ -40,8 +42,13 @@ function periodDays(start: string | null, end: string | null): number | null {
  * no longer what was saved, so it does not wear 已儲存 (the header chip prints the saved amount instead). */
 function savedRowKey(c: CampaignDetail): string | null {
   const rows = c.budget_basis_json.scenarios?.scenarios ?? [];
-  const row = rows.find((r) => r.key === c.budget_scenario && r.total !== null && r.total === c.budget_planned);
+  const row = rows.find((r) => r.key === c.budget_scenario && selectableScenario(r) && r.total === c.budget_planned);
   return row ? row.key : null;
+}
+
+/** Scenario source money must match the existing TWD planning interface. Legacy units stay unknown. */
+export function selectableScenario(row: BudgetScenarioRow | null | undefined): boolean {
+  return row?.currency === "TWD" && row.total !== null && Number.isFinite(row.total) && row.total > 0;
 }
 
 function scenarioRow(c: CampaignDetail, key: string | null): BudgetScenarioRow | null {
@@ -89,11 +96,26 @@ export function BudgetScenarios({ brandId, campaign: c, picked, onPick, pending,
   const [customValue, setCustomValue] = useState("");
   const [customSaving, setCustomSaving] = useState(false);
 
+  const pendingRow = scenarioRow(c, pending?.key ?? null);
+  const pendingCurrent = pending !== null && (pending.customTotal !== null
+    ? budgetCap !== null && pending.customTotal - budgetCap === pending.over
+    : selectableScenario(pendingRow) && pendingRow?.total === pending.total && pendingRow.over_cap === pending.over);
+  useEffect(() => {
+    if (pending && !pendingCurrent) {
+      onPending(null);
+      setError("預算選項或上限已更新，請重新選擇並確認金額。");
+    }
+  }, [pending, pendingCurrent, onPending]);
+
   if (!scenarios) return null;
 
-  const rows: ScenarioRow[] = scenarios.scenarios.map((r) => ({
-    key: r.key, label: r.label, total: r.total, overCap: r.over_cap, caption: r.caption,
-    recommended: r.key === scenarios.recommended, saved: r.key === saved,
+  const advice = c.budget_advice !== undefined ? c.budget_advice : scenarios.advice !== undefined
+    ? scenarios.advice : c.budget_basis_json.strategy?.decision?.budget_advice;
+  const compatible = scenarios.scenarios.filter(r => r.currency === "TWD" && (r.total === null || selectableScenario(r)));
+  const references = scenarios.scenarios.filter(r => !compatible.includes(r));
+  const rows: ScenarioRow[] = compatible.map((r) => ({
+    key: r.key, label: summaryLabel(r.label), total: r.total, overCap: r.over_cap, caption: r.caption,
+    recommended: advice?.state === "retain" && r.key === scenarios.recommended && r.key === advice.recommended_key, saved: r.key === saved,
   }));
   const days = periodDays(c.start_date, c.end_date);
   const pickedRow = scenarioRow(c, picked);
@@ -104,7 +126,7 @@ export function BudgetScenarios({ brandId, campaign: c, picked, onPick, pending,
 
   function choose(key: string) {
     const row = scenarioRow(c, key);
-    if (!row || row.total === null) return;
+    if (!row || !selectableScenario(row) || row.total === null) return;
     setError(null);
     if (key === saved) { onPick(null); onPending(null); return; }
     if (row.over_cap !== null && row.over_cap > 0) {
@@ -116,7 +138,7 @@ export function BudgetScenarios({ brandId, campaign: c, picked, onPick, pending,
   }
 
   async function confirmOver() {
-    if (!pending) return;
+    if (!pending || !pendingCurrent) return;
     setConfirming(true);
     setError(null);
     try {
@@ -220,9 +242,17 @@ export function BudgetScenarios({ brandId, campaign: c, picked, onPick, pending,
         </p>
       )}
 
-      <ScenarioBars rows={rows} budgetCap={budgetCap} selected={picked ?? saved} onSelect={choose} resultCap={c.cap.value} />
+      <BudgetAdviceView advice={advice} legacyRecommendation={scenarios.recommended !== null} />
+      {rows.length > 0 && <>
+        <p className="mb-2 text-xs text-muted-foreground">台幣規劃選項（TWD）{scenarios.mode === "history" ? "・歷史倍數僅供金額比較，不代表效果成長" : "・測試金額不代表預期成果"}</p>
+        <ScenarioBars rows={rows} budgetCap={budgetCap} selected={picked ?? saved} onSelect={choose} missingText="金額尚未核實" />
+      </>}
+      {references.map(row => <div key={row.key} data-slot="unselectable-budget" className="flex min-w-0 flex-wrap items-center justify-between gap-2 rounded-lg px-3 py-2.5 text-sm">
+        <div className="min-w-0 [overflow-wrap:anywhere]"><b>{summaryLabel(row.label)}</b><p className="text-xs text-muted-foreground">僅供來源對照，不能套用台幣預算。</p></div>
+        <span className="numeric">{row.currency ?? "幣別未知"} {fmt(row.total)}</span>
+      </div>)}
 
-      {pending && (
+      {pending && pendingCurrent && (
         <ConfirmSheet
           variant="over-cap"
           title={`選「${pending.label} ${fmt(pending.total)}」會超出預算上限 ${fmt(pending.over)} 元`}
@@ -243,9 +273,9 @@ export function BudgetScenarios({ brandId, campaign: c, picked, onPick, pending,
 
       <div className="mt-3 flex flex-col gap-2">
         <Disclosure label="為什麼是這幾個數字">
-          <div className="text-sm leading-7 text-muted-foreground">
+          <div className="text-sm leading-7 text-muted-foreground [overflow-wrap:anywhere]">
             {scenarios.scenarios.map((r) => <div key={r.key}>{r.label}：{r.caption}</div>)}
-            {c.cap.value !== null && <div>約幾筆購買＝總額 ÷ 每筆上限；每筆都花到上限時的估計</div>}
+            {scenarios.mode === "history" && <div>歷史倍數僅供比較，不能據此推定成長或加碼。</div>}
           </div>
         </Disclosure>
         <Disclosure label="自己填總額">

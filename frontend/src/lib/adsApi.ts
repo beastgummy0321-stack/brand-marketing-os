@@ -189,7 +189,7 @@ export interface ActionRow {
 /** `GET /campaigns/{c}` — 五分頁工作區共用的一份 dict：Campaign 本身欄位 + 推導出來的
  * `budget_total` + 投放組（各自掛著廣告）+ 最新的操作紀錄 + 成效小計。 */
 export interface CampaignDetail extends EntityBinding, ExternalCampaignFields {
-  budget_advice?: BudgetAdvice;
+  budget_advice?: BudgetAdvice | null;
   simulation_mode?: boolean;
   manual_handoff?: ManualHandoff;
   id: string;
@@ -334,10 +334,10 @@ export type BudgetScenarioKey = "minimum" | "recommended" | "aggressive" | "cons
 
 /** `app/ads/budget.py::scenarios()` 的整包回傳——程式算的，AI 只預填百分比。 */
 export interface BudgetScenarios {
-  advice?: BudgetAdvice;
+  advice?: BudgetAdvice | null;
   mode: BudgetScenarioMode;
   scenarios: BudgetScenarioRow[];
-  recommended: string | null; // F28-I03: moves to the "cap" row (照預算上限) when the old pick is over the cap
+  recommended: string | null; // Served recommendation; null must not select the legacy "recommended" comparison key.
   basis: Record<string, unknown>;
   budget_cap: number | null; // F28-I03: `constraints_json.budget`; unset／0／negative -> null
 }

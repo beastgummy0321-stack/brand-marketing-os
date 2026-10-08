@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { selectScenario, setBudgetCap, type BudgetScenarioRow, type CampaignDetail, type ResplitRow } from "@/lib/adsApi";
 import { BudgetScenarios, type OverCapPending } from "./BudgetScenarios";
+import type { BudgetAdvice } from "@/lib/adsStrategyTypes";
 
 vi.mock("@/lib/adsApi", async () => ({
   ...(await vi.importActual<object>("@/lib/adsApi")), selectScenario: vi.fn(), setBudgetCap: vi.fn(),
@@ -20,7 +21,7 @@ function rows(budgetCap: number | null): BudgetScenarioRow[] {
     { key: "aggressive", label: "積極", daily: 4500, total: 139500, caption: "冷啟動估算：上限 x 每天 10 筆購買", over_cap: over(139500) },
   ];
   if (budgetCap !== null) base.splice(1, 0, { key: "cap", label: "照預算上限", daily: null, total: budgetCap, caption: `用滿你設的預算上限 NT$${budgetCap}`, over_cap: 0 });
-  return base;
+  return base.map(row => ({...row, currency: "TWD"}));
 }
 
 function campaign(budgetCap: number | null, extra: Partial<CampaignDetail> = {}, scenarioRows = rows(budgetCap)): CampaignDetail {
@@ -60,10 +61,92 @@ function renderCard(c: CampaignDetail) {
 describe("BudgetScenarios", () => {
   beforeEach(() => vi.clearAllMocks());
 
+  it("summarizes a long choice name while the existing explanation reveals it in full", async () => {
+    const user = userEvent.setup();
+    const long = "夜跑與步行通勤、反光及輕量穿著的上班族完整商品情境".repeat(5);
+    const c = campaign(30000, {}, [{key: "cap", label: long, currency: "TWD", total: 30000,
+      daily: 1000, over_cap: 0, caption: "原始來源名稱"}]);
+    renderCard(c);
+    const choice = screen.getByRole("radio");
+    expect(choice.textContent).toContain("…");
+    expect(choice.textContent).not.toContain(long);
+    await user.click(screen.getByRole("button", {name: "為什麼是這幾個數字"}));
+    expect(screen.getByText(`${long}：原始來源名稱`)).toBeTruthy();
+    await user.click(choice);
+    expect(screen.getByTestId("picked").textContent).toBe("cap");
+  });
+
+  it.each(["currency", "total", "cap"])("a fresh %s change invalidates an old over-cap confirmation without saving", async (change) => {
+    const c = campaign(change === "cap" ? 40000 : 30000);
+    if (change === "currency") c.budget_basis_json.scenarios!.scenarios[2].currency = "USD";
+    if (change === "total") c.budget_basis_json.scenarios!.scenarios[2].total = 70000;
+    const onPending = vi.fn();
+    render(<BudgetScenarios brandId="brd_1" campaign={c} picked={null} onPick={vi.fn()}
+      pending={{key: "recommended", label: "穩定成長", total: 69750, over: 39750, customTotal: null}}
+      onPending={onPending} onCampaignChange={vi.fn()} onBudgetSaved={vi.fn()} />);
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(await screen.findByText("預算選項或上限已更新，請重新選擇並確認金額。")).toBeTruthy();
+    expect(onPending).toHaveBeenCalledWith(null);
+    expect(selectScenario).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["retain", "可維持已知預算", "on_target_affordable", "目前成本達標，已知預算可負擔"],
+    ["repair_before_budget", "先改善成本，再調預算", "cost_over", "成本超過上限，先改善再調預算"],
+    ["insufficient_evidence", "證據不足，暫無建議金額", "continuation_outside_recent_window", "選定來源月份已不在近期預算判斷期間"],
+    ["unaffordable", "已知資金不足，暫無建議金額", "period_budget_exceeded", "這期金額超過已確認的預算或可用資金"],
+  ] as const)("prints served %s without reclassifying a nullable recommendation", async (state, title, reason, explanation) => {
+    const user = userEvent.setup();
+    const c = campaign(30000);
+    const advice: BudgetAdvice = {state, recommended_key: state === "retain" ? "cap" : null,
+      reason_codes: [reason], revision: "advice-current", evidence: {window: {start: "2026-09-15", end: "2026-09-21", campaign_id: "selected"},
+        cost_per_result: 0, target: {value: 100, basis: "own", revision: 2, unit: {currency: "TWD"}}, grade: "on_target",
+        currency: "TWD", attribution: {kind: "purchase", action: "omni_purchase", window: "7d_click"}, sample_flag: {few: true}}};
+    c.budget_advice = advice;
+    renderCard(c);
+    expect(screen.getByText(title)).toBeTruthy();
+    expect(screen.queryByText("推薦") !== null).toBe(state === "retain");
+    expect(screen.getAllByRole("radio").every(row => row.getAttribute("aria-checked") === "false")).toBe(true);
+    await user.click(screen.getByRole("button", {name: "預算建議依據"}));
+    expect(screen.getByText(explanation)).toBeTruthy();
+    expect(screen.getByText("TWD 0")).toBeTruthy();
+    expect(screen.getByText("advice-current")).toBeTruthy();
+    expect(selectScenario).not.toHaveBeenCalled();
+  });
+
+  it("keeps a legacy recommended key without a served recommendation neutral", () => {
+    const c = campaign(null);
+    c.budget_basis_json.scenarios!.recommended = null;
+    renderCard(c);
+    expect(screen.queryByText("推薦")).toBeNull();
+    expect(screen.getByText("目前沒有可自動建議的預算")).toBeTruthy();
+    expect(selectScenario).not.toHaveBeenCalled();
+  });
+
+  it.each([["USD", 14000], [null, 1200], [undefined, 0], ["TWD", 0], ["USD", -100]] as const)("retains %s source money %s without making it selectable as TWD", async (currency, total) => {
+    const user = userEvent.setup();
+    const c = campaign(30000, {}, [{key: "recommended", label: "照上一期", currency,
+      total, daily: 0, over_cap: 0, caption: "原始來源"}]);
+    c.budget_basis_json.scenarios!.recommended = "recommended";
+    renderCard(c);
+    const source = document.querySelector("[data-slot=unselectable-budget]")!;
+    expect(source.textContent).toContain(currency ?? "幣別未知");
+    expect(source.textContent).toContain(total.toLocaleString("en-US"));
+    expect(screen.queryByRole("radio", {name: /照上一期/})).toBeNull();
+    expect(screen.queryByText("推薦")).toBeNull();
+    await user.click(screen.getByRole("button", {name: "自己填總額"}));
+    await user.type(screen.getByLabelText("自己填這一期的總預算"), "1200");
+    vi.mocked(selectScenario).mockRejectedValue(new Error("儲存失敗"));
+    await user.click(screen.getByRole("button", {name: "套用"}));
+    expect(await screen.findByText("儲存失敗")).toBeTruthy();
+    expect(screen.getByLabelText("自己填這一期的總預算")).toHaveProperty("value", "1200");
+    expect(selectScenario).toHaveBeenCalledWith("brd_1", "cmp_1", {scenario_key: "custom", custom_total: 1200});
+  });
+
   it("prints the API rows against the budget cap: 推薦, 已儲存, 超出 amounts, 約 N 筆購買", async () => {
     renderCard(campaign(30000, { budget_planned: 30000, budget_scenario: "cap" }));
     const capRow = await screen.findByRole("radio", { name: /照預算上限/ });
-    expect(capRow.textContent).toContain("推薦");
+    expect(capRow.textContent).not.toContain("推薦");
     expect(capRow.textContent).toContain("已儲存");
     expect(capRow.textContent).toContain("用滿你設的預算上限 NT$30000");
     expect(capRow.getAttribute("aria-checked")).toBe("true");
@@ -75,7 +158,7 @@ describe("BudgetScenarios", () => {
   it("a row the API cannot price (no cost cap) says 要先設上限 and cannot be picked", async () => {
     const c = campaign(30000, {}, rows(30000).map((r) => (r.key === "cap" ? r : { ...r, total: null, over_cap: null })));
     renderCard(c);
-    expect((await screen.findAllByText("要先設上限")).length).toBe(3);
+    expect((await screen.findAllByText("金額尚未核實")).length).toBe(3);
     expect(screen.getAllByRole("radio").map((r) => r.textContent)).toEqual([expect.stringContaining("照預算上限")]);
   });
 
@@ -245,6 +328,6 @@ describe("BudgetScenarios", () => {
     renderCard(campaign(30000));
     await user.click(await screen.findByRole("button", { name: "為什麼是這幾個數字" }));
     expect(screen.getByText("積極：冷啟動估算：上限 x 每天 10 筆購買")).toBeTruthy();
-    expect(screen.getByText("約幾筆購買＝總額 ÷ 每筆上限；每筆都花到上限時的估計")).toBeTruthy();
+    expect(screen.queryByText("約幾筆購買＝總額 ÷ 每筆上限；每筆都花到上限時的估計")).toBeNull();
   });
 });
