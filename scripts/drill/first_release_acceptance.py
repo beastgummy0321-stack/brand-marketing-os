@@ -793,6 +793,9 @@ def verify_http_cycle(cycle):
         raise ReceiptError("Actual reader periods absent")
     controls = []
     for period in periods:
+        if period["accepted"]["id"] != period["proposal"]["id"]:
+            raise ReceiptError("Observation campaign differs from the actual proposal/adoption")
+        verify_observation_grains(period)
         items = {item["id"]: item for item in period["reader"]["evidence_context"]["items"]}
         identity = period["observations"]["controlled_learning"]["id"]
         if identity not in items:
@@ -922,6 +925,128 @@ def verify_http_cycle(cycle):
     new_targets = {s["customer_group_id"] for s in refreshed["slots"] if not s["carry_from_ad_id"]}
     if not new_targets or new_targets == old_targets:
         raise ReceiptError("Post-contrary proposal lacks a changed executable buyer hypothesis")
+
+
+def verify_observation_grains(period):
+    """Ad and adset reports are separate representations of the SAME frozen children."""
+    observation = period["observations"]
+    expected = period["period"]
+    campaign = period["accepted"]
+    raw_ads = observation.get("raw_observations", [])
+    raw_groups = observation.get("raw_group_observations", [])
+    members = observation.get("group_membership", [])
+    entities = observation.get("bound_entities", [])
+    bound_groups = observation.get("bound_groups", [])
+    if not raw_ads or not raw_groups or not members or not entities or not bound_groups:
+        raise ReceiptError("Separate ad/group report and raw binding proof absent")
+    entity_ids = [row["id"] for row in entities]
+    if len(entity_ids) != len(set(entity_ids)):
+        raise ReceiptError("Duplicate bound entity proof")
+    by_entity = {row["id"]: row for row in entities}
+    group_ids = [group["id"] for group in campaign["groups"]]
+    if len(group_ids) != len(set(group_ids)) or len(members) != len(group_ids):
+        raise ReceiptError("Actual group membership is incomplete or duplicated")
+    if {row["group_id"] for row in members} != set(group_ids):
+        raise ReceiptError("Group report membership differs from adopted groups")
+    if len(bound_groups) != len(group_ids) or {g["id"] for g in bound_groups} != set(group_ids):
+        raise ReceiptError("Actual retained local group bindings are incomplete")
+    if len(raw_groups) != len(group_ids):
+        raise ReceiptError("Exactly one report is required for each adopted group")
+    all_rows = [*raw_ads, *raw_groups]
+    if len({row["id"] for row in all_rows}) != len(all_rows):
+        raise ReceiptError("Duplicate or mixed-grain source observation")
+    owners = {(row["org_id"], row["brand_id"]) for row in all_rows}
+    if owners != {(campaign["org_id"], campaign["brand_id"])}:
+        raise ReceiptError("Report tenant/brand identities differ")
+    for row in all_rows:
+        entity = by_entity.get(row["entity_id"])
+        if not entity or (
+            (entity["org_id"], entity["brand_id"]) not in owners
+            or entity["campaign_id"] != campaign["id"]
+            or entity["platform"] != "test"
+            or entity["source_account"] != "test"
+            or row["campaign_id"] != campaign["id"]
+            or str(row["day"]) != expected["end"]
+            or row["source"] != "graph"
+            or row["currency"] != "TWD"
+            or row["attribution_key"] != "fixed-known-fixture"
+            or row["result_kind"] != "purchase"
+            or row["result_action"] != "omni_purchase"
+            or row["result_attribution"] != "fixed-known-fixture"
+            or row["result_count"] != row["purchases"]
+        ):
+            raise ReceiptError("Raw observation identity/measurement differs from frozen binding")
+    by_ad = {row["entity_id"]: row for row in raw_ads}
+    by_group = {row["entity_id"]: row for row in raw_groups}
+    if len(by_ad) != len(raw_ads) or len(by_group) != len(raw_groups):
+        raise ReceiptError("Duplicate report entity at one grain")
+    used_ad_entities = []
+    used_group_entities = []
+    for group in campaign["groups"]:
+        member = next(row for row in members if row["group_id"] == group["id"])
+        bound_group = next(row for row in bound_groups if row["id"] == group["id"])
+        parent = by_entity.get(member["group_entity_id"])
+        child_ids = [ad["id"] for ad in group["ads"]]
+        if (
+            not child_ids or len(child_ids) != len(set(child_ids))
+            or member["trial_id"] != campaign["id"]
+            or member["child_ad_ids"] != child_ids
+            or len(member["child_entity_ids"]) != len(child_ids)
+            or len(member["child_observation_ids"]) != len(child_ids)
+            or not parent or parent["native_kind"] != "adset"
+            or bound_group["external_id"] != parent["native_id"]
+            or [ad["id"] for ad in bound_group["ads"]] != child_ids
+        ):
+            raise ReceiptError("Group report does not bind its actual adopted children/trial")
+        children = []
+        for entity_id, source_id in zip(
+            member["child_entity_ids"], member["child_observation_ids"], strict=True
+        ):
+            entity, row = by_entity.get(entity_id), by_ad.get(entity_id)
+            if (
+                not entity or not row or entity["native_kind"] != "ad"
+                or entity["parent_native_kind"] != "adset"
+                or entity["parent_native_id"] != parent["native_id"]
+                or row["id"] != source_id or row["metric_scope"] != "ad"
+            ):
+                raise ReceiptError("Raw child source row belongs to another group or grain")
+            children.append(row)
+            used_ad_entities.append(entity_id)
+        # Native IDs were retained by the actual binding, not inferred from display names.
+        actual_native = member["child_native_ids"]
+        if actual_native != [by_entity[e]["native_id"] for e in member["child_entity_ids"]]:
+            raise ReceiptError("Child native binding differs from raw entity snapshot")
+        if actual_native != [ad["external_id"] for ad in bound_group["ads"]]:
+            raise ReceiptError("Child source binding differs from actual local ad binding")
+        report = by_group.get(member["group_entity_id"])
+        if (
+            not report or report["id"] != member["group_observation_id"]
+            or report["metric_scope"] != "adset"
+            or member["group_native_id"] != parent["native_id"]
+        ):
+            raise ReceiptError("Raw group source row is absent or uses another grain")
+        used_group_entities.append(report["entity_id"])
+        for metric in ("spend", "purchases", "result_count", "impressions", "clicks", "revenue"):
+            values = [row[metric] for row in children]
+            summed = sum(values) if all(value is not None for value in values) else None
+            if report[metric] != summed:
+                raise ReceiptError("Group metric differs from its original child observations")
+    if (
+        len(set(used_ad_entities)) != len(used_ad_entities)
+        or set(used_ad_entities) != set(by_ad)
+        or len(set(used_group_entities)) != len(used_group_entities)
+        or set(used_group_entities) != set(by_group)
+        or set(by_ad) & set(by_group)
+    ):
+        raise ReceiptError("Missing, duplicate or mixed-grain child/group membership")
+    # Each level is checked against the SAME facts, never summed across levels.
+    for rows in (raw_ads, raw_groups):
+        if (
+            sum(row["result_count"] for row in rows) != expected["events"]
+            or sum(float(row["spend"]) for row in rows)
+            != expected["events"] * expected["cost_per_result"]
+        ):
+            raise ReceiptError("Separate grain totals differ from frozen observations")
 
 
 def required_integration_steps(root=ROOT):
@@ -1818,6 +1943,61 @@ def first_release_child(context_path, port):
         thread.join(timeout=15)
 
 
+def fixture_group_reports(conn, org, brand, campaign, bound, raw_ads):
+    """Retain one adset report derived ONLY from its already-retained frozen child rows."""
+    from app.ads import external_repository
+
+    by_ad_entity = {row["entity_id"]: row for row in raw_ads}
+    groups, members = [], []
+    for group in campaign["groups"]:
+        children = [by_ad_entity[bound[ad["id"]]] for ad in group["ads"]]
+        if not children:
+            raise ReceiptError("A fixture group needs existing children; no invented zero report")
+        first = children[0]
+        if any(
+            row[key] != first[key]
+            for row in children
+            for key in ("day", "source", "currency", "attribution_key", "result_kind",
+                        "result_action", "result_attribution")
+        ):
+            raise ReceiptError("Group children use incompatible source measurements")
+        observation = {
+            "entity_id": bound[group["id"]], "metric_scope": "adset",
+            **{key: first[key] for key in ("day", "source", "currency", "attribution_key")},
+        }
+        for metric in ("spend", "impressions", "clicks", "purchases", "revenue"):
+            values = [row[metric] for row in children]
+            observation[metric] = sum(values) if all(v is not None for v in values) else None
+        counts = [row["result_count"] for row in children]
+        report = external_repository.upsert_observation(
+            conn, org, brand, campaign["id"], observation,
+            result_kind=first["result_kind"],
+            result_count=sum(counts) if all(count is not None for count in counts) else None,
+            result_action=first["result_action"], result_attribution=first["result_attribution"],
+        )
+        groups.append(report)
+        members.append({
+            "group_id": group["id"], "group_entity_id": bound[group["id"]],
+            "group_native_id": group["external_id"], "group_observation_id": report["id"],
+            "child_ad_ids": [ad["id"] for ad in group["ads"]],
+            "child_entity_ids": [row["entity_id"] for row in children],
+            "child_native_ids": [ad["external_id"] for ad in group["ads"]],
+            "child_observation_ids": [row["id"] for row in children],
+            "trial_id": campaign["id"],
+        })
+    entities = [dict(row) for row in conn.execute(
+        "SELECT * FROM ads_external_entity WHERE org_id=%s AND brand_id=%s AND campaign_id=%s",
+        (org, brand, campaign["id"]),
+    ).fetchall()]
+    return {
+        "raw_group_observations": groups, "group_membership": members, "bound_entities": entities,
+        "bound_groups": [{
+            "id": group["id"], "external_id": group["external_id"],
+            "ads": [{"id": ad["id"], "external_id": ad["external_id"]} for ad in group["ads"]],
+        } for group in campaign["groups"]],
+    }
+
+
 def fixture_observe(conn, context, campaign_id, period_id):
     """Injected SourcePage observations use the normal retained performance writer."""
     from datetime import date
@@ -1913,6 +2093,8 @@ def fixture_observe(conn, context, campaign_id, period_id):
                     result_attribution="fixed-known-fixture",
                 )
             )
+    bound_campaign = required(repository.campaign_detail(conn, org, brand, campaign_id))
+    group_reports = fixture_group_reports(conn, org, brand, bound_campaign, bound, raw)
     outcome_seed.set_coverage(
         conn,
         org,
@@ -1978,6 +2160,7 @@ def fixture_observe(conn, context, campaign_id, period_id):
     )
     return {
         "raw_observations": raw,
+        **group_reports,
         "source_evidence": evidence,
         "originals": originals,
         "provenance": "injected-reader-synthetic-not-market-results",
