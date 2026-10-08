@@ -1731,7 +1731,11 @@ def fixture_provider(context):
                             "name": "Synthetic test group",
                             "ads": [
                                 {
-                                    "name": "Synthetic test",
+                                    # Retained prior-period names stay reserved.
+                                    "name": (
+                                        f"Synthetic test {context['f53_planning_campaign']} "
+                                        f"{s['id']}"
+                                    ),
                                     "slot_id": s["id"],
                                     "customer_group": next(
                                         (
