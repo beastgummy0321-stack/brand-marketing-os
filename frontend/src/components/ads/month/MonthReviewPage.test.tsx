@@ -116,7 +116,7 @@ function summary(overrides: Partial<MonthSummary> = {}): MonthSummary {
       spend: 22000, result_count: 46, result_label: "購買", cost_per_result: 478, target: 450, verdict: "missed",
     }],
     orders: null, closed_this_month: 6, closed_tracking_since: "2026-06-01",
-    suggestions: [suggestion()], days_covered: 30, days_elapsed: 23,
+    suggestions: [suggestion()], days_covered: 30, days_elapsed: 23, data_days: 22, window: { start: `${THIS}-01`, end: `${THIS}-22` },
     grades: gradesOf(MIXED_ROWS),
     rejected: { worse: [rejectedCard()], same_count: 2 },
     ...overrides,
@@ -134,8 +134,8 @@ function days(month: string, daily: number[]): { day: string; cumulative: number
 function home(overrides: Partial<HomeOverview> = {}): HomeOverview {
   return {
     month: THIS, day_of_month: 24, days_in_month: 30, currency: "TWD", spent: 22000,
-    money: {
-      purchases: 158, cost_per_purchase: 139, cap: null, earn_after_cost_and_ads: null, earn_missing: [], excluded: [],
+    commerce: null, money: {
+      purchases: 158, cost_per_purchase: 139, cap: null, earn_after_cost_and_ads: null, earn_missing: [], estimate_basis: { kind: "platform_purchase_margin", assumptions: [], missing: [] }, excluded: [],
       previous_same_period: { days: 23, purchases: 118, cost_per_purchase: 221 },
     },
     pace: {

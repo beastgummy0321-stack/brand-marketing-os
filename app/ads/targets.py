@@ -38,10 +38,8 @@ def own_cap(campaign: dict) -> float | None:
 
 
 def _unit_cost_with_shipping(economics: dict) -> float:
-    """成本含運 of one product economics row: the two numbers `budget.breakeven_cpa` subtracts
-    from the price (a missing shipping cost is 0 there too). Only called once that row has
-    yielded a break-even, so `unit_variable_cost` is known."""
-    return float(economics["unit_variable_cost"]) + float(economics.get("shipping_cost") or 0)
+    """Known unit cost plus known shipping, after the break-even input check."""
+    return float(economics["unit_variable_cost"]) + float(economics["shipping_cost"])
 
 
 def resolve(conn, org_id: str, brand_id: str, campaign: dict, *,
@@ -58,13 +56,16 @@ def resolve(conn, org_id: str, brand_id: str, campaign: dict, *,
     `cost` (F29 Contract D) is the unit cost including shipping from the SAME economics row
     `break_even` came from, so the screen's 「售價 X − 成本含運 Y」 subtracts to the break-even
     it shows; `None` whenever `break_even` is (no purchase result kind, no product, no cost).
-    `missing` only ever names `"product"`,
-    `"product_cost"` or `"result_kind"`. `org_id` stays in the signature (every caller passes
+    `economics_basis` preserves the economics currency and missing price, cost, shipping or
+    sales-mix evidence independently of grading. An own cap remains usable even when a
+    margin estimate is unavailable. `org_id` stays in the signature (every caller passes
     the tenant) although no read here needs it since the trailing-30 fallback was removed."""
     result_kind = effective_result_kind(campaign)
     own_value = own_cap(campaign)
 
     missing: list[str] = []
+    economics_missing: list[str] = []
+    economics_currency = None
     break_even = price = cost = used_product_id = None
     if result_kind is None:
         missing.append("result_kind")
@@ -75,16 +76,24 @@ def resolve(conn, org_id: str, brand_id: str, campaign: dict, *,
         )
         if not product_ids:
             missing.append("product")
+            economics_missing.append("product")
+        elif len(set(product_ids)) > 1:
+            missing.append("sales_mix")
+            economics_missing.append("sales_mix")
         else:
             economics, used_product_id = budget.economics_for(conn, brand_id, product_ids)
-            break_even = budget.breakeven_cpa(economics)
+            used_product_id = used_product_id or product_ids[0]
+            for field, reason in (("selling_price", "product_price"),
+                                  ("unit_variable_cost", "product_cost"),
+                                  ("shipping_cost", "shipping_cost"), ("currency", "currency")):
+                if economics is None or economics.get(field) is None:
+                    economics_missing.append(reason)
+            economics_currency = economics.get("currency") if economics else None
+            break_even = None if economics_missing else budget.breakeven_cpa(economics)
             if economics is not None and break_even is not None:
                 cost = _unit_cost_with_shipping(economics)
             else:
-                missing.append("product_cost")
-                # No cost yet, but a known price still feeds ROAS 參考 (price / cap).
-                used_product_id = product_ids[0]
-                economics = bi_repo.get_product_economics(conn, brand_id, used_product_id)
+                missing.extend(economics_missing)
             if economics and economics.get("selling_price") is not None:
                 price = float(economics["selling_price"])
 
@@ -107,5 +116,6 @@ def resolve(conn, org_id: str, brand_id: str, campaign: dict, *,
         "result_label": result_kinds.label(result_kind),
         # An own cap is a complete answer: nothing is missing for grading any more.
         "missing": [] if own_value is not None else missing,
+        "economics_basis": {"currency": economics_currency, "missing": economics_missing},
         "revision": campaign.get("target_revision") or 0,
     }

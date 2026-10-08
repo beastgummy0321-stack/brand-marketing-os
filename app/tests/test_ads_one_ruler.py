@@ -727,6 +727,8 @@ _COVERAGE_SQL = re.compile(r"->>?\s*'(coverage|ranges)'|observations,(coverage|r
 # (file relative to app/ads, function, key) -> why that read is not the stored observations
 # range. Never widen this to hide a range read: call `coverage.load`／`gap`／`covered` instead.
 NOT_THE_READ_RANGE = {
+    ("month_summary.py", "_orders_comparison", "coverage"):
+        "orders' public brand-commerce coverage evidence, not platform read ranges",
     ("external_sync.py", "_save_monthly", "coverage"):
         "the monthly task's own account-month proof (`account_campaign_day`)",
     ("month_budget.py", "_inventory", "coverage"):

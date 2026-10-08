@@ -205,7 +205,7 @@ class MonthSummaryOrdersTest(unittest.TestCase):
         }], source="easystore_xlsx", actor="test")
 
     def test_like_for_like_comparison_and_change_pct(self):
-        self._save("this", 1000, self.today)
+        self._save("this", 1000, self.month_start)
         previous_start = (self.month_start - timedelta(days=1)).replace(day=1)
         self._save("previous", 500, previous_start)
 
@@ -216,16 +216,17 @@ class MonthSummaryOrdersTest(unittest.TestCase):
         self.assertEqual(orders_view["this_count"], 1)
         self.assertEqual(orders_view["previous_net"], 500)
         self.assertEqual(orders_view["previous_count"], 1)
-        self.assertEqual(orders_view["change_pct"], 1.0)
+        # Import default is not currency/coverage proof.
+        self.assertIsNone(orders_view["change_pct"])
 
     def test_unknown_net_amount_nulls_change_pct_without_failing(self):
-        self._save("unknown", None, self.today, financial_status=None)
+        self._save("unknown", None, self.month_start, financial_status=None)
 
         summary = month_summary.get_summary(self.conn, self.org, self.brand, self.month)
         orders_view = summary["orders"]
         self.assertIsNotNone(orders_view)
         self.assertIsNone(orders_view["this_net"])
-        self.assertEqual(orders_view["this_count"], 1)
+        self.assertEqual(orders_view["this_count"], 0)  # No known paid amount.
         self.assertIsNone(orders_view["change_pct"])
 
     def test_future_month_has_no_orders_window(self):

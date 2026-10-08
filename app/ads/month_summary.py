@@ -20,9 +20,9 @@ excludes them; `review_evidence.aggregate()` also drops them defensively by attr
 `app/schedule/tree_approval.py::_approval_overspend` already uses for its own `days_elapsed`
 (`today_for_org` clamped to the month) -- `days_covered` is the month's own full length,
 `days_elapsed` the elapsed portion (0 for a future month, the full length once the month is
-fully in the past). The orders comparison ("this month so far vs the same number of days of the
-previous month") walks the same elapsed count backed into the previous month, capped at that
-month's own length.
+fully in the past). R5 `data_days`/`window` separately expose complete platform days, also used
+by the paid-order comparison. Previous-month comparison is capped at that month's length;
+unknown source currency, payment, amounts or coverage prevent a sales-growth claim.
 
 The write (`dismiss_suggestion`): `key` is `"<kind>:<campaign_id>"` -- brand-scoped route (no
 campaign in the path, Contract G), so the campaign id has to come from the key itself. Stored in
@@ -36,9 +36,11 @@ from datetime import date, datetime, time, timedelta
 
 from app import orders
 from app.ads import (
+    coverage,
     learning_rank,
     learning_view,
     lifecycle,
+    outcome,
     period_grades,
     repository,
     result_kinds,
@@ -90,7 +92,7 @@ def _ad_spend_and_currency(aggregated: dict) -> tuple[float | None, str | None]:
     if not entries or any(s["metrics"]["spend"] is None for s in entries):
         return None, None
     currencies = {s["currency"] for s in entries}
-    if len(currencies) > 1:
+    if len(currencies) > 1 or None in currencies:
         return None, None
     return sum(s["metrics"]["spend"] for s in entries), next(iter(currencies))
 
@@ -113,11 +115,12 @@ def _campaign_month_metrics(conn, org_id, brand_id, campaign_id, start, end) -> 
         ).fetchall()
     ]
     aggregated = review_evidence.aggregate(rows, start, end)
-    spend, _currency = _ad_spend_and_currency(aggregated)
+    spend, currency = _ad_spend_and_currency(aggregated)
     result_count, cost_per_result, result_kind = _ad_result(aggregated)
     return {
         "spend": spend, "result_count": result_count, "cost_per_result": cost_per_result,
         "result_kind": result_kind,
+        "currency": currency,
     }
 
 
@@ -187,17 +190,37 @@ def _orders_comparison(conn, org_id, brand_id, start, days_elapsed) -> dict | No
     )
     this_summary = this_evidence["order_summary"]
     previous_summary = previous_evidence["order_summary"]
-    this_net = this_summary["order_net_amount"]
-    previous_net = previous_summary["order_net_amount"]
+    this_net = this_summary["paid_net_amount"]
+    previous_net = previous_summary["paid_net_amount"]
+    missing = []
+    if (any(s["currency_basis"] == "unknown" for s in (this_summary, previous_summary))
+            or not this_summary["currency"]
+            or this_summary["currency"] != previous_summary["currency"]):
+        missing.append("currency")
+    if any(s["coverage"] != "complete" for s in (this_summary, previous_summary)):
+        missing.append("coverage")
+    if any(s["unknown_payment_count"] for s in (this_summary, previous_summary)):
+        missing.append("payment")
+    if any(s["paid_count"] != s["known_paid_net_count"]
+           for s in (this_summary, previous_summary)):
+        missing.append("amount")
     change_pct = (
         (this_net - previous_net) / previous_net
-        if this_net is not None and previous_net
+        if not missing and this_net is not None and previous_net
         else None
     )
     return {
-        "this_net": this_net, "this_count": this_summary["non_void_count"],
-        "previous_net": previous_net, "previous_count": previous_summary["non_void_count"],
+        "this_net": this_net, "this_count": this_summary["known_paid_net_count"],
+        "previous_net": previous_net, "previous_count": previous_summary["known_paid_net_count"],
         "change_pct": change_pct,
+        "amount_basis": "paid_net_amount", "comparison_missing": missing,
+        "order_book": {
+            "this_net": this_summary["order_net_amount"],
+            "this_count": this_summary["known_net_count"],
+            "previous_net": previous_summary["order_net_amount"],
+            "previous_count": previous_summary["known_net_count"],
+        },
+        "this_evidence": this_evidence, "previous_evidence": previous_evidence,
     }
 
 
@@ -365,6 +388,8 @@ def _grades_view(conn, org_id, brand_id, start, end) -> dict:
     """Contract C `grades`: every ad that spent this month graded by the one ruler
     (`period_grades.grade_period`, the same rows a settle of this month reads) -- 有效 is the
     `on_target` bucket only (ads.md §6.33)."""
+    if end < start:
+        return {**period_grades.summarize([]), "rows": [], "missing": []}
     rows = period_grades.grade_period(conn, org_id, brand_id, start, end)
     return {
         **period_grades.summarize(rows), "rows": rows,
@@ -428,14 +453,19 @@ def _rejected_view(conn, org_id, brand_id, items, campaigns_by_id: dict, month: 
 def get_summary(conn, org_id: str, brand_id: str, month: str) -> dict:
     month = _require_month(month)
     start, end, days_covered, days_elapsed = _month_window(conn, org_id, month)
+    cutoff = min(end, coverage.last_complete_day(conn, org_id, brand_id))
+    data_days = max((cutoff - start).days + 1, 0)
     campaigns_rows = _campaign_rows(conn, org_id, brand_id)
 
     campaigns = []
     target_by_campaign = {}
     for row in campaigns_rows:
-        metrics = _campaign_month_metrics(conn, org_id, brand_id, row["id"], start, end)
-        target_value = targets.resolve(conn, org_id, brand_id, row)["value"]
-        target_by_campaign[row["id"]] = target_value
+        metrics = _campaign_month_metrics(conn, org_id, brand_id, row["id"], start, cutoff)
+        target = targets.resolve(conn, org_id, brand_id, row)
+        comparison = outcome.cap_comparison(conn, brand_id, target, metrics["currency"],
+                                            campaign=row)
+        target_value = target["value"] if comparison["reason"] is None else None
+        target_by_campaign[row["id"]] = target["value"]
         # F27-I27: one objective-family rule, not two -- the same `repository`.
         # `campaign_objective_family` F27-I09 already added for `CampaignChip` on campaign
         # cards/triage items, reused here (and via `campaigns_by_id` below for the
@@ -447,13 +477,17 @@ def get_summary(conn, org_id: str, brand_id: str, month: str) -> dict:
             "campaign_id": row["id"], "name": row["name"], "objective": row["objective"],
             "campaign_objective": row["campaign_objective"],
             "spend": metrics["spend"], "result_count": metrics["result_count"],
+            "currency": metrics["currency"],
             "result_label": result_kinds.label(metrics["result_kind"]),
             "cost_per_result": metrics["cost_per_result"], "target": target_value,
+            "configured_cap": {"value": target["value"], "basis": target["basis"]}
+            if target["value"] is not None else None,
+            "cap_comparison": comparison,
             "verdict": _verdict(metrics["cost_per_result"], target_value),
         })
 
-    total_spend, currency = _brand_month_total(conn, org_id, brand_id, start, end)
-    orders_view = _orders_comparison(conn, org_id, brand_id, start, days_elapsed)
+    total_spend, currency = _brand_month_total(conn, org_id, brand_id, start, cutoff)
+    orders_view = _orders_comparison(conn, org_id, brand_id, start, data_days)
     closed_this_month, closed_tracking_since = _closed_this_month(
         conn, org_id, brand_id, start, end,
     )
@@ -477,7 +511,9 @@ def get_summary(conn, org_id: str, brand_id: str, month: str) -> dict:
         "closed_tracking_since": closed_tracking_since.isoformat(),
         "suggestions": suggestions,
         "days_covered": days_covered, "days_elapsed": days_elapsed,
-        "grades": _grades_view(conn, org_id, brand_id, start, end),
+        "data_days": data_days, "window": {"start": start.isoformat(),
+                                            "end": cutoff.isoformat() if data_days else None},
+        "grades": _grades_view(conn, org_id, brand_id, start, cutoff),
         "rejected": _rejected_view(
             conn, org_id, brand_id, brand_items, campaigns_by_id, month,
         ),

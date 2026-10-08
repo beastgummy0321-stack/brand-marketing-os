@@ -34,9 +34,9 @@ class BreakevenCpaTest(unittest.TestCase):
         economics = {"selling_price": 500, "unit_variable_cost": 150, "shipping_cost": 50}
         self.assertEqual(budget.breakeven_cpa(economics), 300)
 
-    def test_breakeven_without_shipping_defaults_to_zero(self):
+    def test_breakeven_without_shipping_remains_unknown(self):
         economics = {"selling_price": 500, "unit_variable_cost": 150, "shipping_cost": None}
-        self.assertEqual(budget.breakeven_cpa(economics), 350)
+        self.assertIsNone(budget.breakeven_cpa(economics))
 
     def test_missing_unit_variable_cost_returns_none_not_a_guess(self):
         economics = {"selling_price": 500, "unit_variable_cost": None, "shipping_cost": 50}

@@ -106,6 +106,7 @@ class OutcomeTestBase(unittest.TestCase):
                 bi_repo.save_product_economics(
                     web.conn, self.brand_id, product["id"], selling_price=cap + 100,
                     currency="TWD", confirmed_by=ACTOR, actor=ACTOR, unit_variable_cost=100,
+                    shipping_cost=0,
                 )
             context = {**context, "product_ids": [product["id"]]}
         allocation = [{"role": "new", "label": "新客", "pct": 100, "rationale": None}]
@@ -703,7 +704,7 @@ class PeriodProjectionPublicTest(OutcomeTestBase):
                     bi_repo.save_product_economics(
                         web.conn, self.brand_id, detail["cap"]["product_id"],
                         selling_price=620, unit_variable_cost=100, currency=currency,
-                        confirmed_by=ACTOR, actor=ACTOR,
+                        confirmed_by=ACTOR, actor=ACTOR, shipping_cost=0,
                     )
                     web.conn.commit()
                 saved = self.client.put(
