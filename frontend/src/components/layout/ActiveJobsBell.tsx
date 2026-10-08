@@ -162,25 +162,29 @@ export function ActiveJobsBell() {
   const closeRef = useRef<HTMLButtonElement>(null);
   const panelId = useId();
   const alive = useRef(true);
+  const epoch = useRef(0);
+  const requestId = useRef(0);
 
-  const load = useCallback(
-    () =>
-      fetchActiveJobs()
-        .then((snapshot) => {
-          if (alive.current) setState({ status: "ready", snapshot });
-        })
-        .catch(() => {
-          if (alive.current) setState({ status: "error" });
-        }),
-    [],
-  );
+  const load = useCallback(async () => {
+    const generation = epoch.current;
+    const id = ++requestId.current;
+    const current = () => alive.current && generation === epoch.current && id === requestId.current;
+    try {
+      const snapshot = await fetchActiveJobs();
+      if (current()) setState({ status: "ready", snapshot });
+    } catch {
+      if (current()) setState({ status: "error" });
+    }
+  }, []);
 
   useEffect(() => {
     alive.current = true;
+    epoch.current += 1;
     void load();
     const timer = setInterval(() => void load(), POLL_MS);
     return () => {
       alive.current = false;
+      epoch.current += 1;
       clearInterval(timer);
     };
   }, [load]);

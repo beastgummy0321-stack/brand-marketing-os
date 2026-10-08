@@ -3,7 +3,7 @@ import { MemoryRouter, useLocation } from "react-router-dom";
  * v10 `topRight()`/`renderJobs()`, demos `jobs:ok` and `jobs:fail`): the top-bar pill says what
  * runs now and how many wait, the panel lists each job with its place in the whole queue and
  * today's done/failed line, and a failed read is its own state with 重試 — never 「沒有…」. */
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -58,6 +58,28 @@ beforeEach(() => {
 });
 
 describe("ActiveJobsBell", () => {
+  it.each(["stopped", "unknown", "failed"] as const)("an older alive response cannot overwrite a newer %s read", async (newer) => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      let finishOlder!: (value: ActiveJobsSnapshot) => void;
+      vi.mocked(fetchActiveJobs).mockImplementationOnce(() => new Promise((resolve) => { finishOlder = resolve; }));
+      if (newer === "failed") vi.mocked(fetchActiveJobs).mockRejectedValue(new Error("unavailable"));
+      else vi.mocked(fetchActiveJobs).mockResolvedValue({ ...QUEUE, worker_alive: false, stalled: newer === "stopped", worker_health: {
+        state: newer, checked_at: QUEUE.generated_at, last_heartbeat_at: null,
+        reason_code: newer === "stopped" ? "heartbeat_stale" : "health_unavailable",
+      } });
+      render(<MemoryRouter><ActiveJobsBell /></MemoryRouter>);
+      await act(async () => { await vi.advanceTimersByTimeAsync(8000); });
+      const label = newer === "stopped" ? /背景程式停了/ : newer === "unknown" ? /背景程式狀態無法確認/ : /背景工作讀取失敗/;
+      expect(await screen.findByRole("button", { name: label })).toBeTruthy();
+      await act(async () => { finishOlder(QUEUE); });
+      expect(screen.getByRole("button", { name: label })).toBeTruthy();
+      expect(screen.queryByRole("button", { name: /正在同步成效/ })).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("a stopped worker with an empty queue keeps the stop pill without inventing waiting work", async () => {
     vi.mocked(fetchActiveJobs).mockResolvedValue({ ...QUEUE, data: [], total: 0, other_count: 0,
       worker_alive: false, stalled: false, worker_health: {
