@@ -2516,3 +2516,161 @@ open and its unrun original acceptance is explicitly recorded.
 Release eligibility requires all blocking gates and genuine human UI acceptance. Copy/image
 polish and simulated profit are not gates. Completed issues, historical green checks, a model
 sample or fixture counts do not certify readiness, live delivery, causality or revenue.
+
+### 6.56 Marketing reliability repairs (F54, planned 2026-10-08)
+
+Status: proposed implementation contract, not implemented behavior or acceptance.
+This plan follows the current source audit and the user's 2026-10-08 dig/carve choices.
+It leaves automatic platform execution and bitmap generation intentionally out of scope.
+F52's state, old drill evidence and other feature acceptance remain unchanged.
+For this repair scope, this section replaces the historical transition-only alert rule,
+automatic historical-budget recommendation and internal-closeout-only continuation rule
+when F54 is implemented. Other domain rules remain unless explicitly changed below.
+
+#### R1. Atomic business mutations
+One rejected business mutation leaves its business fields and dependent rows unchanged.
+Validation precedes writes where possible; a domain transaction/savepoint surrounds
+multi-step writes, with no inner commit that escapes the operation. The operation owns
+its boundary; returning a handled HTTP error does not imply successful persistence.
+Do not blanket-rollback every HTTP error: durable failed-job/audit/cost records use their
+existing separate lifecycle and are tested explicitly. Preserve tenant scope after rollback,
+optimistic revisions, nested-operation behavior and successful/idempotent writes.
+Repair the proven campaign PATCH and inspect its scoped sibling change/launch/material
+mutation owners. Record the inspected paths; do not sweep unrelated modules.
+
+#### R2. Public-page network policy
+core/net owns the fetch policy for every intake/product-page reader; input_rules URL syntax
+alone is not a security boundary. Only public HTTP(S) destinations are fetchable.
+Reject embedded credentials, unsupported schemes, loopback, private, link-local, multicast,
+unspecified/reserved addresses and IPv4-mapped equivalents. Check all resolved addresses
+and every redirect hop. Bind the validated destination to the actual connection, preserving
+HTTPS hostname/certificate checks, so a second DNS answer cannot bypass validation.
+Bound redirects, time and body size. Never put credentials or raw internal response text in
+errors/logs. Tests inject DNS/transport at a seam; production gets no local-address bypass.
+
+#### R3. Background execution and sync truth
+Reuse app/background's real worker heartbeat and app/tools/boot_launcher's watchdog.
+The canonical Windows launcher ensures web and worker independently, including web-alive /
+worker-stopped. Preserve the database advisory singleton lock, bounded restarts and cleanup
+of only processes it owns. Repeated launch cannot start a second effective worker.
+Serve one worker_health projection through the existing background facade:
+{state: alive|stopped|unknown, checked_at: ISO instant, last_heartbeat_at: ISO instant|null,
+ reason_code: heartbeat_fresh|heartbeat_stale|health_unavailable|test_queue}.
+The jobs snapshot and home.sync use this projection. Memory-queue fixtures may report
+test_queue; they are never operational-health evidence.
+home.sync retains last_success_at; adds worker_health and eligible_at (earliest due-rule
+instant). Legacy next_at is null unless a live worker can execute and is only an estimate.
+Health read failure is unknown, never healthy or stopped. The UI uses anticipated sync,
+not a guaranteed reservation; stale/unavailable health cannot produce a green all-clear.
+A healthy empty decision queue means no pending decision, not verified profitability.
+
+#### R4. Persistent absolute-cost decisions
+Keep the canonical grade_window ruler and cohort/currency/result-action/attribution guards.
+An active ad with a known, comparable grade over produces a worse decision even if its
+previous grade is over/watch/unknown. Preserve on_target -> watch/over transition alerts.
+Serve trigger_reason = crossed_cap|persistently_over_cap|currently_over_cap.
+An unavailable/uncomparable cost is unknown, not over; few results remain a visible flag,
+not a new hard-coded threshold blocking an absolute-cost warning.
+Continue to use the existing decision kind, queue lifecycle, scope/revision identities,
+deferral/rejection memory and change-control lineage. Cleanup may own the same ad, so never
+create two competing actions. Repeated reads create at most one open decision for the owner.
+An explicit deferred/rejected decision stays visible with its reason/revisit state; it cannot
+silently become healthy. No automatic platform pause, reduction or spend occurs.
+
+#### R5. Money evidence
+orders.review_evidence remains the owner of brand-level order/payment/refund aggregates.
+home adds commerce with exactly that facade's brand/date scope, order_summary, channels,
+attribution and limitations; use the same elapsed-date window as platform totals.
+The UI primary order amount is paid_net_amount, with known-paid rows, pending/unknown
+payment, refunds, cancellations, coverage and currency evidence kept distinct.
+Month comparison uses paid_net_amount when describing paid sales; order_net_amount may
+remain separately labeled order-book amount. Do not count website mirrors as extra income.
+Existing import default TWD is not proof of source currency; missing currency/coverage
+remains unknown. No bank-settlement or complete-coverage claim.
+Home money retains earn_after_cost_and_ads for compatible reads but marks it through
+estimate_basis = {kind: platform_purchase_margin, assumptions: [...], missing: [...]};
+this is a hypothetical contribution estimate, not paid profit or incremental ad return.
+Multiple products without an evidenced sales mix, unknown shipping/cost, incompatible
+currencies and missing inputs yield an unavailable estimate with specific missing reasons.
+Explicit zero shipping remains a known zero; null shipping never becomes zero.
+No same-date brand revenue is assigned to individual ads. Unavailable attribution blocks
+ad-revenue/profit claims, while platform cost-per-result advice remains usable and labeled.
+
+#### R6. Evidence-based budget recommendation
+Keep arithmetic in budget and grading in triage; models supply explanation/creative judgment,
+never balances or eligibility. Fixed historical multipliers are selectable comparison amounts.
+Serve an additive advice object:
+{state: retain|repair_before_budget|insufficient_evidence|unaffordable,
+ recommended_key: scenario key|null, reason_codes: [...],
+ evidence: {window, cost_per_result, target, grade, currency, attribution, sample_flag},
+ revision: stable source/target/budget revision}.
+A history amount alone is not evidence. Resolve a current comparable cohort and target;
+never use arbitrary first-product or mixed-objective/currency history as a recommendation.
+For over/wasted, advice is repair_before_budget and recommended_key is null.
+For watch, advice is repair_before_budget; no default growth amount.
+For valid on_target evidence, recommend retaining the prior amount only if period, currency
+and explicit campaign cap or verified available brand budget make it affordable.
+Unknown comparison or budget availability gives insufficient_evidence with no historical
+recommended amount. Insufficient data never recommends an increase.
+Existing cold-start options remain explicit test-budget options, labeled as such, not evidence
+of successful growth. This feature does not introduce a new automatic growth multiplier.
+A live-owner increase remains the existing separately gated scale proposal, never inferred
+from hypothetical profit. Reconciliation and strategy generation/adoption consume the same
+advice revision and cannot restore a removed recommendation via a fallback. Explicit user
+amounts remain supported with existing cap confirmation, no fabricated implicit approval.
+
+#### R7. Existing-campaign continuation
+Unify review -> decision -> scoped learning -> next-period planning, retaining native identity.
+An imported campaign's completed month does not close, recreate or stop that platform activity.
+Imported legacy strategy/budget/publish/close operations remain unavailable; the new operation
+creates an internal planning draft through the existing structured-create path.
+Reuse settle/review evidence, the learning ledger, qualification and planner context. No
+second campaign ledger, order attribution service or campaign/learning ownership migration.
+
+GET /brands/{brand_id}/next-period?month=YYYY-MM (under the existing /api/ads prefix)
+returns {month, window:{start,end}, revision, source_campaigns, eligible_learning_refs, excluded}.
+Each source campaign returns {campaign_id, origin, name, mapping_required, result_kind,
+currency}; each excluded entry has an owner/ref and reason_code. Only completed month windows
+in the org clock are accepted. Cohorts retain currency/action/attribution/target/evidence scope.
+
+The structured create picks gain optional continuation:
+{month, campaign_ids:[...], revision, request_id: UUID, product_mapping_confirmed: boolean}.
+The selected product plus an explicit confirmation that the selected historical campaigns
+advertised that product supplies the user's source association for this draft. False/missing
+confirmation on an unbound source permits source-period context but excludes product-specific
+successful carry; it never silently promotes unknown historical applicability. Unknown legacy
+product mapping is not guessed from name, and an association confirmation is not order attribution.
+The server rechecks same org/brand, completed window, sources and revision before any write;
+stale/missing/deleted/out-of-brand sources reject the whole operation with no partial draft.
+Store the validated source window, campaign/native entity references, confirmed destination
+product mapping and qualification references in the new draft's context_json.next_period_source.
+Persist only references plus bounded qualified projection, never raw bulk observations.
+Use the existing draft context for request_id and canonical payload digest; serialize each
+org/brand/request_id with the existing database advisory-transaction-lock primitive. A matching
+retry returns the same created draft; reuse of a key with a different payload returns conflict.
+Replays check ownership and the stored digest before fresh-source validation; they do not mutate
+or re-adopt the already created draft. New requests still revalidate current source revision.
+Existing created-draft resume identity is retained; retry cannot clone a completed draft.
+Reading the preparation endpoint is read-only and never creates a draft.
+
+Planner context includes explicitly selected and compatible completed-period sources from
+either origin, with evidence references and missing/exclusion reasons. Do not simply remove
+origin filters and promote unbound/relative-best ads as successful or universally reusable.
+A source above target cannot be carried as a proven winner. Reuse actual owned/available
+library assets through existing placement interfaces; missing bytes/rights/compatibility
+means unavailable carry, not a fresh fabricated asset or duplicated native ad.
+The UI chooses a source period and product, shows eligible/excluded carry, lets the user edit,
+and creates only on confirmation. It preserves manual publishing and its readback states.
+
+#### R8. UI and acceptance ownership
+Backend fields above are prerequisites for their consuming screens, not frontend deductions.
+Use existing prototype-v10-ads-center.html home/month/settle hierarchy and existing strategy /
+new-campaign references; one primary action, kit components, advanced detail folded.
+No new global dashboard, tutorial layer or parallel settings model.
+Each changed screen needs reference|built at 1024/1920, long names, keyboard, loading/empty/
+unknown/error/retry, zero vs null, and truthful failed-save behavior (design-system 1.7).
+If a material hierarchy change is necessary, lead resolves it with Harness demo before
+dependent execution; workers do not invent a replacement UI.
+Machine acceptance covers R1-R7 with real isolated HTTP/Postgres and a real separate worker
+for stop/restart; external platform/model responses are fixtures. Cleanup is bounded and
+verified. This evidence never proves live platform writes, commercial uplift or human usability.

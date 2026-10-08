@@ -656,6 +656,16 @@ image (§5.8). The seeds live in a schedule migration plus the lazy seeder
 value `flexible` is disabled for every brand and no longer seeded (「若排程仍然說這期要排彈性圖片，
 則視為BUG」); a stored `flexible` reads as 單圖.
 
+### 3.1 Planned reliability boundaries (F54)
+F54 is a proposed repair plan; the current implementation is unchanged.
+[ads 6.56](docs/architecture/ads.md#656-marketing-reliability-repairs-f54-planned-2026-10-08)
+owns its selected behavior and wire contracts. core/db owns operation-scoped transaction
+primitives, core/net owns public-page destination enforcement, background owns worker health,
+and orders owns payment/refund evidence. ads consumes these facades and owns decisions,
+budget advice and completed-period continuation. Existing ledger/table owners and public
+module dependency directions stay unchanged. A new private ads/next_period helper is owned
+by the existing ads/** pattern; no new managed module, ORM, ledger or migration is planned.
+
 ## 4. The loop, end to end
 
 品牌建檔 (`intake`) fills 品牌智庫 (`brand_intelligence`) — seven steps since F42 (2026-09-30), each AI-prefilled and
