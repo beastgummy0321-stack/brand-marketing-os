@@ -401,3 +401,92 @@ def test_real_socket_timeout_closes_every_io_reference(socketpair_transport, mon
     client = socketpair_transport(wire, hold_open=True)
     assert net.read_url("http://shop.example/") == (False, "", net.REASON_TIMEOUT)
     assert client.fileno() == -1
+
+
+@pytest.mark.parametrize("wire", [
+    b"HTTP/1.1 200 OK\r\nContent-Length: 1000\r\n\r\n<p>Partial secret page</p>",
+    b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n100\r\n<p>Partial secret page</p>",
+    b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n4\r\nSafe\r\n",
+])
+def test_real_socket_truncated_body_never_returns_partial_content(socketpair_transport, wire):
+    client = socketpair_transport(wire)
+    assert net.read_url("http://shop.example/") == (False, "", net.REASON_UNREACHABLE)
+    assert client.fileno() == -1
+
+
+class ConnectSocket(Socket):
+    def __init__(self, error=None, clock=None, elapsed=0):
+        super().__init__()
+        self.error, self.clock, self.elapsed = error, clock, elapsed
+
+    def connect(self, address):
+        super().connect(address)
+        if self.clock is not None:
+            self.clock[0] += self.elapsed
+        if self.error is not None:
+            raise self.error
+
+
+def test_pinned_tcp_falls_back_from_public_ipv6_to_same_snapshot_ipv4():
+    first = ConnectSocket(OSError("IPv6 unreachable"))
+    second = ConnectSocket()
+    snapshot = addresses("2606:4700:4700::1111", 80) + addresses(PUBLIC, 80)
+    with mock.patch.object(net.socket, "getaddrinfo", return_value=snapshot) as dns, \
+            mock.patch.object(net.socket, "socket", side_effect=[first, second]) as sockets:
+        assert net.read_url("http://shop.example/") == (True, "Safe", None)
+    dns.assert_called_once()
+    assert [call.args[0] for call in sockets.call_args_list] == [socket.AF_INET6, socket.AF_INET]
+    assert first.connected == ("2606:4700:4700::1111", 80, 0, 0)
+    assert second.connected == (PUBLIC, 80)
+    assert first.closed and second.closed
+    assert first.timeouts[0] < second.timeouts[0]
+
+
+def test_every_pinned_tcp_failure_closes_the_attempt_and_returns_safe_reason():
+    sockets = [ConnectSocket(OSError("SECRET")), ConnectSocket(ConnectionRefusedError("SECRET"))]
+    with mock.patch.object(net.socket, "getaddrinfo", return_value=addresses() * 2) as dns, \
+            mock.patch.object(net.socket, "socket", side_effect=sockets) as factory:
+        assert net.read_url(URL) == (False, "", net.REASON_UNREACHABLE)
+    dns.assert_called_once()
+    assert factory.call_count == 2
+    assert all(sock.closed for sock in sockets)
+
+
+def test_pinned_tcp_attempts_share_one_deadline_and_divide_remaining_time():
+    clock = [0.0]
+    first = ConnectSocket(TimeoutError(), clock, 5)
+    second = ConnectSocket(TimeoutError(), clock, 5)
+    with mock.patch.object(net.time, "monotonic", side_effect=lambda: clock[0]), \
+            mock.patch.object(net.socket, "getaddrinfo", return_value=addresses() * 2) as dns, \
+            mock.patch.object(net.socket, "socket", side_effect=[first, second]) as factory:
+        assert net.read_url(URL) == (False, "", net.REASON_TIMEOUT)
+    dns.assert_called_once()
+    assert factory.call_count == 2
+    assert first.timeouts == [5.0]
+    assert second.timeouts == [5.0]
+    assert first.closed and second.closed
+
+
+def test_tcp_fallback_preserves_tls_hostname_and_verification():
+    first, second = ConnectSocket(OSError("IPv6 unreachable")), ConnectSocket()
+    context = ssl.create_default_context()
+    with mock.patch.object(net.socket, "getaddrinfo", return_value=(
+            addresses("2606:4700:4700::1111") + addresses())), \
+            mock.patch.object(net.socket, "socket", side_effect=[first, second]), \
+            mock.patch.object(net.ssl, "create_default_context", return_value=context), \
+            mock.patch.object(context, "wrap_socket", return_value=second) as tls:
+        assert net.read_url(URL) == (True, "Safe", None)
+    tls.assert_called_once_with(second, server_hostname="shop.example")
+    assert context.check_hostname and context.verify_mode == ssl.CERT_REQUIRED
+
+
+def test_certificate_failure_is_not_retried_on_another_address():
+    sock = ConnectSocket()
+    context = ssl.create_default_context()
+    with mock.patch.object(net.socket, "getaddrinfo", return_value=addresses() * 2), \
+            mock.patch.object(net.socket, "socket", return_value=sock) as factory, \
+            mock.patch.object(net.ssl, "create_default_context", return_value=context), \
+            mock.patch.object(context, "wrap_socket", side_effect=ssl.SSLCertVerificationError()):
+        assert net.read_url(URL) == (False, "", net.REASON_SSL)
+    factory.assert_called_once()
+    assert sock.closed

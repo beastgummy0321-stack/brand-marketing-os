@@ -175,10 +175,10 @@ class _ResponseSocket:
 
 
 class _PinnedConnection(http.client.HTTPConnection):
-    def __init__(self, host, port, secure, address, deadline):
+    def __init__(self, host, port, secure, addresses, deadline):
         self.default_port = 443 if secure else 80
         super().__init__(host, port, timeout=_remaining(deadline))
-        self.address, self.deadline, self.secure = address, deadline, secure
+        self.addresses, self.deadline, self.secure = addresses, deadline, secure
 
         class DeadlineResponse(http.client.HTTPResponse):
             def __init__(self, sock, **kwargs):
@@ -187,14 +187,36 @@ class _PinnedConnection(http.client.HTTPConnection):
 
         self.response_class = DeadlineResponse
 
+    def _connect_tcp(self):
+        # Every attempt uses this validated DNS snapshot's numeric sockaddr.
+        # Divide the remaining time so one unreachable address cannot consume
+        # the whole deadline before other public addresses get a chance.
+        for index, address in enumerate(self.addresses):
+            family, _type, _protocol, _name, sockaddr = address
+            timeout = _remaining(self.deadline) / (len(self.addresses) - index)
+            sock = None
+            try:
+                sock = socket.socket(family, socket.SOCK_STREAM, socket.IPPROTO_TCP)
+                sock.settimeout(timeout)
+                sock.connect(sockaddr)
+                return sock
+            except OSError:
+                if sock is not None:
+                    sock.close()
+                _remaining(self.deadline)
+                if index == len(self.addresses) - 1:
+                    raise
+            except BaseException:
+                if sock is not None:
+                    sock.close()
+                raise
+        raise OSError("No validated addresses")
+
     def connect(self):
-        family, _type, _protocol, _name, sockaddr = self.address
-        # Connect the numeric sockaddr directly. No create_connection/getaddrinfo
-        # runs here, so a second DNS answer cannot replace the validated address.
-        sock = socket.socket(family, socket.SOCK_STREAM, socket.IPPROTO_TCP)
+        sock = self._connect_tcp()
+        # Only TCP failures may fall back. A TLS verification/handshake failure
+        # must fail the request, rather than retrying another endpoint.
         try:
-            sock.settimeout(_remaining(self.deadline))
-            sock.connect(sockaddr)
             if self.secure:
                 context = ssl.create_default_context()
                 sock.settimeout(_remaining(self.deadline))
@@ -211,7 +233,7 @@ def _read_public(url: str) -> bytes:
     for hop in range(URL_FETCH_MAX_REDIRECTS + 1):
         parts, host, port = _destination(url)
         addresses = _resolve(host, port, deadline)
-        connection = _PinnedConnection(host, port, parts.scheme == "https", addresses[0], deadline)
+        connection = _PinnedConnection(host, port, parts.scheme == "https", addresses, deadline)
         response = None
         try:
             target = parts.path or "/"
@@ -239,6 +261,9 @@ def _read_public(url: str) -> bytes:
                 chunk = response.read1(min(65536, URL_FETCH_MAX_BYTES + 1 - len(content)))
                 _remaining(deadline)
                 if not chunk:
+                    outstanding = getattr(response, "length", None)
+                    if outstanding is not None and outstanding > 0:
+                        raise http.client.IncompleteRead(b"", outstanding)
                     return bytes(content)
                 content.extend(chunk)
                 if len(content) > URL_FETCH_MAX_BYTES:
@@ -283,6 +308,8 @@ def _failure_reason(exc: BaseException) -> str:
             return REASON_NOT_FOUND
         return REASON_UNREACHABLE
     if isinstance(exc, OSError):
+        return REASON_UNREACHABLE
+    if isinstance(exc, http.client.IncompleteRead):
         return REASON_UNREACHABLE
     if isinstance(exc, ValueError):  # urllib refuses a malformed URL
         return REASON_UNKNOWN
