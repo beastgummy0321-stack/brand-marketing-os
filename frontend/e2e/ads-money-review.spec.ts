@@ -7,12 +7,15 @@ async function setup(page: Page, options: {failed?: "home" | "month-summary"; mi
   const user = {id: "month-ui-user", email: "month-ui@example.com", aud: "authenticated", role: "authenticated"};
   const org = {id: "month-ui-org", name: "月份測試組織", kind: "personal", role: "owner", timezone: "Asia/Taipei", today: "2026-09-23"};
   let failed = options.failed;
-  const writes: string[] = [];
+  const writes: {path: string; method: string; body: string | null}[] = [];
   await page.clock.setFixedTime(new Date("2026-09-23T02:00:00Z"));
   await page.route("**/auth/v1/**", route => route.fulfill({json: {access_token: "local-ui-fixture-token", refresh_token: "local-ui-fixture-refresh", token_type: "bearer", expires_in: 3600, expires_at: Math.floor(Date.now()/1000)+3600, user}}));
   await page.route("**/api/**", async route => {
     const url = new URL(route.request().url()), key = url.pathname;
-    if (route.request().method() !== "GET") { writes.push(key); return route.fulfill({status: 503, json: {detail: "Fixture: writes unavailable"}}); }
+    if (route.request().method() !== "GET") {
+      writes.push({path: key, method: route.request().method(), body: route.request().postData()});
+      return route.fulfill({status: 503, json: {detail: "Fixture: writes unavailable"}});
+    }
     const month = url.searchParams.get("month") ?? MONTH;
     const data = monthEvidence(month);
     if (options.long) { const name = "VeryLongCampaignNameWithoutAnySpaces".repeat(5); data.summary.suggestions = [{key: "cleanup:cmp_month", kind: "cleanup", campaign_id: "cmp_month", campaign_name: name, objective: "購買", campaign_objective: "sales", title: "改善成本後再安排下一期", why: name, action_url: "/brands/brd_month_ui/ads/campaigns/cmp_month/propose/cleanup/cmp_month"}]; }
@@ -93,9 +96,15 @@ test("completed imported source follows its exact canonical settle and preserves
   await expect(page.getByText("3,500 TWD", {exact: true}).first()).toBeVisible();
   await expect(page.getByText(/每筆 500 TWD/).first()).toBeVisible();
   await expect(page.getByText(/上限 100 TWD/).first()).toBeVisible();
+  expect(writes).toEqual([]);
+  const queuePath = `/api/ads/brands/${MONTH_BRAND}/queue/refresh`;
+  const refreshRequest = page.waitForRequest(request => new URL(request.url()).pathname === queuePath && request.method() === "POST");
   await page.getByRole("link", {name: /投放中心/}).last().click();
   await expect(page).toHaveURL(new RegExp(`/brands/${MONTH_BRAND}/ads$`));
-  expect(writes).toEqual([]);
+  const refresh = await refreshRequest;
+  expect(refresh.postDataJSON()).toEqual({});
+  await expect(page.getByText("今天的判斷讀取失敗", {exact: true})).toBeVisible();
+  expect(writes).toEqual([{path: queuePath, method: "POST", body: "{}"}]);
 });
 
 test("long source names and proposal explanations fit at desktop widths without hiding controls", async ({page}) => {
