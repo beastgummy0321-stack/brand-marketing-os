@@ -498,6 +498,7 @@ def planner_context(conn, org_id: str, brand_id: str, product_id: str | None, *,
         "previous": _previous(conn, org_id, brand_id, known),
         "cap": cap,
         "capacity": capacity,
+        "budget_advice": campaign.get("budget_advice") if campaign else None,
         "carried_candidates": carried,
         "calendar_windows": calendar_windows,
         "calendar_evidence": [{**row, "id": f"{row['start']}:{row['end']}:{row['name']}"}

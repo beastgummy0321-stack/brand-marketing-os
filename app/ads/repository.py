@@ -295,7 +295,9 @@ def get_campaign(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str) -
         from app.ads import targets
 
         cap = targets.resolve(conn, org_id, brand_id, campaign)["value"]
-    return budget.reconcile_campaign(campaign, labels["conversion"], cap=cap)
+    advice = budget.advice(conn, org_id, brand_id, campaign)
+    campaign["budget_advice"] = {key: value for key, value in advice.items() if key != "retain"}
+    return budget.reconcile_campaign(campaign, labels["conversion"], cap=cap, current_advice=advice)
 
 
 def require_internal_campaign(conn, org_id, brand_id, campaign_id) -> dict:

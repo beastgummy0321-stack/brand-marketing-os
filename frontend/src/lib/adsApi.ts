@@ -10,7 +10,7 @@ import type { ManualHandoff } from "./adsLaunchApi";
 // here as a type only, so `CampaignData.capacity` keeps the one shared shape.
 import type { CampaignCapacity, CampaignObjectiveFamily, CapView } from "./adsTriageApi";
 import type { CampaignContextJson, CampaignCreateExtras } from "./adsCampaignTypes";
-import type { BudgetPreview, PlanCapacity, PlanMenuRow, ResplitRow, StrategyBasis, StrategyPayload, StrategyRole } from "./adsStrategyTypes";
+import type { BudgetAdvice, BudgetPreview, PlanCapacity, PlanMenuRow, ResplitRow, StrategyBasis, StrategyPayload, StrategyRole } from "./adsStrategyTypes";
 
 export type CampaignStatus = "draft" | "ready" | "live" | "ended" | "closed";
 export type LocalState = "unbound" | "bound" | "detached" | "retired";
@@ -188,6 +188,7 @@ export interface ActionRow {
 /** `GET /campaigns/{c}` — 五分頁工作區共用的一份 dict：Campaign 本身欄位 + 推導出來的
  * `budget_total` + 投放組（各自掛著廣告）+ 最新的操作紀錄 + 成效小計。 */
 export interface CampaignDetail extends EntityBinding, ExternalCampaignFields {
+  budget_advice?: BudgetAdvice;
   simulation_mode?: boolean;
   manual_handoff?: ManualHandoff;
   id: string;
@@ -331,6 +332,8 @@ export type BudgetScenarioMode = "cold_start" | "history";
 export type BudgetScenarioKey = "minimum" | "recommended" | "aggressive" | "conservative";
 
 export interface BudgetScenarioRow {
+  currency?: string | null;
+  source?: string | null;
   key: string;
   label: string;
   daily: number | null;
@@ -341,6 +344,7 @@ export interface BudgetScenarioRow {
 
 /** `app/ads/budget.py::scenarios()` 的整包回傳——程式算的，AI 只預填百分比。 */
 export interface BudgetScenarios {
+  advice?: BudgetAdvice;
   mode: BudgetScenarioMode;
   scenarios: BudgetScenarioRow[];
   recommended: string | null; // F28-I03: moves to the "cap" row (照預算上限) when the old pick is over the cap

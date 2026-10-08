@@ -163,7 +163,9 @@ class _Fixture(unittest.TestCase):
         campaign = {
             "name": "夜跑背心・這一期", "goal_text": "夜跑背心衝購買", "objective": "購買",
             "target_cost": 300, "start_date": "2026-10-01", "end_date": "2026-10-10",
-            "status": "draft", "context_json": {"product_ids": [self.way["id"]]},
+            "status": "draft", "context_json": {
+                "product_ids": [self.way["id"]], "field_sources": {"cap": "user"},
+            },
         }
         campaign.update(overrides)
         row = ads_repo.create_campaign(web.conn, self.org_id, self.brand_id, campaign,

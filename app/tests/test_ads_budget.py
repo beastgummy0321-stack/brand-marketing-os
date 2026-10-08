@@ -80,7 +80,7 @@ class ScenariosTest(unittest.TestCase):
             self.assertIn("冷啟動估算", row["caption"])
             self.assertIn("上限", row["caption"])
             self.assertEqual(row["total"], row["daily"] * 10)
-        self.assertEqual(result["recommended"], "recommended")
+        self.assertIsNone(result["recommended"])
         self.assertEqual(result["basis"]["cap"], 300)
         self.assertEqual(result["basis"]["product_id"], self.product_id)
 
@@ -191,11 +191,11 @@ class BudgetCapScenariosTest(unittest.TestCase):
                 self.assertEqual([r["key"] for r in result["scenarios"]],
                                  ["minimum", "recommended", "aggressive"])
                 self.assertTrue(all(r["over_cap"] is None for r in result["scenarios"]))
-                self.assertEqual(result["recommended"], "recommended")
+                self.assertIsNone(result["recommended"])
 
     def test_cold_start_labels(self):
         labels = [r["label"] for r in self._cold()["scenarios"]]
-        self.assertEqual(labels, ["最低", "穩定成長", "積極"])
+        self.assertEqual(labels, ["小額測試", "一般測試", "較高額測試"])
 
     def test_cap_row_and_over_amounts_when_the_recommendation_fits(self):
         # 300 x 2/5/10 x 10 days = 6000 / 15000 / 30000
@@ -208,11 +208,11 @@ class BudgetCapScenariosTest(unittest.TestCase):
         self.assertEqual((cap_row["label"], cap_row["daily"], cap_row["total"]),
                          ("照預算上限", 2000, 20000))
         self.assertEqual([r["over_cap"] for r in rows], [0, 0, 0, 10000])
-        self.assertEqual(result["recommended"], "recommended")
+        self.assertIsNone(result["recommended"])
 
-    def test_recommended_moves_to_cap_when_it_is_over(self):
+    def test_cap_does_not_restore_suppressed_cold_start_recommendation(self):
         result = self._cold(12000)
-        self.assertEqual(result["recommended"], "cap")
+        self.assertIsNone(result["recommended"])
         by_key = {r["key"]: r for r in result["scenarios"]}
         self.assertEqual(by_key["recommended"]["over_cap"], 3000)
 
@@ -220,7 +220,7 @@ class BudgetCapScenariosTest(unittest.TestCase):
         result = self._cold(15000)
         by_key = {r["key"]: r for r in result["scenarios"]}
         self.assertEqual(by_key["recommended"]["over_cap"], 0)
-        self.assertEqual(result["recommended"], "recommended")
+        self.assertIsNone(result["recommended"])
 
     def test_unknown_totals_are_never_over(self):
         result = self._cold(12000, cap=None)  # no cost-per-result cap -> no amounts
@@ -228,7 +228,7 @@ class BudgetCapScenariosTest(unittest.TestCase):
         self.assertIsNone(by_key["recommended"]["total"])
         self.assertIsNone(by_key["recommended"]["over_cap"])
         self.assertEqual(by_key["cap"]["total"], 12000)
-        self.assertEqual(result["recommended"], "recommended")
+        self.assertIsNone(result["recommended"])
 
     def test_days_unknown_keeps_the_cap_total_without_a_daily(self):
         result = self._cold(12000, dates=False)
@@ -259,13 +259,12 @@ class BudgetCapScenariosTest(unittest.TestCase):
         self.assertEqual([r["label"] for r in once["scenarios"]],
                          ["保守", "照預算上限", "照上一期", "積極"])
         self.assertEqual([r["total"] for r in once["scenarios"]], [6000, 20000, 10000, 16000])
-        self.assertEqual(once["recommended"], "recommended")  # 10000 fits under 20000
-        # Lowering the cap moves the recommendation; clearing it drops the row again.
+        self.assertIsNone(once["recommended"])
         lower = budget.current_scenarios(once, self._campaign(8000))
-        self.assertEqual(lower["recommended"], "cap")
+        self.assertIsNone(lower["recommended"])
         cleared = budget.current_scenarios(lower, self._campaign(None))
         self.assertNotIn("cap", [r["key"] for r in cleared["scenarios"]])
-        self.assertEqual(cleared["recommended"], "recommended")
+        self.assertIsNone(cleared["recommended"])
 
 
 class RecommendedWithAmountTest(unittest.TestCase):
@@ -280,22 +279,23 @@ class RecommendedWithAmountTest(unittest.TestCase):
             "start_date": self.START if dates else None, "end_date": self.END if dates else None,
             "constraints_json": {} if budget_cap is None else {"budget": budget_cap},
             "budget_planned": None,
-            "budget_basis_json": {"scenarios": stored or {"mode": "cold_start"}},
+            "budget_basis_json": {"scenarios": stored or {
+                "mode": "cold_start", "recommended": "recommended",
+            }},
         }
         return budget.reconcile_campaign(campaign, cap=cap)["budget_basis_json"]["scenarios"]
 
-    def test_a_known_pick_is_kept(self):
-        self.assertEqual(self._read()["recommended"], "recommended")
+    def test_cold_start_has_choices_but_no_verified_pick(self):
+        self.assertIsNone(self._read()["recommended"])
 
-    def test_over_cap_rule_still_wins(self):
-        # recommended (15000) is over the 12000 budget cap -> the cap row, as §6.32 rules.
-        self.assertEqual(self._read(12000)["recommended"], "cap")
+    def test_cap_does_not_create_an_unverified_pick(self):
+        self.assertIsNone(self._read(12000)["recommended"])
 
-    def test_unknown_pick_falls_to_the_first_row_with_an_amount(self):
+    def test_unknown_pick_does_not_fall_to_another_amount(self):
         # No cost-per-result cap: only the 照預算上限 row has an amount.
         scenarios = self._read(12000, cap=None)
         self.assertIsNone({r["key"]: r for r in scenarios["scenarios"]}["recommended"]["total"])
-        self.assertEqual(scenarios["recommended"], "cap")
+        self.assertIsNone(scenarios["recommended"])
 
     def test_every_total_unknown_recommends_nothing(self):
         scenarios = self._read(None, cap=None)
@@ -306,11 +306,9 @@ class RecommendedWithAmountTest(unittest.TestCase):
         # A cap but no campaign dates: every daily is known, no total is.
         self.assertIsNone(self._read(None, dates=False)["recommended"])
 
-    def test_a_stored_null_recommendation_reprojects(self):
-        # A snapshot saved with `recommended: None` is read back as a real pick once amounts
-        # are known again.
+    def test_a_stored_null_recommendation_remains_null(self):
         stored = {"mode": "cold_start", "recommended": None, "scenarios": []}
-        self.assertEqual(self._read(stored=stored)["recommended"], "recommended")
+        self.assertIsNone(self._read(stored=stored)["recommended"])
 
     def test_history_pick_with_unknown_days_recommends_nothing(self):
         stored = {

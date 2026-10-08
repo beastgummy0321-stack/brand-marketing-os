@@ -2,6 +2,10 @@
 
 任務代號：ADS-STRATEGY-TASK-V1（本行是這份任務檔的識別行，請照樣保留，不要在回覆裡重複貼出）。
 
+Budget advice is program-owned. Historical multipliers and cold-start test budgets are
+comparison choices, not verified growth. A null recommended_key means no recommendation;
+do not select another amount, invent affordability, or override repair_before_budget.
+
 下面會給你這次投放的目標句子、目標與成功條件、投放期間、這個品牌的起點（投放過沒、花費
 歷史、平台讀回、像素）、程式列出的可用角色、品牌已知的事實、【這個賣法】（名稱、單品或組合、
 事實、今天有效的價格）、【不能講】、這個賣法的顧客、【這期可用的優惠】、過去的學習記錄、

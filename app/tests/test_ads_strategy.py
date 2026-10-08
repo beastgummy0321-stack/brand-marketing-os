@@ -190,7 +190,7 @@ class StrategyTestBase(unittest.TestCase):
             "name": "測試 Campaign", "goal_text": "幫夜跑背心衝購買",
             "objective": "購買", "target_cost": 300,
             "start_date": "2026-10-01", "end_date": "2026-10-10", "status": "draft",
-            "context_json": {"product_ids": [self.product["id"]]},
+            "context_json": {"product_ids": [self.product["id"]], "field_sources": {"cap": "user"}},
         }
         campaign.update(overrides)
         return ads_repo.create_campaign(
@@ -220,15 +220,13 @@ class AmountsSumToScenarioTotalTest(StrategyTestBase):
         self.campaign = self._create_campaign()
         strategy.PROVIDER = _fake(_VALID_REPLY)
 
-    def test_generated_allocation_amounts_sum_to_recommended_scenario_total(self):
+    def test_cold_start_leaves_allocation_unknown_until_user_selects(self):
         detail = self._generate()
         strategy_payload = detail["budget_basis_json"]["strategy"]
         scenarios = detail["budget_basis_json"]["scenarios"]
-        recommended = next(
-            row for row in scenarios["scenarios"] if row["key"] == scenarios["recommended"]
-        )
-        total = sum(item["amount"] for item in strategy_payload["allocation"])
-        self.assertEqual(total, recommended["total"])
+        self.assertIsNone(scenarios["recommended"])
+        self.assertEqual(scenarios["advice"]["state"], "insufficient_evidence")
+        self.assertTrue(all(item["amount"] is None for item in strategy_payload["allocation"]))
         # 模型只回百分比，不回金額——回覆裡沒有 amount 這個鍵
         self.assertNotIn("amount", json.loads(_VALID_REPLY)["allocation"][0])
 
@@ -587,7 +585,8 @@ class BudgetHistoryTest(StrategyTestBase):
         scenarios = budget._history_scenarios(history, 14)
         captions = [row["caption"] for row in scenarios["scenarios"]]
         self.assertTrue(all(
-            c.startswith("Meta 廣告帳戶全部活動，近 30 天有投放的 2 天平均日花費 NT$450 ×")
+            c.startswith("Meta 廣告帳戶全部活動，近 30 天有投放的 2 天平均日花費"
+                         "（幣別未核實）450 ×")
             for c in captions
         ), captions)
         self.assertTrue(all(c.count("30 天") == 1 for c in captions), captions)
@@ -1330,13 +1329,13 @@ class BudgetCapSelectionTest(StrategyTestBase):
         self.assertIsNone(detail["budget_basis_json"]["scenarios"]["budget_cap"])
         self.assertNotIn("over_cap_confirmation", detail["budget_basis_json"])
 
-    def test_generated_allocation_splits_the_cap_when_the_recommendation_is_over(self):
+    def test_budget_cap_keeps_choice_but_does_not_restore_cold_start_recommendation(self):
         self.campaign = self._create_campaign(constraints_json={"budget": 12000})
         detail = self._generate()
         scenarios = detail["budget_basis_json"]["scenarios"]
-        self.assertEqual(scenarios["recommended"], "cap")
+        self.assertIsNone(scenarios["recommended"])
         allocation = detail["budget_basis_json"]["strategy"]["allocation"]
-        self.assertEqual(sum(item["amount"] for item in allocation), 12000)
+        self.assertTrue(all(item["amount"] is None for item in allocation))
 
 
 class BudgetCapRoutesTest(StrategyTestBase):
@@ -1439,7 +1438,7 @@ class BudgetCapRoutesTest(StrategyTestBase):
         scenarios = after["budget_basis_json"]["scenarios"]
         row = next(r for r in scenarios["scenarios"] if r["key"] == "recommended")
         self.assertEqual(row["over_cap"], 3000)
-        self.assertEqual(scenarios["recommended"], "cap")
+        self.assertIsNone(scenarios["recommended"])
 
     def test_non_draft_cap_edit_preserves_plan_and_refreshes_strategy_provenance(self):
         self.assertEqual(self._choose("recommended").status_code, 200)

@@ -150,11 +150,15 @@ def _scenarios_section(scenario_result: dict) -> str:
         f"- {row['label']}（{row['key']}）：日預算 {row['daily']}／{row['caption']}"
         for row in scenario_result["scenarios"]
     ]
+    recommended = scenario_result["recommended"]
+    pick_text = "推薦 " + recommended if recommended else "目前無推薦"
     header = (
         f"【程式算好的預算情境（{scenario_result['mode']}，"
-        f"推薦 {scenario_result['recommended']}）】"
+        f"{pick_text}）】"
     )
-    return header + "\n" + "\n".join(lines)
+    return header + "\n" + "\n".join(lines) + "\n【預算建議】\n" + json.dumps(
+        scenario_result.get("advice"), ensure_ascii=False, default=str,
+    )
 
 
 def _str_list(value) -> list[str]:
@@ -271,6 +275,7 @@ def decision_context(ctx: dict, campaign: dict) -> dict:
             else None
         ),
         "constraints": campaign.get("constraints_json") or {},
+        "budget_advice": ctx.get("budget_advice"),
         "customers": [
             {
                 k: g.get(k)
@@ -369,6 +374,7 @@ def decision_prompt_context(ctx: dict, campaign: dict) -> dict:
     }
     return {**{key: rows[:_BINDING_PROMPT_CAP] for key, rows in lists.items()},
             "capacity": ctx.get("capacity"),
+            "budget_advice": ctx.get("budget_advice"),
             "omitted": {key: max(0, len(rows) - _BINDING_PROMPT_CAP)
                         for key, rows in lists.items()}}
 
@@ -463,11 +469,18 @@ def executable_decision(ctx: dict, campaign: dict, payload: dict) -> dict:
     revision = hashlib.sha256(json.dumps(stable, sort_keys=True, ensure_ascii=False,
                                        default=str).encode()).hexdigest()
     return {"schema_version": 1, "revision": revision, "state": "proposed", "slots": slots,
+            "budget_advice": ctx.get("budget_advice"),
             "feasibility": {"state": "blocked" if reasons else "ready", "reasons": reasons}}
 
 
 def _prepared_decision_context(conn, org, brand, campaign):
     """Share the same facts and recommended-budget fallback for reads and edits."""
+    current = budget.advice(conn, org, brand, campaign)
+    campaign = {**campaign, "budget_advice": {key: value for key, value in current.items()
+                                             if key != "retain"}}
+    campaign = budget.reconcile_campaign(
+        campaign, cap=targets.resolve(conn, org, brand, campaign)["value"], current_advice=current,
+    )
     ctx = planner_context.planner_context(conn, org, brand, sell_way.of_campaign(campaign),
                                           campaign=campaign)
     if ctx["capacity"] is None and campaign.get("budget_planned") is None:
@@ -798,13 +811,17 @@ def generate(conn, org_id: str, brand_id: str, campaign_id: str, *, actor: str) 
     scenario_result = budget.current_scenarios(
         scenario_result, campaign, labels["conversion"], cap=cap,
     )
+    current_advice = budget.advice(conn, org_id, brand_id, campaign)
+    scenario_result = budget.apply_advice(scenario_result, current_advice)
+    ctx["budget_advice"] = scenario_result["advice"]
     scenarios_text = _scenarios_section(scenario_result)
-    recommended_row = next(
-        row for row in scenario_result["scenarios"] if row["key"] == scenario_result["recommended"]
-    )
+    recommended_row = next((row for row in scenario_result["scenarios"]
+                            if row["key"] == scenario_result["recommended"]), None)
     if ctx["capacity"] is None and campaign.get("budget_planned") is None:
         # No adopted budget yet: the capacity line reads the recommended scenario's day.
-        ctx["capacity"] = planner_context.capacity_of(recommended_row["daily"], cap)
+        ctx["capacity"] = planner_context.capacity_of(
+            recommended_row.get("daily") if recommended_row else None, cap,
+        )
 
     reads = ads_repo.starting_point_reads(conn, org_id, brand_id)
     starting_point_text = _starting_point_section(brand, history, reads, campaign)
@@ -868,7 +885,9 @@ def generate(conn, org_id: str, brand_id: str, campaign_id: str, *, actor: str) 
     task_row, strategy_payload = plan.ask_with_one_retry(conn, ask, campaign_id=campaign_id)
 
     strategy_payload["allocation"] = _apply_amounts(
-        strategy_payload["allocation"], campaign.get("budget_planned") or recommended_row["total"],
+        strategy_payload["allocation"], campaign["budget_planned"]
+        if campaign.get("budget_planned") is not None
+        else recommended_row.get("total") if recommended_row else None,
     )
     strategy_payload["facts"] = _facts(ctx, strategy_payload["allocation"], recommended_row)
     strategy_payload["decision"] = executable_decision(ctx, campaign, strategy_payload)

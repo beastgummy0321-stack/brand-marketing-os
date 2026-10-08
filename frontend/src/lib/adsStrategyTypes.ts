@@ -8,6 +8,22 @@ import type { LearningEvidence, LearningEvidenceContext } from "./adsLearningEvi
 
 export type StrategyRole = "new" | "retarget" | "explore";
 
+export interface BudgetAdvice {
+  state: "retain" | "repair_before_budget" | "insufficient_evidence" | "unaffordable";
+  recommended_key: string | null;
+  reason_codes: string[];
+  evidence: {
+    window: { start: string; end: string; campaign_id: string | null };
+    cost_per_result: number | null;
+    target: { value: number | null; basis: string | null; revision: number; unit: Record<string, unknown> };
+    grade: string;
+    currency: string | null;
+    attribution: { kind: string | null; action: string | null; window: string | null } | null;
+    sample_flag: Record<string, unknown>;
+  };
+  revision: string;
+}
+
 export interface StrategyAllocationItem {
   role: StrategyRole;
   label: string;
@@ -41,6 +57,7 @@ export interface StrategyPayload {
 
 /** Contract S: accepted bindings and the backend-owned adoption receipt. */
 export interface StrategyDecision {
+  budget_advice?: BudgetAdvice | null;
   schema_version: 1;
   revision: string;
   state: "proposed" | "adopted" | "modified" | "legacy_unbound";
