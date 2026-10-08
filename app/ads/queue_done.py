@@ -12,13 +12,14 @@ rows all count these rows and only these. `NOTICE_KINDS` are served in the queue
 Done rules (`DONE_RULES`, one per kind the queue serves):
 - a change-set proposal (`cleanup`, `scale_budget`, the retired `stop_loss`) is done once it is
   rejected or deferred, or approved and its readback `confirmed`;
-- a `worse` row's review round is done once deferred or unjudgeable, or completed with a copy change
-  set that is itself done by the rule above;
+- a `worse` row's review is done once deferred or unjudgeable, or ready/completed with a copy
+  change set that is itself done by the rule above;
 - no proposal yet is never done; `closeout` (it leaves when the campaign closes), `settle`,
   `refresh_creative` and `insufficient_data` rows have no proposal flow and are never done.
 
 `triage.get_queue` stamps `decision`, `done` and `position` on every row; `status_summary`,
 `workspace_reads`, `digest` and the frontend read those fields -- no second copy of the rule.
+An open count of zero means no decision is waiting; it certifies neither cost nor profit.
 """
 
 DECISION_KINDS = ("cleanup", "worse", "closeout", "settle", "refresh_creative")
@@ -35,7 +36,7 @@ def _review_done(proposal) -> bool:
     status = proposal.get("status")
     if status in {"deferred", "unjudgeable"}:
         return True
-    if status == "completed" and proposal.get("change_set_id") is not None:
+    if status in {"ready", "completed"} and proposal.get("change_set_id") is not None:
         return _set_done(
             proposal.get("change_set_status") or "draft",
             proposal.get("verification_state") or "pending",

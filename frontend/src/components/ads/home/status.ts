@@ -49,7 +49,7 @@ function deferredLabel(revisitAt: string | null, timezone: string | undefined): 
   return revisitAt && timezone ? formatRevisitLabel(revisitAt, timezone) : "已暫緩";
 }
 
-/** F23-I01: `proposal.status === "completed"` with a copy change set already exists — the row's
+/** A ready or completed review with a copy set follows that set's actual workflow — the row's
  * button then just follows that change set's own status/verification_state, same labels/steps as
  * a `stop_loss` row's pause change set (feature Decisions "completed with a copy set → that set's
  * step via the F22 labels"). Reuses the pause branch below through a synthetic
@@ -93,6 +93,9 @@ function reviewProposalAction(
         label: "證據沒整理成", href: reviewRoundPath(brandId, campaignId, proposal.review_id), done: false,
       };
     case "ready":
+      if (proposal.change_set_id !== null) {
+        return reviewChangeSetAction(brandId, campaignId, entityId, proposal, timezone);
+      }
       return {
         label: "等你決定", href: reviewRoundPath(brandId, campaignId, proposal.review_id), done: false,
       };

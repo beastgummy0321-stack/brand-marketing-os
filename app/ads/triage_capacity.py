@@ -87,7 +87,7 @@ def _new_ad_rows(conn, org_id, brand_id, campaign_id) -> list:
     return rows
 
 
-def _open_lineage_entity_ids(conn, org_id, brand_id, campaign_id) -> set:
+def open_lineage_entity_ids(conn, org_id, brand_id, campaign_id) -> set:
     """Entity ids that must never be a cleanup candidate (correction 4): the entity a still-
     unverified `new_ad` item created, or the old entity a CONFIRMED `new_ad` item has replaced
     while no non-superseded `pause` item targets that old entity yet (its own follow-up, Contract
@@ -136,6 +136,10 @@ def _open_lineage_entity_ids(conn, org_id, brand_id, campaign_id) -> set:
             # Not yet verified -- the NEW ad itself (once it actually exists as an entity) is open.
             open_ids.add(created_entity)
     return open_ids
+
+
+def _open_lineage_entity_ids(conn, org_id, brand_id, campaign_id) -> set:
+    return open_lineage_entity_ids(conn, org_id, brand_id, campaign_id)
 
 
 def _ad_spend_7d(rows_by_entity, entity_id, start, end):
@@ -240,7 +244,8 @@ def decision_memory(conn, org_id, brand_id) -> dict:
     `at` is the entry's own decision time (else the set's `created_at`); the newest wins."""
     rows = conn.execute(
         "SELECT id,campaign_id,title,decision_reason,decision_grades,created_at "
-        "FROM ads_change_set WHERE org_id=%s AND brand_id=%s AND decision_grades IS NOT NULL",
+        "FROM ads_change_set WHERE org_id=%s AND brand_id=%s AND decision_grades IS NOT NULL "
+        "AND plan_json->>'review_id' IS NULL",
         (org_id, brand_id),
     ).fetchall()
     memory, times = {}, {}

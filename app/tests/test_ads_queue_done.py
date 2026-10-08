@@ -59,6 +59,9 @@ class DoneRuleTest(unittest.TestCase):
             (_review("failed"), False),
             (_review("unknown"), False),
             (_review("ready"), False),
+            (_review("ready", "deferred", "pending"), True),
+            (_review("ready", "rejected", "pending"), True),
+            (_review("ready", "approved", "confirmed"), True),
             (_review("completed"), False),
             (_review("deferred"), True),
             (_review("unjudgeable"), True),
@@ -117,6 +120,16 @@ class DecisionKindsTest(unittest.TestCase):
         self.assertTrue(queue_done.is_decision({"kind_key": "closeout"}))
         self.assertFalse(queue_done.is_decision({"kind_key": "scale_budget"}))
         self.assertFalse(queue_done.is_decision({"kind_key": "insufficient_data"}))
+
+    def test_zero_open_preserves_an_explicit_hold_without_claiming_profit(self):
+        rows = [{**_row("worse", _review("deferred")),
+                 "triage": {"grade": "over", "current": {"cost_per_result": 500},
+                            "target": {"value": 100}}}]
+        decisions = queue_done.stamp(rows)
+        self.assertEqual(decisions["open"], 0)
+        self.assertEqual(rows[0]["triage"]["grade"], "over")
+        self.assertTrue(rows[0]["done"])
+        self.assertNotIn("profitable", decisions)
 
     def test_stamp_positions_open_decision_rows_in_board_order(self):
         rows = [

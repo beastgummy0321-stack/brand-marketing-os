@@ -281,7 +281,7 @@ def _check_declined(conn, org, brand, campaign, declined, items):
         raise ValueError("未勾選的廣告必須是這次清理提議裡、且沒有要暫停的廣告。")
 
 
-def _decision_grades(conn, org, brand, campaign, entity_ids):
+def _decision_grades(conn, org, brand, campaign, entity_ids, *, review_scope=False):
     """F29-I01 Contract B: each ad's current cap grade (`triage.classify`), remembered at the user's
     decision. An ad that is closed, or not graded right now (剛開始／資料不足／未判斷), holds no
     memory -- only a ranked grade can later "get worse"."""
@@ -298,13 +298,19 @@ def _decision_grades(conn, org, brand, campaign, entity_ids):
             "grade": item["grade"], "cost_per_result": item["current"]["cost_per_result"],
             "cap": item["target"]["value"], "at": at,
         }
+        if review_scope:
+            entity = bindings.entity(conn, org, brand, campaign, entity_id)
+            grades[entity_id]["scope"] = triage.review_decision_scope(
+                item, data.copy_fields(entity),
+            )
     return grades
 
 
-def _write_decision_grades(conn, org, brand, campaign, set_id, entity_ids):
+def _write_decision_grades(conn, org, brand, campaign, set_id, entity_ids, *, review_scope=False):
     conn.execute(
         "UPDATE ads_change_set SET decision_grades=%s WHERE id=%s AND org_id=%s AND brand_id=%s",
-        (db.jsonb(_decision_grades(conn, org, brand, campaign, entity_ids)), set_id, org, brand),
+        (db.jsonb(_decision_grades(conn, org, brand, campaign, entity_ids,
+                                  review_scope=review_scope)), set_id, org, brand),
     )
 
 
@@ -462,6 +468,12 @@ def _apply_decision(conn, org, brand, campaign, set_id, decision, reason, revisi
         _write_decision_grades(
             conn, org, brand, campaign, set_id,
             [i["target_id"] for i in current["items"] if i["kind"] == "pause"],
+        )
+    elif decision == "rejected" and current["plan_json"].get("review_id"):
+        _write_decision_grades(
+            conn, org, brand, campaign, set_id,
+            [i["target_id"] for i in current["items"] if i["kind"] == "copy"],
+            review_scope=True,
         )
     write_audit(
         conn,

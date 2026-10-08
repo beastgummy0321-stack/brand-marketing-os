@@ -48,6 +48,89 @@ class _Reader:
                   "timezone_name": ACCOUNT_TZ}]
 
 
+class PersistentCostEndToEndTest(unittest.TestCase):
+    def setUp(self):
+        QueueEndToEndTest.setUp(self)
+        self.conn.execute("UPDATE ads_external_entity SET native_status='PAUSED' WHERE id=%s",
+                          (self.ad_stop["id"],))
+        self.conn.execute("UPDATE ads_external_entity SET native_status='ACTIVE',"
+                          "budget_type='daily',budget_amount=10000,currency='TWD' "
+                          "WHERE campaign_id=%s AND native_kind='campaign'", (self.campaign,))
+        self.conn.commit()
+        for offset in range(14):
+            self.obs(self.ad_worse["id"], self.cutoff - timedelta(days=offset), spend=500,
+                     result_count=1, attribution_key=(f"curworse{offset}" if offset < 7
+                                                     else f"prevworse{offset - 7}"))
+
+    def obs(self, *args, **kwargs):
+        QueueEndToEndTest.obs(self, *args, **kwargs)
+
+    def test_persistently_over_cap_with_spare_capacity_is_one_decision(self):
+        queue = triage.refresh_queue(self.conn, self.org, self.brand)
+        [row] = queue["items"]
+        self.assertEqual(row["kind_key"], "worse")
+        self.assertEqual(row["triage"]["class"], "flat")
+        self.assertEqual(row["triage"]["previous_grade"], "over")
+        self.assertEqual(row["triage"]["current"]["cost_per_result"], 500)
+        self.assertEqual(row["trigger_reason"], "persistently_over_cap")
+        self.assertIn("成本持續超過上限", row["message"])
+        self.assertTrue(row["message"].endswith("成本持續超過上限，待決定"))
+        self.assertEqual(queue["total_ads"], 1)
+        self.assertEqual(queue["decisions"]["open"], 1)
+        again = triage.refresh_queue(self.conn, self.org, self.brand)
+        self.assertEqual(again["items"][0]["id"], row["id"])
+
+    def test_current_over_cap_when_previous_result_unknown_is_actionable(self):
+        for offset in range(7, 14):
+            self.obs(self.ad_worse["id"], self.cutoff - timedelta(days=offset), spend=500,
+                     result_count=None, attribution_key=f"prevworse{offset - 7}")
+        [row] = triage.refresh_queue(self.conn, self.org, self.brand)["items"]
+        self.assertEqual(row["triage"]["grade"], "over")
+        self.assertIsNone(row["triage"]["previous_grade"])
+        self.assertEqual(row["trigger_reason"], "currently_over_cap")
+        self.assertIn("成本超過上限", row["message"])
+        self.assertTrue(row["message"].endswith("成本超過上限，待決定"))
+
+    def test_current_unknown_currency_or_definition_cannot_become_over(self):
+        for field, value in (("currency", "USD"), ("result_action", "other_purchase"),
+                             ("result_attribution", "1d_click")):
+            with self.subTest(field=field):
+                original = {"currency": "TWD", "result_action": "omni_purchase",
+                            "result_attribution": "7d_click+1d_view"}[field]
+                try:
+                    self.conn.execute(
+                        f"UPDATE ads_external_daily SET {field}=%s WHERE entity_id=%s AND day=%s",
+                        (value, self.ad_worse["id"], self.cutoff),
+                    )
+                    queue = triage.refresh_queue(self.conn, self.org, self.brand)
+                    self.assertFalse(any(r["kind_key"] == "worse" for r in queue["items"]))
+                finally:
+                    self.conn.execute(
+                        f"UPDATE ads_external_daily SET {field}=%s WHERE entity_id=%s AND day=%s",
+                        (original, self.ad_worse["id"], self.cutoff),
+                    )
+                    self.conn.commit()
+
+    def test_few_results_remain_a_flag_not_an_absolute_cost_gate(self):
+        for offset in range(14):
+            first = offset % 7 == 0
+            self.obs(self.ad_worse["id"], self.cutoff - timedelta(days=offset),
+                     spend=500 if first else 0, result_count=1 if first else 0,
+                     attribution_key=(f"curworse{offset}" if offset < 7
+                                      else f"prevworse{offset - 7}"))
+        [row] = triage.refresh_queue(self.conn, self.org, self.brand)["items"]
+        self.assertTrue(row["triage"]["sample"]["few"])
+        self.assertEqual(row["trigger_reason"], "persistently_over_cap")
+
+    def test_watch_to_over_does_not_need_an_on_target_previous_window(self):
+        for offset in range(7, 14):
+            self.obs(self.ad_worse["id"], self.cutoff - timedelta(days=offset), spend=110,
+                     result_count=1, attribution_key=f"prevworse{offset - 7}")
+        [row] = triage.refresh_queue(self.conn, self.org, self.brand)["items"]
+        self.assertEqual(row["triage"]["previous_grade"], "watch")
+        self.assertEqual(row["trigger_reason"], "currently_over_cap")
+
+
 class QueueEndToEndTest(unittest.TestCase):
     def setUp(self):
         self.conn, self.org = db.current(), db.DEV_ORG_ID
@@ -290,15 +373,14 @@ class QueuePlumbingTest(unittest.TestCase):
             {"severity": "rule_warning", "label": "廣告變差待決定"},
         )
 
-    def test_worse_row_follows_the_grade_move_never_the_trend_class(self):
-        # F29-I01 (ads.md §6.33): 變貴 = 划算 -> 偏貴／太貴. A trend-"worse" ad with no move, a move
-        # between two costly grades, and an improving move raise nothing; a trend-"flat" ad whose
-        # grade moved 划算 -> 偏貴 does.
+    def test_worse_row_follows_the_absolute_grade_never_the_trend_class(self):
+        # A costly current grade is actionable even when the previous grade was costly;
+        # an improving on-target grade is not. Historical on-target crossings stay actionable.
         window_end = date(2026, 1, 7)
         cases = [
             (self._item("worse", entity_id="e1", window_end=window_end, grade_move=None), False),
             (self._item("worse", entity_id="e2", window_end=window_end,
-                        grade_move={"from": "watch", "to": "over"}), False),
+                        grade_move={"from": "watch", "to": "over"}), True),
             (self._item("better", entity_id="e3", window_end=window_end,
                         grade_move={"from": "over", "to": "on_target"}), False),
             (self._item("flat", entity_id="e4", window_end=window_end,
@@ -568,7 +650,7 @@ class QueueReviewProposalTest(unittest.TestCase):
         }
 
     def _round(self, *, entity_id=None, window_end=None, status="ready", decision=None,
-               reason=None, revisit_at=None, result_json=None, created_at=None):
+               reason=None, revisit_at=None, result_json=None, created_at=None, evidence=None):
         entity_id = entity_id or self.entity
         window_end = window_end or date(2026, 1, 7)
         round_id = db.new_id("arv")
@@ -577,7 +659,7 @@ class QueueReviewProposalTest(unittest.TestCase):
             "window_end,evidence_json,evidence_hash,result_json,status,decision,reason,revisit_at,"
             "created_by,created_at) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
             (round_id, self.org, self.brand, self.campaign, entity_id,
-             window_end - timedelta(days=6), window_end, db.jsonb({}), round_id,
+             window_end - timedelta(days=6), window_end, db.jsonb(evidence or {}), round_id,
              db.jsonb(result_json or {}), status, decision, reason, revisit_at, "test",
              created_at or db.now_utc()),
         )
@@ -610,6 +692,371 @@ class QueueReviewProposalTest(unittest.TestCase):
     def test_no_round_is_null(self):
         item = self._item()
         self.assertIsNone(self._queue([item])["items"][0]["proposal"])
+
+    def test_deferred_memory_survives_rollover_without_new_interrupt(self):
+        revisit = db.now_utc() + timedelta(days=30)
+        round_id = self._round(status="deferred", decision="deferred", reason="Wait for supply",
+                               revisit_at=revisit)
+        first = self._queue([self._item()])
+        later = self._queue([self._item(window_end=date(2026, 2, 20))])
+        self.assertEqual(first["decisions"]["open"], 0)
+        self.assertEqual(later["decisions"]["open"], 0)
+        self.assertEqual(later["items"][0]["proposal"]["review_id"], round_id)
+        self.assertEqual(later["items"][0]["proposal"]["reason"], "Wait for supply")
+        self.assertEqual(later["items"][0]["proposal"]["revisit_at"], revisit)
+        self.assertEqual(core_interrupts.list_open(self.conn, org_id=self.org,
+                         brand_id=self.brand, archive_stale=False), [])
+
+    def test_due_revisit_reopens_same_day_once(self):
+        now = db.now_utc()
+        self._round(status="deferred", decision="deferred", reason="Check later",
+                    revisit_at=now + timedelta(hours=1))
+        first = self._queue([self._item()])
+        self.assertEqual(first["decisions"]["open"], 0)
+        with patch.object(triage, "now_utc", return_value=now + timedelta(hours=2)):
+            second = self._queue([self._item()])
+            third = self._queue([self._item()])
+        self.assertEqual(second["decisions"]["open"], 1)
+        self.assertIsNone(second["items"][0]["proposal"])
+        self.assertEqual(second["items"][0]["id"], third["items"][0]["id"])
+
+    def test_rejected_copy_memory_survives_rollover(self):
+        round_id = self._round(status="completed", decision="completed")
+        set_id = self._insert_review_set(review_id=round_id, status="rejected",
+                                         items=[self._copy_item(self.entity)])
+        self.conn.execute("UPDATE ads_change_set SET decision_reason=%s WHERE id=%s",
+                          ("Keep current copy", set_id))
+        self.conn.commit()
+        queue = self._queue([self._item(window_end=date(2026, 2, 20))])
+        self.assertEqual(queue["decisions"]["open"], 0)
+        self.assertEqual(queue["items"][0]["proposal"]["change_set_id"], set_id)
+        self.assertEqual(queue["items"][0]["proposal"]["reason"], "Keep current copy")
+
+    def test_target_revision_releases_deferred_memory(self):
+        self._round(status="deferred", decision="deferred", reason="Original cap",
+                    revisit_at=db.now_utc() + timedelta(days=30),
+                    evidence={"campaign": {"target": {"value": 1, "revision": 0}}})
+        item = self._item()
+        item["target"]["revision"] = 1
+        queue = self._queue([item])
+        self.assertEqual(queue["decisions"]["open"], 1)
+        self.assertIsNone(queue["items"][0]["proposal"])
+
+    def test_persistent_over_notification_keeps_its_owner_across_daily_rollover(self):
+        item = self._item()
+        item["grade_move"], item["previous_grade"] = None, "over"
+        first = self._queue([item])
+        for offset in (1, 14, 40):
+            later = {**item, "window": {**item["window"],
+                     "start": item["window"]["start"] + timedelta(days=offset),
+                     "end": item["window"]["end"] + timedelta(days=offset)}}
+            queue = self._queue([later])
+            self.assertEqual(queue["items"][0]["id"], first["items"][0]["id"])
+        self.assertEqual(self.conn.execute("SELECT count(*) AS n FROM interrupt WHERE brand_id=%s",
+                                          (self.brand,)).fetchone()["n"], 1)
+
+    def test_absolute_cost_messages_keep_the_outcome_when_the_name_is_long(self):
+        item = self._item()
+        item["grade_move"], item["name"] = None, "A" * 80
+        for previous in (None, "over"):
+            with self.subTest(previous=previous):
+                item["previous_grade"] = previous
+                [row] = self._queue([item])["items"]
+                self.assertLessEqual(len(row["message"]), core_interrupts.MAX_MESSAGE_LEN)
+                self.assertIn("超過上限", row["message"])
+
+    def test_recovery_then_a_new_over_cap_window_raises_a_fresh_episode(self):
+        item = self._item()
+        item["grade_move"], item["previous_grade"] = None, "over"
+        [first] = self._queue([item])["items"]
+        recovered = {**item, "grade": "on_target", "class": "better"}
+        self.assertEqual(self._queue([recovered])["items"], [])
+        later = {**item, "window": {**item["window"], "start": date(2026, 2, 14),
+                                    "end": date(2026, 2, 20)}}
+        queue = self._queue([later])
+        self.assertEqual(queue["decisions"]["open"], 1)
+        self.assertNotEqual(queue["items"][0]["id"], first["id"])
+        self.assertEqual(len(core_interrupts.list_open(self.conn, org_id=self.org,
+                         brand_id=self.brand, archive_stale=False)), 1)
+
+    def test_same_window_recovery_and_recurrence_seed_one_new_episode(self):
+        item = self._item()
+        item["grade_move"], item["previous_grade"] = None, "over"
+        item["current"]["cost_per_result"] = 500
+        [first] = self._queue([item])["items"]
+        recovered = {**item, "grade": "on_target", "class": "better"}
+        self.assertEqual(self._queue([recovered])["items"], [])
+        # Same date, same target, same CPA: only the closed episode's receipt is new.
+        second = self._queue([item])
+        self.assertEqual(second["decisions"]["open"], 1)
+        self.assertNotEqual(first["id"], second["items"][0]["id"])
+        self.assertEqual(self._queue([item])["items"][0]["id"], second["items"][0]["id"])
+        before = [dict(r) for r in self.conn.execute("SELECT * FROM interrupt ORDER BY id")]
+        with patch.object(triage, "_classify_brand", return_value=[item]):
+            self.assertEqual(triage.get_queue(self.conn, self.org, self.brand), second)
+        after = [dict(r) for r in self.conn.execute("SELECT * FROM interrupt ORDER BY id")]
+        self.assertEqual(before, after)
+        self.assertEqual(len(core_interrupts.list_open(self.conn, org_id=self.org,
+                         brand_id=self.brand, archive_stale=False)), 1)
+
+    def test_new_performance_and_learning_aging_do_not_release_deferred_memory(self):
+        self._round(status="deferred", decision="deferred", reason="Deliberate hold",
+                    revisit_at=db.now_utc() + timedelta(days=30), evidence={
+                        "learning_context": {"revision": "old-aging-revision"},
+                        "current": {"result_views": [{"metric_scope": "ad", "currency": "TWD",
+                            "result_action": "purchase", "result_attribution": "7d_click",
+                            "spend": 1000, "result_count": 2}]},
+                    })
+        item = self._item(window_end=date(2026, 2, 20))
+        item["current"] = {"currency": "TWD", "result_action": "purchase",
+                           "result_attribution": "7d_click", "spend": 5000,
+                           "result_count": 3, "cost_per_result": 1666.67}
+        queue = self._queue([item])
+        self.assertEqual(queue["decisions"]["open"], 0)
+        self.assertEqual(queue["items"][0]["proposal"]["reason"], "Deliberate hold")
+        before = [dict(r) for r in self.conn.execute("SELECT * FROM interrupt ORDER BY id")]
+        with patch.object(triage, "_classify_brand", return_value=[item]):
+            read = triage.get_queue(self.conn, self.org, self.brand)
+        after = [dict(r) for r in self.conn.execute("SELECT * FROM interrupt ORDER BY id")]
+        self.assertEqual(before, after)
+        self.assertEqual(read, queue)
+
+    def test_semantic_measurement_changes_release_deferred_memory(self):
+        self._round(status="deferred", decision="deferred", reason="Original measurement",
+                    revisit_at=db.now_utc() + timedelta(days=30), evidence={"current": {
+                        "result_views": [{"metric_scope": "ad", "currency": "TWD",
+                            "result_action": "purchase", "result_attribution": "7d_click"}],
+                    }})
+        for field, value in (("currency", "USD"), ("result_action", "lead"),
+                             ("result_attribution", "1d_click")):
+            with self.subTest(field=field):
+                item = self._item()
+                item["current"] = {"currency": "TWD", "result_action": "purchase",
+                                   "result_attribution": "7d_click", field: value}
+                queue = self._queue([item])
+                self.assertEqual(queue["decisions"]["open"], 1)
+                self.assertIsNone(queue["items"][0]["proposal"])
+
+    def test_creative_change_releases_copy_rejection(self):
+        round_id = self._round(status="completed", decision="completed", evidence={
+            "conditions": {"creative_snapshot": {"copy_fields": {"body": "Old", "title": None}}},
+        })
+        self._insert_review_set(review_id=round_id, status="rejected",
+                                items=[self._copy_item(self.entity)])
+        self.conn.execute("UPDATE ads_external_entity SET creative=%s WHERE id=%s",
+                          (db.jsonb({"kind": "image", "fields": {"body": "New"}}), self.entity))
+        self.conn.commit()
+        queue = self._queue([self._item(window_end=date(2026, 2, 20))])
+        self.assertEqual(queue["decisions"]["open"], 1)
+        self.assertIsNone(queue["items"][0]["proposal"])
+
+    def test_unknown_or_mixed_saved_measurement_becoming_known_releases_hold(self):
+        for views in ([], [{"metric_scope": "ad", "currency": "TWD", "reason": "unknown"}],
+                      [{"metric_scope": "ad", "currency": "TWD"},
+                       {"metric_scope": "ad", "currency": "USD"}]):
+            with self.subTest(views=views):
+                self._round(status="deferred", decision="deferred", reason="Unknown basis",
+                            revisit_at=db.now_utc() + timedelta(days=30),
+                            evidence={"current": {"result_views": views}})
+                item = self._item()
+                item["current"] = {"currency": "TWD", "result_action": "purchase",
+                                   "result_attribution": "7d_click", "result_kind": "purchase"}
+                queue = self._queue([item])
+                self.assertEqual(queue["decisions"]["open"], 1)
+                self.assertIsNone(queue["items"][0]["proposal"])
+
+    def test_copy_deferred_revisit_controls_completed_review(self):
+        now = db.now_utc()
+        round_id = self._round(status="completed", decision="completed")
+        set_id = self._insert_review_set(review_id=round_id, status="deferred",
+                                        items=[self._copy_item(self.entity)])
+        self.conn.execute("UPDATE ads_change_set SET revisit_at=%s,decision_reason=%s WHERE id=%s",
+                          (now + timedelta(hours=1), "Check stock", set_id))
+        self.conn.commit()
+        first = self._queue([self._item(window_end=date(2026, 2, 20))])
+        self.assertEqual(first["decisions"]["open"], 0)
+        self.assertEqual(first["items"][0]["proposal"]["reason"], "Check stock")
+        with patch.object(triage, "now_utc", return_value=now + timedelta(hours=2)):
+            second = self._queue([self._item(window_end=date(2026, 2, 20))])
+        self.assertEqual(second["decisions"]["open"], 1)
+
+    def test_resolved_open_notification_is_replaced_by_served_done_memory(self):
+        [row] = self._queue([self._item()])["items"]
+        self._round(status="deferred", decision="deferred", reason="Hold",
+                    revisit_at=db.now_utc() + timedelta(days=30))
+        queue = self._queue([self._item()])
+        self.assertEqual(queue["decisions"]["open"], 0)
+        self.assertTrue(queue["items"][0]["done"])
+        self.assertEqual(self.conn.execute("SELECT status FROM interrupt WHERE id=%s",
+                                          (row["id"],)).fetchone()["status"], "resolved")
+
+    def test_copy_rejection_decide_writes_scope_without_polluting_cleanup_memory(self):
+        from app.ads import change_control
+
+        round_id = self._round(status="ready")
+        set_id = self._insert_review_set(review_id=round_id, status="draft",
+                                        items=[self._copy_item(self.entity)])
+        item = self._item()
+        item["current"] = {"cost_per_result": 500, "currency": "TWD"}
+        item["target"]["revision"] = 0
+        with patch.object(triage, "classify", return_value={"items": [item]}):
+            rejected = change_control.decide(self.conn, self.org, self.brand, self.campaign,
+                                             set_id, "rejected", "Keep the current copy", None,
+                                             "test")
+        self.assertEqual(rejected["status"], "rejected")
+        memory = self.conn.execute("SELECT decision_grades FROM ads_change_set WHERE id=%s",
+                                   (set_id,)).fetchone()["decision_grades"][self.entity]
+        self.assertEqual(memory["grade"], "over")
+        self.assertEqual(memory["scope"]["target"]["revision"], 0)
+        self.assertEqual(triage.decision_memory(self.conn, self.org, self.brand), {})
+        item["window"]["start"], item["window"]["end"] = date(2026, 2, 14), date(2026, 2, 20)
+        item["current"]["cost_per_result"] = 700
+        queue = self._queue([item])
+        self.assertEqual(queue["decisions"]["open"], 0)
+        self.assertEqual(queue["items"][0]["proposal"]["reason"], "Keep the current copy")
+        item["target"]["revision"] = 1
+        changed = self._queue([item])
+        self.assertEqual(changed["decisions"]["open"], 1)
+
+    def test_real_ready_review_create_and_reject_copy_keeps_the_disposition(self):
+        from app.ads import change_control, change_control_data, review_evidence
+
+        external.upsert_entity(self.conn, self.org, self.brand, self.campaign, {
+            "platform": "meta", "source_account": "act_1", "native_kind": "campaign",
+            "native_id": "root", "native_status": "ACTIVE",
+        })
+        entity = external.upsert_entity(self.conn, self.org, self.brand, self.campaign, {
+            "platform": "meta", "source_account": "act_1", "native_kind": "ad", "native_id": "ad1",
+            "native_status": "ACTIVE", "parent_native_kind": "campaign", "parent_native_id": "root",
+            "creative": {"kind": "image", "fields": {"body": "Original", "title": "Title"}},
+        })
+        campaign = change_control_data.campaign(self.conn, self.org, self.brand, self.campaign)
+        cutoff = db.now_utc().date() - timedelta(days=1)
+        round_id = self._round(status="ready", window_end=cutoff,
+            evidence={"premise": review_evidence.premise(entity, campaign)},
+            result_json={"recommendations": [{"id": "adjust-1", "recommendation": "adjust"}]})
+        item = self._item(window_end=cutoff)
+        item["current"]["cost_per_result"] = 500
+        with patch.object(triage, "classify", return_value={"items": [item]}):
+            created = change_control.create(self.conn, self.org, self.brand, self.campaign, {
+                "operation_id": db.new_id("op"), "month": cutoff.strftime("%Y-%m"),
+                "title": "Ready review copy decision", "review_id": round_id,
+                "recommendation_id": "adjust-1", "items": [{"kind": "copy",
+                    "target_id": self.entity,
+                    "after": {"body": "Proposed"}, "reason": "Test the hypothesis"}],
+            }, "test", decision={"decision": "rejected", "reason": "Keep the original"})
+        self.assertEqual(created["status"], "rejected")
+        self.assertEqual(self.conn.execute("SELECT status FROM ads_review_round WHERE id=%s",
+                                          (round_id,)).fetchone()["status"], "ready")
+        queue = self._queue([item])
+        self.assertEqual(queue["decisions"]["open"], 0)
+        self.assertEqual(queue["items"][0]["proposal"]["status"], "ready")
+        self.assertEqual(queue["items"][0]["proposal"]["change_set_status"], "rejected")
+        self.assertEqual(queue["items"][0]["proposal"]["reason"], "Keep the original")
+
+    def test_rejected_watch_reopens_on_a_worse_canonical_grade(self):
+        from app.ads import change_control
+
+        round_id = self._round(status="completed", decision="completed")
+        set_id = self._insert_review_set(review_id=round_id, status="draft",
+                                        items=[self._copy_item(self.entity)])
+        item = self._item()
+        item["grade"], item["current"]["cost_per_result"] = "watch", 1.1
+        with patch.object(triage, "classify", return_value={"items": [item]}):
+            change_control.decide(self.conn, self.org, self.brand, self.campaign,
+                                  set_id, "rejected", "Keep testing", None, "test")
+        item["grade"], item["current"]["cost_per_result"] = "over", 1.5
+        queue = self._queue([item])
+        self.assertEqual(queue["decisions"]["open"], 1)
+        self.assertIsNone(queue["items"][0]["proposal"])
+
+    def test_cleanup_pause_keeps_single_ownership_outside_today_close_list(self):
+        now = db.now_utc()
+        pause = {"id": db.new_id("adx"), "kind": "pause", "target_id": self.entity,
+                 "before": {}, "after": {"status": "PAUSED"}, "reason": "Cleanup"}
+        set_id = self._insert_review_set(review_id="unused", status="draft", items=[pause])
+        self.conn.execute("UPDATE ads_change_set SET plan_json=%s,decision_grades=%s,revisit_at=%s "
+                          "WHERE id=%s", (db.jsonb({"source": "cleanup", "items": [pause]}),
+                          db.jsonb({self.entity: {"grade": "over", "cap": 1}}),
+                          now + timedelta(hours=1), set_id))
+        self.conn.commit()
+        for status in ("draft", "deferred", "approved", "rejected"):
+            with self.subTest(status=status):
+                self.conn.execute("UPDATE ads_change_set SET status=%s WHERE id=%s",
+                                  (status, set_id))
+                self.conn.commit()
+                self.assertEqual(self._queue([self._item()])["decisions"]["open"], 0)
+        self.conn.execute("UPDATE ads_change_set SET status='deferred' WHERE id=%s", (set_id,))
+        self.conn.commit()
+        with patch.object(triage, "now_utc", return_value=now + timedelta(hours=2)):
+            due = self._queue([self._item()])
+        self.assertEqual(due["decisions"]["open"], 1)
+
+    def test_replacement_lineage_uses_the_existing_owner_until_its_followup(self):
+        new = external.upsert_entity(
+            self.conn, self.org, self.brand, self.campaign,
+            {"platform": "meta", "source_account": "act_1", "native_kind": "ad",
+             "native_id": "replacement", "name": "Replacement"},
+        )["id"]
+        action_id = db.new_id("adx")
+        new_item = {"id": action_id, "kind": "new_ad", "target_id": "placement",
+                    "before": {}, "after": {}, "reason": "Replace"}
+        set_id = self._insert_review_set(review_id="unused", status="approved", items=[new_item])
+        self.conn.execute("UPDATE ads_change_set SET plan_json=%s WHERE id=%s",
+                          (db.jsonb({"replaces_entity_id": self.entity,
+                                     "items": [new_item]}), set_id))
+        self.conn.execute(
+            "INSERT INTO ads_action(id,org_id,brand_id,campaign_id,target_kind,target_id,kind,"
+            "change_set_id,verification_state) VALUES(%s,%s,%s,%s,'ad',%s,'publish',%s,'pending')",
+            (action_id, self.org, self.brand, self.campaign, new, set_id),
+        )
+        self.conn.execute(
+            "INSERT INTO ads_handoff_item(id,org_id,brand_id,campaign_id,change_set_id,"
+            "action_id,planned_kind,planned_id,name,expected_json,entity_id) "
+            "VALUES(%s,%s,%s,%s,%s,%s,'ad',%s,'Replacement',%s,%s)",
+            (db.new_id("ahi"), self.org, self.brand, self.campaign, set_id, action_id,
+             new, db.jsonb({}), new),
+        )
+        self.conn.commit()
+        for state in ("pending", "unknown", "stale"):
+            with self.subTest(state=state):
+                self.conn.execute("UPDATE ads_action SET verification_state=%s WHERE id=%s",
+                                  (state, action_id))
+                self.conn.commit()
+                # Existing policy: the created replacement stays held until confirmed,
+                # including stale readback, which cannot prove a live replacement.
+                self.assertEqual(self._queue([self._item(entity_id=new)])["decisions"]["open"], 0)
+        self.conn.execute("UPDATE ads_action SET verification_state='confirmed' WHERE id=%s",
+                          (action_id,))
+        self.conn.commit()
+        self.assertEqual(self._queue([self._item()])["decisions"]["open"], 0)
+        self.assertEqual(self._queue([self._item(entity_id=new)])["decisions"]["open"], 1)
+        pause = {"id": db.new_id("adx"), "kind": "pause", "target_id": self.entity,
+                 "before": {}, "after": {}, "reason": "Follow up"}
+        followup = self._insert_review_set(review_id="unused", status="draft", items=[pause])
+        self.conn.execute("UPDATE ads_change_set SET plan_json=%s WHERE id=%s",
+                          (db.jsonb({"items": [pause]}), followup))
+        self.conn.commit()
+        self.assertEqual(self._queue([self._item()])["decisions"]["open"], 1)
+
+    def test_another_brand_cleanup_cannot_own_this_ads_decision(self):
+        other = brands.create_brand(self.conn, org_id=self.org, name="Other brand",
+                                    actor="test", client_name=None)["id"]
+        other_campaign = external.create_imported_campaign(
+            self.conn, self.org, other, name="Other campaign",
+        )["id"]
+        set_id = db.new_id("acs")
+        # A foreign plan mentioning this id is not authority over this tenant's queue.
+        self.conn.execute(
+            "INSERT INTO ads_change_set(id,org_id,brand_id,campaign_id,operation_id,"
+            "request_hash,content_hash,title,month,status,plan_json,created_by) "
+            "VALUES(%s,%s,%s,%s,%s,%s,%s,'Other','2026-01','draft',%s,'test')",
+            (set_id, self.org, other, other_campaign, set_id, set_id, set_id,
+             db.jsonb({"source": "cleanup", "items": [{"id": db.new_id("adx"),
+                 "kind": "pause", "target_id": self.entity}]})),
+        )
+        self.conn.commit()
+        self.assertEqual(self._queue([self._item()])["decisions"]["open"], 1)
 
     def test_queued_round_without_change_set(self):
         item = self._item()

@@ -7,8 +7,10 @@ literal in this file, no adapter import, no `attribution_key` parsing -- the jud
 never a second, divergent definition of "known".
 """
 
+import json
 from collections import defaultdict
 from datetime import timedelta
+from hashlib import sha256
 
 from app.ads import (
     change_control_data,
@@ -361,6 +363,8 @@ def _metrics_view(view, spend):
         "result_label": result_kinds.label(view["result_kind"]),
         "derived_zero_days": view["derived_zero_days"], "reason": view["reason"],
         "currency": view["currency"],
+        "result_action": view.get("result_action"),
+        "result_attribution": view.get("result_attribution"),
     }
 
 
@@ -832,6 +836,17 @@ def _queue_message(cls, name):
     return f"廣告「{_safe_name(name)}」{LABELS[cls]}，待決定"
 
 
+def _cost_message(trigger, name):
+    if trigger == "crossed_cap":
+        return _queue_message("worse", name)
+    outcome = ("成本持續超過上限，待決定" if trigger == "persistently_over_cap"
+               else "成本超過上限，待決定")
+    room = interrupts.MAX_MESSAGE_LEN - len(outcome) - len("廣告「」")
+    name = name or "(未命名廣告)"
+    name = name if len(name) <= room else name[:room - 1] + "…"
+    return f"廣告「{name}」{outcome}"
+
+
 def _scale_message(owner_name):
     return f"「{_safe_name(owner_name)}」可加預算，待決定"
 
@@ -1030,6 +1045,16 @@ def _became_costly(item) -> bool:
     return move is not None and move["from"] == "on_target" and move["to"] in {"watch", "over"}
 
 
+def _cost_trigger(item):
+    """The canonical absolute grade owns the decision; trend and sample size do not."""
+    if item.get("grade") in {"watch", "over"} and _became_costly(item):
+        return "crossed_cap"
+    if item.get("grade") != "over":
+        return None
+    return ("persistently_over_cap" if item.get("previous_grade") == "over"
+            else "currently_over_cap")
+
+
 def decision_memory(conn, org_id, brand_id) -> dict:
     """F29-I01 Contract B: `triage_capacity.decision_memory` (newest memory per ad) with each
     entry's `grade_label` -- one brand-wide read shared by the cleanup rows and the month review."""
@@ -1050,8 +1075,7 @@ def campaign_cleanup(conn, org_id, brand_id, campaign_id) -> dict | None:
 
 def _queue_candidates(conn, org_id, brand_id, items, *, settle=True, holds=None) -> list:
     """Every row this brand's queue could raise -- qualifying `scale_budget` owners, `cleanup`
-    campaigns, one `worse` row per ad whose grade moved from 划算 to 偏貴／太貴 (F29-I01; never
-    for an ad already inside its
+    campaigns, one `worse` row per crossed-cap or currently over-cap ad (never inside its
     campaign's cleanup `ads`, F28-I02), `refresh_creative` campaigns and `insufficient_data`
     campaigns (`triage_scale.py`/`triage_capacity.py`). `stop_loss` rows are no longer raised
     (F28-I02): a 沒賣出 ad closes through its campaign's cleanup row. Each candidate carries its
@@ -1083,17 +1107,17 @@ def _queue_candidates(conn, org_id, brand_id, items, *, settle=True, holds=None)
         ad["entity_id"] for c in cleanup_candidates for ad in c["payload"]["cleanup"]["ads"]
     }
     for item in items:
-        # F29-I01 (ads.md §6.33 "One ruler"): 變貴 is a grade move from 划算 to 偏貴／太貴 -- the
-        # trend note (`class`) never raises a row.
-        if not _became_costly(item) or item["entity_id"] in in_cleanup:
+        # Current cap grades own these decisions; the trend note never raises a row.
+        trigger = _cost_trigger(item)
+        if trigger is None or item["entity_id"] in in_cleanup:
             continue
         candidates.append({
             "kind": "worse", "identity_id": item["entity_id"], "campaign_id": item["campaign_id"],
             "window_start": item["window"]["start"], "window_end": item["window"]["end"],
-            "message": _queue_message("worse", item["name"]),
+            "message": _cost_message(trigger, item["name"]),
             "action_url": f"/brands/{brand_id}/ads/campaigns/{item['campaign_id']}/detail"
                           f"?ad={item['entity_id']}",
-            "payload": {"triage": item},
+            "payload": {"triage": item, "trigger_reason": trigger},
         })
     # Correction 4: while a campaign has an open cleanup row, its refresh_creative row is not
     # raised (cleanup first) -- `identity_id` is the campaign id for both kinds.
@@ -1180,7 +1204,14 @@ def _scoped_candidates(conn, org_id, brand_id, items, open_rows, *, settle=True,
         *_queue_candidates(conn, org_id, brand_id, items, settle=settle, holds=holds),
         *_closeout_candidates(conn, org_id, brand_id, scope["ended"]),
     ]
+    _prepare_review_candidates(conn, org_id, brand_id, candidates)
     open_keys = [row["dedupe_key"] for row in open_rows]
+    done_rows = [row for row in interrupts.list_done(conn, brand_id=brand_id, org_id=org_id)
+                 if row["org_id"] == org_id and row["brand_id"] == brand_id
+                 and row["category"] == QUEUE_CATEGORY["worse"]] if any(
+                     c.get("cost_scope") for c in candidates) else []
+    done_rows.sort(key=lambda row: (str(row.get("resolved_at") or row["created_at"]), row["id"]),
+                   reverse=True)
     kept = []
     for candidate in candidates:
         kind = candidate["kind"]
@@ -1188,6 +1219,21 @@ def _scoped_candidates(conn, org_id, brand_id, items, open_rows, *, settle=True,
         if not candidate["ended"]:
             candidate["key"] = _dedupe_key(kind, candidate["identity_id"],
                                            candidate["window_end"])
+            if candidate.get("cost_scope"):
+                suffix = "~" + candidate["cost_scope"]
+                if candidate.get("review_cycle"):
+                    suffix += "~" + candidate["review_cycle"]
+                prefix = _key_prefix(kind, candidate["identity_id"])
+                previous_episode = next((row["id"] for row in done_rows
+                    if _key_identity(row["dedupe_key"]) == candidate["identity_id"]), None)
+                if previous_episode is not None:
+                    candidate["key"] += "-" + previous_episode
+                # Keep an unresolved episode's owner across rolling dates. Once the
+                # episode resolves, its receipt seeds a fresh owner even in the same window.
+                candidate["key"] = next((k for k in open_keys
+                    if k.startswith(prefix) and k.endswith(suffix)), candidate["key"] + suffix)
+            elif candidate.get("review_cycle"):
+                candidate["key"] += "~" + candidate["review_cycle"]
             kept.append(candidate)
             continue
         if kind not in queue_done.DECISION_KINDS:
@@ -1252,7 +1298,9 @@ def refresh_queue(conn, org_id, brand_id) -> dict:
     )
     decisions = [c for c in candidates if c["kind"] in queue_done.DECISION_KINDS]
     for candidate in decisions:
-        if candidate["ended"]:
+        if candidate["ended"] or queue_done.done({
+            "kind_key": candidate["kind"], "proposal": candidate.get("proposal"),
+        }):
             continue  # kept on its open row; nothing new for an ended campaign
         interrupts.enqueue(
             conn, org_id=org_id, brand_id=brand_id, category=QUEUE_CATEGORY[candidate["kind"]],
@@ -1261,7 +1309,11 @@ def refresh_queue(conn, org_id, brand_id) -> dict:
         )
     runtime_events.record(conn, "queue_refresh", org_id=org_id, brand_id=brand_id)
     conn.commit()
-    _supersede_stale_open_rows(conn, org_id, brand_id, {c["key"] for c in decisions})
+    _supersede_stale_open_rows(conn, org_id, brand_id, {
+        c["key"] for c in decisions if not queue_done.done({
+            "kind_key": c["kind"], "proposal": c.get("proposal"),
+        })
+    })
     return _queue_payload(conn, org_id, brand_id, items, candidates, holds)
 
 
@@ -1457,7 +1509,8 @@ def _brand_review_rounds(conn, org_id, brand_id) -> dict:
     `(campaign_id, entity_id)` in Python; the SQL-level `ORDER BY created_at DESC` is preserved
     inside each group, so "the newest round of this entity" is the first match while walking it."""
     rows = conn.execute(
-        "SELECT id,campaign_id,entity_id,window_end,status,decision,reason,revisit_at,result_json "
+        "SELECT id,campaign_id,entity_id,window_end,status,decision,reason,revisit_at,result_json,"
+        "evidence_json "
         "FROM ads_review_round WHERE org_id=%s AND brand_id=%s ORDER BY created_at DESC",
         (org_id, brand_id),
     ).fetchall()
@@ -1467,14 +1520,17 @@ def _brand_review_rounds(conn, org_id, brand_id) -> dict:
     return by_entity
 
 
-def _matching_review_round(rounds_by_entity, campaign_id, entity_id, window):
-    """The newest round of this entity whose own `window_end` still lies inside the row's
-    CURRENT triage window (feature Decisions "Queue row state") -- the window's own `end` moves
-    forward every day (`triage.py:120,264`), so an exact `window_end == window["end"]` match would
-    lose the round the very next morning; `None` when no round's `window_end` falls in range."""
+def _matching_review_round(rounds_by_entity, campaign_id, entity_id, window,
+                           sets_by_campaign=None):
+    """Explicit decisions and their action lineage survive rolling observation dates."""
     for round_ in rounds_by_entity.get((campaign_id, entity_id), ()):
+        change_set = _matching_review_change_set(sets_by_campaign or {}, campaign_id, round_["id"])
+        if round_["status"] in {"deferred", "unjudgeable"} or change_set is not None:
+            return round_
         if window["start"] <= round_["window_end"] <= window["end"]:
             return round_
+        # A newer round is a lineage barrier; an older disposition must not take it over.
+        return None
     return None
 
 
@@ -1496,18 +1552,137 @@ def _first_adjust_recommendation_id(result_json):
     return None
 
 
-def _row_review_proposal(rounds_by_entity, sets_by_campaign, action_states, triage_item):
+def review_decision_scope(item, creative=None):
+    """Only semantic conditions, never dates, counts, spend or a full evidence hash."""
+    return {
+        "target": {k: item.get("target", {}).get(k) for k in
+                   ("value", "revision", "basis", "result_kind", "cap_unit")},
+        "measurement": {k: item.get("current", {}).get(k) for k in
+                        ("currency", "result_kind", "result_action", "result_attribution")},
+        "creative": creative,
+    }
+
+
+def _review_scope_changed(round_, item, creative, change_set):
+    evidence = round_.get("evidence_json") or {}
+    saved_target = (evidence.get("campaign") or {}).get("target") or {}
+    scope = review_decision_scope(item, creative)
+    if change_set is not None and change_set["status"] == "rejected":
+        remembered = (change_set.get("decision_grades") or {}).get(item["entity_id"])
+        if remembered and remembered.get("scope") is not None:
+            return (remembered["scope"] != scope or (
+                remembered.get("grade") in triage_capacity.GRADE_RANK
+                and triage_capacity.got_worse(remembered, item["grade"])
+            ))
+    if any(k in saved_target and saved_target[k] != v for k, v in scope["target"].items()):
+        return True
+    period = evidence.get("current") or {}
+    if "result_views" in period:
+        saved_view = _ad_view(period)
+        # The same reducer grades both stored and current evidence. Newly comparable
+        # evidence is a semantic change; choosing a first mixed view would hide it.
+        if saved_view is None or saved_view.get("reason") is not None or period.get("missing_days"):
+            return True
+        if any(saved_view.get(k) != v for k, v in scope["measurement"].items()):
+            return True
+    saved_creative = (evidence.get("conditions") or {}).get("creative_snapshot") or {}
+    if "copy_fields" in saved_creative and creative is not None:
+        if saved_creative["copy_fields"] != creative:
+            return True
+    if change_set is not None and change_set["status"] == "rejected":
+        remembered = (change_set.get("decision_grades") or {}).get(item["entity_id"])
+        if remembered:
+            if remembered.get("grade") in triage_capacity.GRADE_RANK:
+                return triage_capacity.got_worse(remembered, item["grade"])
+    return False
+
+
+def _prepare_review_candidates(conn, org_id, brand_id, candidates):
+    """Read dispositions before enqueue: a remembered decision is served, never re-raised."""
+    reviews = [c for c in candidates if c["kind"] == "worse"]
+    if not reviews:
+        return
+    rounds = _brand_review_rounds(conn, org_id, brand_id)
+    sets = _brand_change_sets_by_campaign(conn, org_id, brand_id)
+    states = _brand_action_verification_states(conn, org_id, brand_id)
+    entities = conn.execute(
+        "SELECT * FROM ads_external_entity WHERE org_id=%s AND brand_id=%s AND native_kind='ad'",
+        (org_id, brand_id),
+    ).fetchall()
+    creatives = {e["id"]: change_control_data.copy_fields(e) for e in entities}
+    lineage = {
+        campaign_id: triage_capacity.open_lineage_entity_ids(conn, org_id, brand_id, campaign_id)
+        for campaign_id in {c["campaign_id"] for c in reviews}
+    }
+    for candidate in reviews:
+        item = candidate["payload"]["triage"]
+        if (item["entity_id"] in lineage[item["campaign_id"]]
+                or _cleanup_owns_review(sets, states, item)):
+            candidates.remove(candidate)
+            continue
+        creative = creatives.get(item["entity_id"])
+        if candidate["payload"]["trigger_reason"] != "crossed_cap":
+            candidate["cost_scope"] = sha256(json.dumps(
+                review_decision_scope(item, creative), sort_keys=True, default=str,
+            ).encode()).hexdigest()[:16]
+        candidate["proposal"] = _row_review_proposal(rounds, sets, states, item, creative)
+        round_ = _matching_review_round(rounds, item["campaign_id"], item["entity_id"],
+                                        item["window"], sets)
+        if round_ is not None and candidate["proposal"] is None:
+            cycle = {"review_id": round_["id"], "scope": review_decision_scope(item, creative),
+                     "grade": item["grade"]}
+            candidate["review_cycle"] = sha256(json.dumps(
+                cycle, sort_keys=True, default=str).encode()).hexdigest()[:16]
+
+
+def _cleanup_owns_review(sets, states, item):
+    """An unfinished or explicitly held pause owns its ad even outside today's close list."""
+    for change_set in sets.get(item["campaign_id"], ()):
+        if change_set["plan_json"].get("source") != "cleanup":
+            continue
+        pause = next((i for i in change_set["plan_json"].get("items", ())
+                      if i.get("kind") == "pause"
+                      and i.get("target_id") == item["entity_id"]), None)
+        if pause is None:
+            continue
+        status = change_set["status"]
+        if status == "draft":
+            return True
+        if status == "approved":
+            return states.get(pause["id"], "pending") not in {"confirmed", "stale", "deviated"}
+        if status == "deferred":
+            revisit = change_set.get("revisit_at")
+            return revisit is None or revisit > now_utc()
+        if status == "rejected":
+            remembered = (change_set.get("decision_grades") or {}).get(item["entity_id"])
+            return bool(remembered and remembered.get("grade") in triage_capacity.GRADE_RANK
+                        and remembered.get("cap") == item["target"].get("value")
+                        and not triage_capacity.got_worse(remembered, item["grade"]))
+        return False
+    return False
+
+
+def _row_review_proposal(rounds_by_entity, sets_by_campaign, action_states, triage_item,
+                         creative=None):
     """The `proposal` for one `worse` row (F23-I01, feature Decisions "Queue row state") -- the
-    newest `ads_review_round` of this entity whose `window_end` lies inside the row's current
-    triage window, or `None` when there is none. The optional copy change set is the newest
+    newest applicable round of this entity, including an explicit disposition beyond the rolling
+    window. A due revisit or changed semantic conditions releases the disposition. The copy set
+    is the newest
     non-superseded set whose `plan_json.review_id` names this round; its `verification_state`
     reads back the matching `copy` item targeting this same entity (reusing the F22 brand-wide
     `sets_by_campaign`/`action_states` maps, never a fresh query per row)."""
     campaign_id, entity_id = triage_item["campaign_id"], triage_item["entity_id"]
-    round_ = _matching_review_round(rounds_by_entity, campaign_id, entity_id, triage_item["window"])
+    round_ = _matching_review_round(rounds_by_entity, campaign_id, entity_id,
+                                    triage_item["window"], sets_by_campaign)
     if round_ is None:
         return None
     change_set = _matching_review_change_set(sets_by_campaign, campaign_id, round_["id"])
+    revisit_at = (change_set.get("revisit_at") if change_set and change_set["status"] == "deferred"
+                  else round_["revisit_at"])
+    if revisit_at is not None and revisit_at <= now_utc():
+        return None
+    if _review_scope_changed(round_, triage_item, creative, change_set):
+        return None
     change_set_id = change_set_status = verification_state = None
     multi = False
     if change_set is not None:
@@ -1525,8 +1700,10 @@ def _row_review_proposal(rounds_by_entity, sets_by_campaign, action_states, tria
         "review_id": round_["id"],
         "status": round_["status"],
         "decision": round_["decision"],
-        "reason": round_["reason"],
-        "revisit_at": round_["revisit_at"],
+        "reason": (change_set.get("decision_reason") or round_["reason"]
+                   if change_set and change_set["status"] in {"deferred", "rejected"}
+                   else round_["reason"]),
+        "revisit_at": revisit_at,
         "recommendation_id": _first_adjust_recommendation_id(round_["result_json"]),
         "change_set_id": change_set_id,
         "change_set_status": change_set_status,
@@ -1693,18 +1870,21 @@ def _queue_payload(conn, org_id, brand_id, items, candidates, holds=()) -> dict:
         (_notice_row(org_id, brand_id, c), c)
         for c in candidates if c["kind"] in queue_done.NOTICE_KINDS
     )
+    listed_keys = {row["dedupe_key"] for row, _ in listed}
+    listed.extend(
+        ({**_notice_row(org_id, brand_id, c), "status": "resolved"}, c)
+        for c in candidates if c["kind"] == "worse" and c["key"] not in listed_keys
+        and queue_done.done({"kind_key": "worse", "proposal": c.get("proposal")})
+    )
     sets_by_campaign = _brand_change_sets_by_campaign(conn, org_id, brand_id)
     action_states = _brand_action_verification_states(conn, org_id, brand_id)
     # F23-I01: `worse` rows' own proposal -- the matching review round (if any), brand-wide.
-    rounds_by_entity = _brand_review_rounds(conn, org_id, brand_id)
     open_rows = []
     for row, candidate in listed:
         kind = candidate["kind"]
         triage_item = candidate["payload"]["triage"]
         if kind == "worse":
-            proposal = _row_review_proposal(
-                rounds_by_entity, sets_by_campaign, action_states, triage_item
-            )
+            proposal = candidate["proposal"]
         elif kind == "scale_budget":
             proposal = _row_scale_proposal(sets_by_campaign, action_states, candidate)
         elif kind == "cleanup":
