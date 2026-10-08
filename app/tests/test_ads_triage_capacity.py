@@ -470,6 +470,7 @@ class CleanupCandidatesTest(unittest.TestCase):
             "entity_id": a, "name": "廣告甲", "thumbnail_url": "https://x/1.jpg",
             "spend_7d": 1540.0, "grade": "wasted", "cost_per_result": None, "spend": 1540,
             "result_count": 0, "daily_spend": 220.0, "rejected_before": None,
+            "currency": "TWD", "cap_comparison": None,
             "rank": 3, "of": 3, "sales": 0, "few": False, "verdict": "replace",
             "verdict_label": "換掉", "flags": [], "reason_text": "花了 1,540，一筆都沒賣出",
         })
@@ -488,6 +489,37 @@ class CleanupCandidatesTest(unittest.TestCase):
         self.assertEqual(result["active_ads"], 3)
         self.assertEqual(result["campaign_id"], self.campaign)
         self.assertEqual(result["campaign_name"], "活動一")
+
+    def test_cleanup_keeps_the_graded_units_and_refusal_without_reclassifying(self):
+        close, kept = self.make_ad("closed"), self.make_ad("unresolved")
+        observed = self.item(close, "wasted", spend=1540, result_count=0)
+        observed["cap_comparison"] = {
+            "basis": "own", "currency": "TWD", "reason": None, "message": None,
+            "source": "user", "unit_basis": "manual_ntd_input",
+        }
+        for currency, comparison in (
+            (None, None),
+            (None, {"basis": "own", "currency": "TWD", "reason": "cap_currency_unknown",
+                    "message": "Unit not verified"}),
+            ("USD", {"basis": "own", "currency": "TWD", "reason": "cap_currency_mismatch",
+                     "message": "Different observed currency"}),
+        ):
+            with self.subTest(currency=currency, comparison=comparison):
+                unresolved = self.item(kept, "insufficient", spend=200)
+                unresolved["current"]["currency"] = currency
+                unresolved["cap_comparison"] = comparison
+                result = self.candidates([observed, unresolved], can_support=1)
+                self.assertEqual(self.ids(result["ads"]), [close])
+                self.assertEqual(self.ids(result["keep"]), [kept])
+                self.assertEqual(result["ads"][0]["currency"], "TWD")
+                self.assertEqual(result["ads"][0]["cap_comparison"], observed["cap_comparison"])
+                row = result["keep"][0]
+                self.assertEqual(row["currency"], currency)
+                self.assertEqual(row["cap_comparison"], comparison)
+                self.assertEqual(row["spend"], 200)
+                self.assertEqual(row["grade"], "insufficient")
+                self.assertIsNone(row["rank"])
+                self.assertIsNone(row["verdict"])
 
     def test_incomplete_seven_day_spend_still_closes_but_saving_is_unknown(self):
         a, b, c = self.make_ad("a1"), self.make_ad("a2"), self.make_ad("a3")

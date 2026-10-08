@@ -109,13 +109,13 @@ function cleanupQueueItem(overrides: Partial<QueueItem> = {}): QueueItem {
     cleanup: {
       campaign_id: "cmp_1", campaign_name: "【銷售】測試活動", can_support: 3, active_ads: 5,
       ads: [
-        { entity_id: "aex_low1", name: "1150701 情境圖 A", thumbnail_url: null, spend_7d: 120, grade: "wasted", cost_per_result: null, spend: 1540, result_count: 0, daily_spend: 120 / 7, rejected_before: null, reason_text: "花了 1540，一筆都沒賣出" },
-        { entity_id: "aex_low2", name: "1150702 情境圖 B", thumbnail_url: "https://cdn.example/b.jpg", spend_7d: 340, grade: "over", cost_per_result: 620, spend: 2480, result_count: 4, daily_spend: 340 / 7, rejected_before: null, reason_text: "第 5／5 名，每筆 620 對上限 450（太貴）" },
+        { entity_id: "aex_low1", name: "1150701 情境圖 A", thumbnail_url: null, spend_7d: 120, grade: "wasted", cost_per_result: null, spend: 1540, result_count: 0, daily_spend: 120 / 7, rejected_before: null, currency: "TWD", cap_comparison: {basis: "own", currency: "TWD", reason: null, message: null}, reason_text: "花了 1540，一筆都沒賣出" },
+        { entity_id: "aex_low2", name: "1150702 情境圖 B", thumbnail_url: "https://cdn.example/b.jpg", spend_7d: 340, grade: "over", cost_per_result: 620, spend: 2480, result_count: 4, daily_spend: 340 / 7, rejected_before: null, currency: "TWD", cap_comparison: {basis: "own", currency: "TWD", reason: null, message: null}, reason_text: "第 5／5 名，每筆 620 對上限 450（太貴）" },
       ],
       keep: [
-        { entity_id: "aex_keep1", name: "晨光隨行杯・日常出發", thumbnail_url: null, spend_7d: 300, grade: "on_target", cost_per_result: 48, spend: 1440, result_count: 30, daily_spend: 300 / 7, rejected_before: null },
-        { entity_id: "aex_keep2", name: "健身情境・保冷 12 小時", thumbnail_url: null, spend_7d: 700, grade: "on_target", cost_per_result: 431.25, spend: 3450, result_count: 8, daily_spend: 100, rejected_before: null },
-        { entity_id: "aex_keep3", name: "辦公室一角・質感桌面", thumbnail_url: null, spend_7d: 280, grade: "on_target", cost_per_result: 52, spend: 1300, result_count: 25, daily_spend: 40, rejected_before: null },
+        { entity_id: "aex_keep1", name: "晨光隨行杯・日常出發", thumbnail_url: null, spend_7d: 300, grade: "on_target", cost_per_result: 48, spend: 1440, result_count: 30, daily_spend: 300 / 7, rejected_before: null, currency: "TWD", cap_comparison: {basis: "own", currency: "TWD", reason: null, message: null} },
+        { entity_id: "aex_keep2", name: "健身情境・保冷 12 小時", thumbnail_url: null, spend_7d: 700, grade: "on_target", cost_per_result: 431.25, spend: 3450, result_count: 8, daily_spend: 100, rejected_before: null, currency: "TWD", cap_comparison: {basis: "own", currency: "TWD", reason: null, message: null} },
+        { entity_id: "aex_keep3", name: "辦公室一角・質感桌面", thumbnail_url: null, spend_7d: 280, grade: "on_target", cost_per_result: 52, spend: 1300, result_count: 25, daily_spend: 40, rejected_before: null, currency: "TWD", cap_comparison: {basis: "own", currency: "TWD", reason: null, message: null} },
       ],
       short: 0, daily_saving: 460 / 7, scale_owner_id: null,
     },
@@ -816,6 +816,27 @@ describe("ConfirmPage（F27-I15）new_ad kind", () => {
 });
 
 describe("ConfirmPage（F27-I15 Contract F／F28-I11）cleanup propose 路由", () => {
+  it.each([
+    {currency: "TWD", breakEvenCurrency: "TWD", comparable: true},
+    {currency: "USD", breakEvenCurrency: "USD", comparable: true},
+    {currency: "USD", breakEvenCurrency: "TWD", comparable: false},
+    {currency: null, breakEvenCurrency: "TWD", comparable: false},
+    {currency: "TWD", breakEvenCurrency: null, comparable: false},
+  ])("confirm cleanup preserves $currency and checks the $breakEvenCurrency break-even unit", async ({currency, breakEvenCurrency, comparable}) => {
+    const queued = cleanupQueueItem();
+    queued.triage = {...queued.triage, target: {...queued.triage.target, break_even: 520,
+      break_even_unit: {basis: "break_even", currency: breakEvenCurrency}}};
+    queued.cleanup = {...queued.cleanup!, ads: queued.cleanup!.ads.map(ad => ({...ad, currency}))};
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([queued]));
+    renderAt(`${proposeCleanupPath}?step=confirm`);
+    await screen.findByText("關 2 則、留 3 則");
+    const row = screen.getAllByRole("listitem").find(li => li.textContent?.includes("1150702 情境圖 B"))!;
+    expect(within(row).getByText(`620 ${currency === "TWD" ? "元" : currency ?? "幣別未知"}`)).toBeTruthy();
+    expect(row.querySelector('[data-slot="money-tag"]') !== null).toBe(comparable);
+    if (!comparable) expect(within(row).getByText("幣別不同或尚未核實，不比較打平線。")).toBeTruthy();
+    expect(changeApi.createChangeSet).not.toHaveBeenCalled();
+  });
+
   it("先是提議步驟，下一步到確認：關的清單有等級、成本與「不會新增花費」，不再寫「花費最低」", async () => {
     const user = userEvent.setup();
     vi.mocked(triageApi.getQueue).mockResolvedValue(queue([cleanupQueueItem()]));

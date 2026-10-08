@@ -209,6 +209,7 @@ def _ad_view(item, spend_7d, ranked, of, rejected_before=None):
         "thumbnail_url": item["thumbnail_url"], "spend_7d": spend_7d,
         "grade": item["grade"], "cost_per_result": current.get("cost_per_result"),
         "spend": current.get("spend"), "result_count": current.get("result_count"),
+        "currency": current.get("currency"), "cap_comparison": item.get("cap_comparison"),
         "daily_spend": spend_7d / _CLEANUP_WINDOW_DAYS if spend_7d is not None else None,
         "rejected_before": rejected_before,
         "rank": ranked["rank"] if ranked else None, "of": of,
