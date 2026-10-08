@@ -145,6 +145,10 @@ class _Rows:
         return iter(self.fetchall())
 
 
+class OperationRolledBack(RuntimeError):
+    """A helper requested rollback but swallowed the operation's failure."""
+
+
 class Conn:
     """`psycopg.Connection` 的薄包裝，`row_factory=dict_row`，維持舊呼叫端的介面契約：
 
@@ -152,13 +156,15 @@ class Conn:
       每一列是 dict，`row["col"]` 可用；`row[0]` 位置存取不支援（02-3 清掉那些用法）。
     - `executemany(sql, seq)`、`commit()`、`rollback()`、`close()`（close 是 no-op，連線
       生命週期歸連線池管，不由呼叫端關）。
+    - `atomic()`: operation-owned transaction/savepoint; nested helpers cannot commit early.
     """
 
-    __slots__ = ("_pg", "_tenant_org_id")
+    __slots__ = ("_pg", "_tenant_org_id", "_operations")
 
     def __init__(self, pg_conn: "psycopg.Connection"):
         self._pg = pg_conn
         self._tenant_org_id: str | None = None
+        self._operations: list[bool] = []
 
     def execute(self, sql, params: Sequence = ()) -> _Rows:
         cur = self._pg.execute(sql, params)
@@ -170,7 +176,28 @@ class Conn:
             cur.executemany(sql, seq)
 
     def commit(self) -> None:
+        # Legacy helpers may request a commit; only the operation owner can finish it.
+        if self._operations:
+            return
         self._pg.commit()
+
+    @contextmanager
+    def atomic(self) -> Iterator["Conn"]:
+        """Isolate one business operation, including nested helpers.
+
+        Psycopg uses a savepoint when the caller already has a transaction. Failure
+        rolls back only this operation, preserving prior receipts and tenant scope.
+        Inner commit requests are deferred to the surrounding transaction owner.
+        A swallowed rollback cannot accidentally release a successful savepoint.
+        """
+        self._operations.append(False)
+        try:
+            with self._pg.transaction():
+                yield self
+                if self._operations[-1]:
+                    raise OperationRolledBack("business operation requested rollback")
+        finally:
+            self._operations.pop()
 
     def rollback(self) -> None:
         """ADR 0052 clause 5: a `SET ROLE` issued inside a transaction that is then
@@ -183,6 +210,9 @@ class Conn:
         wrong org -- the RLS-silently-off failure mode this whole ticket exists to
         close.
         """
+        if self._operations:
+            self._operations[-1] = True
+            return
         self._pg.rollback()
         if self._tenant_org_id is not None:
             self._pg.execute("SET ROLE authenticated")
@@ -352,6 +382,9 @@ class ConnProxy:
 
     def commit(self) -> None:
         return current().commit()
+
+    def atomic(self):
+        return current().atomic()
 
     def rollback(self) -> None:
         return current().rollback()

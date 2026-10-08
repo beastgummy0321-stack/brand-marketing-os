@@ -23,9 +23,20 @@ LIMITATIONS = [
 
 
 @contextmanager
-def _locked(conn, org, brand):
-    # Existing workbench writes commit internally. Session lock survives those commits.
+def _locked(conn, org, brand, *, session=False):
     key = f"ads-material:{org}:{brand}"
+    if not session:
+        # Business edits may run inside an operation savepoint. PostgreSQL keeps
+        # this lock until the enclosing transaction commits (or rolls back the
+        # acquiring savepoint), without running SQL on an aborted transaction.
+        conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0))", (key,))
+        try:
+            yield
+        except BaseException:
+            conn.rollback()
+            raise
+        return
+    # Dispatch persists its identity before enqueue; this lock spans those commits.
     conn.execute("SELECT pg_advisory_lock(hashtextextended(%s,0))", (key,))
     try:
         yield
@@ -582,7 +593,7 @@ def dispatch(conn, org, brand, campaign, task_id, payload, actor):
     next dispatch -- a replay of the same operation included."""
     if set(payload) != {"operation_id", "expected_revision", "content_hash"}:
         raise ValueError("請核對本版內容後再交棒。")
-    with _locked(conn, org, brand):
+    with _locked(conn, org, brand, session=True):
         operation, digest, prior = _prior(conn, org, brand, campaign, payload, "dispatch", task_id)
         if prior:
             done = get(conn, org, brand, campaign, task_id, prior["result_revision"])

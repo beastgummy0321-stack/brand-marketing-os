@@ -15,6 +15,8 @@ from app.brand_intelligence import repository as brands
 from app.core import db
 from app.main import app
 
+from .test_ads_http_atomic_writes import try_material_lock
+
 
 @pytest.fixture
 def setup(monkeypatch):
@@ -71,6 +73,30 @@ def create(setup, mode="external_image", **fields):
         },
         "test",
     )
+
+
+def test_dispatch_session_lock_spans_durable_commit_and_enqueue(setup):
+    conn, org, brand, campaign, enqueue = setup
+    task = create(setup, "copy")
+    observed = []
+
+    def enqueue_under_lock(*args, **kwargs):
+        observed.append(try_material_lock(brand))
+        # Dispatch's durable identity is already visible from a separate backend.
+        with db.connection() as observer:
+            result = tasks.get(observer, org, brand, campaign, task["id"])
+            assert result["pack_id"] is not None
+            assert result["dispatch_status"] == "unknown"
+        return True
+
+    enqueue.side_effect = enqueue_under_lock
+    result = tasks.dispatch(conn, org, brand, campaign, task["id"], {
+        "operation_id": "dispatch-lock", "expected_revision": 1,
+        "content_hash": task["content_hash"],
+    }, "test")
+    assert observed == [False]
+    assert result["dispatch_status"] == "queued"
+    assert try_material_lock(brand) is True
 
 
 def change(setup, task, action, **fields):

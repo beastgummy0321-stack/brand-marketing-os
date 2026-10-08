@@ -340,12 +340,13 @@ def patch_campaign(request: Request, brand_id: str, campaign_id: str, body: Patc
     pick_groups = "customer_group_ids" in updates
     group_ids = updates.get("customer_group_ids")
     try:
-        repository.update_campaign(web.conn, actor.org_id, brand_id, campaign_id, updates)
-        if edit_landing_url:
-            brief.set_landing_url(web.conn, actor.org_id, brand_id, campaign_id, landing_url)
-        if pick_groups or "product_ids" in updates:
-            brief.set_customer_groups(web.conn, actor.org_id, brand_id, campaign_id, group_ids,
-                                      picked=pick_groups)
+        with web.conn.atomic():
+            repository.update_campaign(web.conn, actor.org_id, brand_id, campaign_id, updates)
+            if edit_landing_url:
+                brief.set_landing_url(web.conn, actor.org_id, brand_id, campaign_id, landing_url)
+            if pick_groups or "product_ids" in updates:
+                brief.set_customer_groups(web.conn, actor.org_id, brand_id, campaign_id, group_ids,
+                                          picked=pick_groups)
     except ValueError as exc:
         code = str(exc)
         status, message = _PATCH_CAMPAIGN_ERRORS.get(code, (400, code))
