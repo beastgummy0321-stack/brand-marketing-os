@@ -17,6 +17,7 @@ import { NextDates, type TodayNote } from "./home/NextDates";
 import { QualityBand } from "./home/QualityBand";
 import { TodayDecisions, homeBoard, type QueueState } from "./home/TodayDecisions";
 import { proposalAction } from "./home/status";
+import { useWorkerHealth } from "@/lib/useWorkerHealth";
 
 type RecoveryState = { status: "loading" } | { status: "error" } | { status: "ready"; recovery: AdsRecovery };
 type HomeState = { status: "loading" } | { status: "error"; message: string } | { status: "ready"; home: HomeOverview };
@@ -64,8 +65,12 @@ function RecoveryBanner({ recovery }: { recovery: AdsRecovery }) {
 function AdsHome({ brandId }: { brandId: string }) {
   const clock = useOrgClock();
   const homeRead = useApiRead((signal) => getHomeOverview(brandId, undefined, signal), [brandId]);
-  const homeState: HomeState = homeRead.data !== null ? { status: "ready", home: homeRead.data }
+  const [lastHome, setLastHome] = useState<HomeOverview | null>(null);
+  useEffect(() => { if (homeRead.status === "ready") setLastHome(homeRead.data); }, [homeRead.status, homeRead.data]);
+  const displayedHome = homeRead.data ?? lastHome;
+  const homeState: HomeState = displayedHome !== null ? { status: "ready", home: displayedHome }
     : homeRead.status === "error" ? { status: "error", message: homeRead.error } : { status: "loading" };
+  const worker = useWorkerHealth(true, 30_000);
   const queueRead = useApiRead((signal) => refreshQueue(brandId, signal), [brandId]);
   const queueState: QueueState = queueRead.status === "ready" ? { status: "ready", queue: queueRead.data }
     : queueRead.status === "error" ? { status: "error", message: queueRead.error } : { status: "loading" };
@@ -82,7 +87,7 @@ function AdsHome({ brandId }: { brandId: string }) {
   const home = homeState.status === "ready" ? homeState.home : null;
   const syncing = (home?.campaigns ?? []).some((c) => c.draft === null && c.sync_state === "syncing");
   const decisions = queueState.status === "ready" ? homeBoard(brandId, queueState.queue) : null;
-  const note: TodayNote = syncing ? { kind: "syncing" }
+  const note: TodayNote = syncing && worker.state === "alive" ? { kind: "syncing" }
     : queueState.status === "loading" ? { kind: "loading" }
     : queueState.status === "error" ? { kind: "error" }
     : decisions && decisions.open.length ? { kind: "open", count: decisions.count } : { kind: "none" };
@@ -139,6 +144,10 @@ function AdsHome({ brandId }: { brandId: string }) {
           </>
         )}
       />
+      {displayedHome && homeRead.status !== "ready" && <div className="flex flex-wrap items-center gap-3 text-sm text-muted-foreground" role="status">
+        <span>{homeRead.status === "error" ? `更新失敗，顯示上次資料・${homeRead.error}` : "正在更新，顯示上次資料"}</span>
+        {homeRead.status === "error" && <Button variant="outline" size="sm" onClick={retryHome}>重新讀取首頁</Button>}
+      </div>}
       {recoveryState.status === "ready" && <RecoveryBanner recovery={recoveryState.recovery} />}
       {empty ? <EmptyBoard brandId={brandId} /> : <>
         <NextDates home={home} note={note} onJump={jump} />
@@ -150,6 +159,8 @@ function AdsHome({ brandId }: { brandId: string }) {
           syncing={syncing}
           recovering={recovering}
           sync={home?.sync ?? null}
+          worker={worker}
+          fresh={homeRead.status === "ready"}
           onRetry={queueRead.reload}
         />
         <CampaignRows brandId={brandId} state={homeState} onRetry={retryHome} />

@@ -299,7 +299,8 @@ class OneSpentTest(_Pinned):
         _obs(conn, org, self.brand, self.buy, self.a1, date(2026, 8, 23), spend=5000, count=50,
              key="p")
         previous = self.overview(self.brand)["money"]["previous_same_period"]
-        self.assertEqual(previous, {"days": 22, "purchases": 3, "cost_per_purchase": 100})
+        self.assertEqual(previous, {"days": 22, "purchases": 3, "cost_per_purchase": 100,
+                                   "currency": "TWD", "cost_comparison": {"reason": None}})
 
     def test_timeline_today_then_month_review(self):
         timeline = self.overview(self.brand)["timeline"]
@@ -632,6 +633,67 @@ class SyncBlockTest(_Pinned):
             self.assertEqual(sync["worker_health"], health)
             self.assertEqual(sync["eligible_at"], updated + timedelta(hours=6))
             self.assertEqual(sync["next_at"], sync["eligible_at"] if state == "alive" else None)
+
+
+class PaceUnitsTest(_Pinned):
+    def test_prior_cost_preserves_its_unit_without_comparing_foreign_or_unknown_money(self):
+        for prior, reason in [("USD", "currency_mismatch"), ("TWD", None),
+                              (None, "currency_unknown")]:
+            with self.subTest(prior=prior):
+                brand = _brand(self.conn, self.org, "Home prior source unit")
+                campaign = _imported(self.conn, self.org, brand, "Purchase", "prior", cap=100)
+                ad = _ad(self.conn, self.org, brand, campaign, "ad", "prior")
+                _obs(self.conn, self.org, brand, campaign, ad, date(2026, 9, 1),
+                     spend=100, count=2)
+                _obs(self.conn, self.org, brand, campaign, ad, date(2026, 8, 1),
+                     spend=400, count=2, currency=prior)
+                previous = self.overview(brand)["money"]["previous_same_period"]
+                self.assertEqual(previous["currency"], prior)
+                self.assertEqual(previous["cost_comparison"], {"reason": reason})
+                self.assertEqual(previous["purchases"], 2)
+                self.assertEqual(previous["cost_per_purchase"], None if prior is None else 200)
+
+    def test_source_budget_unit_qualifies_comparison_without_converting_observations(self):
+        for observed, configured, reason in [
+            (["TWD"], "TWD", None), (["USD"], "USD", None),
+            (["USD"], "TWD", "currency_mismatch"),
+            ([None], "TWD", "currency_unknown"),
+            (["TWD", "USD"], "TWD", "currency_unknown"),
+        ]:
+            with self.subTest(observed=observed, configured=configured):
+                brand = _brand(self.conn, self.org, "Home pace source units")
+                campaign = _imported(self.conn, self.org, brand, "Pace", "pace")
+                ad = _ad(self.conn, self.org, brand, campaign, "ad", "pace")
+                month_budget.save(self.conn, self.org, brand, month=MONTH, currency=configured,
+                                  amount=3000, expected_revision=0, actor="test")
+                for index, currency in enumerate(observed):
+                    _obs(self.conn, self.org, brand, campaign, ad, date(2026, 9, index + 1),
+                         spend=100, currency=currency)
+                home = self.overview(brand)
+                pace = home["pace"]
+                self.assertEqual(pace["budget_amount"], 3000)
+                self.assertEqual(pace["budget_currency"], configured)
+                self.assertEqual(pace["budget_comparison"], {"reason": reason})
+                if reason == "currency_unknown":
+                    self.assertIsNone(home["spent"])
+                    self.assertIsNone(pace["projected_month_end"])
+                else:
+                    self.assertEqual(home["spent"], 100)
+                    self.assertEqual(pace["daily"][-1]["cumulative"], 100)
+                    self.assertEqual(pace["projected_month_end"], round(100 / 22 * 30, 2))
+
+    def test_known_zero_spend_compares_but_no_observations_do_not(self):
+        brand = _brand(self.conn, self.org, "Home pace zero and missing")
+        campaign = _imported(self.conn, self.org, brand, "Pace", "pace")
+        ad = _ad(self.conn, self.org, brand, campaign, "ad", "pace")
+        month_budget.save(self.conn, self.org, brand, month=MONTH, currency="TWD",
+                          amount=3000, expected_revision=0, actor="test")
+        self.assertEqual(self.overview(brand)["pace"]["budget_comparison"],
+                         {"reason": "currency_unknown"})
+        _obs(self.conn, self.org, brand, campaign, ad, date(2026, 9, 1), spend=0)
+        pace = self.overview(brand)["pace"]
+        self.assertEqual(pace["budget_comparison"], {"reason": None})
+        self.assertEqual(pace["projected_month_end"], 0)
 
 
 class RealTriageTest(unittest.TestCase):

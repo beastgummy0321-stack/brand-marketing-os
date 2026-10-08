@@ -26,7 +26,7 @@ function scopeText(row: SettleQueueRow): string {
   return `${settleRange(row)}・${n} 個活動${imported > 0 ? `（${imported} 個${FROM_META}）` : ""}`;
 }
 
-export function SettleCard({ brandId, row, recovering }: { brandId: string; row: SettleQueueRow; recovering: boolean }) {
+export function SettleCard({ brandId, row, recovering, primary = false }: { brandId: string; row: SettleQueueRow; recovering: boolean; primary?: boolean }) {
   const action = settleAction(brandId, row);
   return (
     <article aria-label="結算上一期" className="col-span-full flex flex-col gap-3.5 rounded-xl border border-border bg-card px-5 py-[18px]">
@@ -47,7 +47,7 @@ export function SettleCard({ brandId, row, recovering }: { brandId: string; row:
         {recovering ? (
           <Chip>補完資料後更新</Chip>
         ) : (
-          <Button asChild variant="outline"><Link to={action.href}>{action.label} →</Link></Button>
+          <Button asChild variant={primary ? "default" : "outline"}><Link to={action.href}>{action.label} →</Link></Button>
         )}
       </div>
     </article>

@@ -4,11 +4,12 @@ import { Button } from "@/components/layout/ui/button";
 import { Skeleton } from "@/components/layout/Skeleton";
 import type { HomeCampaign, HomeCap, HomeHandoff, HomeOverview } from "@/lib/adsHomeApi";
 import type { CampaignDataState } from "@/lib/adsTriageApi";
-import { Chip, MoneyMeter, MoneyTag, formatAmount } from "../patterns";
+import { Chip, MoneyMeter, formatAmount } from "../patterns";
 import { cn } from "@/lib/utils";
 import { useOrgClock } from "@/lib/orgClock";
 import { runningText } from "../workspace/WorkspaceHead";
-import { wholeYuan } from "./MonthMoney";
+import { currencyPrefix, wholeYuan } from "./MonthMoney";
+import { CostBasis } from "./CostBasis";
 import { monthDay } from "./NextDates";
 
 /** v10 home campaign rows (prototype v10 `homeCamps()`, `.ct`): every campaign that is not closed — live, ended and
@@ -26,9 +27,15 @@ const RECONNECT = new Set<CampaignDataState>(["partial", "failed", "auth_expired
  * where the spend would be. */
 const NOTED = new Set<CampaignDataState>(["partial", "syncing", "never", "failed", "auth_expired", "disconnected"]);
 
-function capLabel(cap: HomeCap | null): string | null {
+function capLabel(cap: HomeCap | null, currency: string | null = null): string | null {
   if (!cap) return null;
-  return `${cap.basis === "break_even" ? "暫用打平" : "上限"} ${formatAmount(cap.value)}`;
+  return `${cap.basis === "break_even" ? "假設打平成本" : "上限"} ${currencyPrefix(currency)}${formatAmount(cap.value)}`;
+}
+
+function configuredLabel(c: HomeCampaign): string {
+  if (!c.configured_cap) return "沒設上限";
+  const currency = c.cap_comparison?.currency ?? null;
+  return `已設${c.configured_cap.basis === "break_even" ? "假設打平成本" : "上限"} ${currencyPrefix(currency)}${formatAmount(c.configured_cap.value)}・${currency ? "幣別無法比較" : "幣別未確認"}`;
 }
 
 /** The backend's one sentence, without its closing 。 inside a chip. */
@@ -105,7 +112,7 @@ export function CampaignRows({ brandId, state, onRetry }: {
         <EmptyRows brandId={brandId} closed={state.home.closed_this_month ?? null} />
       )}
       {state.status === "ready" && campaigns?.map((c) => (
-        c.draft ? <DraftRow key={c.campaign_id} brandId={brandId} c={c} /> : <LiveRow key={c.campaign_id} brandId={brandId} c={c} spent={state.home.spent} />
+        c.draft ? <DraftRow key={c.campaign_id} brandId={brandId} c={c} /> : <LiveRow key={c.campaign_id} brandId={brandId} c={c} spent={c.currency && c.currency === state.home.currency ? state.home.spent : null} />
       ))}
     </section>
   );
@@ -123,7 +130,7 @@ function LiveRow({ brandId, c, spent }: { brandId: string; c: HomeCampaign; spen
   const { timezone } = useOrgClock();
   const status = c.data_status;
   const reconnect = RECONNECT.has(status.state);
-  const tl = capLabel(c.cap);
+  const tl = capLabel(c.cap, c.currency ?? null);
   const cap = c.cap && c.cap.basis ? { value: c.cap.value, basis: c.cap.basis } : null;
   // An ended campaign's next step is its closeout (the same link as its queue row), not another look at the numbers.
   const closeout = c.lifecycle?.state === "ended" && c.lifecycle.can_close;
@@ -151,7 +158,7 @@ function LiveRow({ brandId, c, spent }: { brandId: string; c: HomeCampaign; spen
         <MoneyMeter value={c.month_spend} max={spent} tone="primary" />
         <div className="numeric mt-1 text-sm text-muted-foreground">
           {c.month_spend !== null
-            ? `${formatAmount(Math.round(c.month_spend))} 元`
+            ? `${currencyPrefix(c.currency ?? null)}${formatAmount(c.month_spend)}`
             : status.state === "no_rows" ? sentence(status.label) : "沒有花費紀錄"}
         </div>
       </div>
@@ -161,8 +168,8 @@ function LiveRow({ brandId, c, spent }: { brandId: string; c: HomeCampaign; spen
           {c.cost_per_purchase === null
             ? <span className="font-medium text-muted-foreground/80">{c.purchases === 0 ? "還沒有購買" : "算不出來"}</span>
             : <>
-                <b>{wholeYuan(c.cost_per_purchase)}</b> <span className="text-muted-foreground">／{tl ?? "沒設上限"}</span>
-                <MoneyTag cost={c.cost_per_purchase} breakEven={c.cap?.break_even ?? null} />
+                <b>{currencyPrefix(c.currency ?? null)}{wholeYuan(c.cost_per_purchase)}{!c.currency && "（幣別未確認）"}</b> <span className="text-muted-foreground">／{tl ?? configuredLabel(c)}</span>
+                <CostBasis value={c.cap?.break_even ?? null} currency={c.currency ?? null} />
               </>}
         </div>
       </div>
@@ -188,7 +195,11 @@ function DraftRow({ brandId, c }: { brandId: string; c: HomeCampaign }) {
   const todo = [d.cap_missing ? "設上限" : "", miss ? `補 ${miss} 張圖` : ""].filter(Boolean);
   const start = d.start_date ? `${monthDay(d.start_date)} 開始` : "還沒定開始日";
   const tl = capLabel(c.cap);
-  const href = campaignPath(brandId, c.campaign_id, {tab:d.cap_missing ? "strategy" : undefined});
+  const next = c.next_action;
+  const href = next ? next.target.kind === "campaign"
+    ? campaignPath(brandId, c.campaign_id, { tab: next.target.tab })
+    : campaignFlowPath(brandId, c.campaign_id, next.target.parts)
+    : campaignPath(brandId, c.campaign_id, {tab:d.cap_missing ? "strategy" : undefined});
   return (
     <div className={cn(GRID, "border-t border-border bg-background/50 py-3.5")}>
       <div className="min-w-0">
@@ -197,13 +208,13 @@ function DraftRow({ brandId, c }: { brandId: string; c: HomeCampaign }) {
           <LifecycleChip c={c} />
           <HandoffChip brandId={brandId} campaignId={c.campaign_id} handoff={c.handoff} />
         </div>
-        <div className="text-sm text-muted-foreground">{start}{todo.length ? `・還要${todo.join("、")}` : "・可以上架了"}</div>
+        <div className="text-sm text-muted-foreground">{start}{todo.length ? `・還要${todo.join("、")}` : next ? `・${next.reason}` : "・準備狀態待確認"}</div>
       </div>
       <div className="text-[13px] text-muted-foreground">{d.approved ? "上架中" : "還沒上架"}</div>
-      <div className="text-[13px] text-muted-foreground">{tl ?? "還沒設上限"}</div>
+      <div className="text-[13px] text-muted-foreground">{tl ?? (c.configured_cap ? configuredLabel(c) : "還沒設上限")}</div>
       <div className="text-muted-foreground">—</div>
       <div className="text-right">
-        <Button asChild variant="link" className="h-auto p-0"><Link to={href}>繼續準備 →</Link></Button>
+        <Button asChild variant="link" className="h-auto p-0"><Link to={href}>{next?.label ?? "繼續準備"} →</Link></Button>
       </div>
     </div>
   );

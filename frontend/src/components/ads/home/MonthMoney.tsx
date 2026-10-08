@@ -1,4 +1,3 @@
-import { Figure } from "@/components/layout/Figure";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { Button } from "@/components/layout/ui/button";
@@ -6,11 +5,11 @@ import { Skeleton } from "@/components/layout/Skeleton";
 import type { HomeCampaign, HomeEarnMissing, HomeOverview } from "@/lib/adsHomeApi";
 import { MonthlyBudgetPanel } from "../MonthlyBudgetPanel";
 import { perSaleAmount } from "../patterns/csv";
-import { MoneyMeter, MoneyTag, PaceChart, Term, formatAmount } from "../patterns";
+import { Chip, Disclosure, MoneyMeter, PaceChart, Term, formatAmount } from "../patterns";
 import { cn } from "@/lib/utils";
 
-/** Home money card (prototype v10 `homeMoney()`, `.moneyg`): what the month earned after ad cost, the cost per
- * purchase against the one shared cap, purchases against the same days of last month, and the budget pace chart
+/** Home money card (prototype v10 `homeMoney()`, `.moneyg`): collected paid orders, a folded platform-margin
+ * hypothesis, purchase cost against the comparable shared cap, and the budget pace chart
  * with the 調整 entry to the existing monthly-budget editor. Every number comes from `GET …/home` (F28-I06);
  * `null` prints the unknown text, never 0. */
 
@@ -54,6 +53,7 @@ function capText(home: HomeOverview): ReactNode {
       : <>每個活動各有<Term k="cap">上限</Term>，目前都是 {formatAmount(cap.value)}</>;
   }
   const live = (home.campaigns ?? []).filter((c: HomeCampaign) => c.draft === null);
+  if (home.money?.configured_cap || live.some((c) => c.configured_cap && !c.cap)) return "已設上限，幣別尚無法比較";
   if (live.length && live.every((c) => c.cap === null)) return "還沒設上限";
   return <>每個活動的<Term k="cap">上限</Term>不一樣</>;
 }
@@ -143,38 +143,27 @@ function MoneyColumn({ home }: { home: HomeOverview }) {
   const prev = money?.previous_same_period ?? null;
 
   const earn = money?.earn_after_cost_and_ads ?? null;
-  const rounded = earn === null ? null : Math.round(earn / 1000) * 1000;
-  const gain = rounded === null || rounded >= 0;
   const missing = (money?.earn_missing ?? []).map((m) => EARN_MISSING[m]).filter(Boolean);
 
   const purchases = money?.purchases ?? null;
   const dr = purchases !== null && prev?.purchases != null ? purchases - prev.purchases : null;
-  const dc = cpp !== null && prev?.cost_per_purchase ? Math.round((1 - cpp / prev.cost_per_purchase) * 100) : null;
+  const costComparable = prev?.cost_comparison?.reason === null;
+  const dc = costComparable && cpp !== null && prev?.cost_per_purchase ? Math.round((1 - cpp / prev.cost_per_purchase) * 100) : null;
 
   return (
     <div className="flex min-w-0 flex-col gap-[18px]">
-      <div className="flex flex-col gap-1">
-        {rounded === null ? (
-          <>
-            <span className="text-sm font-semibold text-muted-foreground">這個月估計多賺</span>
-            <span className="text-xl font-medium text-muted-foreground/80">
-              <Figure basis="earn_after_cost_and_ads" value={null} currency={home.currency} unknown={money === null ? "暫時讀取不到" : `算不出來・${missing.length ? missing.join("、") : "資料不完整"}`} />
-            </span>
-          </>
-        ) : (
-          <>
-            <span className={cn("text-[13px] font-semibold", gain ? "text-success" : "text-danger")}>
-              這個月估計{gain ? "多賺" : "少賺"}
-            </span>
-            <span className={cn("numeric flex items-baseline gap-2 text-4xl leading-tight font-semibold tracking-tight", gain ? "text-success" : "text-danger")}>
-              約 <Figure basis="earn_after_cost_and_ads" value={Math.abs(rounded)} currency={home.currency} className="min-w-0" />
-            </span>
-          </>
-        )}
-      </div>
+      <PaidOrders home={home} />
+      <Disclosure label="平台購買假設估算">
+        <p className="text-sm">扣除假設商品成本與廣告費：<b className="numeric">
+          {earn === null ? `算不出來・${missing.length ? missing.join("、") : "資料不完整"}`
+            : `${prefix}${formatAmount(earn)}`}
+        </b></p>
+        <p className="mt-1 text-xs text-muted-foreground">平台購買數推估，不能當作已付款利潤</p>
+        {(money?.estimate_basis?.assumptions ?? []).map((assumption) => <p key={assumption} className="text-xs text-muted-foreground">{assumption}</p>)}
+      </Disclosure>
 
       <div>
-        <div className="text-[13px] text-muted-foreground">每賣出一筆，廣告花</div>
+        <div className="text-[13px] text-muted-foreground">每筆平台購買，廣告花</div>
         <div className="flex flex-wrap items-baseline gap-3">
           <span className="numeric text-[30px] font-semibold tracking-tight">
             {cpp !== null
@@ -182,7 +171,7 @@ function MoneyColumn({ home }: { home: HomeOverview }) {
               : <span className="text-xl font-medium text-muted-foreground/80">{purchases === 0 ? "還沒有購買" : "算不出來"}</span>}
           </span>
           <span className="text-sm text-muted-foreground">{capText(home)}</span>
-          <MoneyTag cost={cpp} breakEven={cap?.break_even ?? null} />
+          {cap?.break_even != null && <span className="text-xs text-muted-foreground">假設打平成本 {currencyPrefix(home.currency)}{formatAmount(cap.break_even)}</span>}
         </div>
         <MoneyMeter value={cpp} cap={cap && cap.basis ? { value: cap.value, basis: cap.basis } : null} max={cpp === null ? 600 : Math.max(600, cpp)} size="lg"
           capLabel={cap?.basis === "break_even" ? "各活動打平線" : "各活動上限"} />
@@ -199,13 +188,39 @@ function MoneyColumn({ home }: { home: HomeOverview }) {
         <div>
           <div className="text-sm text-muted-foreground">每賣一筆</div>
           <div className="numeric text-xl font-semibold">{dc === null ? "—" : `${dc >= 0 ? "便宜" : "貴"} ${Math.abs(dc)}%`}</div>
-          <div className={cn("text-sm", dc === null || dc >= 0 ? "text-success" : "text-danger", prev?.cost_per_purchase == null && "text-muted-foreground")}>
-            {prev?.cost_per_purchase != null ? `${prevMonth} 月同期 ${wholeYuan(prev.cost_per_purchase)}` : `${prevMonth} 月同期沒有可比資料`}
+          <div className={cn("text-sm", dc === null ? "text-muted-foreground" : dc >= 0 ? "text-success" : "text-danger")}>
+            {prev?.cost_per_purchase != null ? `${prevMonth} 月同期 ${currencyPrefix(prev.currency ?? null)}${wholeYuan(prev.cost_per_purchase)}` : `${prevMonth} 月同期沒有可比資料`}
           </div>
+          {prev?.cost_per_purchase != null && !costComparable && <p className="text-xs text-muted-foreground">前期與本期成本幣別無法比較</p>}
         </div>
       </div>
     </div>
   );
+}
+
+function PaidOrders({ home }: { home: HomeOverview }) {
+  const commerce = home.commerce;
+  const orders = commerce?.order_summary;
+  const mixed = orders ? orders.reported_currencies.length > 1 : false;
+  const amount = mixed ? null : orders?.paid_net_amount ?? null;
+  return <div className="flex min-w-0 flex-col gap-1">
+    <span className="text-sm font-semibold text-muted-foreground">已收集的已付款訂單淨額</span>
+    <span className="numeric text-4xl leading-tight font-semibold tracking-tight">
+      {amount === null ? <span className="text-xl font-medium text-muted-foreground/80">{!commerce ? "目前無法確認訂單證據" : mixed ? "多幣別，無法合計" : "付款金額尚未確認"}</span>
+        : `${currencyPrefix(orders?.currency ?? null)}${formatAmount(amount)}`}
+    </span>
+    {commerce && orders && <>
+      <span className="text-sm text-muted-foreground">{orders.paid_count} 筆已付款・{orders.known_paid_net_count} 筆金額已知・{orders.refunded_count} 筆已退款</span>
+      <span className="text-xs text-muted-foreground">僅計入已知金額的付款列，不代表全部收入</span>
+      <span className="text-xs text-muted-foreground">{commerce.start}–{commerce.end}・品牌訂單，未歸因單一廣告</span>
+      <span className="text-xs text-muted-foreground">來源幣別與覆蓋範圍尚未核實</span>
+      <Disclosure label="訂單來源與狀態">
+        <p className="text-sm">{orders.unpaid_count} 筆待付款・{orders.unknown_payment_count} 筆付款狀態未知</p>
+        <p className="text-sm">{orders.unknown_amount_count} 筆金額未知・{orders.void_count} 筆取消或作廢</p>
+        {commerce.limitations.map((limitation) => <p key={limitation} className="mt-1 text-xs text-muted-foreground">{limitation}</p>)}
+      </Disclosure>
+    </>}
+  </div>;
 }
 
 function PaceColumn({ home, scaleHref, onAdjust }: { home: HomeOverview; scaleHref: string | null; onAdjust: () => void }) {
@@ -215,10 +230,14 @@ function PaceColumn({ home, scaleHref, onAdjust }: { home: HomeOverview; scaleHr
   const budget = pace?.budget_amount != null && pace.budget_amount > 0 ? pace.budget_amount : null;
   const projected = pace?.projected_month_end ?? null;
   const available = pace?.available ?? null;
-  const pacing = budget !== null && projected !== null ? (projected < budget ? "，照現在速度月底會用不完" : "，照現在速度月底會超出") : "";
+  const comparable = !!pace?.budget_currency && pace.budget_comparison?.reason === null;
+  const budgetPrefix = currencyPrefix(pace?.budget_currency ?? null);
+  const pacing = comparable && budget !== null && projected !== null ? (projected < budget ? "，照現在速度月底會用不完" : "，照現在速度月底會超出") : "";
   return (
     <div className="min-w-0">
-      {pace !== null && (
+      {pace !== null && (comparable ? (
+        <div>
+        <p className="text-xs text-muted-foreground">預算與花費單位：{pace.budget_currency}</p>
         <PaceChart
           month={monthNumber(home.month)}
           dayOfMonth={home.day_of_month}
@@ -229,7 +248,15 @@ function PaceColumn({ home, scaleHref, onAdjust }: { home: HomeOverview; scaleHr
           projected={projected}
           budgetToDate={pace?.budget_to_date ?? null}
         />
-      )}
+        </div>
+      ) : (
+        <div className="flex min-h-[220px] flex-col items-start justify-center gap-3">
+          <b className="text-base">預算進度</b>
+          <Chip>暫不比較</Chip>
+          {budget !== null && <span className="numeric text-sm">已設月預算 {budgetPrefix}{formatAmount(budget)}</span>}
+          <span className="text-sm text-muted-foreground">{pace.budget_comparison?.reason === "currency_mismatch" ? "月預算與廣告花費幣別不同" : "幣別尚未確認"}，暫不比較花費進度</span>
+        </div>
+      ))}
       <div className="mt-1.5 flex flex-wrap items-center gap-3 rounded-[10px] bg-accent px-3.5 py-3">
         <span className="min-w-0 flex-1 text-sm">
           {pace === null
@@ -238,7 +265,7 @@ function PaceColumn({ home, scaleHref, onAdjust }: { home: HomeOverview; scaleHr
             ? "還沒設這個月的預算"
             : available === null
               ? <>還能花 <b className="numeric">尚待確認</b>{pacing}</>
-              : <>還能花 <b className="numeric">{formatAmount(available)} 元</b>{pacing}</>}
+              : <>預算可用餘額 <b className="numeric">{budgetPrefix}{formatAmount(available)}</b>{!pace.budget_currency && "（幣別未確認）"}{pacing}</>}
         </span>
         {scaleHref && (
           <Button asChild variant="link" className="h-auto p-0 font-semibold">

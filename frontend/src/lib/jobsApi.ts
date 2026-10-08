@@ -52,8 +52,8 @@ export interface ActiveJobsSnapshot {
   failed_today: number;
   generated_at: string;
   worker_health?: WorkerHealthProjection;
-  /** F47 Contract C: some worker heartbeat within 60 s (memory-queue mode: always true).
-   * Optional in the type only so fixtures written before F47 still compile; the server always sends it. */
+  /** Compatibility boolean: true only for a fresh real heartbeat. A test queue or unavailable
+   * health is unknown; prefer the exact worker_health projection over this legacy field. */
   worker_alive?: boolean;
   /** F47 Contract C: no live worker while this org has queued/running work. Only `true` means
    * stalled — a missing field or a failed read never reads as stopped. */

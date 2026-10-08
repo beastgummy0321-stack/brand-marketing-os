@@ -7,7 +7,7 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 
-import type { HomeCampaign, HomeOverview, HomeSync } from "@/lib/adsHomeApi";
+import type { CommerceEvidence, HomeCampaign, HomeOverview, HomeSync } from "@/lib/adsHomeApi";
 import type { CloseoutQueueRow, QueueItem, SettleQueueRow, TriageItem } from "@/lib/adsTriageApi";
 import { CampaignRows } from "./CampaignRows";
 import { MonthMoney } from "./MonthMoney";
@@ -33,7 +33,7 @@ const LONG = "中秋限定活動・送禮受眾 2026｜Advantage+ 購物活動 -
 
 function campaign(overrides: Partial<HomeCampaign> = {}): HomeCampaign {
   return {
-    campaign_id: "cmp_daily", name: "日常商品推廣・轉換", origin: "internal", status: "live", month_spend: 15767.4, purchases: 121,
+    campaign_id: "cmp_daily", name: "日常商品推廣・轉換", currency: "TWD", origin: "internal", status: "live", month_spend: 15767.4, purchases: 121,
     cost_per_purchase: 130.31, cap: { value: 450, basis: "own", break_even: 520 }, active_ads: 8, daily_budget: 1200, missing_days: [], sync_state: "ok",
     data_status: { state: "ready", label: "資料已讀齊。", missing_days: [], last_success_at: "2026-09-23T00:40:00Z" }, handoff: null, draft: null,
     running: { count: 8, unknown: 0, read_at: "2026-09-23T00:40:00Z", stale: false, state: "running", freshness: "read" },
@@ -46,9 +46,9 @@ function home(overrides: Partial<HomeOverview> = {}): HomeOverview {
     closed_this_month: 0, month: "2026-09", day_of_month: 23, days_in_month: 30, currency: "TWD", spent: 22000,
     commerce: null, money: {
       purchases: 158, cost_per_purchase: 139.24, cap: { value: 450, basis: "own", break_even: 520 }, earn_after_cost_and_ads: 60163.5, earn_missing: [], estimate_basis: { kind: "platform_purchase_margin", assumptions: [], missing: [] }, excluded: [],
-      previous_same_period: { days: 22, purchases: 118, cost_per_purchase: 221.37 },
+      previous_same_period: { currency: "TWD", cost_comparison: { reason: null }, days: 22, purchases: 118, cost_per_purchase: 221.37 },
     },
-    pace: { budget_amount: 60000, available: 23600, daily: [{ day: "2026-09-22", cumulative: 22000 }], projected_month_end: 28695.65 },
+    pace: { budget_currency: "TWD", budget_comparison: { reason: null }, budget_amount: 60000, available: 23600, daily: [{ day: "2026-09-22", cumulative: 22000 }], projected_month_end: 28695.65 },
     quality: { buckets: [{ grade: "on_target", amount: 22000, count: 3, ads: [] }] },
     timeline: [
       { date: "2026-09-23", kind: "today", campaign_id: null, name: null, ready: null },
@@ -65,6 +65,119 @@ function home(overrides: Partial<HomeOverview> = {}): HomeOverview {
 
 const ready = (h: HomeOverview) => ({ status: "ready" as const, home: h });
 const wrap = (node: React.ReactNode) => render(<MemoryRouter>{node}</MemoryRouter>);
+
+function commerce(amount: number | null, currencies = ["TWD"]): CommerceEvidence {
+  return { scope: "brand", start: "2026-09-01", end: "2026-09-22", attribution: "unavailable", limitations: ["coverage_unknown"],
+    order_summary: { count: 4, non_void_count: 4, void_count: 0, unpaid_count: 1, unknown_payment_count: 1,
+      refunded_count: 1, unknown_amount_count: 0, known_net_count: 4, paid_count: 2, known_paid_net_count: 2,
+      order_net_amount: 9999, paid_net_amount: amount, reported_currencies: currencies, latest_import_at: null,
+      currency: null, currency_basis: "unknown", coverage: "unknown" },
+    channels: [{ channel: "mirror", source: "orders", source_type: "order_mirror", currency: "TWD", amount: 9999, row_count: 4, unknown_amount_count: 0 }] };
+}
+
+describe("F54 source and readiness truth", () => {
+  it("renders a confirmed same-unit USD pace and preserves zero availability", () => {
+    const pace = { ...home().pace!, budget_currency: "USD", budget_comparison: { reason: null },
+      budget_amount: 3000, available: 0, projected_month_end: 100 };
+    wrap(<MonthMoney brandId="b" state={ready(home({ currency: "USD", money: null, spent: 100, pace }))} onRetry={vi.fn()} scaleHref={null} onBudgetClosed={vi.fn()} />);
+    expect(document.querySelector('[data-slot="pace-chart"]')).toBeTruthy();
+    expect(screen.getByText("預算與花費單位：USD")).toBeTruthy();
+    expect(screen.getByText("USD 0")).toBeTruthy();
+    expect(screen.getByText(/月底會用不完/)).toBeTruthy();
+  });
+
+  it.each(["currency_mismatch", "currency_unknown", undefined] as const)("keeps prior cost evidence without a misleading %s change percentage", (reason) => {
+    const money = { ...home().money!, cost_per_purchase: 50, previous_same_period: {
+      days: 22, purchases: 2, cost_per_purchase: 200, currency: "USD", cost_comparison: reason ? { reason } : undefined } };
+    wrap(<MonthMoney brandId="b" state={ready(home({ money }))} onRetry={vi.fn()} scaleHref={null} onBudgetClosed={vi.fn()} />);
+    expect(screen.queryByText(/便宜 75%|貴 75%/)).toBeNull();
+    expect(screen.getByText("8 月同期 USD 200 元")).toBeTruthy();
+    expect(screen.getByText("前期與本期成本幣別無法比較")).toBeTruthy();
+  });
+
+  it.each(["currency_unknown", "currency_mismatch", undefined] as const)("pace does not compare an unqualified %s budget or label it unset", (reason) => {
+    const pace = { ...home().pace!, budget_currency: "TWD", budget_comparison: reason ? { reason } : undefined,
+      budget_amount: 3000, available: -200, projected_month_end: 100 };
+    wrap(<MonthMoney brandId="b" state={ready(home({ currency: "USD", spent: 100, pace }))} onRetry={vi.fn()} scaleHref={null} onBudgetClosed={vi.fn()} />);
+    expect(screen.getByText("已設月預算 NT$3,000")).toBeTruthy();
+    expect(screen.getByText("NT$-200")).toBeTruthy();
+    expect(document.querySelector('[data-slot="pace-chart"]')).toBeNull();
+    expect(screen.queryByText(/還沒設這個月|月底會用不完|月底會超出/)).toBeNull();
+  });
+
+  it("keeps unpaid, unknown and cancelled rows separate from the known paid subtotal in a closed source fold", () => {
+    const evidence = commerce(1200);
+    evidence.order_summary = { ...evidence.order_summary, paid_count: 5, known_paid_net_count: 2,
+      unpaid_count: 4, unknown_payment_count: 3, unknown_amount_count: 6, void_count: 1 };
+    evidence.limitations = ["訂單淨額只計入未作廢且金額與退款額都有記錄的列；缺值不當成零。"];
+    wrap(<MonthMoney brandId="b" state={ready(home({ commerce: evidence }))} onRetry={vi.fn()} scaleHref={null} onBudgetClosed={vi.fn()} />);
+    expect(screen.getByText("5 筆已付款・2 筆金額已知・1 筆已退款")).toBeTruthy();
+    expect(screen.getByText("僅計入已知金額的付款列，不代表全部收入")).toBeTruthy();
+    const fold = screen.getByRole("button", { name: "訂單來源與狀態" });
+    expect(fold.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByText("4 筆待付款・3 筆付款狀態未知")).toBeNull();
+    fireEvent.click(fold);
+    expect(screen.getByText("4 筆待付款・3 筆付款狀態未知")).toBeTruthy();
+    expect(screen.getByText("6 筆金額未知・1 筆取消或作廢")).toBeTruthy();
+    expect(screen.getByText(evidence.limitations[0])).toBeTruthy();
+  });
+
+  it.each([0, -500, 1750.25])("preserves the exact paid subtotal %s, refunds and source limits without adding mirrors", (amount) => {
+    wrap(<MonthMoney brandId="b" state={ready(home({ commerce: commerce(amount) }))} onRetry={vi.fn()} scaleHref={null} onBudgetClosed={vi.fn()} />);
+    const column = screen.getByText("已收集的已付款訂單淨額").parentElement!;
+    expect(within(column).getByText(amount.toLocaleString("en-US"))).toBeTruthy();
+    expect(within(column).getByText("2 筆已付款・2 筆金額已知・1 筆已退款")).toBeTruthy();
+    expect(within(column).getByText("2026-09-01–2026-09-22・品牌訂單，未歸因單一廣告")).toBeTruthy();
+    expect(within(column).getByText("來源幣別與覆蓋範圍尚未核實")).toBeTruthy();
+    expect(within(column).queryByText(/9,999/)).toBeNull();
+    expect(screen.queryByText(/有賺|少賺/)).toBeNull();
+  });
+
+  it("does not combine multiple source currencies or turn unknown payment amount into zero", () => {
+    const { unmount } = wrap(<MonthMoney brandId="b" state={ready(home({ commerce: commerce(120, ["TWD", "USD"]) }))} onRetry={vi.fn()} scaleHref={null} onBudgetClosed={vi.fn()} />);
+    expect(screen.getByText("多幣別，無法合計")).toBeTruthy();
+    expect(screen.queryByText("120")).toBeNull();
+    unmount();
+    wrap(<MonthMoney brandId="b" state={ready(home({ commerce: commerce(null) }))} onRetry={vi.fn()} scaleHref={null} onBudgetClosed={vi.fn()} />);
+    expect(screen.getByText("付款金額尚未確認")).toBeTruthy();
+    expect(screen.queryByText("NT$0")).toBeNull();
+  });
+
+  it("uses the served draft flow even when counts superficially look ready", () => {
+    wrap(<CampaignRows brandId="b" state={ready(home({ campaigns: [campaign({ status: "draft",
+      draft: { start_date: null, cap_missing: false, ads_total: 2, ads_ready: 2, approved: false },
+      next_action: { id: "prepare_campaign", label: "核對策略", reason: "預算尚待確認", target: { kind: "flow", parts: ["strategy"] } },
+    })] }))} onRetry={vi.fn()} />);
+    expect(screen.getByRole("link", { name: "核對策略 →" }).getAttribute("href")).toBe("/brands/b/ads/campaigns/cmp_daily/strategy");
+    expect(screen.queryByText(/可以上架/)).toBeNull();
+  });
+  it("unknown orders remain unknown and the platform hypothesis is folded", () => {
+    wrap(<MonthMoney brandId="b" state={ready(home())} onRetry={vi.fn()} scaleHref={null} onBudgetClosed={vi.fn()} />);
+    expect(screen.getByText("已收集的已付款訂單淨額")).toBeTruthy();
+    expect(screen.getByText("目前無法確認訂單證據")).toBeTruthy();
+    expect(screen.queryByText("這個月估計多賺")).toBeNull();
+    expect(screen.getByRole("button", { name: "平台購買假設估算" }).getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("zero ready ads cannot create publishing readiness without a served next action", () => {
+    wrap(<CampaignRows brandId="b" state={ready(home({ campaigns: [campaign({
+      status: "draft", draft: { start_date: null, cap_missing: false, ads_total: 0, ads_ready: 0, approved: false },
+    })] }))} onRetry={vi.fn()} />);
+    expect(screen.queryByText(/可以上架了/)).toBeNull();
+    expect(screen.getByRole("link", { name: "繼續準備 →" })).toBeTruthy();
+  });
+
+  it("configured foreign cap is not a missing cap or a TWD profit comparison", () => {
+    wrap(<CampaignRows brandId="b" state={ready(home({ currency: null, spent: null, campaigns: [campaign({
+      currency: "TWD", cap: null, configured_cap: { value: 350, basis: "own" },
+      cap_comparison: { basis: "own", currency: "USD", reason: "cap_currency_mismatch", message: "幣別不同" },
+    })] }))} onRetry={vi.fn()} />);
+    expect(screen.getByText(/已設上限 USD 350/)).toBeTruthy();
+    expect(screen.queryByText(/沒設上限/)).toBeNull();
+    expect(screen.queryByText(/有賺/)).toBeNull();
+    expect(screen.getByText("NT$130 元")).toBeTruthy();
+  });
+});
 
 describe("MonthMoney", () => {
   it("keeps a manual cap while hiding an uncomparable break-even and its profit tag", () => {
@@ -90,23 +203,25 @@ describe("MonthMoney", () => {
     const h = home({ money: { ...home().money!, earn_after_cost_and_ads: null,
       earn_missing: [reason], estimate_basis: { kind: "platform_purchase_margin", assumptions: [], missing: [reason] } } });
     wrap(<MonthMoney brandId="b" state={ready(h)} onRetry={vi.fn()} scaleHref={null} onBudgetClosed={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "平台購買假設估算" }));
     expect(screen.getByText(`算不出來・${label}`)).toBeTruthy();
     expect(screen.queryByText("0 TWD")).toBeNull();
   });
 
-  it("prints the rounded earn, whole-yuan cost per purchase, the shared cap and last month's same days", () => {
+  it("separates collected orders from the exact folded hypothesis and comparable cost", () => {
     wrap(<MonthMoney brandId="b" state={ready(home())} onRetry={vi.fn()} scaleHref={null} onBudgetClosed={vi.fn()} />);
-    expect(screen.getByText("這個月估計多賺")).toBeTruthy();
-    expect(screen.getByText("60,000 TWD")).toBeTruthy();
-    expect(screen.getByText("扣掉商品成本和廣告費")).toBeTruthy();
+    expect(screen.getByText("目前無法確認訂單證據")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "平台購買假設估算" }));
+    expect(screen.getByText("NT$60,163.5")).toBeTruthy();
+    expect(screen.getByText("平台購買數推估，不能當作已付款利潤")).toBeTruthy();
     expect(screen.getByText("NT$139 元")).toBeTruthy();
     expect(screen.getByText(byPlain("每個活動各有上限，目前都是 450"))).toBeTruthy();
-    expect(screen.getByText(byPlain("・有賺（打平 520）"))).toBeTruthy();
+    expect(screen.getByText("假設打平成本 NT$520")).toBeTruthy();
     expect(screen.getByText("各活動上限 450")).toBeTruthy();
     expect(screen.getByText("比 8 月同期多 40 筆")).toBeTruthy();
     expect(screen.getByText("便宜 37%")).toBeTruthy();
-    expect(screen.getByText("8 月同期 221 元")).toBeTruthy();
-    expect(screen.getByText("23,600 元")).toBeTruthy();
+    expect(screen.getByText("8 月同期 NT$221 元")).toBeTruthy();
+    expect(screen.getByText("NT$23,600")).toBeTruthy();
     expect(screen.getByText(/照現在速度月底會用不完/)).toBeTruthy();
     expect(screen.queryByRole("link", { name: "看加預算建議 →" })).toBeNull();
   });
@@ -117,6 +232,7 @@ describe("MonthMoney", () => {
       pace: { budget_amount: null, available: null, daily: [], projected_month_end: null },
     });
     wrap(<MonthMoney brandId="b" state={ready(h)} onRetry={vi.fn()} scaleHref={null} onBudgetClosed={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "平台購買假設估算" }));
     expect(screen.getByText("算不出來・缺商品成本")).toBeTruthy();
     expect(screen.getByText("還沒有購買")).toBeTruthy();
     expect(screen.getByText(byPlain("每個活動各自算，目前都暫用打平線 520"))).toBeTruthy();
@@ -136,16 +252,16 @@ describe("MonthMoney", () => {
     expect(screen.getByText("還沒設上限")).toBeTruthy();
   });
 
-  it("a loss prints 少賺 with the absolute amount; another currency keeps its code", () => {
+  it("a negative hypothesis retains its sign and another currency keeps its code", () => {
     wrap(<MonthMoney brandId="b" state={ready(home({ currency: "USD", money: { ...home().money!, earn_after_cost_and_ads: -1499.5 } }))} onRetry={vi.fn()} scaleHref={null} onBudgetClosed={vi.fn()} />);
-    expect(screen.getByText("這個月估計少賺")).toBeTruthy();
-    expect(screen.getByText("1,000 USD")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "平台購買假設估算" }));
+    expect(screen.getByText("USD -1,499.5")).toBeTruthy();
   });
 
   it("the pace block failing alone says so once; the money column stays", () => {
     wrap(<MonthMoney brandId="b" state={ready(home({ pace: null }))} onRetry={vi.fn()} scaleHref={null} onBudgetClosed={vi.fn()} />);
     expect(screen.getByText("預算進度暫時讀取不到")).toBeTruthy();
-    expect(screen.getByText("60,000 TWD")).toBeTruthy();
+    expect(screen.getByText("目前無法確認訂單證據")).toBeTruthy();
   });
 });
 
@@ -224,8 +340,8 @@ describe("CampaignRows", () => {
     wrap(<CampaignRows brandId="b" state={ready(h)} onRetry={vi.fn()} />);
     const grid = screen.getByTestId("campaign-grid");
     expect(within(grid).getByText(LONG, { exact: true }).closest("a")?.getAttribute("href")).toBe("/brands/b/ads/campaigns/cmp_mid");
-    expect(within(grid).getByText("15,767 元")).toBeTruthy();
-    expect(within(grid).getByText("130 元")).toBeTruthy();
+    expect(within(grid).getByText("NT$15,767.4")).toBeTruthy();
+    expect(within(grid).getByText("NT$130 元")).toBeTruthy();
     expect(within(grid).getByText("9/17、9/18 沒抓到資料")).toBeTruthy();
     expect(within(grid).getByText("在投 8 則・每日 未知")).toBeTruthy();
     expect(within(grid).getByRole("link", { name: "重新連線 →" }).getAttribute("href")).toBe("/brands/b/ads/connections");
@@ -286,10 +402,10 @@ describe("CampaignRows", () => {
 
   it("money tag beside the cost: 有賺 against break-even; hidden when break-even is unknown (never guessed)", () => {
     const { unmount } = wrap(<CampaignRows brandId="b" state={ready(home())} onRetry={vi.fn()} />);
-    expect(screen.getByText(byPlain("・有賺（打平 520）"))).toBeTruthy();
+    expect(screen.getByText("假設打平成本 NT$520")).toBeTruthy();
     unmount();
     wrap(<CampaignRows brandId="b" state={ready(home({ campaigns: [campaign({ cap: { value: 450, basis: "own", break_even: null } })] }))} onRetry={vi.fn()} />);
-    expect(screen.getByText("130 元")).toBeTruthy();
+    expect(screen.getByText("NT$130 元")).toBeTruthy();
     expect(document.querySelector('[data-slot="money-tag"]')).toBeNull();
   });
 
@@ -383,9 +499,10 @@ function triage(overrides: Partial<TriageItem> = {}): TriageItem {
     entity_id: "ad_1", native_id: "n_1", name: "再行銷・兩入組 NT$1,580 免運 - 複本 2", campaign_id: "cmp_daily", campaign_name: "日常商品推廣・轉換",
     thumbnail_url: null, class: "worse", label: "變差", reason_code: "worse", grade: "over", grade_label: "太貴", previous_grade: "on_target", grade_move: { from: "on_target", to: "over" },
     window: { start: "2026-09-16", end: "2026-09-22", days: 7, previous_start: "2026-09-09", previous_end: "2026-09-15", extended_from: null },
-    target: { value: 450, basis: "own", result_kind: "purchase", result_label: "購買", missing: [] },
-    current: { spend: 3120, result_count: 6, cost_per_result: 520, result_kind: "purchase", result_label: "購買", derived_zero_days: 0, reason: null },
-    previous: { spend: 3080, result_count: 7, cost_per_result: 440, result_kind: "purchase", result_label: "購買", derived_zero_days: 0, reason: null },
+    cap_comparison: { basis: "own", currency: "TWD", reason: null, message: null },
+    target: { value: 450, basis: "own", cap_unit: { basis: "own", currency: "TWD" }, break_even_unit: { basis: "break_even", currency: "TWD" }, result_kind: "purchase", result_label: "購買", missing: [] },
+    current: { currency: "TWD", spend: 3120, result_count: 6, cost_per_result: 520, result_kind: "purchase", result_label: "購買", derived_zero_days: 0, reason: null },
+    previous: { currency: "TWD", spend: 3080, result_count: 7, cost_per_result: 440, result_kind: "purchase", result_label: "購買", derived_zero_days: 0, reason: null },
     change_pct: 0.182, sample: { gate: true, spend_multiple: 6.9, days_with_events: 7 },
     ...overrides,
   };
@@ -412,7 +529,58 @@ function row(id: string, kind: QueueItem["kind_key"], extra: Partial<QueueItem> 
 }
 const payload = (items: QueueItem[]) => ({ status: "ready" as const, queue: { items, counts: { stop_loss: 0, worse: 0, better: 0, flat: 0, insufficient: 0, no_target: 0 }, total_ads: 0, kinds_available: [], kinds_pending: [] } });
 
+function closeoutRow(overrides: Partial<CloseoutQueueRow> = {}): CloseoutQueueRow {
+  return { id: "itr_c", dedupe_key: "c", category: "ads_triage_closeout", severity: "rule_warning", message: "「秋季檔期」已結束，待結案",
+    action_url: "/brands/b/ads/campaigns/cmp_fall?tab=perf&close=1", visible_from: null, status: "open", created_at: "2026-10-10T00:00:00Z",
+    campaign_id: "cmp_fall", decision: true, position: 1, done: false,
+    closeout: { campaign_id: "cmp_fall", campaign_name: "秋季檔期", end_date: null, running: { count: 0, read_at: null } }, ...overrides };
+}
+
 describe("TodayDecisions", () => {
+  it("legacy unknown currencies cannot create a current/prior arrow or a break-even claim", () => {
+    wrap(<TodayDecisions brandId="b" state={payload([row("unknown", "worse", {}, {
+      current: { ...triage().current, currency: undefined }, previous: { ...triage().previous, currency: undefined },
+    })])} syncing={false} recovering={false} sync={null} onRetry={vi.fn()} />);
+    expect(screen.getByText("每筆 520（幣別未確認）")).toBeTruthy();
+    expect(screen.queryByText(/440 →|假設打平成本|有賺/)).toBeNull();
+  });
+
+  it("stable over-cap rows use the served trigger and review route; only the first action is primary", () => {
+    const rows = [row("steady", "worse", { decision: true, position: 0, trigger_reason: "persistently_over_cap" }, {
+      target: { ...triage().target, value: 100 }, previous: { ...triage().previous, cost_per_result: 500 },
+      current: { ...triage().current, cost_per_result: 500 }, change_pct: 0, grade_move: null,
+    }), row("second", "cleanup", { decision: true, position: 2, action_url: "/second" })];
+    wrap(<TodayDecisions brandId="b" state={{ ...payload(rows), queue: { ...payload(rows).queue, closeouts: [closeoutRow({ position: 1 })] } }} syncing={false} recovering={false} sync={null} onRetry={vi.fn()} />);
+    expect(screen.getByText("成本持續超過上限")).toBeTruthy();
+    expect(screen.getByText(byPlain("每筆 NT$500 → 500，超過日常商品推廣的上限 100"))).toBeTruthy();
+    expect(screen.getByRole("link", { name: "查原因 →" }).getAttribute("href")).toContain("/review/");
+    expect(document.querySelectorAll('[data-slot="button"][data-variant="default"]')).toHaveLength(1);
+    expect(screen.getByRole("link", { name: "結案這一期 →" }).getAttribute("data-variant")).toBe("outline");
+  });
+
+  it("retains a held decision's reason, revisit and exit while keeping the empty queue neutral", () => {
+    const held = row("held", "worse", { done: true, proposal: { kind: "review", review_id: "review-held",
+      status: "deferred", decision: "deferred", reason: "先等付款資料核對", revisit_at: "2026-10-08T16:00:00Z",
+      recommendation_id: null, change_set_id: null, change_set_status: null, verification_state: null, multi: false } });
+    wrap(<TodayDecisions brandId="b" state={payload([held])} syncing={false} recovering={false} sync={null} onRetry={vi.fn()} />);
+    expect(screen.getByText("目前沒有待決定的項目")).toBeTruthy();
+    expect(screen.queryByText("✓")).toBeNull();
+    const fold = screen.getByRole("button", { name: "今天處理過 1 件" });
+    expect(fold.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(fold);
+    expect(screen.getByText("先等付款資料核對")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "10/9 再看" }).getAttribute("href")).toContain("reviews/review-held");
+  });
+
+  it.each([null, "USD"])("does not compare observed TWD with a %s break-even or unknown cap", (currency) => {
+    const t = triage({ target: { ...triage().target, break_even: 350,
+      cap_unit: { basis: "own", currency }, break_even_unit: { basis: "break_even", currency } },
+      cap_comparison: { basis: "own", currency, reason: "cap_currency_unknown", message: null } });
+    wrap(<TodayDecisions brandId="b" state={payload([row("foreign", "worse", {}, t)])} syncing={false} recovering={false} sync={null} onRetry={vi.fn()} />);
+    expect(screen.getByText("每筆 NT$440 → 520")).toBeTruthy();
+    expect(screen.queryByText(/假設打平成本|超過.*上限|有賺/)).toBeNull();
+  });
+
   it("cleanup card: red-only cut title with the saving rounded to 10; 沒賣出 rows show spend, others whole-yuan cost", () => {
     const cleanup = row("c1", "cleanup", {
       action_url: "/brands/b/ads/campaigns/cmp_daily/propose/cleanup/cmp_daily",
@@ -423,9 +591,9 @@ describe("TodayDecisions", () => {
         ] },
     });
     wrap(<TodayDecisions brandId="b" state={payload([cleanup])} syncing={false} recovering={false} sync={null} onRetry={vi.fn()} />);
-    expect(screen.getByText("關掉色帶裡紅色的 2 則，每天省約 260 元")).toBeTruthy();
+    expect(screen.getByText("關掉色帶裡紅色的 2 則，每天省約 257（幣別未確認）")).toBeTruthy();
     expect(screen.getByText("花 1,480・0 筆")).toBeTruthy();
-    expect(screen.getByText("每筆 618 元")).toBeTruthy(); // F47-I06: 617.5 rounds like the performance page, never floors
+    expect(screen.getByText("每筆 618 元（幣別未確認）")).toBeTruthy(); // F47-I06: 617.5 rounds like the performance page, never floors
     expect(screen.getByText("沒賣出")).toBeTruthy();
     expect(screen.getByText("太貴")).toBeTruthy();
     expect(screen.getByRole("link", { name: "決定要不要關 →" }).getAttribute("data-variant")).toBe("default");
@@ -444,18 +612,18 @@ describe("TodayDecisions", () => {
   it("worse card: the label is the backend's grade move; costs compared with this campaign's cap; trend only as a footnote", () => {
     const { unmount } = wrap(<TodayDecisions brandId="b" state={payload([row("w1", "worse", {}, { target: { ...triage().target, break_even: 520 } })])} syncing={false} recovering={false} sync={null} onRetry={vi.fn()} />);
     expect(screen.getByText("從划算變太貴")).toBeTruthy();
-    expect(screen.getByText(byPlain("每筆 440 → 520，超過日常商品推廣的上限 450"))).toBeTruthy();
-    expect(screen.getByText(byPlain("・剛好打平（打平 520）"))).toBeTruthy();
+    expect(screen.getByText(byPlain("每筆 NT$440 → 520，超過日常商品推廣的上限 450"))).toBeTruthy();
+    expect(screen.getByText("假設打平成本 NT$520")).toBeTruthy();
     expect(screen.getByText("比前 7 天 ▲18%（只當參考）")).toBeTruthy();
-    expect(screen.getByRole("link", { name: "查原因 →" }).getAttribute("data-variant")).toBe("outline");
+    expect(screen.getByRole("link", { name: "查原因 →" }).getAttribute("data-variant")).toBe("default");
     unmount();
     wrap(<TodayDecisions brandId="b" state={payload([row("w1", "worse", {}, {
       grade_move: { from: "on_target", to: "watch" }, change_pct: null, window: { ...triage().window, days: 14 },
-      target: { value: 520, basis: "break_even", result_kind: "purchase", result_label: "購買", missing: [], break_even: 520 },
+      target: { ...triage().target, value: 520, basis: "break_even", result_kind: "purchase", result_label: "購買", missing: [], break_even: 520 },
       current: { ...triage().current, cost_per_result: 505.5 },
     })])} syncing={false} recovering={false} sync={null} onRetry={vi.fn()} />);
     expect(screen.getByText("從划算變偏貴")).toBeTruthy();
-    expect(screen.getByText(byPlain("每筆 440 → 506，還在日常商品推廣暫用打平線 520 內"))).toBeTruthy(); // 505.5 rounds (F47-I06)
+    expect(screen.getByText(byPlain("每筆 NT$440 → 506，還在日常商品推廣暫用打平線 520 內"))).toBeTruthy(); // 505.5 rounds (F47-I06)
     expect(screen.getByText("比前 14 天：沒有可比資料（只當參考）")).toBeTruthy();
   });
 
@@ -470,11 +638,11 @@ describe("TodayDecisions", () => {
     const cleanup = row("c1", "cleanup", {
       action_url: "/x",
       cleanup: { campaign_id: "cmp_daily", campaign_name: "日常商品推廣・轉換", can_support: 6, active_ads: 8, short: 0, daily_saving: null, scale_owner_id: null, keep: [],
-        ads: [{ entity_id: "a8", name: "提問式貼文・早晨第一口是什麼？", thumbnail_url: null, spend_7d: null, grade: "over", cost_per_result: 617.5, spend: 2470, result_count: 4, daily_spend: null, rejected_before: null }] },
+        ads: [{ entity_id: "a8", name: "提問式貼文・早晨第一口是什麼？", thumbnail_url: null, spend_7d: null, grade: "over", cost_per_result: 617.5, spend: 2470, result_count: 4, daily_spend: null, currency: "TWD", rejected_before: null }] },
     }, { target: { ...triage().target, break_even: 520 } });
     wrap(<TodayDecisions brandId="b" state={payload([cleanup])} syncing={false} recovering={false} sync={null} onRetry={vi.fn()} />);
     expect(document.querySelector('[data-grade="over"] [data-slot="term"]')).toBeTruthy();
-    expect(screen.getByText(byPlain("・在虧（打平 520）"))).toBeTruthy();
+    expect(screen.getByText("假設打平成本 NT$520")).toBeTruthy();
   });
 
   it("settle card: the row's range, campaigns (imported counted), learnable ads, the grade bar and 開始結算; it spans the row", () => {
@@ -500,7 +668,7 @@ describe("TodayDecisions", () => {
     const row = settleRow({ status: "resolved" });
     wrap(<TodayDecisions brandId="b" state={{ status: "ready", queue: { ...payload([]).queue, settle: row } }} syncing={false} recovering={false} sync={null} onRetry={vi.fn()} />);
     expect(screen.queryByRole("article", { name: "結算上一期" })).toBeNull();
-    expect(screen.getByText("今天沒有要決定的事")).toBeTruthy();
+    expect(screen.getByText("目前沒有待決定的項目")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "今天處理過 1 件" }));
     expect(screen.getByText("結算上一期 08/01–08/31")).toBeTruthy();
     expect(screen.getByText("✓ 已寫進筆記本").getAttribute("data-tone")).toBe("ok");

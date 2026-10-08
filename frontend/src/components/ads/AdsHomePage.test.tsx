@@ -15,6 +15,8 @@ import { getMonthlyBudget, saveMonthlyBudget, type MonthlyBudget } from "@/lib/a
 import { getRecovery, type AdsRecovery } from "@/lib/adsStatusApi";
 import { AdsHomePage } from "./AdsHomePage";
 import { ApiNetworkError } from "@/lib/http";
+import { fetchActiveJobs } from "@/lib/jobsApi";
+vi.mock("@/lib/jobsApi", async (actual) => ({ ...await actual<typeof import("@/lib/jobsApi")>(), fetchActiveJobs: vi.fn() }));
 // F50 Contract K: the org clock reads the workspace org zone; dates assert Asia/Taipei output, never the runner's.
 vi.mock("@/components/layout/WorkspaceContext", () => ({ useWorkspace: () => ({ scope: "user:org", identity: { user: { id: "u", email: "a@example.com" }, org: { id: "o", name: "測試", kind: "personal", role: "owner", timezone: "Asia/Taipei", today: "2026-10-01" }, orgs: [] } }) }));
 
@@ -40,9 +42,9 @@ function home(overrides: Partial<HomeOverview> = {}): HomeOverview {
     closed_this_month: 0, month: "2026-09", day_of_month: 23, days_in_month: 30, currency: "TWD", spent: 22000,
     commerce: null, money: {
       purchases: 158, cost_per_purchase: 139.24, cap: { value: 450, basis: "own", break_even: 520 }, earn_after_cost_and_ads: 60163.5, earn_missing: [], estimate_basis: { kind: "platform_purchase_margin", assumptions: [], missing: [] }, excluded: [],
-      previous_same_period: { days: 22, purchases: 118, cost_per_purchase: 221.37 },
+      previous_same_period: { currency: "TWD", cost_comparison: { reason: null }, days: 22, purchases: 118, cost_per_purchase: 221.37 },
     },
-    pace: { budget_amount: 60000, available: 23600, daily: [{ day: "2026-09-01", cumulative: 900 }, { day: "2026-09-22", cumulative: 22000 }], projected_month_end: 28695.65 },
+    pace: { budget_currency: "TWD", budget_comparison: { reason: null }, budget_amount: 60000, available: 23600, daily: [{ day: "2026-09-01", cumulative: 900 }, { day: "2026-09-22", cumulative: 22000 }], projected_month_end: 28695.65 },
     quality: { buckets: [
       { grade: "on_target", amount: 14300, count: 6, ads: [] },
       { grade: "watch", amount: 3120, count: 1, ads: [{ entity_id: "a7", name: "再行銷・兩入組", thumbnail_url: null, spend: 3120 }] },
@@ -153,10 +155,60 @@ function renderAt(url: string) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(fetchActiveJobs).mockResolvedValue({ data: [], total: 0, other_count: 0,
+    done_today: 0, failed_today: 0, generated_at: "2026-09-23T00:40:00Z",
+    worker_health: { state: "alive", checked_at: "2026-09-23T00:40:00Z",
+      last_heartbeat_at: "2026-09-23T00:40:00Z", reason_code: "heartbeat_fresh" } });
   vi.mocked(getHomeOverview).mockResolvedValue(home());
   vi.mocked(refreshQueue).mockResolvedValue(queue([]));
   vi.mocked(getRecovery).mockResolvedValue(notRecovering);
   vi.mocked(getMonthlyBudget).mockResolvedValue(budget);
+});
+
+describe("F54 independent execution health", () => {
+  it("failed overview refresh retains the last blocks and focused budget input, then retries", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getHomeOverview).mockResolvedValueOnce(home({ quality: null }))
+      .mockRejectedValueOnce(new Error("overview refresh failed")).mockResolvedValue(home());
+    renderPage();
+    await user.click(await screen.findByRole("button", { name: "調整" }));
+    await user.click(await screen.findByRole("button", { name: "調整月總額" }));
+    const input = screen.getByRole("spinbutton", { name: "每月品牌總額" });
+    await user.clear(input);
+    await user.type(input, "55000");
+    await user.click(screen.getByRole("button", { name: "重試" }));
+    input.focus();
+    expect(await screen.findByText(/更新失敗，顯示上次資料/)).toBeTruthy();
+    expect(screen.getByRole("link", { name: "日常商品推廣・轉換" })).toBeTruthy();
+    expect(screen.getByText("目前無法確認訂單證據")).toBeTruthy();
+    expect(input).toBe(document.activeElement);
+    expect((input as HTMLInputElement).value).toBe("55000");
+    expect(screen.queryByText(/下次同步/)).toBeNull();
+    await user.click(screen.getByRole("button", { name: "重新讀取首頁" }));
+    await waitFor(() => expect(screen.queryByText(/更新失敗，顯示上次資料/)).toBeNull());
+    expect((input as HTMLInputElement).value).toBe("55000");
+    expect(vi.mocked(getHomeOverview)).toHaveBeenCalledTimes(3);
+  });
+
+  it("zero decisions with stopped worker never promises the old next sync", async () => {
+    vi.mocked(fetchActiveJobs).mockResolvedValue({ data: [], total: 0, other_count: 0,
+      done_today: 0, failed_today: 0, generated_at: "2026-09-23T00:40:00Z", worker_alive: false });
+    renderPage();
+    expect(await screen.findByText("背景執行已停止")).toBeTruthy();
+    expect(screen.getByText("目前沒有待決定的項目")).toBeTruthy();
+    expect(screen.queryByText(/下次同步/)).toBeNull();
+    expect(screen.queryByText("✓")).toBeNull();
+  });
+
+  it("failed health remains unknown and does not hide known decisions behind syncing", async () => {
+    vi.mocked(fetchActiveJobs).mockRejectedValue(new Error("health unavailable"));
+    vi.mocked(getHomeOverview).mockResolvedValue(home({ campaigns: home().campaigns!.map((c) => ({ ...c, sync_state: "syncing" })) }));
+    vi.mocked(refreshQueue).mockResolvedValue(served([item("expensive", "worse", { decision: true, position: 1 })], 1));
+    renderPage();
+    expect(await screen.findByText("背景狀態未確認")).toBeTruthy();
+    expect(await screen.findByRole("link", { name: "查原因 →" })).toBeTruthy();
+    expect(screen.queryByText(/下次同步/)).toBeNull();
+  });
 });
 
 describe("AdsHomePage (F28-I08 board D)", () => {
@@ -279,12 +331,12 @@ describe("AdsHomePage (F28-I08 board D)", () => {
     renderPage();
     expect(await screen.findByRole("article", { name: "結算上一期" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "1 件要你決定 ↓" })).toBeTruthy();
-    expect(screen.queryByText("今天沒有要決定的事")).toBeNull();
+    expect(screen.queryByText("目前沒有待決定的項目")).toBeNull();
   });
 
   it("no open decision: honest empty card with the sync time, and 今天 says nothing to decide", async () => {
     renderPage();
-    expect(await screen.findByText("今天沒有要決定的事")).toBeTruthy();
+    expect(await screen.findByText("目前沒有待決定的項目")).toBeTruthy();
     expect(screen.getByText("沒有要決定的事")).toBeTruthy();
     expect(screen.getByRole("link", { name: "看每月回顧" }).getAttribute("href")).toBe("/brands/brd_1/ads/month");
   });
@@ -299,14 +351,14 @@ describe("AdsHomePage (F28-I08 board D)", () => {
       const money = screen.getByRole("region", { name: "這個月的錢" });
       expect(within(money).getByText(error.message)).toBeTruthy();
       await userEvent.click(within(money).getByRole("button", { name: "重新讀取" }));
-      expect(await screen.findByText("60,000 TWD")).toBeTruthy();
+      expect(await screen.findByText("目前無法確認訂單證據")).toBeTruthy();
       if (failed === "both") expect(screen.getAllByText(error.message)).toHaveLength(1);
     }
     if (failed !== "home") {
       const decisions = screen.getByRole("region", { name: /需要你決定/ });
       expect(within(decisions).getByText(error.message)).toBeTruthy();
       await userEvent.click(within(decisions).getByRole("button", { name: "重新讀取" }));
-      expect(await screen.findByText("今天沒有要決定的事")).toBeTruthy();
+      expect(await screen.findByText("目前沒有待決定的項目")).toBeTruthy();
     }
     expect(screen.queryByText(error.message)).toBeNull();
   });
@@ -325,7 +377,7 @@ describe("AdsHomePage (F28-I08 board D)", () => {
     renderPage();
     expect(await screen.findByText("今天的判斷讀取失敗")).toBeTruthy();
     expect(screen.getByRole("button", { name: "判斷讀取失敗 ↓" })).toBeTruthy();
-    expect(await screen.findByText("60,000 TWD")).toBeTruthy();
+    expect(await screen.findByText("目前無法確認訂單證據")).toBeTruthy();
     expect(screen.getByText("65%")).toBeTruthy();
     expect(screen.getByRole("link", { name: "日常商品推廣・轉換" })).toBeTruthy();
     await userEvent.click(screen.getByRole("button", { name: "重新讀取" }));
@@ -342,7 +394,7 @@ describe("AdsHomePage (F28-I08 board D)", () => {
     expect(await screen.findByRole("link", { name: "查原因 →" })).toBeTruthy();
     expect(screen.queryByText(/NT\$0/)).toBeNull();
     await userEvent.click(screen.getAllByRole("button", { name: "重新讀取" })[0]);
-    expect(await screen.findByText("60,000 TWD")).toBeTruthy();
+    expect(await screen.findByText("目前無法確認訂單證據")).toBeTruthy();
   });
 
   it("a running platform read holds the judgement: 同步中 chip, skeleton cards, and 今天 waits", async () => {
@@ -506,7 +558,7 @@ describe("AdsHomePage (F28-I08 board D)", () => {
     it("getRecovery fails: no banner, the rest of the page still renders", async () => {
       vi.mocked(getRecovery).mockRejectedValue(new Error("x"));
       renderPage();
-      expect(await screen.findByText("今天沒有要決定的事")).toBeTruthy();
+      expect(await screen.findByText("目前沒有待決定的項目")).toBeTruthy();
       expect(screen.queryByText(/系統暫停了/)).toBeNull();
     });
   });
@@ -519,12 +571,12 @@ describe("AdsHomePage (F29-I10) one queue read for the count and the cards", () 
     let resolveQueue!: (q: QueuePayload) => void;
     vi.mocked(refreshQueue).mockReturnValue(new Promise<QueuePayload>((res) => { resolveQueue = res; }));
     renderPage();
-    expect(await screen.findByText("60,000 TWD")).toBeTruthy();
+    expect(await screen.findByText("目前無法確認訂單證據")).toBeTruthy();
     expect(screen.getByText("正在整理今天的判斷")).toBeTruthy();
     const section = screen.getByRole("region", { name: /需要你決定/ });
     expect(section.querySelector('[aria-busy="true"]')).toBeTruthy();
     expect(screen.queryByText("沒有要決定的事")).toBeNull();
-    expect(screen.queryByText("今天沒有要決定的事")).toBeNull();
+    expect(screen.queryByText("目前沒有待決定的項目")).toBeNull();
 
     resolveQueue(queue([item("w1", "worse"), cleanupItem("c1")]));
     const cards = await within(section).findAllByRole("article");
@@ -540,9 +592,9 @@ describe("AdsHomePage (F29-I10) one queue read for the count and the cards", () 
     expect(await screen.findByText("今天的判斷讀取失敗")).toBeTruthy();
     expect(screen.getByRole("button", { name: "判斷讀取失敗 ↓" })).toBeTruthy();
     expect(screen.queryByText("沒有要決定的事")).toBeNull();
-    expect(screen.queryByText("今天沒有要決定的事")).toBeNull();
+    expect(screen.queryByText("目前沒有待決定的項目")).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: "重新讀取" }));
-    expect(await screen.findByText("今天沒有要決定的事")).toBeTruthy();
+    expect(await screen.findByText("目前沒有待決定的項目")).toBeTruthy();
     expect(screen.getByText("沒有要決定的事")).toBeTruthy();
     expect(vi.mocked(refreshQueue)).toHaveBeenCalledTimes(2);
   });

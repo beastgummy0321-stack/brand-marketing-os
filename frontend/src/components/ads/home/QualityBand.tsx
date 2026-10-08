@@ -3,7 +3,8 @@ import { Link, useParams } from "react-router-dom";
 import { Button } from "@/components/layout/ui/button";
 import { Skeleton } from "@/components/layout/Skeleton";
 import type { HomeOverview } from "@/lib/adsHomeApi";
-import { GradeBand, MoneyRule, type BandBucket } from "../patterns";
+import { GradeBand, type BandBucket } from "../patterns";
+import { CostBasis } from "./CostBasis";
 import { monthNumber } from "./MonthMoney";
 import { bandState } from "./status";
 
@@ -62,11 +63,13 @@ function Band({ home, onRetry }: { home: HomeOverview; onRetry: () => void }) {
     ads: b.ads.map((a) => ({ entity_id: a.entity_id, name: a.name ?? "未命名廣告", thumbnail_url: a.thumbnail_url, spend: a.spend })),
   }));
   const cap = home.money?.cap && home.money.cap.basis ? { value: home.money.cap.value, basis: home.money.cap.basis } : null;
-  // v10 `moneyRule()` closes the band: 有賺／在虧 is measured against break-even, the grades against the cap.
+  // Grades compare ad cost with the cap; the margin hypothesis is not paid profit.
   return (
     <>
       <GradeBand buckets={buckets} spent={home.spent} spentLabel={label} cap={cap} />
-      <MoneyRule breakEven={home.money?.cap?.break_even ?? null} />
+      <div className="text-xs text-muted-foreground">色帶比較廣告成本與上限，不代表已付款利潤。
+        <CostBasis value={home.money?.cap?.break_even ?? null} currency={home.currency} />
+      </div>
     </>
   );
 }

@@ -59,6 +59,8 @@ export interface HomeExcludedCampaign {
 
 export interface HomePreviousSamePeriod {
   days: number; purchases: number | null; cost_per_purchase: number | null;
+  currency?: string | null;
+  cost_comparison?: { reason: "currency_unknown" | "currency_mismatch" | null };
 }
 
 export interface HomeMoney {
@@ -79,6 +81,10 @@ export interface HomeMoney {
 
 export interface HomePace {
   budget_amount: number | null;
+  /** Saved budget's own unit and backend qualification against observed complete-window spend.
+   * Absent legacy metadata is unknown; configured amounts stay visible without a comparison. */
+  budget_currency?: string | null;
+  budget_comparison?: { reason: "currency_unknown" | "currency_mismatch" | null };
   available: number | null;
   /** F51 Contract F `budget_to_date`: month budget × day of month ÷ days in month, whole, half up; null without a budget. */
   budget_to_date?: number | null;

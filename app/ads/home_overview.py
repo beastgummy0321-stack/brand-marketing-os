@@ -297,7 +297,14 @@ def _money_totals(rows_by_campaign, campaigns, caps, start, end, brand_currency_
     }
 
 
-def _previous_same_period(conn, org_id, brand_id, win, campaigns, caps) -> dict | None:
+def _currency_comparison(source, observed) -> dict:
+    reason = ("currency_unknown" if not source or not observed
+              else "currency_mismatch" if source != observed else None)
+    return {"reason": reason}
+
+
+def _previous_same_period(conn, org_id, brand_id, win, campaigns, caps,
+                          current_currency=None) -> dict | None:
     """The same number of complete days at the start of the previous month, capped at that
     month's own length (`month_summary._orders_comparison`'s like-for-like rule). Null when this
     month has no complete day yet."""
@@ -313,9 +320,12 @@ def _previous_same_period(conn, org_id, brand_id, win, campaigns, caps) -> dict 
     for row in rows:
         by_campaign[row["campaign_id"]].append(row)
     totals = _money_totals(by_campaign, campaigns, caps, previous_start, previous_end, currency_ok)
+    previous_spend = _spend_view(rows, previous_start, previous_end)
+    currency = previous_spend["currency"] if previous_spend["known"] else None
     return {
         "days": days, "purchases": _count_out(totals["purchases"]),
         "cost_per_purchase": _money_out(totals["cost_per_purchase"]),
+        "currency": currency, "cost_comparison": _currency_comparison(currency, current_currency),
     }
 
 
@@ -324,9 +334,14 @@ def _money_block(conn, org_id, brand_id, win, rows_by_campaign, campaigns, caps,
     totals = _money_totals(
         rows_by_campaign, campaigns, caps, win["start"], win["cutoff"], currency_ok,
     )
+    current_rows = [row for rows in rows_by_campaign.values() for row in rows]
+    current_spend = _spend_view(current_rows, win["start"], win["cutoff"])
+    current_currency = current_spend["currency"] if current_spend["known"] else None
     previous = _guarded(
         conn, "money.previous_same_period",
-        lambda: _previous_same_period(conn, org_id, brand_id, win, campaigns, caps),
+        lambda: _previous_same_period(
+            conn, org_id, brand_id, win, campaigns, caps, current_currency,
+        ),
     )
     return {
         "purchases": _count_out(totals["purchases"]),
@@ -355,6 +370,9 @@ def _money_block(conn, org_id, brand_id, win, rows_by_campaign, campaigns, caps,
 
 def _pace_block(conn, org_id, brand_id, month, win, rows, spent) -> dict:
     month_plan = month_budget.view(conn, org_id, brand_id, month)
+    observed = _spend_view(rows, win["start"], win["cutoff"])
+    observed_currency = observed["currency"] if observed["known"] else None
+    budget_currency = month_plan["currency"]
     by_day = defaultdict(lambda: Decimal(0))
     for row in rows:
         if spent is not None:
@@ -374,6 +392,8 @@ def _pace_block(conn, org_id, brand_id, month, win, rows, spent) -> dict:
     amount = month_plan["amount"]
     return {
         "budget_amount": amount, "available": month_plan["available"],
+        "budget_currency": budget_currency,
+        "budget_comparison": _currency_comparison(budget_currency, observed_currency),
         "budget_to_date": None if amount is None else budget.whole(
             amount * win["day_of_month"] / win["days_in_month"]
         ),
