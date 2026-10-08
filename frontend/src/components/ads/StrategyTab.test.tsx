@@ -67,7 +67,7 @@ const ROWS: BudgetScenarioRow[] = [
   { key: "cap", label: "照預算上限", daily: 968, total: 30000, caption: "用滿你設的預算上限 NT$30,000", over_cap: 0 },
   { key: "recommended", label: "穩定成長", daily: 2250, total: 69750, caption: "冷啟動估算：上限 x 每天 5 筆購買", over_cap: 39750 },
   { key: "aggressive", label: "積極", daily: 4500, total: 139500, caption: "冷啟動估算：上限 x 每天 10 筆購買", over_cap: 109500 },
-];
+].map(row => ({...row, currency: "TWD"}));
 
 function group(): DeliveryGroupRow {
   return {
@@ -397,18 +397,33 @@ describe("StrategyTab (F28-I09)", () => {
     c.budget_basis_json.scenarios = {
       mode: "history", recommended: "recommended", basis: {}, budget_cap: null,
       scenarios: [
-        { key: "conservative", label: "保守", daily: 1162, total: 18592, caption: "上一期日預算 NT$1936 ×0.6", over_cap: null },
-        { key: "recommended", label: "照上一期", daily: 1936, total: 30976, caption: "上一期日預算 NT$1936 ×1", over_cap: null },
-        { key: "aggressive", label: "積極", daily: 3098, total: 49568, caption: "上一期日預算 NT$1936 ×1.6", over_cap: null },
+        { key: "conservative", label: "保守", currency: "TWD", daily: 1162, total: 18592, caption: "上一期日預算 NT$1936 ×0.6", over_cap: null },
+        { key: "recommended", label: "照上一期", currency: "TWD", daily: 1936, total: 30976, caption: "上一期日預算 NT$1936 ×1", over_cap: null },
+        { key: "aggressive", label: "積極", currency: "TWD", daily: 3098, total: 49568, caption: "上一期日預算 NT$1936 ×1.6", over_cap: null },
       ],
     };
     renderTab(c);
     const row = await screen.findByRole("radio", { name: /照上一期/ });
     expect(row.getAttribute("aria-checked")).toBe("true");
-    expect(row.textContent).toContain("推薦");
+    expect(row.textContent).not.toContain("推薦");
     expect(row.textContent).toContain("已儲存");
     expect(screen.getByText("沒設預算上限")).toBeTruthy();
     expect(screen.getByRole("button", { name: "設預算上限" })).toBeTruthy();
+  });
+
+  it("a reread with a foreign unit cannot save a previously picked TWD scenario", async () => {
+    const user = userEvent.setup();
+    const c = campaign();
+    const view = renderTab(c);
+    await user.click(screen.getByRole("radio", {name: /最低/}));
+    expect(screen.getByRole("button", {name: "儲存預算 27,900"})).toBeTruthy();
+    const fresh = campaign();
+    fresh.budget_basis_json.scenarios!.scenarios = ROWS.map(row => ({...row, currency: "USD"}));
+    view.rerender(<MemoryRouter><StrategyTab brandId="brd_1" campaign={fresh} onCampaignChange={view.onCampaignChange}
+      onChangeTab={view.onChangeTab} launchApproved={false} /></MemoryRouter>);
+    expect(screen.queryByRole("button", {name: "儲存預算 27,900"})).toBeNull();
+    expect(screen.queryByRole("radio")).toBeNull();
+    expect(selectScenario).not.toHaveBeenCalled();
   });
 
   it("the why fold carries the reasons and unknowns", async () => {
@@ -522,16 +537,16 @@ describe("StrategyTab (F28-I09)", () => {
       renderTab(withReasons({ coordinate_learnings: COORD, learnings: [VERDICT] }));
       await user.click(await screen.findByRole("button", { name: "為什麼這樣建議" }));
       const [good, bad] = screen.getAllByRole("listitem").filter((li) => li.getAttribute("data-slot") === "coordinate-learning");
-      expect(within(good).getByText("划算・每筆 422").getAttribute("data-tone")).toBe("ok"); // F47-I06: 421.6 rounds (one per-sale rule), never floors
+      expect(within(good).getByText("划算・每筆 422（幣別未提供）").getAttribute("data-tone")).toBe("ok"); // F47-I06: 421.6 rounds (one per-sale rule), never floors
       expect(good.textContent).toContain(`「${LONG_AD}」（綜合維他命軟糖・10/03～10/09）`);
       expect(within(good).getByText("受眾：陌生、知道問題")).toBeTruthy();
       expect(within(good).getByText("痛點：太麻煩")).toBeTruthy();
       expect(good.textContent).not.toMatch(/effort|audience/);
-      expect(within(bad).getByText("太貴・每筆 —").getAttribute("data-tone")).toBe("over");
+      expect(within(bad).getByText("太貴・每筆 —（幣別未提供）").getAttribute("data-tone")).toBe("over");
       // 策略依據 lists what the model read: the coordinate rows, then the surviving verdict line.
       await user.click(screen.getByRole("button", { name: /查看策略依據/ }));
       const panel = screen.getByRole("dialog", { name: "策略依據" });
-      expect(within(panel).getByText("划算・每筆 422")).toBeTruthy();
+      expect(within(panel).getByText("划算・每筆 422（幣別未提供）")).toBeTruthy();
       expect(within(panel).getByText(VERDICT.text)).toBeTruthy();
       expect(within(panel).getByText("這份安排尚未列出已核實的學習引用。")).toBeTruthy();
     });
@@ -650,7 +665,8 @@ describe("StrategyTab (F28-I09)", () => {
       const facts = Array.from(panel.querySelectorAll("[data-slot=basis-fact]")).map((li) => li.textContent);
       expect(facts).toEqual(["每顆含 50mg 咖啡因09/12 更新", "顧客原話「比排咖啡快」09/20 更新"]);
       const prices = Array.from(panel.querySelectorAll("[data-slot=basis-price]")).map((li) => li.textContent);
-      expect(prices).toEqual(["三盒組 999 TWD09/01 起", "單盒 價格尚未設定起始日不明"]);
+      expect(prices).toEqual(["三盒組 999（幣別未提供）09/01 起", "單盒 價格尚未設定起始日不明"]);
+      expect(prices.join(" ")).not.toMatch(/NT\$|TWD/);
       expect(panel.textContent).not.toMatch(/\d{4}-\d{2}-\d{2}/);
     });
   });

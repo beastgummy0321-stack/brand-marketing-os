@@ -1,4 +1,3 @@
-import { formatMoney } from "@/lib/format";
 import { isRejected } from "@/lib/http";
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
@@ -28,11 +27,11 @@ import {
 import { ActionBar, AllocationBar, Chip, Disclosure, GradeChip, formatAmount, LearningEvidenceCard, LearningEvidenceSource } from "./patterns";
 import type { LearningEvidence } from "@/lib/adsLearningEvidence";
 import { StrategyEvidence } from "./strategy/StrategyEvidence";
-import { usedEvidence, unusedEvidence } from "./strategy/evidenceProjection";
+import { usedEvidence, unavailableCitations, unusedEvidence } from "./strategy/evidenceProjection";
 import { perSaleAmount } from "./patterns/csv";
 import { nextStep, type StepTarget } from "./nextStep";
 import { CapBlock } from "./strategy/CapBlock";
-import { BudgetScenarios, type OverCapPending } from "./strategy/BudgetScenarios";
+import { BudgetScenarios, selectableScenario, type OverCapPending } from "./strategy/BudgetScenarios";
 import { StrategyAssignmentSummary, StrategyCommitments } from "./strategy/StrategyCommitments";
 import { LaunchSettingsCard } from "./publish/LaunchSettingsCard";
 import { GroupSummary } from "./learnings/GroupSummary";
@@ -51,7 +50,7 @@ function CoordinateLearningRows({ rows }: { rows: StrategyCoordinateLearning[] }
       {rows.map((row, i) => (
         <li key={`${row.ad_name}-${i}`} data-slot="coordinate-learning" className="border-t border-border py-2.5 text-[13px] first:border-t-0">
           <div className="flex flex-wrap items-center gap-2">
-            <GradeChip grade={row.grade} label={`${row.grade_label}・每筆 ${row.cost_per_result === null ? "—" : perSaleAmount(row.cost_per_result)}`} />
+            <GradeChip grade={row.grade} label={`${row.grade_label}・每筆 ${row.cost_per_result === null ? "—" : perSaleAmount(row.cost_per_result)}（幣別未提供）`} />
             <span className="min-w-0 [overflow-wrap:anywhere]">「{row.ad_name}」（{row.campaign_name}）</span>
           </div>
           {row.coordinates.length > 0 && (
@@ -79,7 +78,7 @@ function UsedLearnings({ brandId, ranked, rows }: {
       <p className="mb-2.5 text-xs text-muted-foreground">和品牌智庫「投放學到的」同一份排名</p>
       {ranked.groups.length > 0 && <div className="mb-3.5"><GroupSummary groups={ranked.groups} /></div>}
       <div className="flex flex-col gap-2.5">
-        {ranked.campaigns.map((campaign) => <LearningsTable key={campaign.campaign_id} campaign={campaign} compact />)}
+        {ranked.campaigns.map((campaign) => <div key={campaign.campaign_id}><p className="mb-1 text-xs text-muted-foreground">來源金額幣別：{campaign.currency ?? "尚未核實"}</p><LearningsTable campaign={campaign} compact /></div>)}
       </div>
       <Link
         to={`/brands/${encodeURIComponent(brandId)}/library?tab=ads-learnings`}
@@ -218,7 +217,8 @@ export function StrategyTab({
   const strategy = imported ? undefined : c.budget_basis_json.strategy;
   const basis = c.budget_basis_json.basis;
   const step = nextStep(c);
-  const pickedRow = picked ? c.budget_basis_json.scenarios?.scenarios.find((r) => r.key === picked) ?? null : null;
+  const pickedCandidate = picked ? c.budget_basis_json.scenarios?.scenarios.find((r) => r.key === picked) : null;
+  const pickedRow = selectableScenario(pickedCandidate) ? pickedCandidate ?? null : null;
   const decision = strategy?.decision;
   const stale = strategy?.rationale_state === "stale" || decision?.state === "modified" ||
     Boolean(decision?.revision && rejectedRevision === decision.revision) ||
@@ -282,7 +282,7 @@ export function StrategyTab({
   }
 
   const saveBudget = () => run(async () => {
-    if (!picked) return;
+    if (!picked || !selectableScenario(pickedRow)) return;
     budgetSaved(await selectScenario(brandId, c.id, { scenario_key: picked, custom_total: null }));
     setPicked(null);
   }, "儲存預算失敗，請稍後再試。");
@@ -581,6 +581,10 @@ export function StrategyTab({
               {usedEvidence(basis, decision).length === 0 && <p className="text-sm text-muted-foreground">這份安排尚未列出已核實的學習引用。</p>}
               {usedEvidence(basis, decision).map((row) => <LearningEvidenceCard key={row.id} evidence={row} onSource={setSourceEvidence} />)}
             </section>
+            {unavailableCitations(basis, decision).length > 0 && <section>
+              <h4 className="mb-2 text-sm font-semibold">已引用但目前不可用</h4>
+              {unavailableCitations(basis, decision).map(row => <LearningEvidenceCard key={row.id} evidence={row} onSource={setSourceEvidence} />)}
+            </section>}
             <section><h4 className="mb-2 text-sm font-semibold">未用於提案的資料</h4>{unusedEvidence(basis, decision).map((row) => <LearningEvidenceCard key={row.id} evidence={row} onSource={setSourceEvidence} />)}
               {basis.learnings.filter((row) => !row.evidence).map((row) => <div key={row.id} className="py-2 text-sm"><p>{row.text}</p><p className="text-xs text-muted-foreground">歷史適用性尚未核實</p></div>)}
             </section>
@@ -614,7 +618,7 @@ export function StrategyTab({
                     return (
                       <li key={p.product_id} data-slot="basis-price" className="flex justify-between gap-3 border-t border-border py-[5px] first:border-t-0">
                         <span className="min-w-0 [overflow-wrap:anywhere]">
-                          {p.sell_way_name} {p.price !== null ? formatMoney(p.price, "TWD") : "價格尚未設定"}
+                          {p.sell_way_name} {p.price !== null ? `${formatAmount(p.price)}（幣別未提供）` : "價格尚未設定"}
                           {p.stale && <span className="ml-1 text-warning">價格可能過期</span>}
                         </span>
                         <span className="whitespace-nowrap text-xs text-muted-foreground">{day ? `${day} 起` : "起始日不明"}</span>

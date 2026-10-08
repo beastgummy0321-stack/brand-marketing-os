@@ -1,5 +1,5 @@
 import {describe, expect, it} from "vitest";
-import {citedEvidence, usedEvidence, unusedEvidence} from "./evidenceProjection";
+import {citedEvidence, usedEvidence, unavailableCitations, unusedEvidence} from "./evidenceProjection";
 import {evidenceFixture, strategyFixture} from "./strategyEvidence.fixtures";
 
 describe("exact saved-decision citations", () => {
@@ -47,6 +47,21 @@ describe("exact saved-decision citations", () => {
     expect(unusedEvidence(basis, decision)).toEqual([]);
     basis.evidence_context.items = [evidence];
     expect(usedEvidence(basis, decision)).toHaveLength(1);
+    decision.slots[0].evidence_refs = [{kind: "result", id: "original"}, {kind: "learning", id: evidence.id},
+      {kind: "result", id: "original"}];
+    expect(citedEvidence(basis, decision).map(row => row.id)).toEqual([evidence.id]);
+    expect(usedEvidence(basis, decision).map(row => row.id)).toEqual([evidence.id]);
+    expect(unusedEvidence(basis, decision)).toEqual([]);
+    decision.slots[0].evidence_refs = [{kind: "result", id: "original"}];
+    expect(usedEvidence(basis, decision).map(row => row.id)).toEqual([evidence.id]);
+    evidence.use_state = "history";
+    evidence.allowed_uses = [];
+    expect(citedEvidence(basis, decision).map(row => row.id)).toEqual([evidence.id]);
+    expect(usedEvidence(basis, decision)).toEqual([]);
+    expect(unavailableCitations(basis, decision).map(row => row.id)).toEqual([evidence.id]);
+    expect(unusedEvidence(basis, decision)).toEqual([]);
+    decision.slots[0].evidence_refs = [{kind: "result", id: evidence.id}];
+    expect(citedEvidence(basis, decision)).toEqual([]);
   });
   it.each(["history", "revalidation", "excluded"] as const)("a citation cannot promote %s evidence", state => {
     const c = strategyFixture(); const basis = c.budget_basis_json.basis!;
@@ -54,6 +69,7 @@ describe("exact saved-decision citations", () => {
     basis.learnings[0].evidence.use_state = state;
     expect(citedEvidence(basis, decision)).toHaveLength(1);
     expect(usedEvidence(basis, decision)).toEqual([]);
-    expect(unusedEvidence(basis, decision).map(row => row.id)).toContain("current");
+    expect(unavailableCitations(basis, decision).map(row => row.id)).toEqual(["current"]);
+    expect(unusedEvidence(basis, decision).map(row => row.id)).not.toContain("current");
   });
 });

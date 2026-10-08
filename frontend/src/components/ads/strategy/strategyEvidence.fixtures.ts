@@ -54,7 +54,7 @@ export function strategyFixture(): CampaignDetail {
         prices: [{product_id: "prd_fixture", sell_way_name: "反光夜跑背心 · 單件", price: 1580, effective_from: "2026-10-01", stale: false, assumptions: []}],
         learnings: [first, second].map((evidence) => ({id: evidence.id, text: evidence.display_text, level: "product", needs_revalidation: false, evidence})), estimated_fields: []},
       scenarios: {mode: "cold_start", recommended: "cap", basis: {}, budget_cap: 30000, scenarios: [
-        {key: "cap", label: "照預算上限", total: 30000, daily: 968, caption: "沿用已選預算", over_cap: 0},
+        {key: "cap", label: "照預算上限", currency: "TWD", total: 30000, daily: 968, caption: "沿用已選預算", over_cap: 0},
       ]},
     }, budget_total: null, context_json: {product_ids: ["prd_fixture"], field_sources: {cap: "user"}}, constraints_json: {budget: 30000},
     verdict: null, verdict_json: {}, closed_at: null, created_by: null, created_at: "2026-10-01T00:00:00Z", groups: [], actions: [],

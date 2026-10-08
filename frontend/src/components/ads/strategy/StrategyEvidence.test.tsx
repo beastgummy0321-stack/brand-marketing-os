@@ -7,6 +7,41 @@ import { StrategyCommitments } from "./StrategyCommitments";
 import { evidenceFixture, strategyFixture } from "./strategyEvidence.fixtures";
 
 describe("served strategy learning evidence", () => {
+  it("separates an actual unusable citation from unreferenced planner inputs", async () => {
+    const user = userEvent.setup();
+    const c = strategyFixture();
+    c.budget_basis_json.basis!.learnings[0].evidence.use_state = "history";
+    c.budget_basis_json.basis!.learnings[0].evidence.allowed_uses = [];
+    render(<StrategyEvidence basis={c.budget_basis_json.basis} decision={c.budget_basis_json.strategy!.decision} onBasis={vi.fn()} />);
+    expect(screen.queryByText("這份提案未列出可用的歷史引用。")).toBeNull();
+    await user.click(screen.getByRole("button", {name: "已引用但目前不可用"}));
+    expect(screen.getByText("只看歷史")).toBeTruthy();
+    const blocked = screen.getByRole("button", {name: "已引用但目前不可用"}).parentElement!;
+    expect(blocked.textContent).toContain("夜跑上班族的反光訊息");
+    await user.click(screen.getByRole("button", {name: "未用於提案的資料"}));
+    const unreferenced = screen.getByRole("button", {name: "未用於提案的資料"}).parentElement!;
+    expect(unreferenced.textContent).not.toContain("夜跑上班族的反光訊息");
+    expect(within(blocked).queryByText("可參考")).toBeNull();
+  });
+  it("shows selected sources and exclusions without calling a control proven market support", async () => {
+    const user = userEvent.setup();
+    const c = strategyFixture();
+    c.budget_basis_json.basis!.planner_context = {product_id: "prd_fixture", forbidden_count: 0,
+      offers: [], previous_campaign_id: null, continuation: {month: "2026-09",
+        window: {start: "2026-09-01", end: "2026-09-30"}, revision: "source-revision-19",
+        source_campaigns: [{campaign_id: "native-campaign", origin: "imported", name: "原生九月活動"}],
+        eligible_learning_refs: [{owner: "ad", ref: "current", campaign_id: "native-campaign"}],
+        excluded: [{owner: "ad", ref: "excluded-ad", reason_code: "objective_family_mismatch"}]}};
+    render(<StrategyEvidence basis={c.budget_basis_json.basis} decision={c.budget_basis_json.strategy!.decision} onBasis={vi.fn()} />);
+    expect(screen.getByText("原生九月活動")).toBeTruthy();
+    expect(screen.getAllByText("可沿用對照；未證明市場有效").length).toBeGreaterThan(0);
+    expect(screen.queryByText("投放目標不同，僅保留歷史")).toBeNull();
+    await user.click(screen.getByRole("button", {name: "下一期來源與限制"}));
+    expect(screen.getByText("投放目標不同，僅保留歷史")).toBeTruthy();
+    expect(screen.getByText("2026-09-01 至 2026-09-30")).toBeTruthy();
+    expect(screen.getByText("source-revision-19")).toBeTruthy();
+    expect(screen.queryByText("已證明成功")).toBeNull();
+  });
   it.each(["missing", "empty", "known"] as const)("keeps %s references distinct without certifying availability", (kind) => {
     const decision = strategyFixture().budget_basis_json.strategy!.decision!;
     const slot = decision.slots[0];
