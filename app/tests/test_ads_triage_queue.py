@@ -850,6 +850,142 @@ class QueueReviewProposalTest(unittest.TestCase):
         self.assertEqual(queue["decisions"]["open"], 1)
         self.assertIsNone(queue["items"][0]["proposal"])
 
+    @staticmethod
+    def _creative_variants():
+        original = {"kind": "image", "fields": {
+            "body": "Same copy", "title": "Same title", "image_hash": "img-old",
+            "thumbnail_url": "https://cdn.example/old", "image_url": "https://cdn.example/old",
+        }, "observed_at": "old", "last_attempt_at": "old", "last_success_at": "old"}
+        changed_kind = {**original, "kind": "video", "fields": {
+            "body": "Same copy", "title": "Same title", "video_id": "vid-new",
+        }}
+        changed_media = {**original, "fields": {**original["fields"], "image_hash": "img-new"}}
+        metadata_only = {**original, "observed_at": "new", "last_attempt_at": "new",
+            "last_success_at": "new", "fields": {**original["fields"],
+                "thumbnail_url": "https://cdn.example/new", "image_url": "https://cdn.example/new"}}
+        return original, (("kind", changed_kind, True), ("media", changed_media, True),
+                          ("metadata", metadata_only, False))
+
+    def test_deferred_creative_identity_changes_but_not_volatile_metadata_release_hold(self):
+        from app.ads import asset_binding_repository, change_control_data
+
+        original, variants = self._creative_variants()
+        for label, changed, reopen in variants:
+            with self.subTest(change=label):
+                self.conn.execute("UPDATE ads_external_entity SET creative=%s WHERE id=%s",
+                                  (db.jsonb(original), self.entity))
+                self.conn.commit()
+                self._round(status="deferred", decision="deferred", reason="Keep this creative",
+                    revisit_at=db.now_utc() + timedelta(days=30), evidence={
+                        "premise": {
+                            "creative_hash": asset_binding_repository.creative_hash(original)},
+                        "conditions": {"creative_snapshot": {"kind": "image",
+                            "copy_fields": change_control_data.copy_fields(
+                                {"creative": original})}},
+                    })
+                self.assertEqual(self._queue([self._item()])["decisions"]["open"], 0)
+                self.conn.execute("UPDATE ads_external_entity SET creative=%s WHERE id=%s",
+                                  (db.jsonb(changed), self.entity))
+                self.conn.commit()
+                queue = self._queue([self._item()])
+                self.assertEqual(queue["decisions"]["open"], int(reopen))
+                if not reopen:
+                    self.assertEqual(queue["items"][0]["proposal"]["reason"], "Keep this creative")
+
+    def test_rejected_scope_creative_identity_changes_but_not_metadata_release_hold(self):
+        from app.ads import change_control
+
+        original, variants = self._creative_variants()
+        for label, changed, reopen in variants:
+            with self.subTest(change=label):
+                self.conn.execute("UPDATE ads_external_entity SET creative=%s WHERE id=%s",
+                                  (db.jsonb(original), self.entity))
+                self.conn.commit()
+                round_id = self._round(status="ready")
+                set_id = self._insert_review_set(review_id=round_id, status="draft",
+                                                items=[self._copy_item(self.entity)])
+                item = self._item()
+                item["current"]["cost_per_result"] = 500
+                with patch.object(triage, "classify", return_value={"items": [item]}):
+                    change_control.decide(self.conn, self.org, self.brand, self.campaign,
+                                          set_id, "rejected", "Keep the creative", None, "test")
+                self.assertEqual(self._queue([item])["decisions"]["open"], 0)
+                self.conn.execute("UPDATE ads_external_entity SET creative=%s WHERE id=%s",
+                                  (db.jsonb(changed), self.entity))
+                self.conn.commit()
+                queue = self._queue([item])
+                self.assertEqual(queue["decisions"]["open"], int(reopen))
+
+    def test_legacy_copy_only_memory_uses_premise_hash_or_kind_without_false_reopening(self):
+        from app.ads import asset_binding_repository, change_control_data
+
+        original, variants = self._creative_variants()
+        changed_kind, changed_media, metadata_only = [changed for _, changed, _ in variants]
+        for has_hash in (False, True):
+            with self.subTest(has_hash=has_hash):
+                item = self._item()
+                item["current"]["cost_per_result"] = 500
+                copy_fields = change_control_data.copy_fields({"creative": original})
+                evidence = {"conditions": {"creative_snapshot": {
+                    "kind": "image", "copy_fields": copy_fields}}}
+                if has_hash:
+                    evidence["premise"] = {
+                        "creative_hash": asset_binding_repository.creative_hash(original)}
+                self.conn.execute("UPDATE ads_external_entity SET creative=%s WHERE id=%s",
+                                  (db.jsonb(original), self.entity))
+                self.conn.commit()
+                round_id = self._round(status="ready", evidence=evidence)
+                set_id = self._insert_review_set(review_id=round_id, status="rejected",
+                                                items=[self._copy_item(self.entity)])
+                self.conn.execute("UPDATE ads_change_set SET decision_grades=%s WHERE id=%s",
+                    (db.jsonb({self.entity: {"grade": "over", "scope":
+                        triage.review_decision_scope(item, copy_fields)}}), set_id))
+                self.conn.commit()
+                self.assertEqual(self._queue([item])["decisions"]["open"], 0)
+                self.conn.execute("UPDATE ads_external_entity SET creative=%s WHERE id=%s",
+                                  (db.jsonb(metadata_only), self.entity))
+                self.conn.commit()
+                self.assertEqual(self._queue([item])["decisions"]["open"], 0)
+                self.conn.execute("UPDATE ads_external_entity SET creative=%s WHERE id=%s",
+                                  (db.jsonb(changed_kind), self.entity))
+                self.conn.commit()
+                self.assertEqual(self._queue([item])["decisions"]["open"], 1)
+                if has_hash:
+                    self.conn.execute("UPDATE ads_external_entity SET creative=%s WHERE id=%s",
+                                      (db.jsonb(changed_media), self.entity))
+                    self.conn.commit()
+                    self.assertEqual(self._queue([item])["decisions"]["open"], 1)
+
+    def test_same_kind_video_identity_change_releases_defer_and_reject(self):
+        from app.ads import asset_binding_repository, change_control
+
+        original = {"kind": "video", "fields": {"body": "Same", "title": "Title",
+                                                   "video_id": "video-old"}}
+        changed = {**original, "fields": {**original["fields"], "video_id": "video-new"}}
+        for decision in ("deferred", "rejected"):
+            with self.subTest(decision=decision):
+                self.conn.execute("UPDATE ads_external_entity SET creative=%s WHERE id=%s",
+                                  (db.jsonb(original), self.entity))
+                self.conn.commit()
+                item = self._item()
+                item["current"]["cost_per_result"] = 500
+                if decision == "deferred":
+                    self._round(status="deferred", decision="deferred", reason="Keep the video",
+                        revisit_at=db.now_utc() + timedelta(days=30), evidence={"premise": {
+                            "creative_hash": asset_binding_repository.creative_hash(original)}})
+                else:
+                    round_id = self._round(status="ready")
+                    set_id = self._insert_review_set(review_id=round_id, status="draft",
+                                                    items=[self._copy_item(self.entity)])
+                    with patch.object(triage, "classify", return_value={"items": [item]}):
+                        change_control.decide(self.conn, self.org, self.brand, self.campaign,
+                                              set_id, "rejected", "Keep the video", None, "test")
+                self.assertEqual(self._queue([item])["decisions"]["open"], 0)
+                self.conn.execute("UPDATE ads_external_entity SET creative=%s WHERE id=%s",
+                                  (db.jsonb(changed), self.entity))
+                self.conn.commit()
+                self.assertEqual(self._queue([item])["decisions"]["open"], 1)
+
     def test_unknown_or_mixed_saved_measurement_becoming_known_releases_hold(self):
         for views in ([], [{"metric_scope": "ad", "currency": "TWD", "reason": "unknown"}],
                       [{"metric_scope": "ad", "currency": "TWD"},

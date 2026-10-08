@@ -301,7 +301,7 @@ def _decision_grades(conn, org, brand, campaign, entity_ids, *, review_scope=Fal
         if review_scope:
             entity = bindings.entity(conn, org, brand, campaign, entity_id)
             grades[entity_id]["scope"] = triage.review_decision_scope(
-                item, data.copy_fields(entity),
+                item, triage.review_creative_scope(entity),
             )
     return grades
 

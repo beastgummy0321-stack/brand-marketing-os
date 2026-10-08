@@ -12,6 +12,7 @@ from collections import defaultdict
 from datetime import timedelta
 from hashlib import sha256
 
+from app.ads import asset_binding_repository as bindings
 from app.ads import (
     change_control_data,
     coverage,
@@ -1552,6 +1553,13 @@ def _first_adjust_recommendation_id(result_json):
     return None
 
 
+def review_creative_scope(entity):
+    """Reuse the binding owner's content identity, excluding its volatile read metadata."""
+    creative = entity.get("creative") or {}
+    return {"kind": creative.get("kind"), "copy_fields": change_control_data.copy_fields(entity),
+            "creative_hash": bindings.creative_hash(creative)}
+
+
 def review_decision_scope(item, creative=None):
     """Only semantic conditions, never dates, counts, spend or a full evidence hash."""
     return {
@@ -1563,6 +1571,24 @@ def review_decision_scope(item, creative=None):
     }
 
 
+def _creative_scope_changed(saved, current):
+    if not saved or current is None:
+        return False
+    if not any(k in saved for k in ("kind", "copy_fields", "creative_hash")):
+        # Before the complete representation, decision_grades retained only copy_fields.
+        return saved != current["copy_fields"]
+    return any(k in saved and saved[k] != current.get(k)
+               for k in ("kind", "copy_fields", "creative_hash"))
+
+
+def _evidence_creative_changed(evidence, creative):
+    saved = (evidence.get("conditions") or {}).get("creative_snapshot") or {}
+    stable_hash = (evidence.get("premise") or {}).get("creative_hash")
+    if stable_hash is not None:
+        saved = {**saved, "creative_hash": stable_hash}
+    return _creative_scope_changed(saved, creative)
+
+
 def _review_scope_changed(round_, item, creative, change_set):
     evidence = round_.get("evidence_json") or {}
     saved_target = (evidence.get("campaign") or {}).get("target") or {}
@@ -1570,7 +1596,12 @@ def _review_scope_changed(round_, item, creative, change_set):
     if change_set is not None and change_set["status"] == "rejected":
         remembered = (change_set.get("decision_grades") or {}).get(item["entity_id"])
         if remembered and remembered.get("scope") is not None:
-            return (remembered["scope"] != scope or (
+            saved_scope = remembered["scope"]
+            saved_creative = saved_scope.get("creative")
+            legacy_creative = not saved_creative or "creative_hash" not in saved_creative
+            return (any(saved_scope.get(k) != scope[k] for k in ("target", "measurement"))
+                    or _creative_scope_changed(saved_creative, creative)
+                    or (legacy_creative and _evidence_creative_changed(evidence, creative)) or (
                 remembered.get("grade") in triage_capacity.GRADE_RANK
                 and triage_capacity.got_worse(remembered, item["grade"])
             ))
@@ -1585,10 +1616,8 @@ def _review_scope_changed(round_, item, creative, change_set):
             return True
         if any(saved_view.get(k) != v for k, v in scope["measurement"].items()):
             return True
-    saved_creative = (evidence.get("conditions") or {}).get("creative_snapshot") or {}
-    if "copy_fields" in saved_creative and creative is not None:
-        if saved_creative["copy_fields"] != creative:
-            return True
+    if _evidence_creative_changed(evidence, creative):
+        return True
     if change_set is not None and change_set["status"] == "rejected":
         remembered = (change_set.get("decision_grades") or {}).get(item["entity_id"])
         if remembered:
@@ -1609,7 +1638,7 @@ def _prepare_review_candidates(conn, org_id, brand_id, candidates):
         "SELECT * FROM ads_external_entity WHERE org_id=%s AND brand_id=%s AND native_kind='ad'",
         (org_id, brand_id),
     ).fetchall()
-    creatives = {e["id"]: change_control_data.copy_fields(e) for e in entities}
+    creatives = {e["id"]: review_creative_scope(e) for e in entities}
     lineage = {
         campaign_id: triage_capacity.open_lineage_entity_ids(conn, org_id, brand_id, campaign_id)
         for campaign_id in {c["campaign_id"] for c in reviews}
