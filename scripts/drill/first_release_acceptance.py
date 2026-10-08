@@ -2002,6 +2002,37 @@ def fixture_group_reports(conn, org, brand, campaign, bound, raw_ads):
     }
 
 
+def fixture_original_asset(conn, org, brand, content):
+    """Reuse the same owned immutable original, as the normal upload hash contract requires."""
+    from app import storage
+    from app.core import db
+
+    existing = conn.execute(
+        "SELECT * FROM ads_user_asset WHERE org_id=%s AND brand_id=%s AND sha256=%s",
+        (org, brand, sha(content)),
+    ).fetchone()
+    if existing:
+        if (
+            existing["status"] != "ready"
+            or existing["byte_size"] != len(content)
+            or existing["mime_type"] != "image/png"
+            or not existing["storage_key"].startswith(org + "/")
+        ):
+            raise ReceiptError("Owned original asset is incompatible; never replace its bytes")
+        return existing["id"]
+    asset = db.new_id("aua")
+    key = f"{org}/{asset}/original.png"
+    storage.put(
+        org_id=org, key=key, filename="original.png", content=content, content_type="image/png"
+    )
+    conn.execute(
+        "INSERT INTO ads_user_asset(id,org_id,brand_id,sha256,storage_key,filename,"
+        "mime_type,byte_size,status) VALUES(%s,%s,%s,%s,%s,'original.png','image/png',%s,'ready')",
+        (asset, org, brand, sha(content), key, len(content)),
+    )
+    return asset
+
+
 def fixture_observe(conn, context, campaign_id, period_id):
     """Injected SourcePage observations use the normal retained performance writer."""
     from datetime import date
@@ -2015,7 +2046,6 @@ def fixture_observe(conn, context, campaign_id, period_id):
         repository,
         user_assets_repository,
     )
-    from app.core import db
     from app.tests.fixtures.ads_external import outcome_seed
 
     period = next(p for p in cases.frozen_cases()["periods"] if p["id"] == period_id)
@@ -2026,21 +2056,7 @@ def fixture_observe(conn, context, campaign_id, period_id):
     for ad in ads:
         if not ad.get("material_placement_id"):
             content = Path(context["media_paths"]["image"]).read_bytes()
-            asset = db.new_id("aua")
-            key = f"{org}/{asset}/original.png"
-            storage.put(
-                org_id=org,
-                key=key,
-                filename="original.png",
-                content=content,
-                content_type="image/png",
-            )
-            conn.execute(
-                "INSERT INTO ads_user_asset(id,org_id,brand_id,sha256,storage_key,filename,"
-                "mime_type,byte_size,status) VALUES(%s,%s,%s,%s,%s,'original.png',"
-                "'image/png',%s,'ready')",
-                (asset, org, brand, sha(content), key, len(content)),
-            )
+            asset = fixture_original_asset(conn, org, brand, content)
             placement = user_assets_repository.attach(
                 conn,
                 org,
