@@ -442,6 +442,7 @@ def test_new_draft_uses_retained_same_product_definition_and_keeps_mixed_unknown
 
     with (
         patch.object(ads_learnings.bi_repo, "get_product", return_value={"id": "A"}),
+        patch.object(ads_learnings.customer_groups, "knowledge_product_ids", return_value=["A"]),
         patch.object(ads_learnings.bi_repo, "list_customer_groups", return_value=[]),
         patch.object(ads_learnings.ads_repo, "coordinate_vocabulary", return_value=[]),
         patch.object(ads_learnings, "condition_snapshot", return_value={}),
