@@ -16,12 +16,14 @@ import { apiFetch, readJson } from "./http";
 import {
   BASE, type CampaignLifecycle, type CampaignNextAction, type CampaignStatus, type CampaignSyncState, type RunningAds,
 } from "./adsApi";
-import type { CampaignDataStatus, CapBasis, TriageGrade } from "./adsTriageApi";
+import type { CampaignDataStatus, CapBasis, CapComparison, TriageGrade } from "./adsTriageApi";
 import type { WorkerHealthProjection } from "./jobsApi";
 
 /** F29 Contract D: `break_even` beside the cap (null when no product break-even is known; on
  * `money.cap` only when every included campaign shares the same one). */
 export interface HomeCap { value: number; basis: CapBasis | null; break_even: number | null }
+/** Raw resolved value retained when its unit cannot be compared with observed costs. */
+export type HomeConfiguredCap = Pick<HomeCap, "value" | "basis">;
 
 /** F29 Contract D: where a campaign's approved change stands. `platform` = the newest approved
  * set or the approved launch still has an item not done on the platform; `check` = done, the
@@ -64,6 +66,8 @@ export interface HomeMoney {
   cost_per_purchase: number | null;
   /** The one cap every included purchase campaign shares; null when they differ or none has one. */
   cap: HomeCap | null;
+  configured_cap?: HomeConfiguredCap | null;
+  cap_comparison?: CapComparison | null;
   earn_after_cost_and_ads: number | null;
   earn_missing: HomeEarnMissing[];
   estimate_basis: {
@@ -119,9 +123,13 @@ export interface HomeCampaign {
   running?: RunningAds;
   next_action?: CampaignNextAction;
   month_spend: number | null;
+  /** This campaign's observed window unit; independent of the brand aggregate currency. */
+  currency?: string | null;
   purchases: number | null;
   cost_per_purchase: number | null;
   cap: HomeCap | null;
+  configured_cap?: HomeConfiguredCap | null;
+  cap_comparison?: CapComparison;
   active_ads: number;
   daily_budget: number | null;
   missing_days: string[];

@@ -40,6 +40,7 @@ from app.ads import (
     lifecycle,
     month_budget,
     month_summary,
+    outcome,
     repository,
     review_evidence,
     runtime,
@@ -166,16 +167,34 @@ class _Caps:
 
     def __call__(self, campaign_id):
         if campaign_id not in self._cache:
-            self._cache[campaign_id] = targets.resolve(
-                self._conn, self._org, self._brand, self._campaigns[campaign_id]
+            campaign = self._campaigns[campaign_id]
+            cap = targets.resolve(
+                self._conn, self._org, self._brand, campaign,
             )
+            cap["cap_unit"] = outcome.cap_unit(self._conn, self._brand, cap, campaign=campaign)
+            cap["break_even_unit"] = outcome.break_even_unit(
+                self._conn, self._brand, cap, campaign=campaign,
+            )
+            self._cache[campaign_id] = cap
         return self._cache[campaign_id]
 
 
-def _cap_out(cap: dict) -> dict | None:
+def _configured_cap_out(cap: dict) -> dict | None:
+    """Preserve a resolved value independently of whether its unit can be compared."""
     if cap["value"] is None:
         return None
-    return {"value": cap["value"], "basis": cap["basis"], "break_even": cap["break_even"]}
+    return {"value": cap["value"], "basis": cap["basis"]}
+
+
+def _cap_out(cap: dict, currency: str | None) -> dict | None:
+    """Only comparable inputs reach the screen's cost ruler and profit tag."""
+    configured = _configured_cap_out(cap)
+    if configured is None or outcome.compare_cap_unit(cap["cap_unit"], currency)["reason"]:
+        return None
+    break_even = cap["break_even"]
+    if outcome.compare_cap_unit(cap["break_even_unit"], currency)["reason"]:
+        break_even = None
+    return {**configured, "break_even": break_even}
 
 
 def _entities(conn, org_id, brand_id) -> list[dict]:
@@ -197,7 +216,9 @@ def _lifecycles(campaigns, roots, today) -> dict:
 def _campaign_money(rows, start, end, brand_currency_ok) -> dict:
     view = _spend_view(rows, start, end)
     spend = view["amount"] if view["known"] and brand_currency_ok else None
-    return {"spend": spend, "purchases": _purchases(rows, start, end)}
+    currencies = {row["currency"] for row in rows}
+    currency = next(iter(currencies)) if len(currencies) == 1 else None
+    return {"spend": spend, "purchases": _purchases(rows, start, end), "currency": currency}
 
 
 # ---------------------------------------------------------------------------
@@ -235,17 +256,11 @@ def _money_totals(rows_by_campaign, campaigns, caps, start, end, brand_currency_
         earn_missing.append("spend")
     if included and purchases is None:
         earn_missing.append("purchases")
-    for cap, _m in included:
+    for cap, money in included:
         if cap["break_even"] is None:
             reasons = cap["economics_basis"]["missing"]
             earn_missing.extend(reasons or ["product_cost"])
-    for campaign_id, rows in rows_by_campaign.items():
-        if campaign_id not in campaigns or caps(campaign_id)["result_kind"] != "purchase":
-            continue
-        currency = caps(campaign_id)["economics_basis"]["currency"]
-        if not caps(campaign_id)["economics_basis"]["missing"] and (
-            currency is None or any(row["currency"] != currency for row in rows)
-        ):
+        elif outcome.compare_cap_unit(cap["break_even_unit"], money["currency"])["reason"]:
             earn_missing.append("currency")
     earn_missing = list(dict.fromkeys(earn_missing))
     earn_after_cost_and_ads = None
@@ -255,19 +270,28 @@ def _money_totals(rows_by_campaign, campaigns, caps, start, end, brand_currency_
             Decimal(0),
         )
 
-    caps_seen = {(cap["value"], cap["basis"]) for cap, _m in included}
-    one_cap = None
-    if len(caps_seen) == 1:
-        value, basis = next(iter(caps_seen))
-        if value is not None:
-            # The shared cap's break-even only when every included campaign has the same one.
-            break_evens = {cap["break_even"] for cap, _m in included}
-            one_cap = {
-                "value": value, "basis": basis,
-                "break_even": next(iter(break_evens)) if len(break_evens) == 1 else None,
-            }
+    caps_seen = {(cap["value"], cap["basis"], cap["cap_unit"]["currency"],
+                  cap["cap_unit"]["source"], cap["cap_unit"]["unit_basis"])
+                 for cap, _m in included}
+    one_cap = configured_cap = cap_comparison = None
+    if len(caps_seen) == 1 and included[0][0]["value"] is not None:
+        cap = included[0][0]
+        configured_cap = _configured_cap_out(cap)
+        assert configured_cap is not None  # This branch requires a resolved value.
+        currencies = {m["currency"] for _cap, m in included}
+        currency = next(iter(currencies)) if brand_currency_ok and len(currencies) == 1 else None
+        cap_comparison = outcome.compare_cap_unit(cap["cap_unit"], currency)
+        if cap_comparison["reason"] is None:
+            break_evens = set()
+            for c, _m in included:
+                comparable = _cap_out(c, currency)
+                assert comparable is not None  # The shared value and unit were verified above.
+                break_evens.add(comparable["break_even"])
+            one_cap = {**configured_cap,
+                       "break_even": next(iter(break_evens)) if len(break_evens) == 1 else None}
     return {
         "purchases": purchases, "cost_per_purchase": cost_per_purchase, "cap": one_cap,
+        "configured_cap": configured_cap, "cap_comparison": cap_comparison,
         "earn_after_cost_and_ads": earn_after_cost_and_ads, "earn_missing": earn_missing,
         "excluded": excluded,
     }
@@ -308,6 +332,7 @@ def _money_block(conn, org_id, brand_id, win, rows_by_campaign, campaigns, caps,
         "purchases": _count_out(totals["purchases"]),
         "cost_per_purchase": _money_out(totals["cost_per_purchase"]),
         "cap": totals["cap"],
+        "configured_cap": totals["configured_cap"], "cap_comparison": totals["cap_comparison"],
         "earn_after_cost_and_ads": _money_out(totals["earn_after_cost_and_ads"]),
         "earn_missing": totals["earn_missing"], "excluded": totals["excluded"],
         "estimate_basis": {
@@ -542,7 +567,7 @@ def _campaigns_block(conn, org_id, brand_id, win, campaigns, caps, entities, row
         rows = rows_by_campaign.get(campaign_id, [])
         month = (
             _campaign_money(rows, win["start"], win["cutoff"], currency_ok) if rows
-            else {"spend": None, "purchases": None}
+            else {"spend": None, "purchases": None, "currency": None}
         )
         purchases = month["purchases"] if cap["result_kind"] == "purchase" and rows else None
         spend = month["spend"]
@@ -558,10 +583,13 @@ def _campaigns_block(conn, org_id, brand_id, win, campaigns, caps, entities, row
                 stage_key="assets" if cap["value"] is not None else None,
             ),
             "month_spend": _money_out(spend),
+            "currency": month["currency"],
             "purchases": _count_out(purchases),
             "cost_per_purchase": _money_out(spend / purchases)
             if spend is not None and purchases else None,
-            "cap": _cap_out(cap),
+            "cap": _cap_out(cap, month["currency"]),
+            "configured_cap": _configured_cap_out(cap),
+            "cap_comparison": outcome.compare_cap_unit(cap["cap_unit"], month["currency"]),
             "active_ads": running["count"],
             "daily_budget": _daily_budget(
                 conn, org_id, brand_id, campaign, judged_ads, draft, owner_by_entity,

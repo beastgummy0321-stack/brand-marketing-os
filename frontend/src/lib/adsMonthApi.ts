@@ -5,7 +5,7 @@
  * files (each keeps its own small copy, existing convention — see `adsChangeApi.ts`). */
 import { apiFetch, readJson } from "./http";
 import { BASE } from "./adsApi";
-import type { CommerceEvidence } from "./adsHomeApi";
+import type { CommerceEvidence, HomeConfiguredCap } from "./adsHomeApi";
 import type { CapComparison, CampaignObjectiveFamily, RankedGrade, TriageGrade, TriageSampleView } from "./adsTriageApi";
 
 export type MonthVerdict = "met" | "missed" | "unjudged";
@@ -20,7 +20,10 @@ export interface MonthCampaignRow {
   campaign_id: string; name: string; objective: string;
   campaign_objective?: CampaignObjectiveFamily | null;
   spend: number | null; result_count: number | null; result_label: string;
+  currency?: string | null;
   cost_per_result: number | null; target: number | null; verdict: MonthVerdict;
+  configured_cap?: HomeConfiguredCap | null;
+  cap_comparison?: CapComparison;
 }
 export interface MonthOrders {
   this_net: number | null; this_count: number; previous_net: number | null;

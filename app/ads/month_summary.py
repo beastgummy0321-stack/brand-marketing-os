@@ -40,6 +40,7 @@ from app.ads import (
     learning_rank,
     learning_view,
     lifecycle,
+    outcome,
     period_grades,
     repository,
     result_kinds,
@@ -91,7 +92,7 @@ def _ad_spend_and_currency(aggregated: dict) -> tuple[float | None, str | None]:
     if not entries or any(s["metrics"]["spend"] is None for s in entries):
         return None, None
     currencies = {s["currency"] for s in entries}
-    if len(currencies) > 1:
+    if len(currencies) > 1 or None in currencies:
         return None, None
     return sum(s["metrics"]["spend"] for s in entries), next(iter(currencies))
 
@@ -114,11 +115,12 @@ def _campaign_month_metrics(conn, org_id, brand_id, campaign_id, start, end) -> 
         ).fetchall()
     ]
     aggregated = review_evidence.aggregate(rows, start, end)
-    spend, _currency = _ad_spend_and_currency(aggregated)
+    spend, currency = _ad_spend_and_currency(aggregated)
     result_count, cost_per_result, result_kind = _ad_result(aggregated)
     return {
         "spend": spend, "result_count": result_count, "cost_per_result": cost_per_result,
         "result_kind": result_kind,
+        "currency": currency,
     }
 
 
@@ -386,6 +388,8 @@ def _grades_view(conn, org_id, brand_id, start, end) -> dict:
     """Contract C `grades`: every ad that spent this month graded by the one ruler
     (`period_grades.grade_period`, the same rows a settle of this month reads) -- 有效 is the
     `on_target` bucket only (ads.md §6.33)."""
+    if end < start:
+        return {**period_grades.summarize([]), "rows": [], "missing": []}
     rows = period_grades.grade_period(conn, org_id, brand_id, start, end)
     return {
         **period_grades.summarize(rows), "rows": rows,
@@ -457,8 +461,11 @@ def get_summary(conn, org_id: str, brand_id: str, month: str) -> dict:
     target_by_campaign = {}
     for row in campaigns_rows:
         metrics = _campaign_month_metrics(conn, org_id, brand_id, row["id"], start, cutoff)
-        target_value = targets.resolve(conn, org_id, brand_id, row)["value"]
-        target_by_campaign[row["id"]] = target_value
+        target = targets.resolve(conn, org_id, brand_id, row)
+        comparison = outcome.cap_comparison(conn, brand_id, target, metrics["currency"],
+                                            campaign=row)
+        target_value = target["value"] if comparison["reason"] is None else None
+        target_by_campaign[row["id"]] = target["value"]
         # F27-I27: one objective-family rule, not two -- the same `repository`.
         # `campaign_objective_family` F27-I09 already added for `CampaignChip` on campaign
         # cards/triage items, reused here (and via `campaigns_by_id` below for the
@@ -470,8 +477,12 @@ def get_summary(conn, org_id: str, brand_id: str, month: str) -> dict:
             "campaign_id": row["id"], "name": row["name"], "objective": row["objective"],
             "campaign_objective": row["campaign_objective"],
             "spend": metrics["spend"], "result_count": metrics["result_count"],
+            "currency": metrics["currency"],
             "result_label": result_kinds.label(metrics["result_kind"]),
             "cost_per_result": metrics["cost_per_result"], "target": target_value,
+            "configured_cap": {"value": target["value"], "basis": target["basis"]}
+            if target["value"] is not None else None,
+            "cap_comparison": comparison,
             "verdict": _verdict(metrics["cost_per_result"], target_value),
         })
 
@@ -502,7 +513,7 @@ def get_summary(conn, org_id: str, brand_id: str, month: str) -> dict:
         "days_covered": days_covered, "days_elapsed": days_elapsed,
         "data_days": data_days, "window": {"start": start.isoformat(),
                                             "end": cutoff.isoformat() if data_days else None},
-        "grades": _grades_view(conn, org_id, brand_id, start, end),
+        "grades": _grades_view(conn, org_id, brand_id, start, cutoff),
         "rejected": _rejected_view(
             conn, org_id, brand_id, brand_items, campaigns_by_id, month,
         ),

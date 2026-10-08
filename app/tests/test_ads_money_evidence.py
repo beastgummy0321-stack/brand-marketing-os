@@ -7,6 +7,7 @@ import pytest
 
 from app import orders
 from app.ads import budget, coverage, home_overview, month_summary, targets
+from app.ads import repository as ads_repository
 from app.brand_intelligence import repository as brands
 from app.core import db
 from app.core import settings as coresettings
@@ -98,6 +99,9 @@ def test_no_elapsed_window_never_calls_order_facade(brand, today, month):
     assert home["commerce"] is None
     assert summary["orders"] is None
     assert summary["data_days"] == 0
+    assert summary["grades"]["rows"] == []
+    assert summary["grades"]["missing"] == []
+    assert summary["grades"]["spent"] is None
     read.assert_not_called()
 
 
@@ -123,6 +127,8 @@ def test_home_and_month_share_platform_elapsed_window_and_exact_facade(brand):
     assert summary["days_elapsed"] == 10
     assert summary["orders"]["this_net"] == 100
     assert summary["total_spend"] == home["spent"] == 100
+    assert summary["grades"]["spent"] == summary["total_spend"]
+    assert sum(b["amount"] for b in summary["grades"]["buckets"]) == summary["total_spend"]
     assert summary["campaigns"][0]["result_count"] == home["money"]["purchases"] == 2
     assert home["commerce"]["channels"][0]["source_type"] == "order_mirror"
     assert "total_revenue" not in home["commerce"]
@@ -165,7 +171,7 @@ def test_home_margin_is_a_unit_currency_checked_hypothesis(
                          product_id=product, cap=100)
     if multiple:
         second = brands.create_product(conn, brand, name="Other sell-way", actor="test")["id"]
-        conn.execute("UPDATE ads_campaign SET context_json=%s WHERE id=%s",
+        conn.execute("UPDATE ads_campaign SET context_json=context_json || %s WHERE id=%s",
                      (db.jsonb({"product_ids": [product, second]}), campaign))
         conn.commit()
     ad = _ad(conn, org, brand, campaign, "ad", "native")
@@ -221,3 +227,73 @@ def test_comparison_requires_equal_currency_coverage_and_payment_amount_evidence
                                               date(2026, 9, 1), 10)
     assert view["change_pct"] == (1.0 if expected_missing is None else None)
     assert view["comparison_missing"] == ([expected_missing] if expected_missing else [])
+
+
+@pytest.mark.parametrize(
+    "product_currency,status,cap,source_unknown,observed,expected_cap,expected_earn", [
+        ("USD", "confirmed", 100, False, ["TWD"], 100, None),
+        ("TWD", "pending", 100, False, ["TWD"], 100, None),
+        ("USD", "confirmed", None, False, ["TWD"], None, None),
+        ("TWD", "pending", None, False, ["TWD"], None, None),
+        ("TWD", "confirmed", None, False, ["TWD"], 350, 600),
+        ("TWD", "confirmed", 100, False, [None], None, None),
+        ("TWD", "confirmed", 100, False, ["TWD", "USD"], None, None),
+        ("TWD", "confirmed", 100, True, ["TWD"], None, 600),
+    ],
+)
+def test_home_and_month_use_the_canonical_cap_and_economics_units(
+    brand, product_currency, status, cap, source_unknown, observed, expected_cap, expected_earn,
+):
+    conn, org = db.current(), db.DEV_ORG_ID
+    product = brands.create_product(conn, brand, name="Unit fixture", actor="test")["id"]
+    brands.save_product_economics(conn, brand, product, selling_price=500,
+                                 currency=product_currency, unit_variable_cost=150,
+                                 shipping_cost=0, confirmed_by="test", actor="test")
+    if status == "pending":
+        # Historical full-number rows may still lack confirmation; fixture owns this item.
+        conn.execute("UPDATE product_economics SET status='pending'"
+                     " WHERE brand_id=%s AND product_id=%s", (brand, product))
+        conn.commit()
+    campaign = _imported(conn, org, brand, "Unit fixture", "native",
+                         product_id=product, cap=cap)
+    if source_unknown:
+        conn.execute("UPDATE ads_campaign SET context_json=context_json || %s WHERE id=%s",
+                     (db.jsonb({"field_sources": {"cap": "legacy"}}), campaign))
+        conn.commit()
+    ad = _ad(conn, org, brand, campaign, "ad", "native")
+    for i, currency in enumerate(observed):
+        _obs(conn, org, brand, campaign, ad, date(2026, 9, 5 + i), spend=100,
+             count=2, currency=currency)
+    with (
+        mock.patch.object(coresettings, "today_for_org", return_value=date(2026, 9, 10)),
+        mock.patch.object(coverage, "last_complete_day", return_value=date(2026, 9, 9)),
+    ):
+        home = home_overview.get_overview(conn, org, brand, "2026-09")
+        month = month_summary.get_summary(conn, org, brand, "2026-09")
+    assert home["money"]["earn_after_cost_and_ads"] == expected_earn
+    expected_break_even = 350 if expected_earn is not None else None
+    for shown in (home["money"]["cap"], home["campaigns"][0]["cap"]):
+        if expected_cap is None:
+            assert shown is None
+        else:
+            assert shown["value"] == expected_cap
+            assert shown["break_even"] == expected_break_even
+    if expected_earn is None:
+        assert "currency" in home["money"]["earn_missing"]
+    row = month["campaigns"][0]
+    expected_currency = observed[0] if len(observed) == 1 else None
+    assert row["currency"] == expected_currency
+    assert home["campaigns"][0]["currency"] == expected_currency
+    assert row["target"] == expected_cap
+    assert row["verdict"] == ("met" if expected_cap is not None else "unjudged")
+    graded = month["grades"]["rows"][0]
+    assert graded["grade"] == ("on_target" if expected_cap is not None else "insufficient")
+    assert row["cap_comparison"] == graded["cap_comparison"]
+    expected_spend = 100 if len(observed) == 1 and observed[0] is not None else None
+    assert home["spent"] == month["total_spend"] == month["grades"]["spent"] == expected_spend
+    raw = ads_repository.get_campaign(conn, org, brand, campaign)
+    resolved = targets.resolve(conn, org, brand, raw)
+    assert resolved["value"] == (cap if cap is not None else 350)
+    for container in (home["money"], home["campaigns"][0], row):
+        assert container["configured_cap"]["value"] == resolved["value"]
+        assert container["configured_cap"]["basis"] == resolved["basis"]

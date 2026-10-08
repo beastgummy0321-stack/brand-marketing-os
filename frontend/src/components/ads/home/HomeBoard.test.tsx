@@ -67,6 +67,20 @@ const ready = (h: HomeOverview) => ({ status: "ready" as const, home: h });
 const wrap = (node: React.ReactNode) => render(<MemoryRouter>{node}</MemoryRouter>);
 
 describe("MonthMoney", () => {
+  it("keeps a manual cap while hiding an uncomparable break-even and its profit tag", () => {
+    const h = home({ money: { ...home().money!, cost_per_purchase: 50,
+      cap: { value: 100, basis: "own", break_even: null },
+      configured_cap: { value: 100, basis: "own" },
+      cap_comparison: { basis: "own", currency: "TWD", reason: null, message: null },
+      earn_after_cost_and_ads: null, earn_missing: ["currency"],
+      estimate_basis: { kind: "platform_purchase_margin", assumptions: [], missing: ["currency"] } } });
+    wrap(<MonthMoney brandId="b" state={ready(h)} onRetry={vi.fn()} scaleHref={null} onBudgetClosed={vi.fn()} />);
+    expect(screen.getByText("NT$50 元")).toBeTruthy();
+    expect(screen.getByText(byPlain("每個活動各有上限，目前都是 100"))).toBeTruthy();
+    expect(document.querySelector('[data-slot="money-tag"]')).toBeNull();
+    expect(screen.queryByText(/・有賺/)).toBeNull();
+  });
+
   it.each([
     ["product_price", "缺商品售價"],
     ["shipping_cost", "運費尚未確認"],
