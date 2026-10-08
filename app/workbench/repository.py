@@ -2,8 +2,9 @@
 (ticket workbench/02/03, ADR 0068 §1). Private to app/workbench (container contract §1): only
 `jobs.py`, `__init__.py` and `routes.py` import this; nothing outside the package does.
 
-`list_coordinate_vocabulary()` reads `brand_coordinate`/`feedback` — tables `app.schedule`
-owns — by raw SQL, never by importing `app.schedule` (contract "Must not import or touch":
+`list_coordinate_vocabulary()` delegates to the private vocabulary leaf, which reads
+`brand_coordinate`/`feedback` — tables `app.schedule` owns — by raw SQL, never by importing
+`app.schedule` (contract "Must not import or touch":
 app.schedule; container contract rule 5 allows duplicating the query, the precedent being
 `scripts/workbench_probe.py`'s own copy of the same read, ticket 01). Read-only: unlike
 `app.schedule.repository.list_coordinates()`, this never calls `ensure_coordinates_seeded()` —
@@ -15,7 +16,7 @@ should trigger as a side effect of reading.
 from app.brand_intelligence import repository as bi_repo
 from app.core import cleanup
 from app.core.db import Conn, ConnProxy, jsonb, new_id, now_iso
-from app.workbench import claims, image_cards, image_port
+from app.workbench import claims, coordinate_vocabulary, image_cards, image_port
 from app.workbench import looks as looks_mod
 
 _AnyConn = Conn | ConnProxy
@@ -452,22 +453,8 @@ def adopted_output(conn: _AnyConn, org_id: str, brand_id: str, brief_id: str,
 
 
 def list_coordinate_vocabulary(conn: _AnyConn, org_id: str, brand_id: str) -> list:
-    """跟 `scripts/workbench_probe.py::_coordinate_rows`／`app.schedule.repository.
-    list_coordinates()` 同一份查法（複製，不 import——app.schedule 私有；不呼叫
-    `ensure_coordinates_seeded()`，見本檔檔頭）。"""
-    rows = conn.execute(
-        "SELECT c.*, EXISTS (SELECT 1 FROM feedback f WHERE f.scope = 'coordinate'"
-        " AND f.coordinate_id = c.id AND f.lifted_at IS NULL) AS rejected"
-        " FROM brand_coordinate c WHERE c.org_id = %s AND c.brand_id = %s"
-        " ORDER BY c.dimension, c.category NULLS LAST, c.label",
-        (org_id, brand_id),
-    ).fetchall()
-    return [
-        {"dimension": r["dimension"], "key": r["key"], "label": r["label"],
-         "attributes": r["attributes_json"] or {}, "disabled_at": r["disabled_at"],
-         "rejected": bool(r["rejected"])}
-        for r in (dict(row) for row in rows)
-    ]
+    """Preserve the repository entry point while sharing its read-only query."""
+    return coordinate_vocabulary.list_coordinate_vocabulary(conn, org_id, brand_id)
 
 
 def resolve_coordinate(rows: list, dimension: str, value: str | None) -> str | None:
