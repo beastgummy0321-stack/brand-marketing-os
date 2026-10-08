@@ -34,6 +34,10 @@ export function monthNumber(month: string | null | undefined, today?: string): n
 
 const EARN_MISSING: Record<HomeEarnMissing, string> = {
   product_cost: "缺商品成本",
+  product_price: "缺商品售價",
+  shipping_cost: "運費尚未確認",
+  sales_mix: "多商品的成交比例尚未確認",
+  currency: "估算與花費的幣別不同或尚未確認",
   product: "缺商品",
   spend: "缺花費資料",
   purchases: "缺購買資料",

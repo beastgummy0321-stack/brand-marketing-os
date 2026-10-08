@@ -7,9 +7,10 @@
  * - `null` means unknown — never read it as 0. `spent` is null when nothing is synced yet, a day's
  *   spend is unknown, or the rows mix currencies. A block that failed to read is `null` as a whole.
  * - `money` covers purchase campaigns only; the rest are listed in `money.excluded`.
- *   `earn_after_cost_and_ads` (F51 Contract F: the key is its basis) is null whenever an input is missing, and `earn_missing` says which (`product`, `product_cost`,
- *   `spend`, `purchases`, `no_purchase_campaign`).
- * - The month's data stops at yesterday (org timezone): `pace.daily` ends yesterday, and
+ *   `earn_after_cost_and_ads` is a platform-purchase margin hypothesis, labeled by `estimate_basis`;
+ *   missing economics, sales mix or compatible currency keep it null. This is not paid profit.
+ * - `commerce` is the exact brand-level orders facade, independently nullable on a failed read.
+ * - The month's data stops at the last complete platform day: `pace.daily` ends there, and
  *   `previous_same_period.days` is that many days at the start of the previous month. */
 import { apiFetch, readJson } from "./http";
 import {
@@ -29,7 +30,26 @@ export interface HomeCap { value: number; basis: CapBasis | null; break_even: nu
 export interface HomeHandoff { state: "platform" | "check"; change_set_id: string }
 
 export type HomeEarnMissing =
-  | "product" | "product_cost" | "spend" | "purchases" | "no_purchase_campaign";
+  | "product" | "product_cost" | "product_price" | "shipping_cost" | "sales_mix"
+  | "currency" | "spend" | "purchases" | "no_purchase_campaign";
+
+/** Exact orders.review_evidence facade: collected brand rows, never attributed ad revenue. */
+export interface CommerceEvidence {
+  scope: "brand"; start: string; end: string;
+  order_summary: {
+    count: number; non_void_count: number; void_count: number; unpaid_count: number;
+    unknown_payment_count: number; refunded_count: number; unknown_amount_count: number;
+    known_net_count: number; paid_count: number; known_paid_net_count: number;
+    order_net_amount: number | null; paid_net_amount: number | null;
+    reported_currencies: string[]; latest_import_at: string | null;
+    currency: string | null; currency_basis: "unknown"; coverage: "unknown";
+  };
+  channels: {
+    channel: string; source: string; source_type: "order_mirror" | "manual" | "imported";
+    currency: string | null; amount: number | null; row_count: number; unknown_amount_count: number;
+  }[];
+  attribution: "unavailable"; limitations: string[];
+}
 
 export interface HomeExcludedCampaign {
   campaign_id: string; name: string; reason: "not_purchase" | "result_kind_unknown";
@@ -46,6 +66,9 @@ export interface HomeMoney {
   cap: HomeCap | null;
   earn_after_cost_and_ads: number | null;
   earn_missing: HomeEarnMissing[];
+  estimate_basis: {
+    kind: "platform_purchase_margin"; assumptions: string[]; missing: HomeEarnMissing[];
+  };
   excluded: HomeExcludedCampaign[];
   previous_same_period: HomePreviousSamePeriod | null;
 }
@@ -125,6 +148,7 @@ export interface HomeOverview {
   currency: string | null;
   spent: number | null;
   money: HomeMoney | null;
+  commerce: CommerceEvidence | null;
   pace: HomePace | null;
   quality: HomeQuality | null;
   timeline: HomeTimelineItem[] | null;

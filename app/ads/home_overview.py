@@ -30,7 +30,7 @@ from collections import defaultdict
 from datetime import datetime, time, timedelta
 from decimal import Decimal
 
-from app import background
+from app import background, orders
 from app.ads import (
     budget,
     campaign_stage,
@@ -237,8 +237,16 @@ def _money_totals(rows_by_campaign, campaigns, caps, start, end, brand_currency_
         earn_missing.append("purchases")
     for cap, _m in included:
         if cap["break_even"] is None:
-            reasons = [m for m in cap["missing"] if m in ("product", "product_cost")]
+            reasons = cap["economics_basis"]["missing"]
             earn_missing.extend(reasons or ["product_cost"])
+    for campaign_id, rows in rows_by_campaign.items():
+        if campaign_id not in campaigns or caps(campaign_id)["result_kind"] != "purchase":
+            continue
+        currency = caps(campaign_id)["economics_basis"]["currency"]
+        if not caps(campaign_id)["economics_basis"]["missing"] and (
+            currency is None or any(row["currency"] != currency for row in rows)
+        ):
+            earn_missing.append("currency")
     earn_missing = list(dict.fromkeys(earn_missing))
     earn_after_cost_and_ads = None
     if not earn_missing:
@@ -302,6 +310,15 @@ def _money_block(conn, org_id, brand_id, win, rows_by_campaign, campaigns, caps,
         "cap": totals["cap"],
         "earn_after_cost_and_ads": _money_out(totals["earn_after_cost_and_ads"]),
         "earn_missing": totals["earn_missing"], "excluded": totals["excluded"],
+        "estimate_basis": {
+            "kind": "platform_purchase_margin",
+            "assumptions": [
+                "平台購買數假設為每筆一份選定賣法，並使用目前售價、單位成本與運費。",
+                "估算只扣商品變動成本、運費與廣告支出，未計固定成本、退款與其他費用。",
+                "平台歸因購買數不是已付款訂單或廣告增量銷售；此數值是假設貢獻估算，不是已驗證獲利。",
+            ],
+            "missing": totals["earn_missing"],
+        },
         "previous_same_period": previous,
     }
 
@@ -659,6 +676,12 @@ def get_overview(conn, org_id: str, brand_id: str, month: str) -> dict:
         rows_by_campaign[row["campaign_id"]].append(row)
     entities = _guarded(conn, "entities", lambda: _entities(conn, org_id, brand_id))
 
+    commerce = None if win["data_days"] <= 0 else _guarded(
+        conn, "commerce", lambda: orders.review_evidence(
+            conn, org_id, brand_id, start=win["start"], end=win["cutoff"],
+        ),
+    )
+
     money = None if rows is None else _guarded(
         conn, "money",
         lambda: _money_block(conn, org_id, brand_id, win, rows_by_campaign, campaigns, caps,
@@ -692,6 +715,7 @@ def get_overview(conn, org_id: str, brand_id: str, month: str) -> dict:
         "days_in_month": win["days_in_month"],
         "currency": spend["currency"] if rows is not None else None,
         "spent": _money_out(spent),
-        "money": money, "pace": pace, "quality": quality, "timeline": timeline,
+        "money": money, "commerce": commerce, "pace": pace, "quality": quality,
+        "timeline": timeline,
         "campaigns": campaigns_out, "sync": sync, "closed_this_month": closed_this_month,
     }

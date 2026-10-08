@@ -601,7 +601,7 @@ class RouteTest(unittest.TestCase):
         self.assertEqual(ok.status_code, 200, ok.text)
         self.assertEqual(set(ok.json()), {
             "month", "day_of_month", "days_in_month", "currency", "spent", "money", "pace",
-            "quality", "timeline", "campaigns", "sync", "closed_this_month",
+            "quality", "timeline", "campaigns", "sync", "closed_this_month", "commerce",
         })
         bad = client.get(f"/api/ads/brands/{brand}/home?month=2026-9")
         self.assertEqual(bad.status_code, 422, bad.text)

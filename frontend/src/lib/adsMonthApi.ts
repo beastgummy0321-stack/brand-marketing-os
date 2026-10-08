@@ -5,6 +5,7 @@
  * files (each keeps its own small copy, existing convention — see `adsChangeApi.ts`). */
 import { apiFetch, readJson } from "./http";
 import { BASE } from "./adsApi";
+import type { CommerceEvidence } from "./adsHomeApi";
 import type { CapComparison, CampaignObjectiveFamily, RankedGrade, TriageGrade, TriageSampleView } from "./adsTriageApi";
 
 export type MonthVerdict = "met" | "missed" | "unjudged";
@@ -24,6 +25,13 @@ export interface MonthCampaignRow {
 export interface MonthOrders {
   this_net: number | null; this_count: number; previous_net: number | null;
   previous_count: number; change_pct: number | null;
+  amount_basis: "paid_net_amount";
+  comparison_missing: ("currency" | "coverage" | "payment" | "amount")[];
+  order_book: {
+    this_net: number | null; this_count: number;
+    previous_net: number | null; previous_count: number;
+  };
+  this_evidence: CommerceEvidence; previous_evidence: CommerceEvidence;
 }
 /** `next_plan` (F46-I05): plan the next period from what the closed campaigns taught; its `action_url` is the create
  * page for that sell-way (`/brands/{b}/ads/new?sell_way=…`). */
@@ -79,6 +87,7 @@ export interface MonthSummary {
   closed_this_month: number | null; closed_tracking_since: string;
   suggestions: MonthSuggestion[];
   days_covered: number; days_elapsed: number;
+  data_days: number; window: { start: string; end: string | null };
   grades: MonthGrades; rejected: MonthRejected;
 }
 

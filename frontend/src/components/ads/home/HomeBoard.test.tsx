@@ -44,8 +44,8 @@ function campaign(overrides: Partial<HomeCampaign> = {}): HomeCampaign {
 function home(overrides: Partial<HomeOverview> = {}): HomeOverview {
   return {
     closed_this_month: 0, month: "2026-09", day_of_month: 23, days_in_month: 30, currency: "TWD", spent: 22000,
-    money: {
-      purchases: 158, cost_per_purchase: 139.24, cap: { value: 450, basis: "own", break_even: 520 }, earn_after_cost_and_ads: 60163.5, earn_missing: [], excluded: [],
+    commerce: null, money: {
+      purchases: 158, cost_per_purchase: 139.24, cap: { value: 450, basis: "own", break_even: 520 }, earn_after_cost_and_ads: 60163.5, earn_missing: [], estimate_basis: { kind: "platform_purchase_margin", assumptions: [], missing: [] }, excluded: [],
       previous_same_period: { days: 22, purchases: 118, cost_per_purchase: 221.37 },
     },
     pace: { budget_amount: 60000, available: 23600, daily: [{ day: "2026-09-22", cumulative: 22000 }], projected_month_end: 28695.65 },
@@ -67,6 +67,19 @@ const ready = (h: HomeOverview) => ({ status: "ready" as const, home: h });
 const wrap = (node: React.ReactNode) => render(<MemoryRouter>{node}</MemoryRouter>);
 
 describe("MonthMoney", () => {
+  it.each([
+    ["product_price", "缺商品售價"],
+    ["shipping_cost", "運費尚未確認"],
+    ["sales_mix", "多商品的成交比例尚未確認"],
+    ["currency", "估算與花費的幣別不同或尚未確認"],
+  ] as const)("shows the specific %s estimate blocker without displaying a zero profit", (reason, label) => {
+    const h = home({ money: { ...home().money!, earn_after_cost_and_ads: null,
+      earn_missing: [reason], estimate_basis: { kind: "platform_purchase_margin", assumptions: [], missing: [reason] } } });
+    wrap(<MonthMoney brandId="b" state={ready(h)} onRetry={vi.fn()} scaleHref={null} onBudgetClosed={vi.fn()} />);
+    expect(screen.getByText(`算不出來・${label}`)).toBeTruthy();
+    expect(screen.queryByText("0 TWD")).toBeNull();
+  });
+
   it("prints the rounded earn, whole-yuan cost per purchase, the shared cap and last month's same days", () => {
     wrap(<MonthMoney brandId="b" state={ready(home())} onRetry={vi.fn()} scaleHref={null} onBudgetClosed={vi.fn()} />);
     expect(screen.getByText("這個月估計多賺")).toBeTruthy();
@@ -86,7 +99,7 @@ describe("MonthMoney", () => {
 
   it("unknowns: earn names what is missing, no purchase yet, no comparison, break-even cap wording", () => {
     const h = home({
-      money: { purchases: 0, cost_per_purchase: null, cap: { value: 520, basis: "break_even", break_even: 520 }, earn_after_cost_and_ads: null, earn_missing: ["product_cost"], excluded: [], previous_same_period: null },
+      money: { purchases: 0, cost_per_purchase: null, cap: { value: 520, basis: "break_even", break_even: 520 }, earn_after_cost_and_ads: null, earn_missing: ["product_cost"], estimate_basis: { kind: "platform_purchase_margin", assumptions: [], missing: ["product_cost"] }, excluded: [], previous_same_period: null },
       pace: { budget_amount: null, available: null, daily: [], projected_month_end: null },
     });
     wrap(<MonthMoney brandId="b" state={ready(h)} onRetry={vi.fn()} scaleHref={null} onBudgetClosed={vi.fn()} />);

@@ -37,18 +37,19 @@ _CAP_LABEL = "照預算上限"
 
 def breakeven_cpa(economics: dict | None) -> float | None:
     """打平 CPA＝一次轉換的價值 = (售價 − 單位成本 − 運費) x 成交率，from one `product_economics`
-    row. 商品（`close_rate` 是 `None`）不帶成交率，一次轉換就是一次成交，行為與 F05 之前完全
-    相同；服務／名單型帶 `close_rate`（百分比 0–100，乘數經 `input_rules.rate_fraction`，F50
-    Contract I），值是每筆名單／每次成交的期望毛利。`None` when the row is
-    missing or `unit_variable_cost` is `None` — an unknown cost stays unknown, never a guessed
-    margin (Blocked-if: no fallback to the `gross_margin` rule card)."""
+    row. A recorded close rate scales the margin (percent 0–100); no close rate means one
+    purchase. Missing price, cost or shipping yields None. An explicit zero is known;
+    an unknown cost never becomes a guessed margin or free shipping.
+    """
     if not economics:
         return None
     price = economics.get("selling_price")
     unit_cost = economics.get("unit_variable_cost")
     if price is None or unit_cost is None:
         return None
-    shipping = economics.get("shipping_cost") or 0
+    shipping = economics.get("shipping_cost")
+    if shipping is None:
+        return None
     value = float(price) - float(unit_cost) - float(shipping)
     close_rate = economics.get("close_rate")
     return value if close_rate is None else value * input_rules.rate_fraction(close_rate)
@@ -134,26 +135,23 @@ def resplit(daily_total: int, groups: list[dict], allocation: list[dict]) -> dic
 def _economics_for(
     conn, brand_id: str, product_ids: list[str] | None,
 ) -> tuple[dict | None, str | None]:
-    """First `product_id` (in order) whose economics yields a breakeven CPA. Multiple products on
-    one campaign is a later-issue shape; picking the first computable one is the minimal, honest
-    choice for this issue — the `basis` always names which product it used.
+    """One selected sell-way's effective economics; no mix is evidenced for multiple choices.
 
-    F43-I04: a campaign always carries a sell-way id (only sell-ways are pickable), so the old
-    parent -> first-sell-way fallback is gone; the numbers are the sell-way's effective economics
-    (`get_product_economics`: a bundle's NULL cost is Σ its components' costs)."""
-    for product_id in product_ids or []:
-        economics = bi_repo.get_product_economics(conn, brand_id, product_id)
-        if breakeven_cpa(economics) is not None:
-            return economics, product_id
-    return None, None
+    A composed sell-way is still one choice: its owner resolves component costs. Multiple
+    sell-ways have no observed sales weights, so neither their first row nor their mean is a
+    defensible unit margin. Missing fields remain available for the caller's explanation.
+    """
+    ids = list(dict.fromkeys(product_ids or []))
+    if len(ids) != 1:
+        return None, None
+    economics = bi_repo.get_product_economics(conn, brand_id, ids[0])
+    return (economics, ids[0]) if economics else (None, None)
 
 
 def economics_for(
     conn, brand_id: str, product_ids: list[str] | None,
 ) -> tuple[dict | None, str | None]:
-    """Public wrapper for `_economics_for` -- F16-I04's `app/ads/targets.py::resolve()` needs the
-    exact same "first computable product" lookup this file's own `scenarios()` already uses; no
-    second implementation of that rule."""
+    """The shared, single sell-way economics lookup used by targets and scenarios."""
     return _economics_for(conn, brand_id, product_ids)
 
 

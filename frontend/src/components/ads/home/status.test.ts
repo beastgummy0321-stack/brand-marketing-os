@@ -261,7 +261,7 @@ const homeCampaign = (overrides: Partial<HomeCampaign> = {}): HomeCampaign => ({
   ...overrides,
 });
 const homeOverview = (overrides: Partial<HomeOverview> = {}): HomeOverview => ({
-  month: "2026-10", day_of_month: 5, days_in_month: 31, currency: "TWD", spent: null, money: null, pace: null,
+  month: "2026-10", day_of_month: 5, days_in_month: 31, currency: "TWD", spent: null, commerce: null, money: null, pace: null,
   quality: null, timeline: null, campaigns: [homeCampaign()], sync: null,
   ...overrides,
 });
