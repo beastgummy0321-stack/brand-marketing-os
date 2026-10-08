@@ -276,6 +276,7 @@ def decision_context(ctx: dict, campaign: dict) -> dict:
         ),
         "constraints": campaign.get("constraints_json") or {},
         "budget_advice": ctx.get("budget_advice"),
+        "continuation": ctx.get("continuation"),
         "customers": [
             {
                 k: g.get(k)
@@ -626,6 +627,7 @@ def served_decision(conn, org, brand, campaign, groups):
     ads = [a for g in groups for a in g.get("ads") or []]
     actual_ids = set(a.get("customer_group_id") for a in ads) - {None}
     decision["facts"] = {
+        "continuation": ctx.get("continuation"),
         "available": {"customer_groups": len(names), "customer_group_names": list(names.values())},
         "proposed": {
             "customer_groups": len(proposed_ids),
@@ -907,6 +909,7 @@ def generate(conn, org_id: str, brand_id: str, campaign_id: str, *, actor: str) 
             "forbidden_count": len(ctx["forbidden"]),
             "offers": [offer["key"] for offer in ctx["offers"]],
             "previous_campaign_id": (ctx["previous"] or {}).get("campaign_id"),
+            "continuation": ctx.get("continuation"),
         },
     }
     assumption_note = _assumption_note(ctx["prices"])

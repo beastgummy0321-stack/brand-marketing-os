@@ -268,7 +268,8 @@ class StrategyPromptAndFactsTest(_Fixture):
         self.assertIn("- 保證不被車撞", prompt)
         basis = detail["budget_basis_json"]["basis"]["planner_context"]
         self.assertEqual(basis, {"product_id": self.way["id"], "forbidden_count": 1,
-                                 "offers": ["discount"], "previous_campaign_id": None})
+                                 "offers": ["discount"], "previous_campaign_id": None,
+                                 "continuation": None})
 
     def test_a_number_in_the_prose_is_refused(self):
         campaign = self._campaign()

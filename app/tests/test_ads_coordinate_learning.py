@@ -382,7 +382,8 @@ class CloseWritesRankedRowsTest(CoordinateLearningTestBase):
         self.assertIn("verdict=keep；rank=1；of=1", row["applicability_scope"])
         carried = coordinate_learning.keep_ads(self.conn, self.org_id, self.brand_id,
                                                self.product_id)
-        self.assertEqual([entry["ad"]["id"] for entry in carried], [sold["id"]])
+        # The ranking is preserved; simulated results without usable originals prove no carry.
+        self.assertEqual(carried, [])
 
     def test_a_zero_at_the_unsold_line_is_written_as_replace(self):
         campaign = self._campaign()

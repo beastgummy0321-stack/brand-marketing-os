@@ -9,7 +9,7 @@ No HTTP, model call, table write or rule-card interpretation belongs here.
 import hashlib
 import json
 import math
-from datetime import timedelta
+from datetime import date, timedelta
 from typing import SupportsFloat, overload
 
 from app.brand_intelligence import repository as bi_repo
@@ -40,7 +40,32 @@ def advice(conn, org_id, brand_id, campaign: dict) -> dict:
     unit = outcome.cap_unit(conn, brand_id, target, campaign=campaign)
     cutoff = coverage.last_complete_day(conn, org_id, brand_id)
     start = cutoff - timedelta(days=6)
-    products = sorted(set((campaign.get("context_json") or {}).get("product_ids") or []))
+    context = campaign.get("context_json") or {}
+    products = sorted(set(context.get("product_ids") or []))
+    continuation = context.get("next_period_source")
+    selection, selection_ready, selection_reason = None, True, None
+    if continuation is not None:
+        source = continuation if isinstance(continuation, dict) else {}
+        ids = source.get("campaign_ids")
+        selection = {"campaign_ids": sorted(set(ids)) if isinstance(ids, list)
+                     and 1 <= len(ids) <= 24 and all(isinstance(i, str) for i in ids) else [],
+                     "month": source.get("month"), "product_id": source.get("product_id"),
+                     "product_mapping_confirmed": source.get("product_mapping_confirmed") is True}
+        selection_reason = "continuation_source_unverified"
+        try:
+            month_start = date.fromisoformat(selection["month"] + "-01")
+            month_end = (month_start.replace(day=28) + timedelta(days=4)).replace(day=1)
+            month_end -= timedelta(days=1)
+            first, last = max(start, month_start), min(cutoff, month_end)
+            selection_ready = bool(selection["campaign_ids"] and first <= last
+                                   and month_end < settings.today_for_org(conn, org_id=org_id))
+            if selection_ready:
+                start, cutoff = first, last
+                selection_reason = None
+            elif selection["campaign_ids"] and first > last:
+                selection_reason = "continuation_outside_recent_window"
+        except (TypeError, ValueError):
+            selection_ready = False
     candidates = conn.execute(
         "SELECT * FROM ads_campaign WHERE org_id=%s AND brand_id=%s "
         "ORDER BY (id=%s) DESC, end_date DESC NULLS LAST, id",
@@ -49,11 +74,16 @@ def advice(conn, org_id, brand_id, campaign: dict) -> dict:
     cohort, rows, entities = None, [], []
     covered = False
     # Cross-campaign evidence needs one explicit sell-way; an unlinked current ID stands alone.
-    if len(products) <= 1 and target["result_kind"] is not None:
+    if selection_ready and len(products) <= 1 and target["result_kind"] is not None:
         for raw in candidates:
             candidate = dict(raw)
+            if selection is not None and candidate["id"] not in selection["campaign_ids"]:
+                continue
             linked = sorted(set((candidate.get("context_json") or {}).get("product_ids") or []))
-            if (linked != products
+            association = (selection is not None and not linked and len(products) == 1
+                           and selection["product_mapping_confirmed"]
+                           and selection["product_id"] == products[0])
+            if ((linked != products and not association)
                     or targets.effective_result_kind(candidate) != target["result_kind"]
                     or repository.campaign_objective_family(conn, org_id, brand_id, candidate)
                     != repository.campaign_objective_family(conn, org_id, brand_id, campaign)):
@@ -99,7 +129,7 @@ def advice(conn, org_id, brand_id, campaign: dict) -> dict:
         grade, reason = "insufficient", "result_definition_unverified"
     days_read = max((cutoff - start).days + 1, 0)
     if not covered:
-        grade, reason = "insufficient", "coverage_unverified"
+        grade, reason = "insufficient", selection_reason or "coverage_unverified"
     evidence = {
         "window": {"start": start.isoformat(), "end": cutoff.isoformat(),
                    "campaign_id": cohort["id"] if cohort else None},
@@ -169,7 +199,7 @@ def advice(conn, org_id, brand_id, campaign: dict) -> dict:
                           and not funds["uncertainties"] and funds["available"] is not None)):
         state, reasons = "unaffordable", ["period_budget_exceeded"]
     result = {"state": state, "recommended_key": key, "reason_codes": reasons, "evidence": evidence}
-    stable = {**result, "products": products, "dates": [first, last],
+    stable = {**result, "products": products, "dates": [first, last], "continuation": selection,
               "chosen": float(campaign["budget_planned"])
               if campaign.get("budget_planned") is not None else None, "budget_cap": cap,
               "prior": {"daily": daily, "source": source, "currency": currency,

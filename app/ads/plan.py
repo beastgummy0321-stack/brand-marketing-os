@@ -608,6 +608,11 @@ def _carried_snapshot(previous: dict, lookup: dict) -> dict:
     if previous.get("customer_group_id") and group:
         snapshot["customer_group"] = group
     snapshot["carried_from"] = {"campaign_id": previous["campaign_id"], "ad_id": previous["id"]}
+    if previous.get("native_ref"):
+        snapshot["carried_from"]["native_ref"] = previous["native_ref"]
+        snapshot["carried_from"]["entity_id"] = previous["native_ref"]["id"]
+        if previous["id"] == previous["native_ref"]["id"]:
+            snapshot["carried_from"].pop("ad_id")
     return snapshot
 
 
@@ -815,6 +820,9 @@ def adopt_strategy(conn, org_id: str, brand_id: str, campaign_id: str, *, actor:
     # F48 Contracts C + K: the ceiling, and last period's 留下 ads carried in before the model.
     ceiling = _ceiling(ctx["capacity"])
     candidates = {i["ad"]["id"]: i for i in ctx["carried_candidates"]}
+    if any(s["carry_from_ad_id"] and s["carry_from_ad_id"] not in candidates
+           for s in decision["slots"]):
+        raise StrategyConflict("strategy_changed")
     carried = [{**candidates[s["carry_from_ad_id"]], "target": s["role"], "slot_id": s["id"]}
                for s in decision["slots"] if s["carry_from_ad_id"]]
     remaining = len(decision["slots"]) - len(carried)

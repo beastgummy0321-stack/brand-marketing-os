@@ -14,6 +14,9 @@
 
 import unittest
 import uuid
+from unittest import mock
+
+import httpx
 
 import app.storage as storage
 
@@ -47,6 +50,22 @@ class GetMissingKeyTest(unittest.TestCase):
             storage.get(org_id=org_id, key=key)
 
 
+class GetTransportFailureTest(unittest.TestCase):
+    def test_timeout_and_connection_failures_use_the_facade_error(self):
+        for failure in (httpx.ReadTimeout, httpx.ConnectError):
+            with self.subTest(failure=failure.__name__):
+                with mock.patch.object(storage.httpx, "get", side_effect=failure("transport down")):
+                    with self.assertRaises(storage.StorageError) as caught:
+                        storage.get(org_id="org_transport", key="org_transport/original.png")
+                self.assertNotIn("transport down", str(caught.exception))
+
+    def test_tenant_guard_precedes_http_even_when_transport_is_down(self):
+        with mock.patch.object(storage.httpx, "get", side_effect=httpx.ConnectError("down")) as get:
+            with self.assertRaises(ValueError):
+                storage.get(org_id="org_transport", key="another_org/original.png")
+            get.assert_not_called()
+
+
 class DeletePrefixTest(unittest.TestCase):
     def test_delete_prefix_removes_objects_two_levels_deep(self):
         org_id = _org()
@@ -75,8 +94,11 @@ class TenantIsolationTest(unittest.TestCase):
         org_id = _org()
         with self.assertRaises(ValueError):
             storage.put(
-                org_id=org_id, key="other_org/x.png", filename="x.png",
-                content=b"x", content_type="image/png",
+                org_id=org_id,
+                key="other_org/x.png",
+                filename="x.png",
+                content=b"x",
+                content_type="image/png",
             )
 
     def test_get_refuses_key_not_starting_with_org_id(self):

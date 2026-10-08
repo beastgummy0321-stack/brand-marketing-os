@@ -413,24 +413,24 @@ class SettleWriteTest(SettleFixture):
                                 "confidence", "source_track", "created_by")},
             {"learning_text": "「保溫到公司」本期每筆成本未超過宣告上限；僅表示相關",
              "applicability_scope": f"ads;campaign={self.daily};group=pcg_morning"
-                                    ";settle_fate=effective",
+                                    ";settle_fate=effective;settle_basis=absolute",
              "sample_size": "26", "confidence": "observed", "source_track": "ads",
              "created_by": "user_1"},
         )
         p2 = rows[f"settle:{MONTH}:{self.ads['p2']}"]
         self.assertEqual(p2["learning_text"], "「桌面質感」本期每筆成本超過宣告上限；僅表示相關")
         self.assertEqual(base_learning_scope(p2["applicability_scope"]),
-                         f"ads;campaign={self.daily};group=none;settle_fate=ineffective")
+                         f"ads;campaign={self.daily};group=none;settle_fate=ineffective;settle_basis=absolute")
         i3 = rows[f"settle:{MONTH}:{self.ads['i3']}"]
         source = ads_learnings.stored_evidence(i3)
         self.assertEqual(source["source_kind"], "settle")
         self.assertEqual(source["source_ref"]["entity_id"], self.ads["i3"])
         self.assertEqual(source["scope"]["claim_key"], "message_text:多種用法")
-        self.assertEqual(source["direction"], "inconclusive")
+        self.assertEqual(source["direction"], "contrary")
         self.assertEqual(i3["learning_text"],
                          "「多種用法」本期無法計算每筆成本與上限的差距；成效原因未知")
         self.assertEqual(base_learning_scope(i3["applicability_scope"]),
-                         f"ads;campaign={self.imp};group=none;settle_fate=ineffective")
+                         f"ads;campaign={self.imp};group=none;settle_fate=ineffective;settle_basis=absolute")
         self.assertEqual(i3["sample_size"], "0")
         # no numbers in any text (identical conclusions promote confidence)
         self.assertFalse(any(ch.isdigit() for row in rows.values()
@@ -568,7 +568,7 @@ class SettleQueueTest(SettleFixture):
 
     def test_no_cap_anywhere_still_ranks_against_the_best(self):
         # F48-I02: the ranking needs no cap (learning_rank keeps the best and those within
-        # NEAR_BEST of it, flagged 相對最好), so a month with no cap is still settled.
+        # NEAR_BEST of it, flagged 相對最好). Absolute success remains unknown without a cap.
         for campaign in (self.daily, self.imp):
             self.conn.execute(
                 "UPDATE ads_campaign SET target_cost=NULL, target_basis=NULL WHERE id=%s",
@@ -577,14 +577,14 @@ class SettleQueueTest(SettleFixture):
         self.conn.commit()
         rows = self.settle_rows(triage.refresh_queue(self.conn, self.org, self.brand))
         # F48-I13: with no cap a known zero is not judged -- only the five sold ads are ranked.
-        self.assertEqual(rows[0]["settle"]["learnable_count"], 5)
+        self.assertEqual(rows, [])
         view_rows = self.rows()
         for key in ("p4", "p5", "i3"):
             self.assertEqual((view_rows[self.ads[key]]["fate"], view_rows[self.ads[key]]["rank"]),
                              ("skip", None))
         p1 = view_rows[self.ads["p1"]]
         self.assertEqual((p1["grade"], p1["verdict"], p1["flags"], p1["fate"]),
-                         ("no_target", "keep_relative", ["相對最好"], "effective"))
+                         ("no_target", "keep_relative", ["相對最好"], "skip"))
 
     def test_only_the_latest_ended_month_is_raised(self):
         self.today.return_value = date(2026, 10, 5)  # September has no rows at all

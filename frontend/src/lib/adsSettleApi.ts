@@ -13,9 +13,8 @@ import type { CampaignDataStatus, CapBasis } from "./adsTriageApi";
 /** `not_ended`: the month is not over yet in the org timezone (nothing can be written);
  * `open`: ended, nothing written; `written`: the month's learnings are in the brand notebook. */
 export type SettleStatus = "not_ended" | "open" | "written";
-/** F48 Contract R "derived rulers": the row's place in its campaign's `learning_rank` ranking decides — 留下
- * (`keep`／`keep_relative`) → `effective`, 換掉 (`replace`) → `ineffective`, a row the ranking cannot place (unknown
- * results or spend, mixed currency) → `skip` (never written, needs no pick; `skip_reason` says why). */
+/** Absolute on-target rows are effective; comparable above-target rows are ineffective.
+ * Relative ranking remains a historical comparison and never certifies success. */
 export type SettleFate = "effective" | "ineffective" | "skip";
 /** `not_needed`: no pick is needed from the AI (a skip or already written row, or an ad with no
  * copy to read — a non-skip row with no copy still needs a pick, typed by the user). */
@@ -49,6 +48,8 @@ export interface SettleCampaign {
 
 export interface SettleWritten {
   at: string; by: string; count: number; effective: number; ineffective: number;
+  /** Legacy relative-only records have no retained absolute verdict. */
+  unknown?: number;
 }
 
 export interface SettleView {

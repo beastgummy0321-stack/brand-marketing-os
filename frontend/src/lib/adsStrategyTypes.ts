@@ -3,6 +3,7 @@
  * importers keep using `@/lib/adsApi`. Shapes served by `app/ads/strategy.py` (`generate_strategy`'s `basis`) and
  * `app/ads/coordinate_learning.py` (`learning_rows`). */
 
+import type { ContinuationProjection } from "./adsWizardApi";
 import type { CoordinateLearnings } from "./adsLearningsApi";
 import type { LearningEvidence, LearningEvidenceContext } from "./adsLearningEvidence";
 
@@ -74,6 +75,7 @@ export interface StrategyDecision {
   revision: string;
   state: "proposed" | "adopted" | "modified" | "legacy_unbound";
   facts?: {
+    continuation?: ContinuationProjection | null;
     available: { customer_groups: number; customer_group_names: string[] };
     proposed: StrategyAssignmentFacts;
     actual: StrategyAssignmentFacts;
@@ -174,6 +176,8 @@ export interface PlanCapacity {
 
 /** 查看策略依據：這個策略用到哪些品牌事實／商品價格／學習／llm_task，畫面照這個列。 */
 export interface StrategyBasis {
+  planner_context?: { product_id: string | null; forbidden_count: number; offers: string[];
+    previous_campaign_id: string | null; continuation?: ContinuationProjection | null };
   evidence_context: LearningEvidenceContext;
   knowledge_item_ids: string[];
   llm_task_id: string;
