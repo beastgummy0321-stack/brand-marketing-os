@@ -4,9 +4,10 @@
 
 ## First-release carve — 2026-10-07
 
-Status: concrete [F53 plan](../../.work/features/F53.md) and nine ordered issues are ready;
-implementation awaits the user's single plan/prototype checkpoint. The user selected this
-Windows host for local/private own-brand use. No issue has been started or authorized.
+Status: the user approved the [F53 plan](../../.work/features/F53.md) and prototype on
+2026-10-08. The nine ordered issues and necessary evidence-backed tooling calibration are
+merged. This Windows local/private release remains subject to the actual combined packet,
+G8 integration sidecar and pending human screen acceptance; queue completion is not closure.
 
 The settled evidence/source/applicability/support/revision/wire contract, complete writer/reader
 inventory and frozen G1-G8 gates moved to [ads §6.55](../architecture/ads.md#655-supervised-first-release-evidence-contract-f53-planned-2026-10-07).
@@ -17,7 +18,7 @@ This replaces the earlier candidate plan rather than creating a parallel product
 and [cases](../drills/drill-12/first-release/cases.json) freezes expectations before code changes.
 
 The [HTML prototype](../../.harness/scratch/prototype/first-release-learning/index.html) remains
-proposed pending approval: strategy basis, brand learning and execution-confirmation learning
+approved as the implementation reference: strategy basis, brand learning and execution-confirmation learning
 card, with sources, cold start, failure/retry, contrary results and changed conditions. Its 27
 historical fake-data checks are not product acceptance. Workers read HTML and reference facts;
 final UI delivery requires fresh reference/build pairs at 1024 and 1920.
@@ -25,7 +26,8 @@ final UI delivery requires fresh reference/build pairs at 1024 and 1920.
 First-release outcome remains defensible direction, faithful accepted execution and traceable
 next-period adaptation. Copy/image polish, simulated profit and optimal strategy are not gates;
 fabrication, wrong scope/money/bindings, input loss and unrecoverable supported flows are blockers.
-Bounded real-provider proof and genuine local auth/backup recovery are still unverified.
+Actual provider/auth/backup dispositions are recorded in the first-release packet;
+missing or failed gates remain unverified and human acceptance remains pending.
 No repair/readiness percentage follows from case/issue counts. F48-F52 remain open; F52's
 unchanged original final nine-dimension acceptance stays paused. Approval of F53 cannot close it.
 

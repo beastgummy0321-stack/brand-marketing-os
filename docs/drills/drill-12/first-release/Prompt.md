@@ -1,49 +1,19 @@
-# New-session opening prompt
+# Resume the completed F53 queue at its finite acceptance boundary
 
-Current status (2026-10-07): `/carve` is complete. [F53](../../../../.work/features/F53.md)
-contains nine ready issues and waits for the concrete plan/prototype checkpoint. The user chose
-Windows local/private use. After approval, continue this existing F53 queue with `/crank`;
-do not repeat the original create-feature prompt below or restart paused F52. The original
-opening is retained as historical planning context, never execution authorization.
+Read Handoff.md, the root CLAUDE.md, `.work/features/F53.md`, acceptance-result.json and the
+actual ignored `.harness/scratch/F53/final/` sidecar before doing work. Use current Harness
+status and the newest human instruction as authority. Completed queue items are not release
+closure. The plan/prototype checkpoint was satisfied and execution approved on 2026-10-08.
 
-Target: Codex in `D:\0UserProfile\Desktop\marketing`, using the installed Harness plugin.
-Paste the following as one message. It requests `/carve`; `/crank` follows the plan checkpoint.
+Do not create another feature, re-carve, redo completed issues or repeat provider/Auth/restore/
+fixed-cycle calls from an old prompt. The user authorized the finite queue and combined report;
+it now stops with fixed/remaining/unverified dispositions and human UI acceptance pending.
+Inspect the gallery `.scratch/F53/final-ui-20261008/index.html` and design-system section 1.7.
+If a blocking technical gate failed, explain its actual retained evidence and the precise
+decision needed; no model switch, timeout extension or new repair campaign is implicit.
 
-```text
-/carve
-
-Continue from D:\0UserProfile\Desktop\marketing\docs\drills\drill-12\first-release\Handoff.md.
-Read the root CLAUDE.md, the linked canonical first-release plan, probe report and interactive
-HTML prototype before editing. Use the newest Handoff rather than restarting the paused F52.
-
-Create a feature and ordered issues for supervised own-brand first release: defensible direction,
-faithful accepted execution and evidence-based next-period adaptation. Copy/image polish and
-simulated profit are not acceptance requirements. Fabricated facts, mis-scoped evidence,
-wrong money, broken accepted bindings and unrecoverable supported flows remain blockers.
-
-Before cutting implementation scopes, inventory all actual learning writers/readers and fixture
-factories; settle the evidence/provenance/applicability/revision contract and additive backend
-field map in the existing domain documents. Preserve already-passing F52 repairs, explicit
-no-offer choices, carryover, duplicate-check behavior, latest-current-verdict and original rankings.
-Plan backend work before three focused UI slices: strategy basis, brand learning and the
-execution-confirmation learning card, using the supplied prototype and existing design system.
-The prototype appearance is proposed and must be shown at the checkpoint.
-
-Keep F52's unchanged final acceptance open. Plan separate first-release gates with a fixed
-evidence-to-adoption cycle, bounded real-provider proof, required clean integration and selected
-environment auth/backup recovery. Do not claim model quality, live results, profit or a percentage
-from probe/issue counts. Diagnose the recorded provider timeout before another bounded attempt.
-
-Preserve uncommitted planning docs and ignored prototype/probe artifacts if using a worktree.
-Do not start implementation, a full drill, publication, push or platform/paid actions during carving.
-Show the concrete feature/issue order, dependencies, acceptance, prototype and remaining choices;
-stop once before the first issue. After I confirm, use /crank to run the approved queue and pause
-with fixed/remaining/unverified status at its agreed repair/acceptance boundary. Do not start an
-extra test/repair round without a relevant change or a new instruction.
-
-Reply in plain Traditional Chinese and start the first prose block with Beast，.
-```
-
-This prompt targets the planning-to-execution handoff, preserves current evidence and makes
-the prototype/plan checkpoint explicit, so another session can proceed without reconstructing
-old dialogue or mistaking the paused F52 queue for the new release authorization.
+With successful current integration and explicit human UI acceptance, use Harness feature
+closure; preserve the pre-close seal inputs because closing changes HEAD/queue bytes.
+F48-F52 remain open and original F52 acceptance stays paused/unrun. No push, public deployment,
+platform mutation or direct paid provider action is authorized. Reply in plain Traditional
+Chinese and begin the first prose block with Beast，.

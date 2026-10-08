@@ -603,12 +603,12 @@ per-offering-type table: the kind of thing being sold is a row's numbers, not a 
 written and read only through `app/brand_intelligence/repository.py`; the product-onboarding capability lives in `intake`, which may
 call the ads public entry for `breakeven_cpa` and `workbench.validate_claims` for 食安法 flags. `intake_product_prefill` is intake's own.
 
-For F53's planned additive evidence projection, see [ads §6.55](docs/architecture/ads.md#655-supervised-first-release-evidence-contract-f53-planned-2026-10-07) and
+For F53's implemented additive evidence projection, see [ads §6.55](docs/architecture/ads.md#655-supervised-first-release-evidence-contract-f53-planned-2026-10-07) and
 [workbench §5.19](docs/architecture/workbench.md#519-first-release-learning-qualification-f53-planned-2026-10-07). The
 existing scope field carries versioned metadata; no schema ownership changes or second ledger.
 The pure workbench helper is exported through its existing public entry, which ads may already
 use. Ads prepares observations/current conditions; workbench qualifies them without reverse
-imports, SQL or model calls. This carve proposal awaits the user's checkpoint.
+imports, SQL or model calls. These F53 changes are implemented; actual first-release/human acceptance remains separate in the packet.
 
 `learning_ledger` stays where it is — in `brand_intelligence`, which is legacy. It is brand
 knowledge shown in 品牌智庫, not ads bookkeeping, so `ads` does not own it and does not write it

@@ -2262,8 +2262,9 @@ and independent errors intact. Existing reload callbacks must be investigated be
 
 ### 6.55 Supervised first-release evidence contract (F53, planned 2026-10-07)
 
-Status: concrete carve proposal, pending the user's plan/prototype checkpoint. This is the
-authoritative contract for F53 implementation when approved; it is not implemented behavior.
+Status: implemented through the approved F53 queue and narrowly reviewed acceptance-tool
+calibration (2026-10-08). This is the authoritative implemented evidence contract; actual
+technical/human/release dispositions remain in the first-release packet and ignored G8 sidecar.
 Scope is supervised own-brand use: defensible proposals, faithful accepted assignments and
 traceable next-period adaptation. F48-F52 remain open; F52's unchanged nine-dimension drill
 is paused and is not replaced by this release gate. No publication, push, paid call or platform
@@ -2379,7 +2380,7 @@ even when the learning ID stays constant. Reason codes include scope_required, o
 unknown_source, conditions_unknown, condition_changed, offer_ended, measurement_stale,
 superseded, insufficient_sample, simulated, operation_only and contradictory_result.
 
-| Existing response / owner | Planned addition |
+| Existing response / owner | Implemented additive projection |
 |---|---|
 | Campaign budget_basis_json.basis.learnings / strategy + planner_context | Each StrategyBasisLearning gains required evidence; basis gains evidence_context snapshot |
 | GET /api/ads/brands/{brand_id}/learnings / ads_learnings + learning_routes | Each AdsLearning gains evidence; optional sell_way_id query qualifies current use without hiding history |

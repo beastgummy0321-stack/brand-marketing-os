@@ -1,135 +1,79 @@
-# First-release direction and learning: planning handoff
+# F53 first-release execution handoff
 
-Date: 2026-10-07. Stage: F53 approved 2026-10-08; `/crank` execution in progress.
-Workspace: `D:\0UserProfile\Desktop\marketing`.
-Branch: `codex/drill12-system-contracts`.
-Product HEAD: `2375e161d06da0455977e87a8010db6dc4f7137f`.
+Date: 2026-10-08. Branch: `codex/first-release-evidence-learning`.
+Workspace: `D:/0UserProfile/Desktop/marketing`. The user approved the plan/prototype and
+the entire `/crank` queue on 2026-10-08 for this Windows host's local/private use.
+The nine approved issues and scoped fixture/group-resolution repairs are merged.
+This is the finite combined acceptance/report boundary, not authority for another drill.
 
-## Latest instruction and authority
+## Current evidence and stopping boundary
 
-The user requested a basic plan, this Handoff, a new-session Prompt and a prototype for
-frontend changes. Continue planning in a different session with `/carve`, then `/crank` after
-the concrete plan checkpoint. `/crave` in the user's message refers to `/carve`.
-This session creates artifacts only. It does not start product repairs, a full integration,
-another Drill 12, live advertising, publication, remote push or a new Codex thread.
-Newest instructions override stored queue state and earlier 'start/retry' messages.
+Canonical [packet](acceptance-result.json), [provider](provider-receipt.json) and
+[operations](operational-receipt.json) retain actual raw references and source/config hashes.
+Final context: `D:/0UserProfile/Desktop/marketing/.scratch/F53/final-combined-20261008-a5/context.json`.
 
-The 2026-10-07 carve created [F53](../../../../.work/features/F53.md) and nine ready issues.
-No authorize/start/claim/worktree, product edit/test, provider attempt, integration or drill was
-performed. The user selected this Windows host for local/private acceptance. The user confirmed the displayed F53 plan/prototype on 2026-10-08 and invoked /crank;
-execute the approved queue without mid-batch confirmation except material errors/decisions.
-F53 supersedes the candidate planning text below; historical probe evidence remains unchanged.
+| Gate | Current technical status |
+|---|---|
+| G1 | pass |
+| G2 | pass |
+| G3 | pass |
+| G4 | pass |
+| G5 | pass |
+| G6 | unverified |
+| G7 | pass |
 
-The accepted outcome is supervised own-brand use with defensible direction, faithful
-execution and evidence-based improvement. Poor copy, unattractive images and simulated
-profit are not release blockers. Evidence cannot promise optimal strategy or profitability.
-The first release does not implement the entire later autonomous/multi-platform roadmap.
+G8 is intentionally a pending pointer in the tracked packet. The lead's actual finite
+integration result, timing/logs and successful seal or honest failed disposition live under
+`.harness/scratch/F53/final/`. Read that sidecar before asserting integration success.
+Queue completion and a successful subset do not close this feature or award release eligibility.
+Human acceptance remains pending; do not prefill it or close F53 without a fresh successful
+integration and the user's explicit five-question acceptance.
 
-## Read order and planning carrier
+The sole actual subscription-provider attempt returned successfully within its unchanged
+60-second limit, but production format checks rejected a numeral in prose and object
+alternatives where strings are required. G6 remains unverified; the independent rejection
+and original reply are preserved. This does not show provider unavailability or bad
+marketing judgment. No output was rewritten and no additional model attempt was made.
 
-1. Root [CLAUDE.md](../../../../CLAUDE.md) and applicable instructions.
-2. The [first-release planning section](../../../backlog/roadmap-autonomous-marketing-major-updates.md)
-   now points to the concrete F53 plan and authoritative ads §6.55/workbench §5.19 contracts;
-   do not reconstruct another queue from the older candidate slices.
-3. The [preflight probe](../launch-direction-probe.md) distinguishes demonstrated gaps,
-   preserved behavior and unverified model/operational proof.
-4. Open the [interactive prototype](../../../../.harness/scratch/prototype/first-release-learning/index.html)
-   before planning frontend tickets. Routes: `#/strategy`, `#/library`, `#/verify`.
-5. Use [Prompt.md](Prompt.md) for the new-session opening. The original [Drill 12 Handoff](../Handoff.md)
-   remains the historical F52 continuation carrier, not permission to restart it now.
+Implemented behavior: prepared source/support/applicability/revision qualification reaches
+strategy, copy and visual consumers; the three screens distinguish usable/history/unknown
+evidence, expose sources, retain drafts and refuse stale decisions until explicit refresh.
+Accepted audience/role/offer/carry/test assignments and original carried image/copy remain
+protected. Money/ranking rules and unknown-versus-zero semantics stay with existing owners.
 
-Use currently loaded Harness skills. If SessionStart state is absent, follow CLAUDE's opening
-checks. This handoff does not create another policy/specification or replace domain contracts.
+## Read order and artifact locations
 
-## Verified, remaining and unverified
+1. Root CLAUDE.md and latest human instruction.
+2. `.work/features/F53.md`, this packet and the actual ignored G8 sidecar.
+3. Ads section 6.55 and workbench section 5.19; their historical heading anchors are preserved.
+4. Final UI gallery: `.scratch/F53/final-ui-20261008/index.html`; select strategy/library/verify,
+   1024/1920 and main/source views. Technical screenshot/state/keyboard/draft-retention review
+   passed; the human five questions are still open.
+5. Prompt.md resumes this boundary without re-carving or repeating successful probes.
 
-- **Verified locally:** bounded preflight: 11 function/SQL cases (7 matching, 4 gaps),
-  8 planning/configuration cases (6 matching, 2 gaps), 5 current targeted tests plus 2 subtests
-  passing. Probe expectations refine parts of the older contract; not every gap is a production
-  incident. Artifacts: `.harness/scratch/launch-direction-probe-20261007/`.
-- **Prototype verified:** 27 fake-data browser rendering/interaction checks passed at
-  1024/1920; screenshots and [verification.json](../../../../.harness/scratch/prototype/first-release-learning/verification.json)
-  are retained. No product API, database or credentials are used. Prototype appearance is
-  proposed, not user-approved. Its sample split and observations are illustrative.
-- **Remaining product work:** scope-compatible evidence promotion, source qualification,
-  current applicability, normalized revision meaning and offer-prompt alignment; qualified
-  pause observation text; three UI projections. No product source was edited in this session.
-- **Unverified:** one actual provider attempt timed out at 60 seconds with no output. Do not
-  infer model quality or timeout cause. Deployment, genuine auth recovery and current Postgres
-  backup restoration remain unverified. No live-platform or revenue proof exists here.
-- **Historical F52:** 24 repairs locally merged before this planning session; original final
-  integrated three-period/nine-dimension acceptance remains paused and unrun. F48-F52 remain
-  open. Preserve this separately from proposed first-release acceptance.
+From the screen alone, the human should identify where they are, what the step does, the
+main button's consequence, next/back, and accept/reject/exit. See design-system section 1.7.
+Known reference/build layout differences and honest unknown source costs are retained in the
+gallery's facts; no prototype sample values became production defaults.
 
-No meaningful total repair/readiness percentage can be inferred from these counts. Show
-fixed/remaining/unverified evidence and the gates still needed instead.
+## Preserved history and authority limits
 
-## Frontend decision to review
+Original preflight/prototype evidence remains under `.harness/scratch/launch-direction-probe-20261007/`
+and `.harness/scratch/prototype/first-release-learning/`. Frozen cases SHA-256 remains
+`48ada4e752fa4c2e5848b7b986e3af7146c9ede0aa712b7a72460b5d53505339`.
+Historical I09, a1, a2, a3 and a4 contexts under `.scratch/F53/` remain immutable. They exposed
+application-connection row shape, LoginPage selector, account metadata and ad/adset fixture
+representation defects, repeated canned names and duplicate original-asset insertion.
+Narrow independently reviewed tooling repairs changed no product
+guard, frozen fact, trial independence, date, formula, migration, model or timeout policy.
+I11 separately corrects the current-condition customer-group lookup through the existing
+brand-scoped sell-way-to-knowledge-product mapping; it changes no qualification policy.
+Old operational passes are historical after probe fingerprint drift, not interchangeable
+with current combined proof. Previous handoff/receipts are retained in `D:/0UserProfile/Desktop/marketing/.scratch/F53/closeout-history-20261008`.
 
-The focused prototype changes the interpretation of evidence in three existing screens:
-strategy basis, brand learning and the pause-learning card on execution confirmation. It shows
-usable/history reasons and inspectable sources, distinguishes operation readback from unknown
-performance cause, and blocks stale decisions until refresh. Existing layout, per-ad rankings,
-navigation counts and user-confirmed adoption are preserved. Loading, failure, cold start,
-changed conditions and contrary results can be selected in the top demo bar.
-
-The backend currently lacks some proposed provenance/eligibility fields. Do not infer them in
-the UI or hard-code the prototype data into production. Settle the field map and backend slice
-before dispatching UI tickets; review the appearance at the next plan checkpoint.
-
-## Continuation and stopping boundary
-
-The writer/reader/factory inventory, exact evidence contract and nine issues are now recorded
-in F53 and ads §6.55/workbench §5.19. Resume the existing queue only after its concrete approval;
-do not create a duplicate feature or repeat completed carving. Cover campaign, pause, A/B, month-settle, coordinate,
-visual learning and downstream planning/copy/review consumers. Do not redo all 24 F52 repairs
-or promote the roadmap's later Full auto scope into this release.
-
-Before the first issue, display the concrete order, dependencies, backend field map, prototype,
-acceptance and material open choices; stop once for confirmation. After user confirmation,
-`/crank` runs that approved queue and required verification. Preserve the user's instruction to
-report/pause when the agreed repair/acceptance boundary is reached; do not initiate an extra
-repair/test round from old queue text. Product fixes need affected checks and required final
-integration; repeated full drills without relevant changes are not the intended workflow.
-
-The user selected this Windows host for local/private use. I09 verifies genuine local auth
-recovery and isolated Postgres/Storage restore; missing capabilities remain unverified. No permission for
-public deployment, remote push or paid/platform actions is granted by this Handoff.
-
-## Workspace preservation and artifact verification
-
-Planning files are uncommitted on the current branch:
-
-- `docs/backlog/roadmap-autonomous-marketing-major-updates.md`
-- `docs/drills/drill-12/launch-direction-probe.md`
-- `docs/drills/drill-12/first-release/Handoff.md`
-- `docs/drills/drill-12/first-release/Prompt.md`
-- F53 plan/ready issues, ads §6.55/workbench §5.19, root architecture pointer and frozen cases.json
-  were added/updated during carve; .work files follow this checkout's existing ignore policy.
-
-The prototype and raw probes are under ignored `.harness/scratch/`; a fresh worktree does not
-automatically contain them or the uncommitted docs. Reuse the current absolute paths for
-planning, or explicitly copy only these artifacts into an authorized worktree before workers
-need them. Preserve other local work. Do not reset/clean, assume a Git checkout transports
-these files, or commit scratch artifacts merely to make them available.
-
-Prototype entry: `.harness/scratch/prototype/first-release-learning/index.html`.
-Open this file directly in a browser; no server is required. A convenience preview is currently
-available at `http://127.0.0.1:8764/#/strategy`. This session started only its loopback-only Node
-helper, PID `25564`, with `preview.cjs` in the prototype directory. It serves only the HTML entry,
-not the repository, APIs or credentials. The URL depends on this helper remaining alive; the
-HTML works independently. Before stopping/restarting it, verify that PID/command ownership
-still matches; never stop unrelated product services. `preview.pid` and stdout/stderr are saved.
-Optional prototype-only reproduction:
-
-`node .harness/scratch/prototype/first-release-learning/verify.cjs`
-
-This checks the disposable HTML only and uses the existing frontend Playwright installation.
-It does not rerun product tests or constitute first-release acceptance. Saved screenshots
-include the three screens at 1024/1920 and strategy/source panels. The project's
-`frontend/scripts/ui-evidence.cjs` also produced reference screenshots and kit-control/fold
-facts under `reference/` for all three routes. Read these before UI dispatch; decide whether
-unmapped classes are layout-only or require an existing/new shared pattern, rather than
-inventing emphasis in each screen. Actual implementation must supply reference/build pairs.
-Recheck source HEAD and working-tree drift before treating the old probe evidence as current
-after product changes.
+F48-F52 remain open; the unchanged original F52 three-period/nine-dimension drill remains
+paused and unrun. No new full repair campaign, blind generation retry, timeout extension,
+model/provider switch, paid direct API, public deployment, platform write or push is authorized.
+Synthetic local/API/browser/model evidence proves no live-market delivery, causality or revenue.
+Do not clean/reset unrelated trees or stop another task's service. The prototype's historical
+8764 helper is separate from nonce-owned acceptance processes; verify ownership before touching it.

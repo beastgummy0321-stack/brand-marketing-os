@@ -425,7 +425,8 @@ Statutory reminders remain distinct from forbidden facts; this work supplies no 
 
 ### 5.19 First-release learning qualification (F53, planned 2026-10-07)
 
-Status: implementation proposal awaiting the plan/prototype checkpoint. The authoritative
+Status: implemented in the approved F53 queue (2026-10-08); release acceptance remains
+separate in the first-release packet. The authoritative
 evidence schema, compatibility, support, current applicability and gates are
 [ads §6.55](ads.md#655-supervised-first-release-evidence-contract-f53-planned-2026-10-07).
 This changes evidence truth/usage, not F52 copy/image quality or its historical acceptance.

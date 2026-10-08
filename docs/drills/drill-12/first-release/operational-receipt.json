@@ -2,153 +2,56 @@
   "schema_version": 1,
   "feature": "F53",
   "gate": "G7",
-  "status": "unverified",
+  "status": "pass",
   "environment": "Windows local/private owned fixtures",
-  "run_id": "59211befe3e94e1dac3f74c6a7f5bf84",
-  "source_head": "6f256637f05faee42e73a1c7411570db92a905d8",
-  "historical_hashes": {
-    "product": "f17763b0f2723a29fd31447cd223f5f50880ead3a9c0a4062cc91439decb75d5",
+  "run_id": "f52124ac872d4a4e94802ab712867f11",
+  "hashes": {
+    "product": "d4d4279bc841ef040cdc45028ca863eb4ec64073529d15100d92747a9d6fd517",
     "ui": "b01c806e52870fd7a243577f84a97f06579ab63d3a79f51e46d7fb81ddecf8f9",
-    "probe": "e0f9d3cd65d6a68d53c73c2d5af0be65868a3f08979c7bdf8cb777598485c8fd",
-    "runtime_config": "65be3dc0058ddf882d91d39dcbf9ae85a178066c35e5a689aee7d33b37298290"
+    "probe": "b436fa658639121725cc020208e0867c3f4e34cc11161791c6d62cd1b6f671b2",
+    "runtime_config": "3826657d9f99c968c0a509b9d4513952c5f1d5c6ea1ebaed4da658de47c4ef53"
   },
-  "cases_sha256": "48ada4e752fa4c2e5848b7b986e3af7146c9ede0aa712b7a72460b5d53505339",
   "context": {
-    "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\I09-g7-20261008-bf3e79\\context.json",
-    "bytes": 21593,
-    "sha256": "d203bf970cd625a5c9d6edf74af2dfb9123c0fe7cf58d3f7b00c833010bacf7f"
-  },
-  "preflight": {
-    "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\I09-g7-20261008-bf3e79\\preflight.json",
-    "bytes": 4350,
-    "sha256": "cc985d0fe4c3ea8505922c4052bea9ba1bee69792259772dd0e7267489e53154"
+    "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\final-combined-20261008-a5\\context.json",
+    "bytes": 33834,
+    "sha256": "a17693ed9d3cc009ad3965d6d25151248b9be880ceb57b45afec55b9c45df55a"
   },
   "auth": {
-    "status": "unverified",
-    "attempts": 1,
-    "cli_exit": 1,
-    "error_type": "ValueError",
-    "refresh_success_control": {
-      "status": 200,
-      "sub": "ba917040-21c3-4d27-a873-35c217c481ec",
-      "issuance_sha256": "368ebe932852182ce1355cf8766cf1c1a398694ddd91de952a8c83b4d3e4d64a",
-      "at": "2026-10-07T23:08:42.895125+00:00"
-    },
-    "receipt": {
-      "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\I09-g7-20261008-bf3e79\\auth-receipt.json",
-      "bytes": 1464,
-      "sha256": "c892266786d103d584ab80646665ec66300ea6f9aff99a60dbf486c0979c7fd4"
-    },
-    "ownership": {
-      "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\I09-g7-20261008-bf3e79\\auth-ownership.json",
-      "bytes": 175,
-      "sha256": "8e280511f1679acd8eb3a046f21445c1a373723e677bb736e09f9d31c5af014b"
-    },
-    "attempt": {
-      "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\I09-g7-20261008-bf3e79\\auth-attempt.json",
-      "bytes": 66,
-      "sha256": "48e79178548e76a30a99627f94717ec98a405d48d7bcd8e0ea9957271be04007"
-    },
-    "cleanup": {
+    "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\final-combined-20261008-a5\\auth-receipt.json",
+    "bytes": 2462,
+    "sha256": "9d1d2fa986a27eb3940d0387f96e37e854a7e364c12ecaae912632e4d569f040"
+  },
+  "auth_browser": {
+    "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\final-combined-20261008-a5\\auth-browser-receipt.json",
+    "bytes": 2959,
+    "sha256": "faeabe20bdd4dae8b795a216859973be6283089ddd098b1759df3aa86840a2c0"
+  },
+  "restore": {
+    "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\final-combined-20261008-a5\\restore-receipt.json",
+    "bytes": 136023,
+    "sha256": "836535aa136c1320ff3e79fe9792cdcce0d4737d40273066acbd813f1ceceae0"
+  },
+  "cleanup": {
+    "auth": {
       "container": true,
       "database": true,
       "backend": true,
       "browser": true,
       "secrets": true
     },
-    "cleanup_errors": [],
-    "remaining": [
-      "Genuine browser expiry/refusal/login and saved-work recovery not reached"
-    ],
-    "diagnosis": {
-      "basis": "Observed ValueError after real refresh; source inspection and pure regression",
-      "callsite": "auth_probe application db.Conn received default tuple rows",
-      "fixture_setup_trace": "Not recorded by the original runner; no trace/probe fabricated"
-    }
-  },
-  "restore": {
-    "status": "pass",
-    "attempts": 1,
-    "receipt": {
-      "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\I09-g7-20261008-bf3e79\\restore-receipt.json",
-      "bytes": 136019,
-      "sha256": "0ca22cfb1790397b4678da71e6e1a370a0433902a3325ff1b4810f3a39ce27d9"
-    },
-    "ownership": {
-      "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\I09-g7-20261008-bf3e79\\restore-ownership.json",
-      "bytes": 319,
-      "sha256": "072d89cb9d2629194da86d32588726e0605c31c5410654564edf0c17ca4b6b31"
-    },
-    "attempt": {
-      "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\I09-g7-20261008-bf3e79\\restore-attempt.json",
-      "bytes": 69,
-      "sha256": "7e59085c218080a61383f3618ad620fda136346419d12249ad4c50105cdf9869"
-    },
-    "schema_inventory_hash": "ac891cb0f841c83595501ca5d759680645bc4bdc24e98e2443974a99ad69139d",
-    "asset": {
-      "source_key": "org_f13_runtime_0e7262f96e2c/backup-sample/original.bin",
-      "restored_key": "org_f13_runtime_0e7262f96e2c/restored-59211befe3e94e1dac3f74c6a7f5bf84/original.bin",
-      "source_deleted_before_verify": true,
-      "sha256": "8606a4fcac24095bf215bf0b021868e5f597a076eb9cebd9905f54e30758ce10",
-      "bytes": 41,
-      "restored_db_reference": "org_f13_runtime_0e7262f96e2c/restored-59211befe3e94e1dac3f74c6a7f5bf84/original.bin"
-    },
-    "tenant_queries": {
-      "owner": "org_f13_runtime_0e7262f96e2c",
-      "other": "org_other_f13_runtime_0e7262f96e2c",
-      "returned_brand_ids": [
-        [
-          "brd_f13_runtime_0e7262f96e2c"
-        ]
-      ]
-    },
-    "tool_identity": {
-      "container_id": "398de6d11a3014ec969455fb32326479d0efde43dc4ef2ce6188284d49534328",
-      "image_id": "sha256:86a2e078779e5bdccda1f6f6c5063aa9779a322d1fface5fb408d051909b230f",
-      "started_at": "2026-10-06T05:01:43.866023802Z"
-    },
-    "backup": {
-      "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\I09-g7-20261008-bf3e79\\owned-schema.sql",
-      "bytes": 324079,
-      "sha256": "454a87b05cf56fe2944455aac74a211498364d780617d4e612798261598889cc"
-    },
-    "storage_export": {
-      "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\I09-g7-20261008-bf3e79\\storage-sample.bin",
-      "bytes": 41,
-      "sha256": "8606a4fcac24095bf215bf0b021868e5f597a076eb9cebd9905f54e30758ce10"
-    },
-    "cleanup": {
+    "restore": {
       "source_schema": true,
       "target_database": true,
       "storage": true
-    },
-    "cleanup_errors": [],
-    "disposition": "Real historical pass on original frozen runner; not corrected final G7 proof"
+    }
   },
-  "aggregation": {
-    "status": "failed",
-    "cli_exit": 1,
-    "error_type": "KeyError",
-    "cli": {
-      "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\I09-g7-20261008-bf3e79\\restore-cli.txt",
-      "bytes": 128,
-      "sha256": "221940f3b0047f639e9146afcab5926c3f5a6005b8938ef61a5b7301fa373427"
-    },
-    "cause": "Automatic record_operations dereferenced absent Auth browser evidence"
+  "historical_operational_receipt": {
+    "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\closeout-history-20261008\\operational-receipt.json",
+    "bytes": 6538,
+    "sha256": "c8d87380aed828ec383d7a142c8f3da851be0e2f9957456d2774f5ec863c03ec"
   },
-  "repair": {
-    "status": "implemented-awaiting-lead-finish-review-merge",
-    "scope": [
-      "dict_row for two application db.Conn callers",
-      "Incomplete/failed operational receipts aggregate to unverified with raw refs and actual cleanup"
-    ],
-    "corrected_final_acceptance": "pending lead-owned new nonce Auth and restore after Harness merge",
-    "original_raw_bytes": "Preserved; no relocation, rewrite, or worker repeat"
-  },
-  "G6": {
-    "status": "pending",
-    "actual_provider_calls": 0
-  },
-  "human_acceptance": "pending",
-  "release_eligible": false
+  "limits": [
+    "Independent owned local databases/issuer/Storage objects; not public deployment proof",
+    "Ordinary browser login and identical saved-work API readback verified; recovered screenshot remains loading, not completed rendered-work proof"
+  ]
 }

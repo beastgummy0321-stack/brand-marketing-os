@@ -1,60 +1,316 @@
 {
   "schema_version": 1,
   "feature": "F53",
-  "status": "tooling-calibrated-provider-and-corrected-final-pending",
   "cases_sha256": "48ada4e752fa4c2e5848b7b986e3af7146c9ede0aa712b7a72460b5d53505339",
+  "hashes": {
+    "product": "d4d4279bc841ef040cdc45028ca863eb4ec64073529d15100d92747a9d6fd517",
+    "ui": "b01c806e52870fd7a243577f84a97f06579ab63d3a79f51e46d7fb81ddecf8f9",
+    "probe": "b436fa658639121725cc020208e0867c3f4e34cc11161791c6d62cd1b6f671b2",
+    "runtime_config": "3826657d9f99c968c0a509b9d4513952c5f1d5c6ea1ebaed4da658de47c4ef53"
+  },
   "gates": {
     "G1": {
-      "status": "unverified"
+      "status": "pass",
+      "evidence": [
+        {
+          "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\final-combined-20261008-a5\\fixed-cycle.json",
+          "bytes": 7338895,
+          "sha256": "3f1d6a0946d5bcee91713dcb4c75fdd08910a26984aa9c75084f12737ab92abd"
+        },
+        {
+          "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\final-combined-20261008-a5\\qualification-cases.json",
+          "bytes": 159032,
+          "sha256": "d3cd1b2424db99db2ca2a7304dc0edbb4cc4d9f2b6bece3d826c1fb3779800b0"
+        },
+        {
+          "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\final-combined-20261008-a5\\source-boundaries.json",
+          "bytes": 79196,
+          "sha256": "1c164593d8b9f1eedf35a6a648d2c7cdda93c8bf9f8a8b9bcc8baab54aebdbba"
+        },
+        {
+          "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\final-combined-20261008-a5\\http-events.jsonl",
+          "bytes": 4624300,
+          "sha256": "23a085dffbd50e46fdb1d031f777b0bdc47edf1192df3fec4a011f4da76a2ad0"
+        },
+        {
+          "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\final-combined-20261008-a5\\cleanup.json",
+          "bytes": 113,
+          "sha256": "cddd00fb21b01bbaccd639839d6384ade76cc03b766735157c1164009c1d60dc"
+        }
+      ],
+      "finished_at": "2026-10-08T00:31:14.204856+00:00",
+      "hashes": {
+        "product": "d4d4279bc841ef040cdc45028ca863eb4ec64073529d15100d92747a9d6fd517",
+        "ui": "b01c806e52870fd7a243577f84a97f06579ab63d3a79f51e46d7fb81ddecf8f9",
+        "probe": "b436fa658639121725cc020208e0867c3f4e34cc11161791c6d62cd1b6f671b2",
+        "runtime_config": "3826657d9f99c968c0a509b9d4513952c5f1d5c6ea1ebaed4da658de47c4ef53"
+      },
+      "limitations": [
+        "Canned provider contract only; synthetic reader"
+      ],
+      "cleanup": {
+        "process_stopped": true,
+        "storage": true,
+        "schema": true
+      },
+      "run_id": "f52124ac872d4a4e94802ab712867f11"
     },
     "G2": {
-      "status": "unverified"
+      "status": "pass",
+      "evidence": [
+        {
+          "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\final-combined-20261008-a5\\fixed-cycle.json",
+          "bytes": 7338895,
+          "sha256": "3f1d6a0946d5bcee91713dcb4c75fdd08910a26984aa9c75084f12737ab92abd"
+        },
+        {
+          "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\final-combined-20261008-a5\\qualification-cases.json",
+          "bytes": 159032,
+          "sha256": "d3cd1b2424db99db2ca2a7304dc0edbb4cc4d9f2b6bece3d826c1fb3779800b0"
+        },
+        {
+          "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\final-combined-20261008-a5\\source-boundaries.json",
+          "bytes": 79196,
+          "sha256": "1c164593d8b9f1eedf35a6a648d2c7cdda93c8bf9f8a8b9bcc8baab54aebdbba"
+        },
+        {
+          "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\final-combined-20261008-a5\\http-events.jsonl",
+          "bytes": 4624300,
+          "sha256": "23a085dffbd50e46fdb1d031f777b0bdc47edf1192df3fec4a011f4da76a2ad0"
+        },
+        {
+          "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\final-combined-20261008-a5\\cleanup.json",
+          "bytes": 113,
+          "sha256": "cddd00fb21b01bbaccd639839d6384ade76cc03b766735157c1164009c1d60dc"
+        }
+      ],
+      "finished_at": "2026-10-08T00:31:14.351682+00:00",
+      "hashes": {
+        "product": "d4d4279bc841ef040cdc45028ca863eb4ec64073529d15100d92747a9d6fd517",
+        "ui": "b01c806e52870fd7a243577f84a97f06579ab63d3a79f51e46d7fb81ddecf8f9",
+        "probe": "b436fa658639121725cc020208e0867c3f4e34cc11161791c6d62cd1b6f671b2",
+        "runtime_config": "3826657d9f99c968c0a509b9d4513952c5f1d5c6ea1ebaed4da658de47c4ef53"
+      },
+      "limitations": [
+        "Canned provider contract only; synthetic reader"
+      ],
+      "cleanup": {
+        "process_stopped": true,
+        "storage": true,
+        "schema": true
+      },
+      "run_id": "f52124ac872d4a4e94802ab712867f11"
     },
     "G3": {
-      "status": "unverified"
+      "status": "pass",
+      "evidence": [
+        {
+          "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\final-combined-20261008-a5\\fixed-cycle.json",
+          "bytes": 7338895,
+          "sha256": "3f1d6a0946d5bcee91713dcb4c75fdd08910a26984aa9c75084f12737ab92abd"
+        },
+        {
+          "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\final-combined-20261008-a5\\qualification-cases.json",
+          "bytes": 159032,
+          "sha256": "d3cd1b2424db99db2ca2a7304dc0edbb4cc4d9f2b6bece3d826c1fb3779800b0"
+        },
+        {
+          "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\final-combined-20261008-a5\\source-boundaries.json",
+          "bytes": 79196,
+          "sha256": "1c164593d8b9f1eedf35a6a648d2c7cdda93c8bf9f8a8b9bcc8baab54aebdbba"
+        },
+        {
+          "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\final-combined-20261008-a5\\http-events.jsonl",
+          "bytes": 4624300,
+          "sha256": "23a085dffbd50e46fdb1d031f777b0bdc47edf1192df3fec4a011f4da76a2ad0"
+        },
+        {
+          "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\final-combined-20261008-a5\\cleanup.json",
+          "bytes": 113,
+          "sha256": "cddd00fb21b01bbaccd639839d6384ade76cc03b766735157c1164009c1d60dc"
+        }
+      ],
+      "finished_at": "2026-10-08T00:31:14.502464+00:00",
+      "hashes": {
+        "product": "d4d4279bc841ef040cdc45028ca863eb4ec64073529d15100d92747a9d6fd517",
+        "ui": "b01c806e52870fd7a243577f84a97f06579ab63d3a79f51e46d7fb81ddecf8f9",
+        "probe": "b436fa658639121725cc020208e0867c3f4e34cc11161791c6d62cd1b6f671b2",
+        "runtime_config": "3826657d9f99c968c0a509b9d4513952c5f1d5c6ea1ebaed4da658de47c4ef53"
+      },
+      "limitations": [
+        "Canned provider contract only; synthetic reader"
+      ],
+      "cleanup": {
+        "process_stopped": true,
+        "storage": true,
+        "schema": true
+      },
+      "run_id": "f52124ac872d4a4e94802ab712867f11"
     },
     "G4": {
-      "status": "unverified"
+      "status": "pass",
+      "evidence": [
+        {
+          "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\final-combined-20261008-a5\\fixed-cycle.json",
+          "bytes": 7338895,
+          "sha256": "3f1d6a0946d5bcee91713dcb4c75fdd08910a26984aa9c75084f12737ab92abd"
+        },
+        {
+          "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\final-combined-20261008-a5\\qualification-cases.json",
+          "bytes": 159032,
+          "sha256": "d3cd1b2424db99db2ca2a7304dc0edbb4cc4d9f2b6bece3d826c1fb3779800b0"
+        },
+        {
+          "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\final-combined-20261008-a5\\source-boundaries.json",
+          "bytes": 79196,
+          "sha256": "1c164593d8b9f1eedf35a6a648d2c7cdda93c8bf9f8a8b9bcc8baab54aebdbba"
+        },
+        {
+          "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\final-combined-20261008-a5\\http-events.jsonl",
+          "bytes": 4624300,
+          "sha256": "23a085dffbd50e46fdb1d031f777b0bdc47edf1192df3fec4a011f4da76a2ad0"
+        },
+        {
+          "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\final-combined-20261008-a5\\cleanup.json",
+          "bytes": 113,
+          "sha256": "cddd00fb21b01bbaccd639839d6384ade76cc03b766735157c1164009c1d60dc"
+        }
+      ],
+      "finished_at": "2026-10-08T00:31:14.643607+00:00",
+      "hashes": {
+        "product": "d4d4279bc841ef040cdc45028ca863eb4ec64073529d15100d92747a9d6fd517",
+        "ui": "b01c806e52870fd7a243577f84a97f06579ab63d3a79f51e46d7fb81ddecf8f9",
+        "probe": "b436fa658639121725cc020208e0867c3f4e34cc11161791c6d62cd1b6f671b2",
+        "runtime_config": "3826657d9f99c968c0a509b9d4513952c5f1d5c6ea1ebaed4da658de47c4ef53"
+      },
+      "limitations": [
+        "Canned provider contract only; synthetic reader"
+      ],
+      "cleanup": {
+        "process_stopped": true,
+        "storage": true,
+        "schema": true
+      },
+      "run_id": "f52124ac872d4a4e94802ab712867f11"
+    },
+    "G7": {
+      "status": "pass",
+      "evidence": [
+        {
+          "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\final-combined-20261008-a5\\auth-receipt.json",
+          "bytes": 2462,
+          "sha256": "9d1d2fa986a27eb3940d0387f96e37e854a7e364c12ecaae912632e4d569f040"
+        },
+        {
+          "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\final-combined-20261008-a5\\restore-receipt.json",
+          "bytes": 136023,
+          "sha256": "836535aa136c1320ff3e79fe9792cdcce0d4737d40273066acbd813f1ceceae0"
+        }
+      ],
+      "finished_at": "2026-10-08T00:33:39.703284+00:00",
+      "hashes": {
+        "product": "d4d4279bc841ef040cdc45028ca863eb4ec64073529d15100d92747a9d6fd517",
+        "ui": "b01c806e52870fd7a243577f84a97f06579ab63d3a79f51e46d7fb81ddecf8f9",
+        "probe": "b436fa658639121725cc020208e0867c3f4e34cc11161791c6d62cd1b6f671b2",
+        "runtime_config": "3826657d9f99c968c0a509b9d4513952c5f1d5c6ea1ebaed4da658de47c4ef53"
+      },
+      "limitations": [
+        "Private Windows owned fixture; not public deployment proof"
+      ],
+      "cleanup": {
+        "auth": true,
+        "restore": true
+      },
+      "run_id": "f52124ac872d4a4e94802ab712867f11"
     },
     "G5": {
-      "status": "unverified"
+      "status": "pass",
+      "evidence": [
+        {
+          "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\final-combined-20261008-a5\\ui-manifest.json",
+          "bytes": 764,
+          "sha256": "7a6aed85cac7bd111009b26f1f48fc55e72a6a75d39d247066d0ff262319cfa4"
+        }
+      ],
+      "finished_at": "2026-10-08T00:33:49.273845+00:00",
+      "hashes": {
+        "product": "d4d4279bc841ef040cdc45028ca863eb4ec64073529d15100d92747a9d6fd517",
+        "ui": "b01c806e52870fd7a243577f84a97f06579ab63d3a79f51e46d7fb81ddecf8f9",
+        "probe": "b436fa658639121725cc020208e0867c3f4e34cc11161791c6d62cd1b6f671b2",
+        "runtime_config": "3826657d9f99c968c0a509b9d4513952c5f1d5c6ea1ebaed4da658de47c4ef53"
+      },
+      "limitations": [
+        "Actual human five-question acceptance remains pending"
+      ],
+      "cleanup": {
+        "read_only_assembly": true
+      },
+      "run_id": "f52124ac872d4a4e94802ab712867f11"
     },
     "G6": {
       "status": "unverified",
-      "provider_receipt": "provider-receipt.json",
-      "diagnosis": "readonly CLI version/login controls complete; prior direct timeout cause unknown",
-      "actual_sample": "pending lead-owned sole gateway sample on stable merged main"
-    },
-    "G7": {
-      "status": "unverified",
-      "operational_receipt": "operational-receipt.json",
-      "auth": "unverified",
-      "restore": "historical-pass",
-      "aggregation": "failed",
-      "corrected_final_acceptance": "pending lead-owned new nonce after reviewed I08 selector/metadata calibration merge"
+      "evidence": [
+        {
+          "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\final-combined-20261008-a5\\provider-receipt.json",
+          "bytes": 4403,
+          "sha256": "6ef16bb323a2a0c64a2859e2b2f20fc71176ba9a0b87e3272bb38a27f5795f91"
+        },
+        {
+          "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\final-combined-20261008-a5\\provider-semantic-review.json",
+          "bytes": 3097,
+          "sha256": "0662b19da97611a0289731621c1a9bba9736b8f51eaede47fb3c14c55872e1c8"
+        }
+      ],
+      "finished_at": "2026-10-08T00:37:06.425884+00:00",
+      "hashes": {
+        "product": "d4d4279bc841ef040cdc45028ca863eb4ec64073529d15100d92747a9d6fd517",
+        "ui": "b01c806e52870fd7a243577f84a97f06579ab63d3a79f51e46d7fb81ddecf8f9",
+        "probe": "b436fa658639121725cc020208e0867c3f4e34cc11161791c6d62cd1b6f671b2",
+        "runtime_config": "3826657d9f99c968c0a509b9d4513952c5f1d5c6ea1ebaed4da658de47c4ef53"
+      },
+      "limitations": [
+        "Sole actual reply failed unchanged production format checks: numeral in prose and non-string alternatives. No output rewrite or retry."
+      ],
+      "cleanup": {
+        "gateway_returned": true,
+        "isolated_schema": true
+      },
+      "run_id": "f52124ac872d4a4e94802ab712867f11"
     }
   },
+  "human_acceptance": "pending",
+  "release_eligible": false,
   "G8": {
     "status": "pending",
     "sidecar": ".harness/scratch/F53/final"
   },
-  "human_acceptance": "pending",
-  "release_eligible": false,
   "disposition": {
-    "fixed": [],
+    "fixed": [
+      "Scoped source/support/current-condition qualification and additive projections",
+      "Qualified strategy/copy/visual consumers and faithful accepted bindings",
+      "Three screens with source inspection, guarded stale decisions and retained drafts"
+    ],
     "remaining": [
-      "F48-F52 remain open; original F52 drill remains paused"
+      "Actual human five-question UI acceptance",
+      "F48-F52 remain open; original F52 drill paused"
     ],
     "unverified": [
-      "G1",
-      "G2",
-      "G3",
-      "G4",
-      "G5",
       "G6",
-      "G7",
-      "G8"
+      "G8 actual integration sidecar pending"
     ]
   },
-  "provenance": "Historical I09 Auth/restore receipts and the failed first combined attempt remain preserved. I08 calibrates only the supported login selector, sanitized stage diagnostics and owned test account metadata; pure regressions do not prove actual operational gates. Main readonly CLI controls found executable/version/login availability; model response and prior timeout cause remain unverified. No provider generation, Auth, restore or fixed cycle ran in this lease. Corrected final acceptance and independent model semantics remain lead-owned pending."
+  "provenance": "Synthetic API/market-shaped source fixtures; not live-market proof",
+  "status": "final-technical-gates-recorded; integration-and-human-disposition-separate",
+  "context": {
+    "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\final-combined-20261008-a5\\context.json",
+    "bytes": 33834,
+    "sha256": "a17693ed9d3cc009ad3965d6d25151248b9be880ceb57b45afec55b9c45df55a"
+  },
+  "historical_closeout_inputs": {
+    "path": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\closeout-history-20261008\\manifest.json",
+    "bytes": 1229,
+    "sha256": "09720e518469db92d1f758d1b3c1321c635b0a293c41eef233ca7f79418b51de"
+  },
+  "ui_gallery": "D:\\0UserProfile\\Desktop\\marketing\\.scratch\\F53\\final-ui-20261008\\index.html",
+  "integration_boundary": "Tracked G8 is a pending pointer; inspect ignored sidecar for actual result, never infer success from queue/tests"
 }
