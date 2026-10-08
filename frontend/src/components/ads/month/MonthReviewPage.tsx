@@ -7,13 +7,15 @@ import { Button } from "@/components/layout/ui/button";
 import { getHomeOverview, type HomeOverview } from "@/lib/adsHomeApi";
 import { dismissSuggestion, getMonthSummary, type MonthSuggestion, type MonthSummary } from "@/lib/adsMonthApi";
 import { useApiRead } from "@/lib/useApiRead";
-import { cn } from "@/lib/utils";
 import { ActionBar, CampaignChip, Chip, ReadFailed, formatAmount, type ObjectiveKey } from "../patterns";
 import { currentBudgetMonth } from "../MonthlyBudgetPanel";
 import { orgDateOf, shiftMonth, useOrgClock } from "@/lib/orgClock";
 import { GradeBuckets, GradeSplit, MissingNote } from "./MonthGrades";
+import { WeeklySpend } from "./WeeklySpend";
+import { MonthOrders } from "./MonthOrders";
+import { settlePath } from "../settle/SettlePage";
 import { MonthFootnote, RejectedCard } from "./RejectedCards";
-import { downloadMonthCsv, monthNum, weekBars, type WeekBar } from "./monthCsv";
+import { downloadMonthCsv, monthNum, money as moneyText } from "./monthCsv";
 
 /** 每月回顧 (F29-I15, prototype v10 `month()`, hashes `#/month` and `#/month/8`): campaigns keep running; this page
  * only settles the books for one calendar month, graded by the one cap ruler (Feature F29 Contract C). Two reads,
@@ -22,66 +24,6 @@ import { downloadMonthCsv, monthNum, weekBars, type WeekBar } from "./monthCsv";
  * month or the previous one). Nothing here writes to an ad platform; 先不要 on a suggestion only hides it for the
  * month. The current month shows its grade split, next month's suggestions, the worsened rejected cleanups and
  * the footnote; a past month shows its weekly spend, buckets and closed count (the prototype's 8 月). */
-
-const HATCH = "bg-[repeating-linear-gradient(45deg,var(--color-border)_0_4px,var(--color-background)_4px_8px)]";
-const CHART_H = 150;
-
-function WeeklySpend({ home }: { home: HomeOverview }) {
-  const pace = home.pace;
-  const budget = pace?.budget_amount ?? null;
-  const bars: WeekBar[] = pace ? weekBars(home.month, home.days_in_month, pace.daily, budget) : [];
-  const top = Math.max(1, ...bars.flatMap((w) => [w.spend, w.pace].filter((v): v is number => v !== null))) * 1.1;
-  const px = (v: number) => Math.round((v / top) * CHART_H);
-  const cols = { gridTemplateColumns: `repeat(${Math.max(bars.length, 1)}, minmax(0, 1fr))` };
-  return (
-    <section aria-label="每週花費 vs 預算步調" data-part="weekly-spend" className="surface px-[22px] py-5">
-      <div className="mb-3.5 flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-[15px] font-semibold">每週花費 vs 預算步調</h2>
-        <div className="flex flex-wrap items-center gap-3.5">
-          <div className="flex flex-wrap gap-x-4 gap-y-1.5 text-xs text-muted-foreground">
-            <span><i aria-hidden="true" className="mr-[5px] inline-block size-2 rounded-[2px] bg-primary" />花費</span>
-            {budget === null
-              ? <span>沒設月預算，不畫步調</span>
-              : <span><i aria-hidden="true" className="mr-[5px] inline-block w-3.5 border-t-2 border-dashed border-chart-rest align-middle" />月預算 {formatAmount(budget)} 的步調</span>}
-          </div>
-          <b className="numeric font-semibold">已花 {formatAmount(home.spent) ?? "未知"}</b>
-        </div>
-      </div>
-      {pace === null ? <p className="text-sm text-muted-foreground">這個月的每日花費讀不到，其他區塊照常。</p> : (
-        <>
-          <div className="relative grid h-[190px] items-end gap-[18px] border-b border-border px-1.5 max-md:gap-1.5" style={cols}>
-            {bars.map((w) => (
-              <div key={w.label} data-week={w.state} className="relative flex h-full flex-col items-center justify-end">
-                {w.state === "known" ? (
-                  <>
-                    <span className="numeric mb-1 text-xs font-semibold">{formatAmount(Math.round(w.spend as number))}</span>
-                    <div className="w-[56%] max-w-16 rounded-t-md bg-primary" style={{ height: px(w.spend as number) }} />
-                  </>
-                ) : (
-                  <>
-                    <span className="mb-1 text-xs text-muted-foreground">{w.state === "future" ? "還沒到" : "未知"}</span>
-                    <div className={cn("w-[56%] max-w-16 rounded-t-md", HATCH)} style={{ height: 6 }} />
-                  </>
-                )}
-                {w.pace !== null && (
-                  <span
-                    aria-hidden="true" title={`預算步調 ${formatAmount(Math.round(w.pace))}`}
-                    className="absolute inset-x-[10%] border-t-2 border-dashed border-chart-rest" style={{ bottom: px(w.pace) }}
-                  />
-                )}
-              </div>
-            ))}
-          </div>
-          <div className="grid gap-[18px] px-1.5 pt-1.5 text-center text-xs text-muted-foreground max-md:gap-1.5" style={cols}>
-            {bars.map((w) => (
-              <span key={w.label}>{w.label}{w.through && <><br /><span className="text-[11.5px]">{w.through}</span></>}</span>
-            ))}
-          </div>
-        </>
-      )}
-    </section>
-  );
-}
 
 function ClosedCard({ summary }: { summary: MonthSummary }) {
   const known = summary.closed_this_month !== null;
@@ -115,16 +57,17 @@ function SuggestionCard({ brandId, month, suggestion, onDismissed }: {
         setError(err instanceof Error ? err.message : "先不要沒有存到，請稍後再試。");
       });
   };
-  // F46: a next_plan card opens the create page for the next period; every other kind opens its proposal.
-  const actionLabel = suggestion.kind === "next_plan" ? "用這些學習排下一期 →" : "看提議（核准或拒絕）→";
+  // A current-month source is incomplete; next-period confirmation starts from its completed settle.
+  const next = suggestion.kind === "next_plan";
+  const actionLabel = next ? "來源月份尚未完成" : "看提議（核准或拒絕）→";
   return (
-    <section aria-label={suggestion.title} data-kind={suggestion.kind} className="surface flex flex-col px-[22px] py-5">
+    <section aria-label={suggestion.title} data-kind={suggestion.kind} className="surface flex min-w-0 flex-col px-[22px] py-5">
       <CampaignChip objective={suggestion.campaign_objective ?? "other"} name={suggestion.campaign_name} suffix={suggestion.objective} />
       <b className="mt-2.5 mb-0.5 block text-[15px] font-semibold [overflow-wrap:anywhere]">{suggestion.title}</b>
-      <div className="mb-3.5 text-[13px] text-muted-foreground">{suggestion.why}</div>
+      <div className="mb-3.5 text-[13px] text-muted-foreground [overflow-wrap:anywhere]">{suggestion.why}</div>
       {error && <p role="alert" className="mb-2 text-xs text-danger">{error}</p>}
       <div className="flex flex-wrap gap-2">
-        {suggestion.action_url
+        {next ? <Button size="sm" variant="outline" disabledReason="本月尚未完成，完成後從本月結算選擇下一期來源。">{actionLabel}</Button> : suggestion.action_url
           ? <Button size="sm" variant="outline" asChild><Link to={suggestion.action_url}>{actionLabel}</Link></Button>
           : <Button size="sm" variant="outline" disabledReason="提議連結目前無法取得，請重新整理再試。">{actionLabel}</Button>}
         <Button size="sm" variant="ghost" busy={busy} onClick={skip}>先不要</Button>
@@ -133,17 +76,20 @@ function SuggestionCard({ brandId, month, suggestion, onDismissed }: {
   );
 }
 
-/** 「比 8 月同期（只當參考，不影響判斷）：購買多 40 筆・每筆便宜 37%」 from the home overview's money block. */
+/** Cost trends require the producer qualification and the same known unit. */
 function trendText(home: HomeOverview, prevMonth: number): string | null {
-  const money = home.money;
-  if (!money) return null;
+  const current = home.money;
+  const prev = current?.previous_same_period;
+  if (!current || !prev) return null;
   const head = `比 ${prevMonth} 月同期（只當參考，不影響判斷）：`;
-  const prev = money.previous_same_period;
-  if (!prev || money.purchases === null || prev.purchases === null) return `${head}沒有可比的購買數`;
-  const dr = money.purchases - prev.purchases;
-  const dc = money.cost_per_purchase !== null && prev.cost_per_purchase
-    ? Math.round((1 - money.cost_per_purchase / prev.cost_per_purchase) * 100) : null;
-  return `${head}購買${dr >= 0 ? "多" : "少"} ${formatAmount(Math.abs(dr))} 筆${dc === null ? "" : `・每筆${dc >= 0 ? "便宜" : "貴"} ${Math.abs(dc)}%`}`;
+  const comparable = !!home.currency && home.currency === prev.currency && prev.cost_comparison?.reason === null;
+  const dr = current.purchases !== null && prev.purchases !== null ? current.purchases - prev.purchases : null;
+  const count = dr === null ? "平台購買數尚無可比資料" : `平台購買${dr >= 0 ? "多" : "少"} ${formatAmount(Math.abs(dr))} 筆`;
+  const dc = comparable && current.cost_per_purchase !== null && current.cost_per_purchase >= 0
+    && prev.cost_per_purchase !== null && prev.cost_per_purchase > 0
+    ? Math.round((1 - current.cost_per_purchase / prev.cost_per_purchase) * 100) : null;
+  const ratio = dc === null ? "" : `・每筆${dc >= 0 ? "便宜" : "貴"} ${Math.abs(dc)}%`;
+  return `${head}${count}${ratio}・前期每筆成本 ${moneyText(prev.cost_per_purchase, prev.currency)}，本期 ${moneyText(current.cost_per_purchase, home.currency)}${comparable ? "" : "（幣別無法比較）"}`;
 }
 
 function objectiveOf(summary: MonthSummary, campaignId: string): ObjectiveKey {
@@ -207,7 +153,7 @@ export function MonthReviewPage({ brandId }: { brandId: string }) {
         <Breadcrumb items={[{ label: "投放中心", href: homeHref }, { label: "每月回顧" }]} />
         <PageHeader
           title={`${monthNum(month)} 月回顧`}
-          description="活動照常投放，這裡只整理帳"
+          description="整理平台成本與品牌付款證據"
           actions={
             <>
               <Button size="sm" variant="outline" disabledReason={!view ? "先載入這個月的資料" : undefined} onClick={() => view && downloadMonthCsv(month, view.grades.rows)}>下載 CSV</Button>
@@ -217,11 +163,11 @@ export function MonthReviewPage({ brandId }: { brandId: string }) {
         />
 
         {home.status === "error"
-          ? <ReadFailed what={`每週花費讀不到；廣告照常投放，其他區塊照常顯示（${home.error}）`} onRetry={home.reload} />
+          ? <ReadFailed what={`每週花費讀不到；其他區塊照常顯示（${home.error}）`} onRetry={home.reload} />
           : homeView ? <WeeklySpend home={homeView} /> : <div className="surface px-[22px] py-5"><Skeleton className="h-[230px] w-full" /></div>}
 
         {summary.status === "error" ? (
-          <ReadFailed what={`這個月的分級與建議讀不到；廣告照常投放，沒有東西被改動（${summary.error}）`} onRetry={summary.reload} />
+          <ReadFailed what={`這個月的分級與建議讀不到；沒有東西被改動（${summary.error}）`} onRetry={summary.reload} />
         ) : !view ? (
           <div className="flex flex-col gap-4" aria-busy="true">
             <Skeleton className="h-36 w-full" />
@@ -229,9 +175,12 @@ export function MonthReviewPage({ brandId }: { brandId: string }) {
           </div>
         ) : (
           <>
+            <p className="text-xs text-muted-foreground">平台數字窗口：{view.window?.start ?? `${month}-01`}–{view.window?.end ?? "尚無完整日"}・{view.data_days ?? "未知"} 個已過完整日；不代表資料已完整讀取</p>
+            <MonthOrders orders={view.orders} />
             {current ? <GradeSplit month={monthNum(month)} grades={view.grades} /> : <MissingNote grades={view.grades} />}
             <GradeBuckets grades={view.grades} withAmounts={current} />
             <ClosedCard summary={view} />
+            {!current && <div className="flex justify-start"><Button asChild><Link to={settlePath(brandId, month, "result")}>回顧本期，準備下一期 →</Link></Button></div>}
             {current && <Suggestions brandId={brandId} month={month} summary={view} />}
             {current && (
               <MonthFootnote

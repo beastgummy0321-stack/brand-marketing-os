@@ -6,10 +6,10 @@ import type { PeriodGradeRow } from "@/lib/adsMonthApi";
 import { formatDay } from "@/lib/orgClock";
 import { downloadCsv, formatAmount, type CsvCell } from "../patterns";
 
-/** 「1,234 元」, or 「未知」 for an unknown amount. */
-export function money(value: number | null | undefined): string {
+/** Preserve the source unit; no legacy default currency. */
+export function money(value: number | null | undefined, currency?: string | null, verified = true): string {
   const text = formatAmount(value ?? null);
-  return text === null ? "未知" : `${text} 元`;
+  return text === null ? "未知" : currency && verified ? `${text} ${currency}` : `${text}（幣別未核實）`;
 }
 
 /** `YYYY-MM` → its month number (9 for 2026-09). */
@@ -47,7 +47,7 @@ export interface WeekBar {
 
 /** Splits the home overview's cumulative daily spend (`pace.daily`, complete days only) into weeks. A missing or
  * null cumulative makes that week unknown, never 0. */
-export function weekBars(month: string, daysInMonth: number, daily: { day: string; cumulative: number | null }[], budget: number | null): WeekBar[] {
+export function weekBars(month: string, daysInMonth: number, daily: { day: string; cumulative: number | null }[], budget: number | null, comparable = false): WeekBar[] {
   const mm = month.slice(5, 7);
   const cumulative = new Map<number, number | null>(daily.map((d) => [Number(d.day.slice(8, 10)), d.cumulative]));
   const lastDay = daily.reduce((max, d) => Math.max(max, Number(d.day.slice(8, 10))), 0);
@@ -56,7 +56,7 @@ export function weekBars(month: string, daysInMonth: number, daily: { day: strin
   for (let start = 1; start <= daysInMonth; start += 7) {
     const end = Math.min(start + 6, daysInMonth);
     const label = `${mm}/${pad(start)}–${pad(end)}`;
-    const pace = budget === null ? null : (budget * (end - start + 1)) / daysInMonth;
+    const pace = budget === null || !comparable ? null : (budget * (end - start + 1)) / daysInMonth;
     if (start > lastDay) {
       bars.push({ label, through: null, state: "future", spend: null, pace });
       continue;
@@ -77,8 +77,8 @@ export function weekBars(month: string, daysInMonth: number, daily: { day: strin
  * columns as the prototype `csvMonth()`. */
 export function monthCsvRows(rows: PeriodGradeRow[]): CsvCell[][] {
   return [
-    ["活動", "廣告", "花費", "購買", "每賣一筆", "上限", "等級"],
-    ...rows.map((row) => [row.campaign_name, row.name, row.spend, row.results, row.cost_per_result, row.cap, row.grade_label]),
+    ["活動", "廣告", "花費", "平台成果數", "每筆成果成本", "上限", "等級", "花費幣別", "上限幣別", "上限比較限制"],
+    ...rows.map((row) => [row.campaign_name, row.name, row.spend, row.results, row.cost_per_result, row.cap, row.grade_label, row.currency, row.cap_comparison?.currency, row.cap_comparison?.reason]),
   ];
 }
 
