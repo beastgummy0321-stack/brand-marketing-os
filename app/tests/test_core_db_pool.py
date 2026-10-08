@@ -379,5 +379,91 @@ class AsyncCancellationTest(unittest.TestCase):
         asyncio.run(run())
 
 
+class AtomicOperationTest(unittest.TestCase):
+    def setUp(self):
+        with coredb.connection() as conn:
+            conn.execute(f"CREATE TABLE {_SCRATCH_TABLE} (x int)")
+            conn.execute(f"GRANT ALL ON {_SCRATCH_TABLE} TO authenticated")
+
+    def tearDown(self):
+        with coredb.connection() as conn:
+            conn.execute(f"DROP TABLE {_SCRATCH_TABLE}")
+
+    def _rows(self):
+        with coredb.connection() as observer:
+            return observer.execute(f"SELECT x FROM {_SCRATCH_TABLE} ORDER BY x").fetchall()
+
+    def test_helper_commit_does_not_publish_before_owner_finishes(self):
+        with coredb.connection() as conn:
+            conn.execute("SELECT 1")
+            with self.assertRaises(ValueError):
+                with conn.atomic():
+                    conn.execute(f"INSERT INTO {_SCRATCH_TABLE} VALUES (1)")
+                    coredb.ConnProxy().commit()
+                    self.assertEqual(self._rows(), [])
+                    raise ValueError("rejected")
+            conn.commit()
+        self.assertEqual(self._rows(), [])
+
+    def test_swallowed_rollback_cannot_turn_into_success(self):
+        with coredb.connection() as conn:
+            conn.execute(f"INSERT INTO {_SCRATCH_TABLE} VALUES (1)")
+            with self.assertRaises(coredb.OperationRolledBack):
+                with coredb.ConnProxy().atomic():
+                    conn.execute(f"INSERT INTO {_SCRATCH_TABLE} VALUES (2)")
+                    conn.rollback()
+                    conn.commit()
+            conn.execute(f"INSERT INTO {_SCRATCH_TABLE} VALUES (3)")
+        self.assertEqual(self._rows(), [{"x": 1}, {"x": 3}])
+
+    def test_nested_failure_preserves_outer_work_and_tenant_scope(self):
+        with coredb.connection() as conn:
+            coredb.set_tenant_scope(conn, coredb.DEV_ORG_ID)
+            conn.execute(f"INSERT INTO {_SCRATCH_TABLE} VALUES (1)")
+            with conn.atomic():
+                conn.execute(f"INSERT INTO {_SCRATCH_TABLE} VALUES (2)")
+                with self.assertRaises(ValueError):
+                    with conn.atomic():
+                        conn.execute(f"INSERT INTO {_SCRATCH_TABLE} VALUES (3)")
+                        conn.execute("SELECT set_config('app.org_id', 'wrong-org', false)")
+                        conn.commit()
+                        raise ValueError("inner rejected")
+                scope = conn.execute(
+                    "SELECT current_user AS role, current_setting('app.org_id') AS org").fetchone()
+                self.assertEqual(scope, {"role": "authenticated", "org": coredb.DEV_ORG_ID})
+                conn.execute(f"INSERT INTO {_SCRATCH_TABLE} VALUES (4)")
+                self.assertEqual(self._rows(), [])
+            conn.commit()
+        self.assertEqual(self._rows(), [{"x": 1}, {"x": 2}, {"x": 4}])
+
+    def test_outer_rejection_undoes_successful_nested_operation(self):
+        with coredb.connection() as conn:
+            conn.execute(f"INSERT INTO {_SCRATCH_TABLE} VALUES (1)")
+            with self.assertRaises(ValueError):
+                with conn.atomic():
+                    with conn.atomic():
+                        conn.execute(f"INSERT INTO {_SCRATCH_TABLE} VALUES (2)")
+                    raise ValueError("outer rejected")
+            conn.commit()
+        self.assertEqual(self._rows(), [{"x": 1}])
+
+    def test_sql_failure_with_swallowed_helper_rollback_remains_rejected(self):
+        with coredb.connection() as conn:
+            coredb.set_tenant_scope(conn, coredb.DEV_ORG_ID)
+            conn.execute(f"INSERT INTO {_SCRATCH_TABLE} VALUES (1)")
+            with self.assertRaisesRegex(coredb.OperationRolledBack, "requested rollback"):
+                with conn.atomic():
+                    conn.execute(f"INSERT INTO {_SCRATCH_TABLE} VALUES (2)")
+                    try:
+                        conn.execute("SELECT 1 / 0")
+                    except psycopg.errors.DivisionByZero:
+                        conn.rollback()
+            conn.execute(f"INSERT INTO {_SCRATCH_TABLE} VALUES (3)")
+            scope = conn.execute(
+                "SELECT current_user AS role, current_setting('app.org_id') AS org").fetchone()
+            self.assertEqual(scope, {"role": "authenticated", "org": coredb.DEV_ORG_ID})
+        self.assertEqual(self._rows(), [{"x": 1}, {"x": 3}])
+
+
 if __name__ == "__main__":
     unittest.main()

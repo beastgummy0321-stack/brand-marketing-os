@@ -137,6 +137,12 @@ class ChangeControlTest(unittest.TestCase):
         self.assertEqual(
             data.get(self.conn, self.org, self.brand, self.campaign, first["id"])["status"], "draft"
         )
+        with db.connection() as observer:
+            self.assertEqual(data.get(observer, self.org, self.brand, self.campaign,
+                                      first["id"])["status"], "draft")
+            self.assertEqual(observer.execute(
+                "SELECT count(*) AS n FROM ads_action WHERE campaign_id=%s", (self.campaign,)
+            ).fetchone()["n"], 0)
 
     def test_wrong_hash_and_relevant_external_copy_change_reject_approval(self):
         first = self.create()

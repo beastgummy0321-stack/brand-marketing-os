@@ -30,15 +30,16 @@ def put_settings(
 ):
     actor = web.require_actor(request)
     try:
-        manual_settings.save(
-            web.conn,
-            actor.org_id,
-            brand_id,
-            campaign_id,
-            group_id,
-            body.values,
-            actor=str(actor.user_id),
-        )
+        with web.conn.atomic():
+            manual_settings.save(
+                web.conn,
+                actor.org_id,
+                brand_id,
+                campaign_id,
+                group_id,
+                body.values,
+                actor=str(actor.user_id),
+            )
     except ValueError as exc:
         errors = {
             "campaign_unknown": (404, "找不到這個活動。"),

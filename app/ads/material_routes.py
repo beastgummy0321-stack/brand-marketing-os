@@ -1,5 +1,6 @@
 """Campaign material API. Saving and explicit generation are separate actions."""
 
+from contextlib import nullcontext
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Request
@@ -81,13 +82,19 @@ class Select(Dispatch):
 
 def _run(request, brand, campaign, function, *args):
     actor = web.require_actor(request)
+    # Dispatch deliberately persists its receipt before enqueue. Pure business
+    # edits instead include revisions, idempotency records and response assembly.
+    business_edit = function in {service.create, service.mutate, service.cancel}
     try:
-        return function(web.conn, actor.org_id, brand, campaign, *args)
+        with web.conn.atomic() if business_edit else nullcontext():
+            return function(web.conn, actor.org_id, brand, campaign, *args)
     except service.InUse as exc:
-        web.conn.rollback()
+        if not business_edit:
+            web.conn.rollback()
         raise web.ApiError(409, "material_task_in_use", str(exc)) from None
     except ValueError as exc:
-        web.conn.rollback()
+        if not business_edit:
+            web.conn.rollback()
         raise web.ApiError(409, "material_unavailable", str(exc)) from None
 
 

@@ -30,6 +30,24 @@ from app.meta import repository as meta_repo
 
 
 class LaunchSettingsTest(unittest.TestCase):
+    def test_save_failure_before_commit_keeps_previous_settings(self):
+        self.view()
+        with db.connection() as observer:
+            before = campaigns.get_campaign(observer, self.org, self.brand,
+                                            self.campaign)["context_json"]
+        original = launch_settings._merge
+
+        def fail_after_write(*args, **kwargs):
+            original(*args, **kwargs)
+            raise ValueError("launch_settings_malformed")
+
+        with patch.object(launch_settings, "_merge", fail_after_write):
+            response = self.put(pixel_id="px2")
+        self.assertEqual(response.status_code, 400, response.text)
+        with db.connection() as observer:
+            self.assertEqual(campaigns.get_campaign(observer, self.org, self.brand,
+                                                   self.campaign)["context_json"], before)
+
     def setUp(self):
         # Platform objects are owned by one campaign across the shared test database: every test
         # reads its own account.

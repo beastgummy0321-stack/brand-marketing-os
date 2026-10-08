@@ -280,6 +280,32 @@ class LaunchStaleTest(unittest.TestCase):
         )
         self.assertEqual(self.workspace()["launch_stale"]["change_set_id"], set_id)
 
+    def test_late_reapproval_failure_rolls_back_supersede_and_new_approval(self):
+        set_id = self.launch()
+        self.sql("UPDATE ads_delivery_group SET daily_budget=100 WHERE id=%s", self.group)
+        stale = self.workspace()["launch_stale"]
+        original = change_control_launch._approve_set
+
+        def fail_after_write(*args, **kwargs):
+            original(*args, **kwargs)
+            raise ValueError("injected late approval failure")
+
+        with (
+            patch.object(change_control_launch.month_budget, "preflight",
+                         return_value={"can_increase": True}),
+            patch.object(change_control_launch, "_approve_set", fail_after_write),
+        ):
+            with self.assertRaisesRegex(ValueError, "injected late approval failure"):
+                self.reapprove(stale)
+        with db.connection() as observer:
+            rows = observer.execute(
+                "SELECT id,status FROM ads_change_set WHERE campaign_id=%s", (self.campaign,)
+            ).fetchall()
+            self.assertEqual(rows, [{"id": set_id, "status": "approved"}])
+        with patch.object(change_control_launch.month_budget, "preflight",
+                          return_value={"can_increase": True}):
+            self.assertTrue(self.reapprove(stale)["ok"])
+
     def test_renamed_ad_reverts_and_the_original_approval_stands(self):
         set_id = self.launch()
         approval_id = self.change_set(set_id)["approval_id"]
