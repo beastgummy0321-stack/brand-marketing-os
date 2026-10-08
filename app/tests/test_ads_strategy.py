@@ -32,6 +32,89 @@ from .identity_test_helpers import mint_hs256
 ACTOR = "測試員"
 
 
+def test_acceptance_prompt_is_captured_at_actual_selected_gateway_provider(tmp_path, monkeypatch):
+    """Real isolated gateway ledger and selection; completion is strictly in-memory."""
+    import pytest
+
+    from scripts.drill import first_release_acceptance as runner
+    from scripts.drill import first_release_cases as cases
+
+    brand = bi_repo.create_brand(web.conn, org_id=coredb.DEV_ORG_ID, name="Prompt boundary",
+                                 actor=ACTOR, client_name=None)["id"]
+    frozen = runner.provider_input()
+    observed = []
+
+    def complete(instance, *, model, system, messages, max_tokens, timeout_s=120.0,
+                 effort=None, tools=None, org_id=None):
+        observed.append(instance)
+        assert system == runner.provider_system()
+        assert "arrays of strings" in system and "even copied from supplied facts" in system
+        assert "alternatives defaults to [], never objects" in system
+        assert messages == [{"role": "user", "content": cases.canonical(frozen)}]
+        assert timeout_s == 60 and tools is None
+        return providers.ProviderResponse(output_text=json.dumps(frozen["output_shape"]),
+                                          structured=None, usage=providers.Usage(100, 50),
+                                          stop_reason="end_turn")
+
+    configuration = providers.config.settings().model_copy(
+        update={"brand_os_llm_provider": "codex_cli"})
+    monkeypatch.setattr(providers.config, "settings", lambda: configuration)
+    monkeypatch.setattr(providers.CodexCliProvider, "complete", complete)
+    passed = providers.CodexCliProvider()
+    started = runner.now()
+    request_path = tmp_path / "provider-request.json"
+    with runner.capture_provider_requests(request_path) as calls:
+        task = gateway.run_task(
+            web.conn, passed, brand_id=brand, task_type="ads_strategy",
+            prompt_template_id="f53-first-release", prompt_template_version="1",
+            system=runner.provider_system(),
+            messages=[{"role": "user", "content": cases.canonical(frozen)}],
+            context=gateway.TaskContext(context_scope={"synthetic": True},
+                                        knowledge_item_ids=[], brand_version=1),
+            options=gateway.TaskOptions(max_retries=0, timeout_s=60, tools=None),
+        )
+    assert len(calls) == len(observed) == 1
+    # Selection created a new instance; the boundary still captured it.
+    assert observed[0] is not passed
+    assert providers.CodexCliProvider.complete is complete
+    assert task["status"] == "succeeded"
+    input_path = tmp_path / "provider-input.json"
+    runner.write(input_path, frozen)
+    model = {"started_at": started, "finished_at": runner.now(), "task": task,
+             "input": runner.reference(input_path), "request": runner.reference(request_path)}
+    runner.verify_provider_receipt(model)
+    for mutation in (
+        "missing-request", "model", "missing-model", "provider", "task-type", "zero-calls",
+        "extra-call", "system", "refs", "timeout", "tools",
+    ):
+        changed = json.loads(json.dumps(model, default=str))
+        request = json.loads(request_path.read_text(encoding="utf-8"))
+        if mutation == "missing-request":
+            del changed["request"]
+        elif mutation == "missing-model":
+            del changed["task"]["model"]
+        elif mutation in ("model", "provider", "task-type"):
+            changed["task"][{"task-type": "task_type"}.get(mutation, mutation)] = "different"
+        elif mutation == "zero-calls":
+            request["calls"] = []
+        elif mutation == "extra-call":
+            request["calls"] *= 2
+        elif mutation == "system":
+            request["calls"][0]["system"] = "Intended but not delivered instructions"
+        elif mutation == "refs":
+            request["calls"][0]["messages"][0]["content"] = "A different evidence reference"
+        elif mutation == "timeout":
+            request["calls"][0]["timeout_s"] = 120
+        else:
+            request["calls"][0]["tools"] = [{"type": "web_search"}]
+        path = tmp_path / f"request-{mutation}.json"
+        runner.write(path, request)
+        if "request" in changed:
+            changed["request"] = runner.reference(path)
+        with pytest.raises(runner.ReceiptError, match="G6"):
+            runner.verify_provider_receipt(changed)
+
+
 def _fake(rendered_output: str) -> providers.FakeProvider:
     return fixture_provider(rendered_output)
 

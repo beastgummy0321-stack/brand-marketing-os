@@ -436,7 +436,16 @@ def auth_fixture(tmp_path):
         "session_id": "owned-session",
         "sub": "owned-user",
     }
-    saved = {"id": "campaign-A", "org_id": "owned-org", "sha256": "saved-bytes"}
+    response_path = tmp_path / "auth-recovered-page-response.json"
+    response_path.write_text(json.dumps({"campaign": {
+        "id": "campaign-A", "brand_id": "brand-A", "org_id": "owned-org",
+        "name": "Original saved work", "budget_basis_json": {},
+    }}, separators=(",", ":")), encoding="utf-8")
+    capture = tmp_path / "auth-recovered.png"
+    capture.write_bytes(b"\x89PNG\r\n\x1a\nsynthetic-unit-boundary")
+    saved = {"id": "campaign-A", "org_id": "owned-org",
+             "sha256": runner.sha(response_path.read_bytes()),
+             "path": "/api/ads/brands/brand-A/campaigns/campaign-A"}
     browser = {
         "auth_js_version": "2.112.4",
         "issuances": [issued],
@@ -455,6 +464,17 @@ def auth_fixture(tmp_path):
         "recovered_work": dict(saved),
         "product_requests": [],
         "requests_after_relogin": [],
+        "page_work_sha256": saved["sha256"],
+        "rendered_work": {
+            "boundary": "browser-page-response", "origin": "http://127.0.0.1:8760",
+            "route": "/app/brands/brand-A/ads/campaigns/campaign-A?tab=strategy",
+            "response_path": saved["path"], "method": "GET", "resource_type": "fetch",
+            "status": 200, "response": runner.reference(response_path),
+            "heading": "Original saved work", "strategy_state": "empty",
+            "body_text": "這個活動還沒有策略建議", "capture": runner.reference(capture),
+            "navigated_at": 46001, "response_at": 46002, "loaded_at": 46003,
+            "captured_at": 46004,
+        },
     }
     path = tmp_path / "auth-browser-receipt.json"
     runner.write(path, browser)
@@ -470,6 +490,7 @@ def auth_fixture(tmp_path):
         "namespace": "auth",
         "search_path": "auth,pg_catalog",
         "database": "owned-db",
+        "web_origin": "http://127.0.0.1:8760",
         "database_identity": {
             "database": "owned-db",
             "schema": "auth",
@@ -496,6 +517,8 @@ def auth_fixture(tmp_path):
     [
         "different-token",
         "write",
+        "write-before-relogin",
+        "write-with-missing-filter",
         "missing-tracker",
         "not-expired",
         "fake-refusal",
@@ -512,6 +535,10 @@ def test_auth_receipt_rejects_false_controls_and_cleanup(tmp_path, mutation):
     elif mutation == "write":
         browser["product_requests"] = [{"at": 46001, "method": "POST", "path": "/api/save"}]
         browser["requests_after_relogin"] = list(browser["product_requests"])
+    elif mutation == "write-before-relogin":
+        browser["product_requests"] = [{"at": 44001, "method": "POST", "path": "/api/save"}]
+    elif mutation == "write-with-missing-filter":
+        browser["product_requests"] = [{"at": 46001, "method": "POST", "path": "/api/save"}]
     elif mutation == "missing-tracker":
         del browser["product_requests"]
     elif mutation == "not-expired":
@@ -530,6 +557,114 @@ def test_auth_receipt_rejects_false_controls_and_cleanup(tmp_path, mutation):
         runner.verify_auth_receipt(receipt)
 
 
+@pytest.mark.parametrize("mutation", [
+    "missing", "api-only", "wrong-route", "wrong-response", "wrong-heading",
+    "loading-body", "wrong-strategy-state", "no-capture", "bad-chronology", "wrong-hash",
+    "wrong-origin",
+])
+def test_auth_receipt_requires_original_work_rendered_by_browser_page(tmp_path, mutation):
+    receipt, browser, path = auth_fixture(tmp_path)
+    runner.verify_auth_receipt(receipt)
+    rendered = browser["rendered_work"]
+    if mutation == "missing":
+        del browser["rendered_work"]
+    elif mutation == "api-only":
+        rendered["boundary"] = "page.request"
+    elif mutation == "wrong-route":
+        rendered["route"] = "/app/brands/brand-A/ads/campaigns/other?tab=strategy"
+    elif mutation == "wrong-response":
+        rendered["response_path"] = "/api/ads/brands/brand-A/campaigns/other"
+    elif mutation == "wrong-heading":
+        rendered["heading"] = "Replacement work"
+    elif mutation == "loading-body":
+        rendered["body_text"] = "讀取中"
+    elif mutation == "wrong-strategy-state":
+        rendered["strategy_state"] = "strategy"
+    elif mutation == "no-capture":
+        del rendered["capture"]
+    elif mutation == "bad-chronology":
+        rendered["loaded_at"] = 45000
+    elif mutation == "wrong-origin":
+        rendered["origin"] = "http://127.0.0.1:9999"
+    else:
+        browser["page_work_sha256"] = "different"
+    runner.write(path, browser)
+    receipt["browser"] = runner.reference(path)
+    with pytest.raises(runner.ReceiptError, match="G7"):
+        runner.verify_auth_receipt(receipt)
+
+
+def test_department_prompt_mutation_invalidates_product_but_not_ui_hash(tmp_path, monkeypatch):
+    paths = ["app/departments/ads/strategy.md", "app/departments/workbench/copy.md",
+             "frontend/src/App.tsx"]
+    for name in paths:
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("Original")
+    monkeypatch.setattr(runner, "git", lambda *a: ("\0".join(paths) + "\0").encode())
+    monkeypatch.setattr(runner, "runtime_config_hash", lambda *a: "synthetic-config")
+    for name in paths[:2]:
+        previous = runner.relevant_hashes(tmp_path, {})
+        (tmp_path / name).write_text("Changed instructions")
+        changed = runner.relevant_hashes(tmp_path, {})
+        assert changed["product"] != previous["product"]
+        assert changed["ui"] == previous["ui"]
+
+
+@pytest.mark.parametrize("failure", [None, "api-only", "loading"])
+def test_actual_rendered_recovery_script_waits_for_page_read_and_dom(failure):
+    """Run the actual helper at mocked Node boundaries, without Auth or a browser probe."""
+    import shutil
+
+    node = shutil.which("node")
+    assert node
+    source = runner.AUTH_BROWSER.split("const hash =", 1)[1].split("\nlet stage =", 1)[0]
+    source = "const hash =" + source
+    script = r"""
+const crypto = require('node:crypto');
+const files = new Map(), calls = [];
+const saved = {campaign:{id:'campaign-A',brand_id:'brand-A',org_id:'owned-org',
+  name:'Original saved work',budget_basis_json:{}}};
+const cfg = {origin:'http://127.0.0.1:8760',
+  work_path:'/api/ads/brands/brand-A/campaigns/campaign-A',
+  work_route:'/app/brands/brand-A/ads/campaigns/campaign-A?tab=strategy',directory:'owned'};
+const fs = {writeFileSync:(path,data)=>files.set(path,Buffer.from(data)),
+  readFileSync:path=>files.get(path)};
+const response = {url:()=>cfg.origin+cfg.work_path, status:()=>200,
+  request:()=>({method:()=> 'GET',resourceType:()=>FAILURE==='api-only'?'other':'fetch'}),
+  json:async()=>saved};
+const page = {waitForResponse:async(predicate,opts)=>{calls.push('page-response-wait');
+    if(!predicate(response)||opts.timeout!==15000) throw Error('No browser response');
+    return response;},
+  goto:async()=>calls.push('goto'),url:()=>cfg.origin+cfg.work_route,
+  getByRole:(role,opts)=>({waitFor:async()=>{calls.push('visible:'+opts.level);
+    if(FAILURE==='loading'&&opts.level===2) throw Error('Still loading');},
+    innerText:async()=>opts.name}),
+  screenshot:async({path})=>{calls.push('capture');
+    files.set(path,Buffer.from('\x89PNG\r\n\x1a\nsynthetic'));}};
+const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
+new AsyncFunction('crypto','fs','page','cfg','saved',SOURCE+
+  '\nreturn await recoverRenderedWork(page,cfg,saved,hash(JSON.stringify(saved)));')(
+  crypto,fs,page,cfg,saved).then(result=>console.log(JSON.stringify({calls,result})))
+  .catch(error=>console.log(JSON.stringify({calls,error:error.message})));
+    """.replace("FAILURE", json.dumps(failure)).replace("SOURCE", json.dumps(source))
+    actual = subprocess.run([node], input=script, text=True, encoding="utf-8",
+                            capture_output=True, timeout=10)
+    assert actual.returncode == 0, actual.stderr
+    output = json.loads(actual.stdout)
+    if failure:
+        assert "error" in output
+        assert "capture" not in output["calls"]
+    else:
+        assert output["calls"] == [
+            "page-response-wait", "goto", "visible:1", "visible:2", "capture",
+        ]
+        rendered = output["result"]["rendered"]
+        assert rendered["boundary"] == "browser-page-response"
+        assert rendered["body_text"] == "這個活動還沒有策略建議"
+        assert rendered["heading"] == "Original saved work"
+        assert rendered["response"]["sha256"]
+        assert rendered["capture"]["sha256"]
 def test_container_timeout_discovery_requires_exact_name_owner_image(tmp_path, monkeypatch):
     actual = {
         "Id": "owned-id",

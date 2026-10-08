@@ -87,6 +87,9 @@ only supplied names may retain digits; do not write CPA, currency, or percentage
 - `why`：這個策略整體的理由，字串陣列，每條都要能指出用了下面哪一段資料。
 - `unknowns`：這次策略還看不出來、需要投放後才知道的事，字串陣列，沒有就給 `[]`。
 - `alternatives`：見上面規則，預設 `[]`。
+  Every entry must be a string explaining a tradeoff, never an object. All prose arrays
+  (`why`, `unknowns`, `alternatives`, `learning_goals`) contain strings only. Do not copy
+  supplied numbers into guarded prose; numeric facts remain program-rendered.
 - `learning_goals`：這一輪投放**想學到什麼**，字串陣列，**最多 3 條**，每條一句話。寫「哪些
   受眾／訊息組合帶來最多新客」這種下一輪用得上的問題，不要寫成預測、不要寫成對成效的保證，
   也不要重複 `unknowns`（`unknowns` 是現在還不知道的事，`learning_goals` 是這一輪打算去弄
