@@ -61,6 +61,11 @@ export interface PeriodGradeRow {
   reason_code?: string | null; sample?: TriageSampleView | null;
   cap_comparison?: CapComparison;
   break_even_unit?: Omit<CapComparison, "reason" | "message">;
+  /** Canonical observed definition, independent of the campaign target. Legacy absence is unknown. */
+  result_kind?: string | null; result_action?: string | null; result_attribution?: string | null;
+  result_label?: string;
+  result_reason?: string | null;
+  result_window?: { start: string; end: string };
 }
 /** One grade's share of the window: `amount` is null when any ad's spend is unknown or the ads
  * span two currencies. Every grade is listed, empty ones with `count` 0. */

@@ -45,6 +45,9 @@ def test_relative_best_is_not_absolute_success():
         "results": 1,
         "currency": "TWD",
         "cap": 100,
+        "result_kind": "purchase", "result_action": "omni_purchase",
+        "result_attribution": "7d_click+1d_view", "result_reason": None,
+        "result_window": {"start": "2026-08-01", "end": "2026-08-31"},
         "grade": "over",
         "thumbnail_url": None,
     }

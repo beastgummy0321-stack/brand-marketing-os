@@ -2,8 +2,7 @@ import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { Button } from "@/components/layout/ui/button";
 import type { SettleRow, SettleView } from "@/lib/adsSettleApi";
-import { ActionBar, FlowTo, LearnLine, MoneyRule, MoneyTag, OriginTag, ResultHero, formatAmount } from "../patterns";
-import { perSaleAmount } from "../patterns/csv";
+import { ActionBar, FlowTo, LearnLine, OriginTag, ResultHero } from "../patterns";
 import { useOrgClock } from "@/lib/orgClock";
 import { angleOf, learnRows, type AnglePicks } from "./SettleAngles";
 import { FROM_META, campaignOf, isImported, money, rangeText, stampText, yuan } from "./settleCsv";
@@ -16,31 +15,31 @@ import { FROM_META, campaignOf, isImported, money, rangeText, stampText, yuan } 
 function Learning({ view, row, angle }: { view: SettleView; row: SettleRow; angle: string }) {
   const campaign = campaignOf(view, row);
   const good = row.fate === "effective";
+  const unknown = row.fate === "skip";
   const cost = row.cost_per_result;
-  return (
-    <LearnLine
-      tone={good ? "ok" : "no"}
-      title={<>
-        「{angle}」對這群受眾{good ? "有效" : "無效"}
-        {good && cost !== null && row.cap !== null && (
-          <span className="font-normal text-muted-foreground">（每筆 {perSaleAmount(cost)}，上限 {formatAmount(row.cap)}）</span>
-        )}
-      </>}
-      meta={<span className="inline-flex flex-wrap items-center">
-        <span>{campaign.name}</span>
+  const title = <>
+        「{angle}」・{unknown ? "目前待核實" : good ? "本期成本達標" : "本期成本未達標"}
+      </>;
+  const meta = <span className="inline-flex flex-wrap items-center">
+        <span className="[overflow-wrap:anywhere]">{campaign.name}</span>
         {isImported(campaign.origin) && <span className="mx-1"><OriginTag>{FROM_META}</OriginTag></span>}
         {row.group_name && <span>・{row.group_name}</span>}
-        {row.grade === "wasted" && <span>・花 {money(row.spend)}沒賣出</span>}
-        {row.grade === "over" && <span>・每筆 {yuan(cost)}，上限 {formatAmount(row.cap) ?? "未知"}</span>}
-        <MoneyTag cost={cost} breakEven={row.break_even} />
-      </span>}
-    />
-  );
+        <span>・花 {money(row.spend, row.currency)}・每筆成果 {yuan(cost, row.currency)}</span>
+        {row.cap !== null && <span>・上限 {money(row.cap, row.cap_comparison?.currency)}</span>}
+        {row.cap_comparison?.reason && <span>・{row.cap_comparison.message ?? "上限單位尚未核實"}</span>}
+        {unknown && <span>・{row.skip_reason ?? "當前來源資格尚未核實"}</span>}
+      </span>;
+  if (unknown) return <div className="grid grid-cols-[28px_minmax(0,1fr)] items-center gap-3 border-t border-border py-3 first:border-t-0">
+    <span aria-hidden="true" className="grid size-[26px] place-items-center rounded-lg bg-muted text-muted-foreground">?</span>
+    <div className="min-w-0"><b className="font-semibold">{title}</b><div className="mt-0.5 text-[11.5px] text-muted-foreground">{meta}</div></div>
+  </div>;
+  return <LearnLine tone={good ? "ok" : "no"} title={title} meta={meta} />;
 }
 
-function Groups({ view, rows }: { view: SettleView; rows: { row: SettleRow; angle: string }[] }) {
+function Groups({ view, rows, written = false }: { view: SettleView; rows: { row: SettleRow; angle: string }[]; written?: boolean }) {
   const good = rows.filter((x) => x.row.fate === "effective");
   const bad = rows.filter((x) => x.row.fate === "ineffective");
+  const unknown = rows.filter((x) => x.row.fate === "skip");
   const card = (title: string, cls: string, note: string, list: typeof rows) => (
     <section aria-label={title} className="surface px-[22px] py-5">
       <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
@@ -54,38 +53,41 @@ function Groups({ view, rows }: { view: SettleView; rows: { row: SettleRow; angl
   );
   return (
     <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-2">
-      {card(`有效 ${good.length} 條`, "text-success", "划算的", good)}
-      {card(`無效 ${bad.length} 條`, "text-danger", "太貴、沒賣出的", bad)}
+      {card(`目前成本達標 ${good.length} 條`, "text-success", "當前成本符合上限", good)}
+      {card(`目前成本未達標 ${bad.length} 條`, "text-danger", "成本偏高或尚無成果", bad)}
+      {written && unknown.length > 0 && card(`目前待核實 ${unknown.length} 條`, "text-muted-foreground", "保留已寫紀錄，不視為當前可沿用", unknown)}
     </div>
   );
 }
 
-export function SettleNote({ view, header, picks, busy, error, onWrite, homeHref, angleHref, newHref, next }: {
+export function SettleNote({ view, header, picks, busy, error, onWrite, homeHref, angleHref, continuation, next }: {
   view: SettleView; header: ReactNode; picks: AnglePicks; busy: boolean; error: string | null; onWrite: () => void;
-  homeHref: string; angleHref: string; newHref: string; next: { href: string } | null;
+  homeHref: string; angleHref: string; continuation?: ReactNode; next: { href: string } | null;
 }) {
   const { timezone } = useOrgClock();
   if (view.status === "written" && view.written) {
     const written = view.written;
-    const rows = learnRows(view).filter((row) => row.written_angle).map((row) => ({ row, angle: row.written_angle as string }));
+    const rows = view.rows.filter((row) => row.written_angle).map((row) => ({ row, angle: row.written_angle as string }));
     const before = Math.max(0, view.notebook.count - written.count);
     return (
       <>
         <div className="flex max-w-[1260px] flex-col gap-4">
           {header}
           <ResultHero
-            tone="ok" title={`寫好了 ${written.count} 條：有效 ${written.effective}、無效 ${written.ineffective}`}
+            tone="ok" title={`已寫 ${written.count} 條：留存分類有效 ${written.effective}、無效 ${written.ineffective}、未核實 ${written.unknown ?? "未知"}`}
             note={`寫於 ${stampText(written.at, timezone)}・上一期 ${rangeText(view.start, view.end)}`}
           />
           <FlowTo
             from={{ label: "品牌筆記本", value: `多了 ${written.count} 條`, note: `原本 ${before} 條` }}
-            to={{ label: "下一個新活動", value: "策略會先讀這些", note: "有效的多用，無效的避開" }}
+            to={{ label: "下一個新活動", value: "先核對當前資格", note: "歷史排序不是成功證明，少樣本只作測試或對照" }}
           />
-          <Groups view={view} rows={rows} />
+          <p className="text-xs text-muted-foreground">上方是當時留存分類，下方是目前來源成本；兩者可能不同，不代表某個說法造成成果。</p>
+          <Groups view={view} rows={rows} written />
+          {written.count > rows.length && <p className="surface px-5 py-4 text-sm text-muted-foreground">另有 {written.count - rows.length} 條已寫紀錄，目前無法逐列核對原來源與主打；不推定其當前成效。</p>}
+          {continuation}
         </div>
         <div className="flex-1" />
         <ActionBar back={{ label: "投放中心", to: homeHref }}>
-          <Button variant="outline" asChild><Link to={newHref}>＋ 建立活動</Link></Button>
           {next
             ? <Button asChild><Link to={next.href}>下一件 →</Link></Button>
             : <Button asChild><Link to={homeHref}>回投放中心 →</Link></Button>}
@@ -100,7 +102,7 @@ export function SettleNote({ view, header, picks, busy, error, onWrite, homeHref
       <div className="flex max-w-[1260px] flex-col gap-4">
         {header}
         <Groups view={view} rows={rows} />
-        <MoneyRule />
+        <p className="text-xs text-muted-foreground">這些是平台成果成本的紀錄；並非付款收入或已核實獲利，也不能證明主打造成成果。</p>
         {error && (
           <div role="alert" className="rounded-xl bg-danger/10 px-5 py-4 text-sm">
             <b>還沒寫進筆記本</b>

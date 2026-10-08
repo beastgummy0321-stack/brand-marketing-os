@@ -1,16 +1,17 @@
-import type { ReactNode } from "react";
+import {useId, useState, type ReactNode} from "react";
 import { Link } from "react-router-dom";
 import { Button } from "@/components/layout/ui/button";
 import type { SettleCampaign, SettleRow, SettleView } from "@/lib/adsSettleApi";
 import { cn } from "@/lib/utils";
 import { perSaleAmount } from "../patterns/csv";
 import {
-  ActionBar, Chip, GradeBar, GradeTermChip, Meter, MoneyTag, OriginTag, Term, Thumb, formatAmount, gradeWord, sampleWords,
+  ActionBar, Chip, GradeBar, Meter, OriginTag, Term, Thumb, formatAmount, gradeWord, sampleWords,
   unsoldLine, useAdsRules, type GradeBarBucket,
 } from "../patterns";
 import {
   FROM_META, campaignOf, campaignShort, downloadSettleCsv, isImported, rangeText, rankText, settleRule,
 } from "./settleCsv";
+import {purchaseWords, resultGradeLabel, SettleCostRules, SettleGradeChip} from "./settleWords";
 
 const money = (value: number | null, currency: string | null) => value === null ? "未知" : `${formatAmount(value)} ${currency ?? "幣別未知"}`;
 const perSale = (value: number | null, currency: string | null) => value === null ? "未知" : `${perSaleAmount(value)} ${currency ?? "幣別未知"}`;
@@ -34,6 +35,10 @@ function Kv({ label, value, note, tone = "mut" }: { label: string; value: string
 
 /** Where the whole period's cost per result sits against the campaigns' own caps (prototype `cppNote`). */
 function cppNote(view: SettleView): { tone: keyof typeof TONE_TEXT; text: string } {
+  if (view.result_comparison?.reason !== null) return {tone: "mut", text: "成果與歸因口徑不同或尚未核實，不能合算成本"};
+  if (view.rows.some(row => row.reason_code === "result_kind_mismatch")) {
+    return {tone: "mut", text: "成果類型與活動目標不同，不能比較上限"};
+  }
   const capped = view.campaigns.filter((c) => c.cap !== null);
   if (view.cost_per_result === null) return { tone: "mut", text: "還算不出來" };
   if (capped.length === 0) return { tone: "mut", text: "活動都還沒設上限，不比較" };
@@ -65,20 +70,13 @@ function Numbers({ view }: { view: SettleView }) {
       <Kv label="期間" value={rangeText(view.start, view.end)} note={`${view.days} 天・${view.status === "not_ended" ? "還沒結束" : "已結束"}`} />
       <Kv label="花費" value={money(view.spent, view.currency)} note={budget.text} tone={budget.tone} />
       <Kv
-        label="購買" value={view.results === null ? "未知" : `${formatAmount(view.results)} 筆`}
-        note={view.on_target_results === null ? "記成有效的廣告賣了幾筆還不知道" : `${formatAmount(view.on_target_results)} 筆來自記成有效的廣告`}
-        tone={view.on_target_results ? "ok" : "mut"}
+        label="平台成果" value={view.result_comparison?.reason !== null || view.results === null ? "未知" : `${formatAmount(view.results)} 筆`}
+        note={view.result_comparison?.reason !== null ? "成果口徑不同或尚未核實；各列保留原值" : view.on_target_results === null ? "成本達標廣告的成果數未知" : `${formatAmount(view.on_target_results)} 筆來自成本達標廣告`}
+        tone={view.result_comparison?.reason === null && view.on_target_results ? "ok" : "mut"}
       />
-      <Kv label="每賣一筆花多少" value={perSale(view.cost_per_result, view.currency)} note={cpp.text} tone={cpp.tone} />
+      <Kv label="每筆成果成本" value={perSale(view.result_comparison?.reason === null ? view.cost_per_result : null, view.currency)} note={cpp.text} tone={cpp.tone} />
     </section>
   );
-}
-
-/** One break-even for the rules line only when every campaign shares it; otherwise the term stays without a value. */
-function sharedBreakEven(view: SettleView): number | null {
-  if (!view.currency || view.rows.some((row) => row.break_even_unit?.currency !== view.currency)) return null;
-  const values = new Set(view.rows.map((row) => row.break_even));
-  return values.size === 1 ? [...values][0] : null;
 }
 
 function Share({ view }: { view: SettleView }) {
@@ -95,7 +93,10 @@ function Share({ view }: { view: SettleView }) {
         </span>
         <span className="text-base font-medium">的錢花在記成有效的廣告</span>
       </div>
-      <GradeBar buckets={buckets} withMoney thinLabel={unknownGrade ? gradeWord(rules, "insufficient", "no_data") ?? "" : undefined} breakEven={sharedBreakEven(view)} />
+      <GradeBar buckets={buckets} withMoney rules={false}
+        gradeLabels={purchaseWords(view.rows) ? undefined : {wasted: "尚無成果"}}
+        thinLabel={unknownGrade ? gradeWord(rules, "insufficient", "no_data") ?? "" : undefined} />
+      <div className="mt-2"><SettleCostRules rows={view.rows} /></div>
       {[...new Set(view.buckets.flatMap((bucket) => bucket.messages ?? []))].map((message) => <p key={message} className="mt-2 text-xs text-muted-foreground">{message}</p>)}
       {rule && (
         <div className="mt-2 text-xs text-muted-foreground">
@@ -119,14 +120,16 @@ const GRADED = new Set(["on_target", "watch", "over", "wasted"]);
  * fate the ranking gave (F48 Contract R: 留下 → 有效, 換掉 → 無效, unranked → 不記; sample size is shown, never a gate).
  * Branches read `grade`／`reason_code`／`fate`, never a label. */
 export function GradedRow({ row }: { row: SettleRow }) {
+  const [definitionOpen, setDefinitionOpen] = useState(false);
+  const definitionId = useId();
   const rules = useAdsRules();
   const cap = row.cap;
   const comparable = Boolean(row.currency) && row.cap_comparison?.currency === row.currency && row.cap_comparison.reason === null;
   const graded = cap !== null && GRADED.has(row.grade) && comparable;
-  const capOnly = (row.reason_code === "cap_currency_mismatch" || row.reason_code === "cap_currency_unknown") && row.cost_per_result !== null && Boolean(row.currency);
+  const capOnly = row.cost_per_result !== null;
   const thin = row.fate === "skip";
   const tooNew = row.grade === "insufficient" && (!row.reason_code || row.reason_code === "too_new");
-  const word = row.grade_label || gradeWord(rules, row.grade, row.reason_code) || "";
+  const word = resultGradeLabel(row) || gradeWord(rules, row.grade, row.reason_code) || "";
   let viz: ReactNode;
   if (!graded) {
     viz = (
@@ -144,7 +147,8 @@ export function GradedRow({ row }: { row: SettleRow }) {
       <Meter
         value={row.spend} max={line === null ? null : line * 1.4} marker={line} tone="danger"
         left={<>花 {money(row.spend, row.currency)}・0 筆</>}
-        right={line === null ? <Term k="wasted">{word}</Term> : <>花到 {money(line, row.currency)} 還一筆都沒賣，就算「<Term k="wasted">{word}</Term>」</>}
+        right={row.result_kind !== "purchase" ? line === null ? word : <>花到 {money(line, row.currency)} 尚無成果，已達浪費門檻</> :
+          line === null ? <Term k="wasted">{word}</Term> : <>花到 {money(line, row.currency)} 還一筆都沒賣，就算「<Term k="wasted">{word}</Term>」</>}
       />
     );
   } else {
@@ -152,7 +156,7 @@ export function GradedRow({ row }: { row: SettleRow }) {
       <Meter
         value={row.cost_per_result} max={cap * 1.6} marker={cap}
         tone={row.grade === "on_target" ? "success" : row.grade === "watch" ? "warning" : "danger"}
-        left={<>每筆 {perSale(row.cost_per_result, row.currency)}{row.break_even_unit?.currency && row.break_even_unit.currency === row.currency && <MoneyTag cost={row.cost_per_result} breakEven={row.break_even} />}</>}
+        left={<>每筆 {perSale(row.cost_per_result, row.currency)}</>}
         right={<>上限 {money(cap, row.cap_comparison?.currency ?? null)}</>}
       />
     );
@@ -168,16 +172,26 @@ export function GradedRow({ row }: { row: SettleRow }) {
       <div className="min-w-0">
         <div className={cn("font-medium [overflow-wrap:anywhere]", !thin && "text-foreground")}>{row.name ?? "（未命名廣告）"}</div>
         {row.group_name && <div className="text-[11.5px] text-muted-foreground [overflow-wrap:anywhere]">{row.group_name}</div>}
+        <button type="button" aria-expanded={definitionOpen} aria-controls={definitionId}
+          onClick={() => setDefinitionOpen(value => !value)} className="text-left text-[11.5px] text-muted-foreground underline-offset-2 hover:underline focus-visible:outline focus-visible:outline-ring">
+          成果：{row.result_label ?? "尚未核實"}・查看口徑
+        </button>
+        {definitionOpen && <div id={definitionId} className="text-[11.5px] text-muted-foreground [overflow-wrap:anywhere]">
+          成果 {row.result_kind ?? "未知"}・動作 {row.result_action ?? "未知"}・歸因 {row.result_attribution ?? "未知"}
+          <br />期間 {row.result_window ? rangeText(row.result_window.start, row.result_window.end) : "尚未核實"}
+          {row.break_even !== null && <><br />商品假設打平線 {money(row.break_even, row.break_even_unit?.currency ?? null)}；不是已核實獲利</>}
+        </div>}
+        {row.reason_code === "result_kind_mismatch" && <div className="text-[11.5px] text-warning">成果類型與目標不同，不能比較上限</div>}
         {place && (
           <div data-part="rank" className="text-[11.5px] text-muted-foreground">
-            第 {place} 名{row.sales !== null && `・成交 ${formatAmount(row.sales)} 筆`}
+            第 {place} 名{row.sales !== null && `・排名成果 ${formatAmount(row.sales)} 筆`}
           </div>
         )}
       </div>
       <div className="col-span-2 col-start-2 row-start-2 md:col-span-1 md:col-start-auto md:row-start-auto">{viz}</div>
       <div className="col-start-3 row-start-1 flex flex-col items-end text-right md:col-start-auto md:row-start-auto">
         <div className="flex flex-wrap justify-end gap-1">
-          <GradeTermChip grade={row.grade} label={row.grade_label} reasonCode={row.reason_code} />
+          <SettleGradeChip row={row} />
           {sampleWords(rules, row).map((w) => <Chip key={w} tone="warn">{w}</Chip>)}
         </div>
         <div className={cn("mt-1 text-[11.5px]", fate.cls)}>{row.skip_reason ?? fate.text}</div>
@@ -223,8 +237,8 @@ export function settleCampaigns(view: SettleView): SettleCampaign[] {
   return [...seen.values()].filter((c) => view.rows.some((row) => row.campaign_id === c.campaign_id));
 }
 
-export function SettleResult({ view, header, homeHref, angleHref, noteHref }: {
-  view: SettleView; header: ReactNode; homeHref: string; angleHref: string; noteHref: string;
+export function SettleResult({ view, header, homeHref, angleHref, noteHref, continuation }: {
+  view: SettleView; header: ReactNode; homeHref: string; angleHref: string; noteHref: string; continuation?: ReactNode;
 }) {
   const open = view.status === "open";
   return (
@@ -237,6 +251,7 @@ export function SettleResult({ view, header, homeHref, angleHref, noteHref }: {
           <p className="surface px-[22px] py-5 text-sm text-muted-foreground">這期沒有花到錢的廣告，沒有要記的。</p>
         )}
         {settleCampaigns(view).map((campaign) => <CampaignCard key={campaign.campaign_id} view={view} campaign={campaign} />)}
+        {continuation}
       </div>
       <div className="flex-1" />
       <ActionBar

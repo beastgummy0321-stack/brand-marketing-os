@@ -510,6 +510,23 @@ describe("v10 kit（F29-I09）", () => {
     expect(tags[0].getAttribute("data-variant")).toBe("gain");
   });
 
+  it("display overrides preserve grade geometry and default purchase vocabulary", async () => {
+    const { GradeBar } = await import("./GradeBar");
+    const { GradeRules } = await import("./GradeRules");
+    seedAdsRules(RULES_FIXTURE);
+    const buckets = [{grade: "wasted" as const, amount: 200, count: 1, currency: "TWD"}];
+    const {container, rerender} = render(<><GradeBar buckets={buckets} withMoney rules={false}
+      gradeLabels={{wasted: "尚無成果"}} /><GradeRules money={false} wastedText="尚無成果＝花了錢仍沒有成果" /></>);
+    expect(container.querySelector<HTMLElement>('i[data-grade="wasted"]')?.style.width).toBe("100%");
+    expect(container.textContent).toContain("尚無成果 1 則・200 TWD");
+    expect(container.textContent).toContain("尚無成果＝花了錢仍沒有成果");
+    expect(container.textContent).not.toMatch(/沒賣出|都沒賣|有賺|在虧/);
+    rerender(<><GradeBar buckets={buckets} withMoney rules={false} /><GradeRules money={false} /></>);
+    expect(container.textContent).toContain("沒賣出 1 則・200 TWD");
+    expect(container.textContent).toContain("花了錢一筆都沒賣");
+    expect(container.querySelector<HTMLElement>('i[data-grade="wasted"]')?.style.width).toBe("100%");
+  });
+
   it("GradeRules 四個等級字都是名詞解釋；GradeBar 依金額分段，金額未知印未知不印 0", async () => {
     const { GradeRules } = await import("./GradeRules");
     const { GradeBar } = await import("./GradeBar");

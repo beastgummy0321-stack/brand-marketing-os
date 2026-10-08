@@ -12,7 +12,7 @@ stays unknown: a window whose spend or result can't be known reads 資料不足 
 
 from collections import defaultdict
 
-from app.ads import coverage, outcome, targets, triage
+from app.ads import coverage, outcome, result_kinds, targets, triage
 
 # Display order of the buckets (Contract C): 划算, 偏貴, 太貴, 沒賣出, then the ungraded ones.
 BUCKET_ORDER = ("on_target", "watch", "over", "wasted", "insufficient", "no_target")
@@ -33,6 +33,9 @@ def _grade(view, spend, target, days):
     if target["value"] is not None and target["result_kind"] is None \
             and (view is None or view["result_kind"] is None):
         return "no_target", triage.GRADE_LABELS["no_target"], "result_kind_unknown"
+    if view is not None and target["result_kind"] is not None \
+            and view["result_kind"] is not None and target["result_kind"] != view["result_kind"]:
+        view = {**view, "reason": "result_kind_mismatch"}
     return triage.grade_window(view, spend, target["value"], days)
 
 
@@ -113,6 +116,14 @@ def grade_period(conn, org_id, brand_id, start, end) -> list[dict]:
             "spend": spend,
             "results": view["result_count"] if view is not None else None,
             "cost_per_result": view["cost_per_result"] if view is not None else None,
+            "result_kind": view.get("result_kind") if view is not None else None,
+            "result_label": result_kinds.label(
+                view.get("result_kind") if view is not None else None
+            ),
+            "result_action": view.get("result_action") if view is not None else None,
+            "result_attribution": view.get("result_attribution") if view is not None else None,
+            "result_reason": view.get("reason") if view is not None else "result_unknown_days",
+            "result_window": {"start": start.isoformat(), "end": end.isoformat()},
             "cap": target["value"], "break_even": target.get("break_even"),
             "grade": grade, "grade_label": label, "reason_code": reason_code,
             "sample": triage._sample_view(

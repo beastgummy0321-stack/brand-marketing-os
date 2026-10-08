@@ -18,7 +18,11 @@ const ROWS = ["on_target", "watch", "over", "wasted"] as const;
  * per screen — the prototype prints it only on its first use. Words and the 偏貴 band are the served rules (F48
  * Contract R-API); until they load the legend waits (nothing to print without them) and the money rule shows alone.
  * `data-slot="grade-rules"`. */
-export function GradeRules({ money = true, breakEven }: { money?: boolean; breakEven?: number | null }) {
+export function GradeRules({ money = true, breakEven, wastedText }: {
+  money?: boolean; breakEven?: number | null;
+  /** Replaces the entire wasted label/explanation without changing the served threshold. */
+  wastedText?: string;
+}) {
   const rules = useAdsRules();
   const tenths = rules ? watchTenths(rules) : null;
   const rest = { watch: `＝超過上限不到 ${tenths} 成`, over: `＝超過 ${tenths} 成以上`, wasted: "＝花了錢一筆都沒賣" } as const;
@@ -29,8 +33,10 @@ export function GradeRules({ money = true, breakEven }: { money?: boolean; break
           {ROWS.map((grade) => (
             <span key={grade}>
               <i aria-hidden="true" className={`mr-[5px] inline-block size-2 rounded-[2px] ${GRADE_FILL[grade]}`} />
-              <Term k={grade}>{rules.labels.grade[grade]}</Term>
-              {grade === "on_target" ? <>＝每筆沒超過<Term k="cap">上限</Term></> : rest[grade]}
+              {grade === "wasted" && wastedText ? wastedText : <>
+                <Term k={grade}>{rules.labels.grade[grade]}</Term>
+                {grade === "on_target" ? <>＝每筆沒超過<Term k="cap">上限</Term></> : rest[grade]}
+              </>}
             </span>
           ))}
         </div>

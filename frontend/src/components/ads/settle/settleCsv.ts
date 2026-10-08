@@ -7,13 +7,12 @@ import { perSaleAmount } from "../patterns/csv";
 import { formatInstant } from "@/lib/orgClock";
 
 /** The origin tag of a campaign read from the platform instead of built here (prototype `FROM_META`). */
-export const FROM_META = "從 Meta 帶進來";
+export const FROM_META = "既有平台活動";
 /** The one sentence of what gets written (prototype `SETTLE_RULE`), from the served verdict words (F48 Contract R
  * "derived rulers": 留下 → 有效, 換掉 → 無效, a row the ranking cannot place → 不記). `null` until the rules load. */
 export function settleRule(rules: AdsRules | null): string | null {
   if (!rules) return null;
-  const { keep, replace } = rules.labels.verdict;
-  return `排名${keep}的記成有效、${replace}的記成無效；排不上名的不記`;
+  return "本期成本達標與未達標分開記錄；資料不足只保留歷史，排名不代表成功";
 }
 
 export const FATE_WORD: Record<SettleFate, string> = { effective: "有效", ineffective: "無效", skip: "不記" };
@@ -21,15 +20,15 @@ export const FATE_WORD: Record<SettleFate, string> = { effective: "有效", inef
 export const isImported = (origin: string | null | undefined) => origin === "imported";
 
 /** 「1,234 元」, or 「未知」 for an unknown amount. */
-export function money(value: number | null | undefined): string {
+export function money(value: number | null | undefined, currency?: string | null): string {
   const text = formatAmount(value ?? null);
-  return text === null ? "未知" : `${text} 元`;
+  return text === null ? "未知" : `${text} ${currency ?? "幣別未知"}`;
 }
 
 /** A cost per result as whole yuan through the one per-sale rule (rounded, F47-I06), or 「未知」. */
-export function yuan(value: number | null | undefined): string {
+export function yuan(value: number | null | undefined, currency?: string | null): string {
   const text = perSaleAmount(value);
-  return text === null ? "未知" : `${text} 元`;
+  return text === null ? "未知" : `${text} ${currency ?? "幣別未知"}`;
 }
 
 /** 「日常商品推廣」 from 「日常商品推廣・轉換」 (prototype `name.split("・")[0]`), capped so a long real name stays a label. */
@@ -67,12 +66,13 @@ export function rankText(row: Pick<SettleRow, "rank" | "of">): string | null {
  * rows in the served order. */
 export function settleCsvRows(view: SettleView): CsvCell[][] {
   return [
-    ["活動", "來源", "廣告組", "廣告", "花費", "購買", "每賣一筆", "上限", "等級", "排名", "成交", "寫進筆記本"],
+    ["活動", "來源", "廣告組", "廣告", "花費", "平台成果數", "每筆成果成本", "上限", "等級", "排名", "排名成果數", "寫進筆記本", "幣別", "成果類型", "成果動作", "歸因", "資料開始", "資料截止"],
     ...view.rows.map((row) => {
       const campaign = campaignOf(view, row);
       return [
         campaign.name, isImported(campaign.origin) ? FROM_META : "本系統", row.group_name, row.name,
         row.spend, row.results, row.cost_per_result, row.cap, row.grade_label, rankText(row), row.sales, FATE_WORD[row.fate],
+        row.currency, row.result_kind, row.result_action, row.result_attribution, row.result_window?.start, row.result_window?.end,
       ];
     }),
   ];

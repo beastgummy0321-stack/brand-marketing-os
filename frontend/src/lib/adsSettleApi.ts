@@ -60,6 +60,9 @@ export interface SettleView {
   budget: number | null;
   results: number | null;
   cost_per_result: number | null;
+  /** Only compatible known observed definitions can share a result total. */
+  result_definition?: { kind: string; action: string; attribution: string; window: { start: string; end: string } } | null;
+  result_comparison?: { reason: string | null };
   on_target_results: number | null;
   /** 0–1 share of the spend that went to 划算 ads; null when the spend is unknown. */
   on_target_spend_share: number | null;

@@ -216,12 +216,36 @@ def _known_total(values):
     return sum(values)
 
 
+def _result_definition(rows):
+    """Qualify an aggregate of canonical observed definitions, never inferred from ranks/names."""
+    definitions = set()
+    for row in rows:
+        window = row.get("result_window") or {}
+        definition = (
+            row.get("result_kind"), row.get("result_action"), row.get("result_attribution"),
+            window.get("start"), window.get("end"),
+        )
+        if any(value is None for value in definition):
+            return None, "result_definition_unknown"
+        definitions.add(definition)
+    if not definitions:
+        return None, "result_definition_unknown"
+    if len(definitions) != 1:
+        return None, "mixed_result_definition"
+    if any(row.get("result_reason") is not None for row in rows):
+        return None, "result_data_unknown"
+    kind, action, attribution, start, end = next(iter(definitions))
+    return {"kind": kind, "action": action, "attribution": attribution,
+            "window": {"start": start, "end": end}}, None
+
+
 def _totals(rows, budget) -> dict:
     summary = period_grades.summarize(rows)
     currencies = {row["currency"] for row in rows}
     currency = next(iter(currencies)) if len(currencies) == 1 else None
     spent = summary["spent"]
-    results = _known_total([row["results"] for row in rows]) if rows else None
+    definition, result_reason = _result_definition(rows)
+    results = _known_total([row["results"] for row in rows]) if result_reason is None else None
     # Absolute on-target rows are effective; the relative ranking stays independent.
     on_target = [row for row in rows if row["grade"] == "on_target" and row["fate"] == "effective"]
     on_target_spend = _known_total([row["spend"] for row in on_target])
@@ -231,8 +255,12 @@ def _totals(rows, budget) -> dict:
         # across two currencies).
         "budget": budget[0] if budget and currency is not None and budget[1] == currency else None,
         "results": results,
+        "result_definition": definition,
+        "result_comparison": {"reason": result_reason},
         "cost_per_result": spent / results if spent is not None and results else None,
-        "on_target_results": _known_total([row["results"] for row in on_target]) if rows else None,
+        "on_target_results": (
+            _known_total([row["results"] for row in on_target]) if result_reason is None else None
+        ),
         "on_target_spend_share": (
             on_target_spend / spent if spent and on_target_spend is not None else None
         ),
