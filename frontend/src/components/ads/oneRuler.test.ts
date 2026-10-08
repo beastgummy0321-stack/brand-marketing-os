@@ -39,9 +39,10 @@
  * excused one line at a time in `NOT_A_RULER`, with the reason. F48-I11 emptied the per-file allowlist (the last
  * frontend issue of feature F48): every ads source is scanned. */
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { dirname, join, normalize, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import * as ts from "typescript";
 
 /** F49 (lead): the *_PENDING lists live one file per removing issue in `oneRulerPending/<issue>.ts`, so screen issues
  * that empty their own entries never share this file. An issue empties its file (or deletes it); stale entries still
@@ -103,14 +104,68 @@ const NAMES_APP = /(?<![\w/])app\//;
  * the backend owns that feature D serves) live one file per removing issue under `oneRulerPending/` (key
  * `notARuler`, F51-I04), so the F51 sweeps that serve them never edit this file. */
 const NOT_A_RULER: { file: string; text: string; why: string }[] = [
+  { file: "components/ads/patterns/LearningEvidence.tsx", text: "reason !== evidence.support_label", why: "suppresses literal duplicate served display strings; never selects qualification or allowed uses" },
   { file: "components/ads/patterns/SlotGrid.tsx", text: "\"缺 1 則\"", why: "a slot placeholder is one missing ad by construction, not a figure" },
   { file: "components/ads/ExperimentPlan.tsx", text: "0.1 代表 10%", why: "explains the input's number format (a fraction), not a fact" },
   { file: "components/ads/StrategyTab.tsx", text: "剛好 100%", why: "percent shares sum to 100 by definition, not a fact" },
   ...(pending("notARuler") as { file: string; text: string; why: string }[]),
 ];
 
-/** Test data that lives beside the sources: the served rules as a test fixture (the app never imports it). */
-const TEST_DATA = new Set(["rulesFixture.ts"]);
+/** Exact test-data paths, admitted only while unreachable from the production entry, including re-exports and lazy imports. */
+const TEST_DATA = new Set([
+  "components/ads/patterns/rulesFixture.ts",
+  "components/ads/learnings/learningEvidence.fixtures.ts",
+  "components/ads/patterns/LearningReceipt.fixtures.ts",
+  "components/ads/strategy/strategyEvidence.fixtures.ts",
+]);
+
+const FRONTEND_DIR = join(SRC_DIR, "..");
+const config = ts.readConfigFile(join(FRONTEND_DIR, "tsconfig.app.json"), ts.sys.readFile);
+const options = ts.parseJsonConfigFileContent(config.config, ts.sys, FRONTEND_DIR).options;
+function productionReachable(overrides: Map<string, string> = new Map()): Set<string> {
+  const reached = new Set<string>();
+  function visit(full: string) {
+    full = normalize(full);
+    if (reached.has(full)) return;
+    reached.add(full);
+    const text = overrides.get(full) ?? readFileSync(full, "utf-8");
+    const ast = ts.createSourceFile(full, text, ts.ScriptTarget.Latest, true, full.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+    const follow = (specifier: string) => {
+      const resolved = ts.resolveModuleName(specifier, full, options, ts.sys).resolvedModule;
+      if (resolved && !resolved.isExternalLibraryImport && /\.tsx?$/.test(resolved.resolvedFileName)) visit(resolved.resolvedFileName);
+      else if (specifier.startsWith(".") || specifier.startsWith("@/")) {
+        // Non-code CSS/assets need no traversal; unresolved local code must fail closed.
+        expect(/\.(css|svg|png|jpg|webp)(?:\?.*)?$/.test(specifier), `unresolved production import: ${full}: ${specifier}`).toBe(true);
+      }
+    };
+    function node(n: ts.Node) {
+      if (ts.isImportDeclaration(n) && ts.isStringLiteral(n.moduleSpecifier)) {
+        const clause = n.importClause;
+        const names = clause?.namedBindings;
+        const typeOnly = clause?.isTypeOnly || (!clause?.name && names && ts.isNamedImports(names)
+          && names.elements.length > 0 && names.elements.every((e) => e.isTypeOnly));
+        if (!typeOnly) follow(n.moduleSpecifier.text);
+      } else if (ts.isExportDeclaration(n) && !n.isTypeOnly && n.moduleSpecifier && ts.isStringLiteral(n.moduleSpecifier)) {
+        const typeOnly = n.exportClause && ts.isNamedExports(n.exportClause)
+          && n.exportClause.elements.length > 0 && n.exportClause.elements.every((e) => e.isTypeOnly);
+        if (!typeOnly) follow(n.moduleSpecifier.text);
+      } else if (ts.isCallExpression(n) && (n.expression.kind === ts.SyntaxKind.ImportKeyword
+        || (ts.isIdentifier(n.expression) && n.expression.text === "require"))) {
+        expect(n.arguments.length === 1 && ts.isStringLiteral(n.arguments[0]), `unbounded production import: ${full}`).toBe(true);
+        if (ts.isStringLiteral(n.arguments[0])) follow(n.arguments[0].text);
+      } else if (ts.isImportEqualsDeclaration(n) && !n.isTypeOnly && ts.isExternalModuleReference(n.moduleReference)
+        && n.moduleReference.expression && ts.isStringLiteral(n.moduleReference.expression)) follow(n.moduleReference.expression.text);
+      else if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression)
+        && n.expression.name.text === "glob") throw new Error(`Unbounded production glob: ${full}`);
+      ts.forEachChild(n, node);
+    }
+    node(ast);
+  }
+  visit(join(SRC_DIR, "main.tsx"));
+  return reached;
+}
+const production = productionReachable();
+const reachableTestData = (reached: Set<string>) => [...TEST_DATA].filter((path) => reached.has(join(SRC_DIR, path)));
 
 function sources(dir: string, keep: (name: string) => boolean): string[] {
   const out: string[] = [];
@@ -121,7 +176,7 @@ function sources(dir: string, keep: (name: string) => boolean): string[] {
       out.push(...sources(full, keep));
       continue;
     }
-    if (!/\.tsx?$/.test(name) || /\.(test|stories)\.tsx?$/.test(name) || TEST_DATA.has(name) || !keep(name)) continue;
+    if (!/\.tsx?$/.test(name) || /\.(test|stories)\.tsx?$/.test(name) || TEST_DATA.has(relative(SRC_DIR, full).split("\\").join("/")) || !keep(name)) continue;
     out.push(full);
   }
   return out;
@@ -305,7 +360,10 @@ const rulerLiterals = (text: string) =>
 const labelComparisons = (text: string) => hits(text, LABEL_COMPARE);
 const factLiterals = (text: string) => hits(text, FACT_LITERALS);
 
-const FILES = () => [...sources(ADS_DIR, () => true), ...sources(LIB_DIR, (name) => name.startsWith("ads"))];
+const FILES = () => {
+  expect(reachableTestData(production)).toEqual([]);
+  return [...sources(ADS_DIR, () => true), ...sources(LIB_DIR, (name) => name.startsWith("ads"))];
+};
 const rel = (full: string) => relative(SRC_DIR, full).split("\\").join("/");
 
 /** Every hit of `scan` across the ads sources as `file:line`; with `excuse`, the `NOT_A_RULER` lines are left out. */
@@ -321,6 +379,30 @@ function offenders(scan: (text: string) => number[], excuse: boolean): string[] 
 }
 
 describe("one ruler (ads.md §6.33)", () => {
+  it("every exact fixture exclusion is unreachable from production", () => {
+    expect(reachableTestData(production)).toEqual([]);
+    for (const path of TEST_DATA) expect(readFileSync(join(SRC_DIR, path), "utf-8").length).toBeGreaterThan(0);
+  });
+
+  it.each([...TEST_DATA])("refuses a production import of excluded test data %s", (path) => {
+    const app = join(SRC_DIR, "App.tsx");
+    const reached = productionReachable(new Map([[app, `${readFileSync(app, "utf-8")}\nimport "@/${path}";`]]));
+    expect(reachableTestData(reached)).toContain(path);
+  });
+
+  it("follows transitive re-exports and lazy imports instead of exempting reachable fixtures", () => {
+    const app = join(SRC_DIR, "App.tsx");
+    const relay = join(SRC_DIR, "components/ads/patterns/rules.ts");
+    const path = "components/ads/patterns/LearningReceipt.fixtures.ts";
+    const reached = productionReachable(new Map([
+      [app, `${readFileSync(app, "utf-8")}\nvoid import("@/components/ads/patterns/rules");`],
+      [relay, `${readFileSync(relay, "utf-8")}\nexport * from "@/${path}";`],
+    ]));
+    expect(reachableTestData(reached)).toContain(path);
+    // A new, unclassified fixture name still receives the full fact/status scans.
+    expect(TEST_DATA.has("components/ads/patterns/Other.fixtures.ts")).toBe(false);
+    expect(factLiterals('const text = "2 筆";')).toEqual([1]);
+  });
   it("no ads screen decides with the trend `class`", () => {
     expect(offenders(classComparisons, false)).toEqual([]);
   });

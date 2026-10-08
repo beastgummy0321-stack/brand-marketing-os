@@ -220,8 +220,10 @@ describe("F49 Contract O: 重新讀取平台 follows the campaign's one served o
     expect(syncCampaign).toHaveBeenCalledWith("b", "c");
     expect(syncOutcome).toHaveBeenCalledWith("b", "c", expect.any(AbortSignal));
     expect(syncJob).not.toHaveBeenCalled();
-    expect(getCampaign).toHaveBeenCalledTimes(2);
-    expect(getCampaignWorkspace).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => {
+      expect(getCampaign).toHaveBeenCalledTimes(2);
+      expect(getCampaignWorkspace).toHaveBeenCalledTimes(2);
+    });
   });
 
   it("while the read runs the button is busy; it settles on the served outcome after polling (found prints, no failure text)", async () => {

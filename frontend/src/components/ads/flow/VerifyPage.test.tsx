@@ -619,6 +619,19 @@ describe("VerifyPage（F27-I15）new_ad kind", () => {
       ...overrides,
     });
   }
+  it.each([
+    { peers: undefined, text: "素材清單尚未提供，素材尚未確認" },
+    { peers: [], text: "素材尚未確認" },
+    { peers: [{ handoff_item_id: "ahi_1", entity_id: "aex_1", status: "confirmed", material_evidence: "media_verified" }], text: "平台素材已核對" },
+  ])("keeps missing, empty and known material proof distinct ($text)", async ({ peers, text }) => {
+    vi.mocked(changeApi.getChangeControl).mockResolvedValue({ targets: [], change_sets: [changeSet({
+      items: [newAdItem({ evidence_json: { setting_matches: true, peers } })],
+    })] });
+    renderAt(verifyPath());
+    expect((await screen.findAllByText(text)).length).toBeGreaterThan(0);
+    if (peers === undefined || peers.length === 0) expect(screen.queryByText("平台素材已核對")).toBeNull();
+    else expect(screen.queryByText("素材清單尚未提供，素材尚未確認")).toBeNull();
+  });
   it("keeps a missing observed timestamp missing without contradicting served confirmation", async () => {
     vi.mocked(changeApi.getChangeControl).mockResolvedValue({ targets: [], change_sets: [changeSet({
       items: [newAdItem({ evidence_json: { setting_matches: true, observed_at: null,

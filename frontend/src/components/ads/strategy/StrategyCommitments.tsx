@@ -18,7 +18,8 @@ export function StrategyCommitments({ decision, role, stale, details = false }: 
           {details && !stale && <p className="mt-1">{typeof slot.rationale === "string" ? slot.rationale : "安排理由未提供"}</p>}
           {details && !stale && <div className="mt-1 text-xs text-muted-foreground">
             {(slot.display?.evidence ?? []).map((ref) => <p key={`${ref.kind}:${ref.id}`} title={ref.id}>依據：{ref.label}</p>)}
-            {(slot.evidence_refs?.length ?? 0) === 0 && <p>沒有可引用的投放紀錄；這則安排是待驗證的新假設。</p>}
+            {!Array.isArray(slot.evidence_refs) && <p>引用依據尚未提供；請重新讀取或產生策略。</p>}
+            {Array.isArray(slot.evidence_refs) && slot.evidence_refs.length === 0 && <p>本次安排未列引用依據；這則安排仍待驗證。</p>}
             {!!slot.display?.evidence_omitted && <p>另有 {slot.display.evidence_omitted} 項依據，此處只顯示前三項。</p>}
           </div>}
         </li>
