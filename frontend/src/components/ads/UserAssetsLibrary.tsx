@@ -29,12 +29,15 @@ export async function twoAtATime<T>(items: T[], run: (item: T) => Promise<void>)
   let index = 0;
   await Promise.all([0, 1].map(async () => { while (index < items.length) await run(items[index++]); }));
 }
-function Library({ brandId, onSelection, onBusy, onAttach, onAttachAsset, readOnly = false }: {
+function Library({ brandId, onSelection, onBusy, onAttach, onAttachAsset, readOnly = false, initialSelection = [] }: {
   brandId: string; onSelection?: (uploads: AssetUpload[]) => void; onBusy?: (busy: boolean) => void;
   onAttach?: (upload: AssetUpload) => Promise<void>; onAttachAsset?: (id: string) => Promise<void>; readOnly?: boolean;
+  /** Restored reference intent only; public batch reads establish present availability. */
+  initialSelection?: AssetUpload[];
 }) {
-  const [library, setLibrary] = useState<AssetLibrary>(emptyLibrary);
-  const [local, setLocal] = useState<LocalFile[]>([]); const [shared, setShared] = useState<CopyFields>({}); const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [library, setLibrary] = useState<AssetLibrary>({...emptyLibrary, uploads: initialSelection});
+  const [local, setLocal] = useState<LocalFile[]>([]); const [shared, setShared] = useState<CopyFields>({}); const [selected, setSelected] = useState<Set<string>>(new Set(initialSelection.map(u => u.id)));
+  const restored = useRef(initialSelection);
   const [busy, setBusy] = useState(false); const [loading, setLoading] = useState(false); const [error, setError] = useState("");
   useAssetDraftGuard(local.length > 0);
   const [stages, setStages] = useState<Record<string, string>>({});
@@ -49,6 +52,12 @@ function Library({ brandId, onSelection, onBusy, onAttach, onAttachAsset, readOn
     setLoading(true); setError("");
     try {
       const next = await listUserAssets(brandId, cursor, uploadCursor, signal);
+      if (!kind) {
+        for (const id of new Set(restored.current.map(u => u.batch_id))) {
+          const {batch} = await getUploadBatch(brandId, id, signal);
+          next.uploads = mergeRows(next.uploads, batch.uploads.filter(u => restored.current.some(ref => ref.id === u.id)));
+        }
+      }
       if (!signal.aborted) setLibrary(prev => !kind ? { ...next, assets: mergeRows(prev.assets, next.assets), uploads: mergeRows(prev.uploads, next.uploads) } : kind === "assets" ? { ...prev, assets: mergeRows(prev.assets, next.assets), next_cursor: next.next_cursor } : { ...prev, uploads: mergeRows(prev.uploads, next.uploads), next_upload_cursor: next.next_upload_cursor });
     } catch (e) { if (!signal.aborted) setError(e instanceof Error ? e.message : "讀取品牌素材失敗。"); }
     finally { if (!signal.aborted) setLoading(false); }
@@ -122,10 +131,10 @@ function Library({ brandId, onSelection, onBusy, onAttach, onAttachAsset, readOn
     {loading && <p role="status">讀取品牌素材中…</p>}{busy && <p role="status">處理中，完成原檔 {library.uploads.filter(u => selected.has(u.id) && u.status === "complete").length}／{selected.size} 檔。請等待目前步驟完成。</p>}
     {error && <p role="alert" className="text-destructive">{error}</p>}
     <details open={library.uploads.length > 0}><summary className="cursor-pointer font-medium">品牌上傳紀錄 · 已載入 {library.uploads.length} 筆{library.next_upload_cursor ? "，尚有更多" : ""}</summary><div className="mt-3 max-h-96 overflow-auto divide-y divide-border">{library.uploads.map(u => <div key={u.id} className="flex flex-col gap-2 py-3">
-      <div className="flex flex-wrap items-center gap-3">{onSelection && <input aria-label={`選取 ${u.filename}`} type="checkbox" checked={selected.has(u.id)} disabled={busy || readOnly} onChange={e => setSelected(prev => { const next = new Set(prev); if (e.target.checked) next.add(u.id); else next.delete(u.id); return next; })} />}<span className="font-medium">{u.filename}</span><span className="text-sm">{u.status === "complete" ? "原檔已保存" : "待處理"}</span></div>
-      <p role="status" className="text-sm text-muted-foreground">{stages[u.id] ?? u.error ?? (u.status !== "complete" ? "尚未傳完；先重試核對，再選取原檔續傳。" : "預覽狀態請見品牌原檔。")}</p>
+      <div className="flex flex-wrap items-center gap-3">{onSelection && <input aria-label={`選取 ${u.filename}`} type="checkbox" checked={selected.has(u.id)} disabled={busy || readOnly} onChange={e => setSelected(prev => { const next = new Set(prev); if (e.target.checked) next.add(u.id); else next.delete(u.id); return next; })} />}<span className="font-medium">{u.filename}</span><span className="text-sm">{u.status === "complete" ? "原檔已保存" : u.status === "unverified" ? "尚未核實" : "待處理"}</span></div>
+      <p role="status" className="text-sm text-muted-foreground">{stages[u.id] ?? u.error ?? (u.status === "unverified" ? "已保留選取，原檔狀態尚未核實；請重新載入，讀取失敗不代表缺檔。" : u.status !== "complete" ? "尚未傳完；先重試核對，再選取原檔續傳。" : "預覽狀態請見品牌原檔。")}</p>
       <details><summary className="cursor-pointer text-sm">本批原文</summary>{Object.entries(u.copy_fields).map(([k, v]) => <p className="whitespace-pre-wrap text-sm" key={k}>{COPY_FIELDS.find(f => f.key === k)?.label ?? k}：{v || "待補"}</p>)}</details>
-      {!readOnly && <div className="flex flex-wrap gap-2">{u.status !== "complete" && <><Button variant="outline" size="sm" busy={busy} onClick={() => void retry(u)}>重試／核對保存</Button><label className="text-sm">重新選原檔<input aria-label={`重選 ${u.filename}`} disabled={busy} type="file" onChange={e => { const file = e.target.files?.[0]; if (file) void retry(u, file); e.target.value = ""; }} /></label></>}{onAttach && u.status === "complete" && <Button size="sm" busy={busy} onClick={() => void action(() => onAttach(u))}>加入此活動（保留本批原文）</Button>}</div>}
+      {!readOnly && <div className="flex flex-wrap gap-2">{u.status !== "complete" && u.status !== "unverified" && <><Button variant="outline" size="sm" busy={busy} onClick={() => void retry(u)}>重試／核對保存</Button><label className="text-sm">重新選原檔<input aria-label={`重選 ${u.filename}`} disabled={busy} type="file" onChange={e => { const file = e.target.files?.[0]; if (file) void retry(u, file); e.target.value = ""; }} /></label></>}{onAttach && u.status === "complete" && <Button size="sm" busy={busy} onClick={() => void action(() => onAttach(u))}>加入此活動（保留本批原文）</Button>}</div>}
     </div>)}</div>{library.next_upload_cursor && <Button variant="outline" busy={loading || busy} onClick={() => void load(null, library.next_upload_cursor, "uploads")}>載入更多上傳紀錄</Button>}</details>
     <details><summary className="cursor-pointer font-medium">品牌原檔 · 已載入 {library.assets.length} 件{library.next_cursor ? "，尚有更多" : ""}</summary><div className="mt-3 grid max-h-[32rem] gap-3 overflow-auto lg:grid-cols-2">{library.assets.map(a => <div key={a.id} className="rounded border border-border p-3"><p className="font-medium">{a.filename}</p><p className="text-sm">{a.status === "ready" ? "預覽完成" : a.error ?? "預覽待處理，原檔可下載"}</p><AuthAssetMedia brandId={brandId} assetId={a.id} filename={a.filename} mime={a.mime_type} duration={a.duration} />{a.status !== "ready" && !readOnly && <Button variant="outline" size="sm" busy={busy} onClick={() => void action(() => retryPreview(brandId, a.id))}>重試預覽處理</Button>}{onAttachAsset && !readOnly && <Button variant="outline" size="sm" busy={busy} onClick={() => void action(() => onAttachAsset(a.id))}>以空白文案加入此活動</Button>}</div>)}</div>{library.next_cursor && <Button variant="outline" busy={loading || busy} onClick={() => void load(library.next_cursor, null, "assets")}>載入更多原檔</Button>}</details>
     {!loading && !library.uploads.length && !local.length && <p className="text-sm text-muted-foreground">品牌尚無自帶素材。加入原檔後可安排文案，不必先產生圖片。</p>}

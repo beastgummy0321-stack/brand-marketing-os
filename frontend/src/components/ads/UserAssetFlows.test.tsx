@@ -20,7 +20,7 @@ import type { CampaignDetail } from "@/lib/adsApi";
 vi.mock("@/lib/http", async () => ({ ...(await vi.importActual<typeof import("@/lib/http")>("@/lib/http")), apiFetch: vi.fn() }));
 import { ApiResponseError } from "@/lib/http";
 vi.mock("@/components/layout/WorkspaceContext", () => ({ useWorkspace: () => ({ scope: "u:o", identity: { user: { id: "u", email: "a@example.com" }, org: { id: "o", name: "測試", kind: "personal", role: "owner", timezone: "Asia/Taipei", today: "2026-09-28" }, orgs: [] } }) }));
-vi.mock("@/lib/adsWizardApi", () => ({ getWizardOptions: vi.fn(), createCampaignFromPicks: vi.fn() }));
+vi.mock("@/lib/adsWizardApi", async original => ({...await original<object>(), getWizardOptions: vi.fn(), createCampaignFromPicks: vi.fn(), getNextPeriod: vi.fn()}));
 vi.mock("@/lib/adsUserAssetsApi", async importOriginal => ({ ...await importOriginal<object>(), listUserAssets: vi.fn(), createUploadBatch: vi.fn(), putUpload: vi.fn(), retryUpload: vi.fn(), getUploadBatch: vi.fn(), attachUpload: vi.fn(), assetBlob: vi.fn(), listPlacements: vi.fn(), listSuggestionBatches: vi.fn(), suggestAssets: vi.fn(), getSuggestionBatch: vi.fn(), revisePlacement: vi.fn(), confirmPlacement: vi.fn(), assetHandoff: vi.fn() }));
 vi.mock("@/lib/adsExternalApi", () => ({ existingCampaigns: vi.fn(), externalView: vi.fn() }));
 vi.mock("@/lib/adsHandoffApi", async importOriginal => ({ ...await importOriginal<object>(), getHandoff: vi.fn() }));
@@ -53,6 +53,7 @@ beforeEach(() => {
 describe("durable upload UI", () => {
   it("keeps the upload library mounted while creating and retries attach without creating twice", async () => {
     vi.mocked(listUserAssets).mockResolvedValue({ ...library(), uploads: [upload()] });
+    vi.mocked(getUploadBatch).mockResolvedValue({batch: {id: "batch1", uploads: [upload()]}});
     vi.mocked(getWizardOptions).mockResolvedValue({ products: [{ id: "prd_1", name: "商品一 · 單盒", display_name: "單盒", kind: "single", knowledge_product_id: "kp_1", knowledge_product_name: "商品一", price: 990, currency: "TWD", thumbnail_url: null, has_cost: true, break_even: 600, cap_per_sale: 600, derived_fields: [], offer_labels: [], customer_groups: [], landing_url: null, previous: null, learned: null }], objectives: [{ key: "購買", label: "購買", description: "看每賣一筆花多少", available: true, platforms: {} }], default_objective: null, default_platform: null });
     const create = deferred<CampaignDetail & { parsed: boolean }>(); vi.mocked(createCampaignFromPicks).mockReturnValue(create.promise);
     vi.mocked(attachUpload).mockRejectedValueOnce(new Error("附件暫時失敗")).mockResolvedValue({ placement: placement() });
@@ -68,6 +69,27 @@ describe("durable upload UI", () => {
     await user.click(screen.getByRole("button", { name: /重試加入未完成素材並繼續/ }));
     await waitFor(() => expect(attachUpload).toHaveBeenCalledTimes(2)); expect(createCampaignFromPicks).toHaveBeenCalledTimes(1);
     expect(attachUpload).toHaveBeenLastCalledWith("b1", "c1", "u1");
+  });
+  it("restores off-page reference intent through the batch facade, then respects explicit removal", async () => {
+    const restored = {...upload("off-page"), status: "unverified", asset_id: null};
+    vi.mocked(listUserAssets).mockResolvedValue({...library(), next_upload_cursor: "more"});
+    vi.mocked(getUploadBatch).mockResolvedValue({batch: {id: "batch1", uploads: [upload("off-page")]}});
+    const selection = vi.fn(); render(<UserAssetsLibrary brandId="b1" initialSelection={[restored]} onSelection={selection} />);
+    const pick = await screen.findByLabelText("選取 off-page.png");
+    await waitFor(() => expect(selection).toHaveBeenLastCalledWith([upload("off-page")]));
+    expect(selection.mock.calls.every(([rows]) => rows.length === 1)).toBe(true);
+    expect(pick).toHaveProperty("checked", true);
+    await userEvent.setup().click(pick); expect(selection).toHaveBeenLastCalledWith([]);
+  });
+  it("failed reference reads keep selection and say unverified rather than missing original", async () => {
+    const restored = {...upload("off-page"), status: "unverified", asset_id: null};
+    vi.mocked(listUserAssets).mockRejectedValue(new Error("read unavailable"));
+    const selection = vi.fn(); render(<UserAssetsLibrary brandId="b1" initialSelection={[restored]} onSelection={selection} />);
+    await screen.findByText("read unavailable");
+    expect(screen.getByLabelText("選取 off-page.png")).toHaveProperty("checked", true);
+    expect(selection.mock.calls.every(([rows]) => rows.length === 1)).toBe(true);
+    expect(screen.getByText(/原檔狀態尚未核實/)).toBeTruthy();
+    expect(screen.queryByText(/尚未傳完；先重試/)).toBeNull();
   });
   it("keeps all 11 files, splits descriptor batches, and saves through raw PUT", async () => {
     let serial = 0;
