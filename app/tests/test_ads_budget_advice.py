@@ -44,6 +44,7 @@ def evidence():
             "platform": "meta", "source_account": "act_1", "native_kind": "adset",
             "native_id": "prior-adset", "native_status": "ACTIVE", "budget_type": "daily",
             "budget_amount": 200, "currency": "TWD",
+            "parent_native_kind": "campaign", "parent_native_id": "prior",
         })
         conn.commit()
         yield conn, org, brand, current, prior, ad
@@ -61,6 +62,49 @@ def test_same_history_different_current_cost(evidence, cost, state, key):
     assert result["recommended_key"] == key
     assert result["evidence"]["cost_per_result"] == cost
     assert result["evidence"]["sample_flag"]["few"] is True
+
+
+@pytest.mark.parametrize("root_order", ["before", "after", "missing"])
+def test_only_campaign_root_establishes_the_cohort_objective(evidence, root_order):
+    conn, org, brand, current, _prior, _ad_id = evidence
+    product = current["context_json"]["product_ids"][0]
+    campaign = external_repository.create_imported_campaign(conn, org, brand, name="Typed root")
+    repository.save_campaign_target(
+        conn, org, brand, campaign["id"], result_kind="purchase", basis="own", value=100,
+        product_id=product, expected_revision=0, actor="test",
+    )
+    root = {"platform": "meta", "source_account": "act_1", "native_kind": "campaign",
+            "native_id": "typed-root", "objective": "OUTCOME_SALES", "currency": "TWD",
+            "budget_type": "daily", "budget_amount": 200}
+    orphan = {"platform": "meta", "source_account": "act_1", "native_kind": "adset",
+              "native_id": "orphan", "objective": "OUTCOME_SALES" if root_order == "missing"
+              else None, "native_status": "ACTIVE"}
+    ordered = [root, orphan] if root_order == "before" else [orphan, root]
+    for entity in ordered:
+        if root_order != "missing" or entity["native_kind"] != "campaign":
+            external_repository.upsert_entity(conn, org, brand, campaign["id"], entity)
+    ad = external_repository.upsert_entity(conn, org, brand, campaign["id"], {
+        "platform": "meta", "source_account": "act_1", "native_kind": "ad",
+        "native_id": "typed-ad", "native_status": "ACTIVE",
+        "parent_native_kind": "adset" if root_order == "missing" else "campaign",
+        "parent_native_id": "orphan" if root_order == "missing" else "typed-root",
+    })["id"]
+    external_repository.record_sync(
+        conn, org, brand, campaign["id"], section="observations", state={
+            "status": "success", "coverage": {"start": "2026-09-15", "end": "2026-09-22"},
+        },
+    )
+    _obs(conn, org, brand, campaign["id"], ad, date(2026, 9, 21), spend=500, count=1)
+    expected_family = "other" if root_order == "missing" else "sales"
+    assert repository.campaign_objective_family(conn, org, brand, campaign) == expected_family
+    result = budget.advice(conn, org, brand, current)
+    if root_order == "missing":
+        assert result["state"] == "insufficient_evidence"
+        assert result["evidence"]["window"]["campaign_id"] is None
+    else:
+        assert result["state"] == "repair_before_budget"
+        assert result["evidence"]["window"]["campaign_id"] == campaign["id"]
+        assert result["evidence"]["cost_per_result"] == 500
 
 
 @pytest.mark.parametrize("available,expected", [(1400, "retain"),
