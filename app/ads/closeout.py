@@ -212,14 +212,13 @@ def close(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, *, actor
         conn, org_id, brand_id, campaign_id, verdict, verdict_json, actor=actor,
     )
     # Partial data teaches no visual pattern: the same stance the incomplete recovery takes.
-    eligible = result["result_view"]["state"] in {"known_positive", "known_zero"}
-    visual_rows = [] if (not eligible or result["result_view"]["result_kind"] != "purchase"
-                         or incomplete_simulation or skipped_gap is not None) else (
+    # Each learning track checks its own measurement grain, independently of group totals.
+    visual_rows = [] if incomplete_simulation or skipped_gap is not None else (
         visual_learning.write_visual_learnings(
             conn, org_id, brand_id, campaign_id, actor=actor, days=days, labels=labels,
         )
     )
-    coordinate_rows = [] if not eligible or incomplete_simulation or skipped_gap is not None else (
+    coordinate_rows = [] if incomplete_simulation or skipped_gap is not None else (
         coordinate_learning.write_coordinate_learnings(
             conn, org_id, brand_id, campaign_id, actor=actor,
         )
