@@ -679,9 +679,11 @@ def _input(value):
         or type(value.get("product_mapping_confirmed", False)) is not bool
     ):
         _refuse("continuation_invalid", "請選擇來源活動並重新讀取來源。", 422)
+    if not isinstance(value.get("request_id"), str):
+        _refuse("continuation_invalid", "下一期請求識別碼無效。", 422)
     try:
         request_id = str(UUID(value["request_id"]))
-    except (ValueError, TypeError, KeyError, AttributeError):
+    except ValueError:
         _refuse("continuation_invalid", "下一期請求識別碼無效。", 422)
     return {
         **value,

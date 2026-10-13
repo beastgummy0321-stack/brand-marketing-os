@@ -63,6 +63,11 @@ def for_conversion_goal(conversion_goal) -> str | None:
     return _CONVERSION_GOAL_OBJECTIVES.get(conversion_goal)
 
 
+def expected_result_kind(objective) -> str | None:
+    """Explicit internal intent only; awareness/ambiguous goals have no guessed count unit."""
+    return {"購買": "purchase", "名單": "lead", "流量": "link_click"}.get(objective)
+
+
 def catalog() -> list[dict]:
     """A fresh copy of the catalog, in display order (callers may mutate their copy)."""
     return [{**row, "platforms": dict(row["platforms"])} for row in CATALOG]

@@ -27,7 +27,9 @@ from app.ads import (
     coordinate_learning,
     lifecycle,
     outcome,
+    performance_evidence,
     repository,
+    result_kinds,
     runtime,
     simulation_mode,
     targets,
@@ -57,10 +59,21 @@ def _judge(cap: dict, campaign: dict, totals: dict, sample: dict,
     F48 Contract R: the sample size is shown, never a verdict switch -- `sample` is
     `{purchases, days, bucket}` (`outcome.sample_bucket`), `sample_bucket` its bucket (the key
     older readers print). 看不出 only when the cap or the actual cost is unknown."""
+    from app.ads import triage
+
+    del labels  # The result unit comes from evidence, never the brand's purchase wording.
     target = cap["value"]
-    actual = totals["cpa"]
+    result = totals.get("result_view") or performance_evidence.project(None, None, cap, {})
+    actual = result["cost_per_result"] if result["state"] == "known_positive" else None
+    risk_view = {"result_count": result["count"], "cost_per_result": actual,
+                 "reason": result["reasons"][0] if result["reasons"] else None}
+    risk_grade, risk_label, risk_reason = triage.grade_window(risk_view, result["spend"], target,
+                                                            sample.get("days", 0))
     verdict_json = {
-        "metric": "cpa", "target": target, "basis": cap["basis"], "actual": actual,
+        "schema_version": 2, "metric": "cost_per_result", "result_kind": result["result_kind"],
+        "target": target, "basis": cap["basis"], "actual": actual,
+        "result_view": result, "evidence_state": result["state"], "reason_codes": result["reasons"],
+        "risk": {"grade": risk_grade, "label": risk_label, "reason_code": risk_reason},
         "window": {"start": campaign["start_date"], "end": campaign["end_date"]},
         "sample": sample, "sample_bucket": sample["bucket"],
     }
@@ -68,7 +81,13 @@ def _judge(cap: dict, campaign: dict, totals: dict, sample: dict,
         verdict_json["missing"] = "上限沒有設定，沒有數字可比對"
         return "看不出", verdict_json
     if actual is None:
-        verdict_json["missing"] = f"{labels['cpa']}未追蹤，沒有數字可以比對"
+        verdict_json["missing"] = (
+            "已追蹤到零成果，沒有每次成果成本可比；支出風險另列"
+            if result["state"] == "known_zero" else
+            "成果種類與上限不一致，不能比較" if "result_kind_mismatch" in result["reasons"] else
+            f"每次{result_kinds.label(result['result_kind'] or cap['result_kind'])}成本未追蹤"
+            "或資料仍有缺漏，不能用部分資料判定達成與否"
+        )
         return "看不出", verdict_json
     return ("達成" if actual <= target else "未達成"), verdict_json
 
@@ -142,13 +161,16 @@ def close(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, *, actor
     labels = conversion_labels(brand.get("conversion_goal") if brand else None)
 
     totals = result["totals"]
+    totals = {**totals, "result_view": result["result_view"]}
     days = result["scope"]["days"]
     # `purchases` is `None` only when no day of the campaign carries a tracked purchase count
     # (Meta purchases are tracked since F16-I05; a legacy or untracked day stays NULL) -- passed
     # as is: the bucket reads 「未追蹤」, never 低 or 0 (F48-I02).
     sample = {
         "purchases": totals["purchases"], "days": days,
-        "bucket": outcome.sample_bucket(totals["purchases"], days),
+        "count": result["result_view"]["count"],
+        "result_kind": result["result_view"]["result_kind"],
+        "bucket": outcome.sample_bucket(result["result_view"]["count"], days),
     }
 
     cap = targets.resolve(conn, org_id, brand_id, campaign)
@@ -158,7 +180,7 @@ def close(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, *, actor
     verdict_json["cap_comparison"] = result["cap_comparison"]
     if result["cap_comparison"]["reason"] is not None:
         verdict = "看不出"
-        if totals["cpa"] is not None:
+        if result["result_view"]["count"] is not None:
             verdict_json["missing"] = "上限與本期成效的幣別不同或尚未核實，不能比較。"
     if simulation_mode.enabled(conn, org_id, brand_id):
         verdict_json["data_source"] = "isolated_simulation"
@@ -190,12 +212,14 @@ def close(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, *, actor
         conn, org_id, brand_id, campaign_id, verdict, verdict_json, actor=actor,
     )
     # Partial data teaches no visual pattern: the same stance the incomplete recovery takes.
-    visual_rows = [] if incomplete_simulation or skipped_gap is not None else (
+    eligible = result["result_view"]["state"] in {"known_positive", "known_zero"}
+    visual_rows = [] if (not eligible or result["result_view"]["result_kind"] != "purchase"
+                         or incomplete_simulation or skipped_gap is not None) else (
         visual_learning.write_visual_learnings(
             conn, org_id, brand_id, campaign_id, actor=actor, days=days, labels=labels,
         )
     )
-    coordinate_rows = [] if incomplete_simulation or skipped_gap is not None else (
+    coordinate_rows = [] if not eligible or incomplete_simulation or skipped_gap is not None else (
         coordinate_learning.write_coordinate_learnings(
             conn, org_id, brand_id, campaign_id, actor=actor,
         )

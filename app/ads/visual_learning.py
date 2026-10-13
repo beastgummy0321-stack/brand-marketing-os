@@ -106,6 +106,11 @@ def write_visual_learnings(conn: _AnyConn, org_id: str, brand_id: str, campaign_
     detail = ads_repo.campaign_detail(conn, org_id, brand_id, campaign_id)
     if detail is None:
         raise ValueError("campaign_unknown")
+    # This existing comparison uses purchase counts; never apply its winners to another goal.
+    from app.ads import targets
+
+    if targets.effective_result_kind(detail) != "purchase":
+        return []
     # F31-I05 Contract O: strata group ads by the coordinates their images were made for (the
     # dispatched set's snapshot), not by coordinates edited after dispatch.
     detail = live_creative.with_learning_coordinates(conn, org_id, brand_id, detail)

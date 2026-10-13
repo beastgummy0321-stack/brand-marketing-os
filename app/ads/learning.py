@@ -15,7 +15,7 @@ F51 Contract F: the campaign read serves the same sentence as `learning_sentence
 
 from typing import cast
 
-from app.ads import ads_learnings, live_creative, sell_way
+from app.ads import ads_learnings, live_creative, result_kinds, sell_way
 from app.brand_intelligence import repository as bi_repo
 from app.core.db import Conn, ConnProxy
 
@@ -30,6 +30,8 @@ def _sentence(campaign: dict, verdict: str, verdict_json: dict) -> str:
     """F28-I01: every campaign is judged on cost per result against its one cap, so the label is
     always 每筆成本."""
     label = "每筆成本"
+    if verdict_json.get("schema_version") == 2:
+        label = f"每次{result_kinds.label(verdict_json.get('result_kind'))}成本"
     name = campaign["name"]
     sample = _bucket(verdict_json)
     if verdict == "看不出":
@@ -136,6 +138,8 @@ def write_learning(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str,
     )
     if verdict_json.get("data_source") == "isolated_simulation":
         evidence["provenance"] = "simulation"
+    if verdict_json.get("schema_version") == 2:
+        evidence["result_view"] = verdict_json["result_view"]
 
     # F48 Contract W: the verdict belongs to the campaign's sell-way, so the strategy's one
     # verdict per product (`strategy._newest_per_product`) sees every sell-way.
