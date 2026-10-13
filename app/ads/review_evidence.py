@@ -388,10 +388,20 @@ def snapshot(
     # (`targets.resolve`), and an imported campaign's objective is its platform objective --
     # drill 5: reading only the wizard's goal_text/objective made every imported campaign
     # "missing a goal" right after the user set one on the target page.
+    from app.ads import outcome, performance_evidence, targets, triage
     from app.ads import repository as ads_repo
-    from app.ads import targets
 
     target = targets.resolve(conn, org, brand, campaign)
+    unit = outcome.cap_unit(conn, brand, target, campaign=campaign)
+    for period, first, last in ((current, start, end), (previous, prior_start, prior_end)):
+        view = triage._ad_view(period)  # noqa: SLF001 -- the same normalized ad scope
+        spend = triage._ad_spend(period)  # noqa: SLF001
+        period["decision_evidence"] = performance_evidence.project(
+            view, spend, target, {"start": first, "end": last, "days": (last-first).days + 1},
+            comparison=outcome.compare_cap_unit(unit, view.get("currency") if view else None),
+            evidence_refs=[r["id"] for r in rows if r.get("id") and r["metric_scope"] == "ad"
+                           and first <= r["day"] <= last],
+        )
     objective = campaign.get("objective") or (
         ads_repo.campaign_objective_family(conn, org, brand, campaign)
         if campaign.get("origin") == "imported" else None

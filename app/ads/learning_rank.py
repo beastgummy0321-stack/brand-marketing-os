@@ -53,6 +53,10 @@ def is_keep(verdict: str) -> bool:
 
 
 def _known(row: dict) -> bool:
+    projection = row.get("result_view")
+    if projection and (projection["state"] in {"incomplete", "incompatible"}
+                       or "result_kind_unknown" in projection["reasons"]):
+        return False
     return (
         row.get("results") is not None and row.get("spend") is not None
         and row.get("currency") is not None

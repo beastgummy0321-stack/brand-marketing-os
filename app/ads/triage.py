@@ -698,6 +698,13 @@ def _classify_ad(entity, campaign_name, campaign_objective, target, cutoff, read
             "window": _window_view(start, end, days, extended_from),
             "target": {**target, "result_label": result_kinds.label(target["result_kind"])},
             "current": _metrics_view(view, spend), "previous": _metrics_view(prev_view, prev_spend),
+            "result_view": performance_evidence.project(
+                view, spend, target, _window_view(start, end, days, extended_from),
+                comparison=current_unit,
+                reason="needs_resync" if not read.covered(start, end) else None,
+                evidence_refs=[r["id"] for r in entity_rows if r.get("id")
+                               and start <= r["day"] <= end],
+            ),
             "change_pct": change_pct,
             "sample": _sample_view(
                 spend, view, target["value"] if current_unit["reason"] is None else None, days,

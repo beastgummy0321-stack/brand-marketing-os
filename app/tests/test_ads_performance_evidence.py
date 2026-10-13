@@ -180,3 +180,66 @@ def test_incidental_purchase_attribution_does_not_remove_lead_spend():
 def test_partial_purchase_cpa_is_not_a_complete_actual_ratio():
     rows = [observation(), observation(500, None, purchases=None)]
     assert outcome.period_bucket(rows)["cpa"] is None
+
+
+def test_recorded_read_gap_keeps_known_subtotal_but_not_complete_cost():
+    from app.ads import performance_evidence
+
+    view = {"result_kind": "purchase", "result_action": "purchase", "result_attribution": "same",
+            "result_count": 1, "cost_per_result": 100, "reason": None}
+    projection = performance_evidence.project(view, 100, {"value": 200, "result_kind": "purchase"},
+                                              {"days": 7}, reason="needs_resync")
+    assert projection["data_state"] == "incomplete"
+    assert projection["known_count"] == 1 and projection["count"] is None
+    assert projection["cost_per_result"] is None
+
+
+def test_real_period_read_gap_cannot_be_graded_or_ranked_as_complete():
+    from app.ads import coverage, external_repository, repository
+    from app.brand_intelligence import repository as brands
+    from app.core import db
+    from app.shared import web
+
+    conn, org = web.conn, db.DEV_ORG_ID
+    brand = brands.create_brand(conn, org_id=org, name="Gap", client_name=None,
+                                actor="fixture")["id"]
+    end = coverage.last_complete_day(conn, org, brand)
+    start = end - timedelta(days=2)
+    campaign = repository.create_campaign(conn, org, brand, {"name": "Incomplete window",
+        "goal_text": "Purchase", "objective": "購買", "status": "live", "start_date": start,
+        "end_date": end})
+    repository.save_campaign_target(conn, org, brand, campaign["id"], basis="own", value=200,
+                                    expected_revision=0, actor="fixture")
+    entity = external_repository.upsert_entity(conn, org, brand, campaign["id"], {
+        "platform": "test", "source_account": "test", "native_kind": "ad", "native_id": "gap",
+        "name": "Gap ad", "native_status": "ACTIVE"})
+    for day in (start, end):
+        raw = observation(day=day)
+        external_repository.upsert_observation(conn, org, brand, campaign["id"], {
+            k: raw[k] for k in ("day", "metric_scope", "spend", "purchases", "currency", "source",
+                               "attribution_key")
+        } | {"entity_id": entity["id"], "metric_scope": "ad"}, result_kind="purchase",
+            result_count=1, result_action="purchase", result_attribution="same")
+    conn.commit()
+    row = period_grades.grade_period(conn, org, brand, start, end)[0]
+    assert row["grade"] == "insufficient" and row["reason_code"] == "needs_resync"
+    assert row["results"] is None and row["cost_per_result"] is None
+    assert row["result_view"]["known_count"] == 2
+
+
+def test_incompatible_result_cannot_enter_the_shared_ranking():
+    from app.ads import learning_rank
+
+    view, _ = result([observation(1000, 10, kind="lead")])
+    assert view["count"] == 10 and view["data_state"] == "known_positive"
+    assert view["state"] == "incompatible"
+    row = {"results": 10, "spend": 1000, "currency": "TWD", "cap": 200, "result_view": view}
+    assert learning_rank.rank([row]) == []
+
+
+def test_evidence_navigation_refs_are_bounded_without_hiding_the_count():
+    from app.ads import performance_evidence
+
+    view = performance_evidence.project(None, None, {}, {}, evidence_refs=range(100))
+    assert len(view["evidence_refs"]) == 32
+    assert view["evidence_ref_count"] == 100 and view["evidence_refs_omitted"] == 68

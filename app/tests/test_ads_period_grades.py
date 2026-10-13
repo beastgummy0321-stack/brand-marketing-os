@@ -84,8 +84,12 @@ class GradePeriodTest(unittest.TestCase):
                      result_count=result_count, **kwargs)
 
     def rows(self, start=START, end=END):
-        return {row["name"]: row for row in period_grades.grade_period(
-            self.conn, self.org, self.brand, start, end)}
+        # Arithmetic scenarios explicitly assume a complete source read. Gap tests below
+        # exercise the real coverage owner separately, rather than inventing zero rows.
+        with patch.object(period_grades.coverage, "gap",
+                          return_value={"never_synced": False, "missing_days": []}):
+            return {row["name"]: row for row in period_grades.grade_period(
+                self.conn, self.org, self.brand, start, end)}
 
     # -- grades ---------------------------------------------------------------------------------
 
@@ -268,7 +272,7 @@ class GradePeriodTest(unittest.TestCase):
         self.days(cheap, 10, spend=50, result_count=1)
         self.days(wasted, 7, spend=50, result_count=0)
         summary = period_grades.summarize(
-            period_grades.grade_period(self.conn, self.org, self.brand, START, END),
+            list(self.rows().values()),
         )
         self.assertEqual([b["grade"] for b in summary["buckets"]], list(period_grades.BUCKET_ORDER))
         self.assertEqual(summary["spent"], 850.0)

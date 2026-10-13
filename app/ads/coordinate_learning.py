@@ -149,10 +149,6 @@ def write_coordinate_learnings(conn: _AnyConn, org_id: str, brand_id: str, campa
     for row in period_grades.grade_period(conn, org_id, brand_id, start, end):
         if row["campaign_id"] != campaign_id:
             continue
-        if (row.get("result_view") or {}).get("state") in {"incomplete", "incompatible"}:
-            continue
-        if "result_kind_unknown" in (row.get("result_view") or {}).get("reasons", []):
-            continue
         ad = ad_by_native.get(native_by_entity.get(row["entity_id"]))
         if ad is None:
             continue

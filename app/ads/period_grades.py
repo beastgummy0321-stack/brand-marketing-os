@@ -80,6 +80,7 @@ def grade_period(conn, org_id, brand_id, start, end) -> list[dict]:
     }
     days = (end - start).days + 1
     target_by_campaign = {}
+    coverage_by_campaign = {}
     out = []
     for entity_id in spent_ids:
         entity = entities.get(entity_id)
@@ -96,10 +97,17 @@ def grade_period(conn, org_id, brand_id, start, end) -> list[dict]:
             target_by_campaign[campaign["id"]]["break_even_unit"] = outcome.break_even_unit(
                 conn, brand_id, target_by_campaign[campaign["id"]], campaign=campaign,
             )
+            coverage_by_campaign[campaign["id"]] = coverage.gap(
+                conn, org_id, brand_id, campaign, start, end,
+            )
         target = target_by_campaign[campaign["id"]]
         entity_rows = rows_by_entity[entity_id]
         view, spend = triage._ad_window(entity_rows, start, end)
         grade, label, reason_code = _grade(view, spend, target, days)
+        gap = coverage_by_campaign[campaign["id"]]
+        gap_reason = "needs_resync" if gap["never_synced"] or gap["missing_days"] else None
+        if gap_reason and grade in triage.GRADED:
+            grade, label, reason_code = "insufficient", triage.NO_DATA_LABEL, gap_reason
         comparison = outcome.compare_cap_unit(target["cap_unit"], _currency(entity_rows))
         if comparison["reason"] is not None and grade in triage.GRADED:
             grade, label, reason_code = "insufficient", triage.NO_DATA_LABEL, comparison["reason"]
@@ -112,18 +120,21 @@ def grade_period(conn, org_id, brand_id, start, end) -> list[dict]:
             "origin": campaign["origin"], "entity_id": entity_id, "name": entity.get("name"),
             "group_name": group_name, "thumbnail_url": triage._thumbnail_url(entity),
             "spend": spend,
-            "results": view["result_count"] if view is not None else None,
-            "cost_per_result": view["cost_per_result"] if view is not None else None,
+            "results": view["result_count"] if view is not None and not gap_reason else None,
+            "cost_per_result": (view["cost_per_result"]
+                                if view is not None and not gap_reason else None),
             "result_kind": view.get("result_kind") if view is not None else None,
             "result_label": result_kinds.label(
                 view.get("result_kind") if view is not None else None
             ),
             "result_action": view.get("result_action") if view is not None else None,
             "result_attribution": view.get("result_attribution") if view is not None else None,
-            "result_reason": view.get("reason") if view is not None else "result_unknown_days",
+            "result_reason": gap_reason or (view.get("reason") if view is not None
+                                             else "result_unknown_days"),
             "result_view": performance_evidence.project(
                 view, spend, target, {"start": start.isoformat(), "end": end.isoformat(),
-                                      "days": days}, comparison=comparison,
+                                      "days": days}, comparison=comparison, reason=gap_reason,
+                evidence_refs=[r["id"] for r in entity_rows],
             ),
             "result_window": {"start": start.isoformat(), "end": end.isoformat()},
             "cap": target["value"], "break_even": target.get("break_even"),

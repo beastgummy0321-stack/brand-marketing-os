@@ -20,7 +20,8 @@ def for_target(view: dict | None, target: dict) -> dict | None:
     elif reason is None and (actual is None or view.get("result_action") is None
                              or view.get("result_attribution") is None):
         reason = "result_definition_unverified"
-    return {**view, "reason": reason}
+    return {**view, "reason": reason,
+            "source_reason": view.get("source_reason", view.get("reason"))}
 
 
 def project(view: dict | None, spend, target: dict, scope: dict, *, comparison=None,
@@ -33,14 +34,15 @@ def project(view: dict | None, spend, target: dict, scope: dict, *, comparison=N
         "target_unresolved" if target.get("value") is None else None,
     ])))
     count = (view or {}).get("result_count")
-    raw_reason = (view or {}).get("reason")
-    if raw_reason or view is None:
+    raw_reason = (view or {}).get("source_reason", (view or {}).get("reason"))
+    known_count = count
+    if raw_reason or reason or view is None:
         count = None
     definition_known = bool(view and view.get("result_kind") and view.get("result_action")
                             and view.get("result_attribution"))
     data_state = (
         "incompatible" if raw_reason in INCOMPATIBLE else "incomplete"
-        if raw_reason or count is None or spend is None or not definition_known else
+        if raw_reason or reason or count is None or spend is None or not definition_known else
         "known_zero" if count == 0 else "known_positive"
     )
     if any(r in INCOMPATIBLE for r in reasons):
@@ -53,11 +55,13 @@ def project(view: dict | None, spend, target: dict, scope: dict, *, comparison=N
         state = "known_zero" if count == 0 else "known_positive"
     cost = (view or {}).get("cost_per_result") if data_state == "known_positive" else None
     kind = (view or {}).get("result_kind")
+    refs = list(evidence_refs)
     return {
         "scope": scope, "result_kind": kind, "result_label": result_kinds.label(kind),
         "result_action": (view or {}).get("result_action"),
         "result_attribution": (view or {}).get("result_attribution"),
         "currency": (view or {}).get("currency"), "spend": spend, "count": count,
+        "known_count": known_count,
         "cost_per_result": cost, "state": state, "data_state": data_state, "reasons": reasons,
         "comparison_state": "ready" if not reasons else "unconfigured"
         if any(r in UNCONFIGURED for r in reasons) else "incompatible"
@@ -68,5 +72,6 @@ def project(view: dict | None, spend, target: dict, scope: dict, *, comparison=N
                    "days_present": (view or {}).get("days_present", 0),
                    "days_known": (view or {}).get("days_known", 0),
                    "derived_zero_days": (view or {}).get("derived_zero_days", 0)},
-        "evidence_refs": list(evidence_refs),
+        "evidence_refs": refs[:32], "evidence_ref_count": len(refs),
+        "evidence_refs_omitted": max(len(refs) - 32, 0),
     }
