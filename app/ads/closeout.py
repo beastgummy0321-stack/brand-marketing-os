@@ -131,10 +131,18 @@ def _coverage_check(campaign: dict, coverage: dict, skip_missing: bool) -> dict 
 
 def close(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, *, actor: str,
           reason: str | None = None, skip_missing: bool = False) -> dict:
-    """結案：判 verdict → 寫一條學習（`app/ads/learning.py::write_learning`，它自己
-    commit——檔案慣例）→ 一次 UPDATE 把 `verdict`／`verdict_json`／`status='closed'`／
-    `closed_at` 落地，順序固定（§0「Close in the order record_learning(...) -> one UPDATE」）。
-    已經是 `closed` 的 Campaign 直接照原樣回傳，不重判也不重寫學習。"""
+    """One operation owns all closeout writes and the transaction-scoped brand lock.
+
+    Helper commits defer until success; callers with an outer transaction retain ownership.
+    A retry reads the closed row only after acquiring the same lock.
+    """
+    with conn.atomic():
+        return _close(conn, org_id, brand_id, campaign_id, actor=actor, reason=reason,
+                      skip_missing=skip_missing)
+
+
+def _close(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, *, actor: str,
+           reason: str | None, skip_missing: bool) -> dict:
     repository.require_internal_campaign(conn, org_id, brand_id, campaign_id)
     simulation_mode.lock(conn, org_id, brand_id)
     campaign = repository.get_campaign(conn, org_id, brand_id, campaign_id)
@@ -151,7 +159,7 @@ def close(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, *, actor
 
     recovery = (campaign.get("context_json") or {}).get("simulation_recovery")
     if recovery:
-        # record_learning commits internally. Freeze recovery before that commit releases the lock.
+        # Freeze recovery in the same transaction as its learning and closed state.
         recovery["closing"] = True
         conn.execute(
             "UPDATE ads_campaign SET context_json=%s WHERE org_id=%s AND brand_id=%s AND id=%s",
@@ -235,7 +243,7 @@ def close(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, *, actor
         (verdict, jsonb(verdict_json), org_id, brand_id, campaign_id),
     )
     # F49 Contract N: a closed campaign is no longer monitored -- its open runtime alerts resolve
-    # with the close (each `interrupts.resolve` commits, so the close lands with the first one).
+    # with the close; helper commits defer to this operation's transaction owner.
     runtime.resolve_alerts(conn, org_id, brand_id, campaign_id)
     # F49 Contract Q: every queue row of the campaign -- its closeout row and any row raised before
     # its end -- leaves the inbox with the close.
