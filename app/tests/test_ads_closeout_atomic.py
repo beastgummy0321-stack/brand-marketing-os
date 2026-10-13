@@ -55,8 +55,8 @@ class AtomicCloseTest(CloseoutTestBase):
                 before = self.snapshot(campaign_id)
                 original = getattr(owner, name)
 
-                def fail_after(conn, *args, **kwargs):
-                    original(conn, *args, **kwargs)
+                def fail_after(conn, *args, _operation=original, **kwargs):
+                    _operation(conn, *args, **kwargs)
                     conn.commit()
                     raise RuntimeError("injected_close_failure")
 
