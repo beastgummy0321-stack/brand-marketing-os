@@ -1,4 +1,5 @@
 """Real PostgreSQL falsifiers for the complete close operation, including helper commits."""
+
 from datetime import timedelta
 from unittest.mock import patch
 
@@ -10,12 +11,18 @@ from app.tests.test_ads_closeout import ACTOR, CloseoutTestBase
 
 class AtomicCloseTest(CloseoutTestBase):
     def prepared(self):
-        row = self._campaign(cap=300, start_date=self.complete_day - timedelta(days=2),
-                             end_date=self.complete_day)
+        row = self._campaign(
+            cap=300, start_date=self.complete_day - timedelta(days=2), end_date=self.complete_day
+        )
         self._three_days(row, spend=1000, purchases=5, revenue=2500)
-        interrupts.enqueue(self.conn, org_id=self.org_id, brand_id=self.brand_id,
-                           category="ads_triage_closeout", message="待結案",
-                           dedupe_key=f"ads-triage:closeout:{row['id']}:{self.complete_day}")
+        interrupts.enqueue(
+            self.conn,
+            org_id=self.org_id,
+            brand_id=self.brand_id,
+            category="ads_triage_closeout",
+            message="待結案",
+            dedupe_key=f"ads-triage:closeout:{row['id']}:{self.complete_day}",
+        )
         self.conn.commit()
         return row["id"]
 
@@ -26,15 +33,22 @@ class AtomicCloseTest(CloseoutTestBase):
             return {
                 "campaign": {k: row[k] for k in ("status", "verdict", "verdict_json", "closed_at")},
                 "learnings": [r["id"] for r in brands.list_learnings(observer, self.brand_id)],
-                "open": [r["id"] for r in interrupts.list_open(
-                    observer, org_id=self.org_id, brand_id=self.brand_id, archive_stale=False)],
+                "open": [
+                    r["id"]
+                    for r in interrupts.list_open(
+                        observer, org_id=self.org_id, brand_id=self.brand_id, archive_stale=False
+                    )
+                ],
             }
 
     def test_failure_at_each_write_boundary_rolls_back_and_retry_is_unique(self):
-        stages = [(closeout.ads_learning, "write_learning"),
-                  (closeout.visual_learning, "write_visual_learnings"),
-                  (closeout.coordinate_learning, "write_coordinate_learnings"),
-                  (closeout.runtime, "resolve_alerts"), (triage, "resolve_campaign")]
+        stages = [
+            (closeout.ads_learning, "write_learning"),
+            (closeout.visual_learning, "write_visual_learnings"),
+            (closeout.coordinate_learning, "write_coordinate_learnings"),
+            (closeout.runtime, "resolve_alerts"),
+            (triage, "resolve_campaign"),
+        ]
         for owner, name in stages:
             with self.subTest(stage=name):
                 campaign_id = self.prepared()
@@ -48,17 +62,23 @@ class AtomicCloseTest(CloseoutTestBase):
 
                 with patch.object(owner, name, fail_after):
                     with self.assertRaisesRegex(RuntimeError, "injected_close_failure"):
-                        closeout.close(self.conn, self.org_id, self.brand_id, campaign_id, actor=ACTOR)
+                        closeout.close(
+                            self.conn, self.org_id, self.brand_id, campaign_id, actor=ACTOR
+                        )
                 self.conn.commit()
                 self.assertEqual(self.snapshot(campaign_id), before)
 
-                closed = closeout.close(self.conn, self.org_id, self.brand_id, campaign_id, actor=ACTOR)
+                closed = closeout.close(
+                    self.conn, self.org_id, self.brand_id, campaign_id, actor=ACTOR
+                )
                 self.conn.commit()
                 after = self.snapshot(campaign_id)
                 self.assertEqual(after["campaign"]["status"], "closed")
                 self.assertEqual(len(after["learnings"]), len(before["learnings"]) + 1)
                 self.assertNotEqual(after["open"], before["open"])
-                again = closeout.close(self.conn, self.org_id, self.brand_id, campaign_id, actor=ACTOR)
+                again = closeout.close(
+                    self.conn, self.org_id, self.brand_id, campaign_id, actor=ACTOR
+                )
                 self.conn.commit()
                 self.assertEqual(again["verdict_json"], closed["verdict_json"])
                 self.assertEqual(again["closed_at"], closed["closed_at"])
