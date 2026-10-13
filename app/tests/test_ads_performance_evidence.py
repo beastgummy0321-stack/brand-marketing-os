@@ -243,3 +243,17 @@ def test_evidence_navigation_refs_are_bounded_without_hiding_the_count():
     view = performance_evidence.project(None, None, {}, {}, evidence_refs=range(100))
     assert len(view["evidence_refs"]) == 32
     assert view["evidence_ref_count"] == 100 and view["evidence_refs_omitted"] == 68
+
+
+def test_fractional_reported_result_is_positive_not_a_zero_sale():
+    from app.ads import learning_rank
+
+    row = {"name": "Weighted result", "results": 0.5, "spend": 1500, "currency": "TWD", "cap": 450}
+    ranked = learning_rank.rank([row])[0]
+    assert ranked["sales"] == 0.5 and ranked["cost_per_sale"] == 3000
+    assert ranked["few"] is True
+    assert not learning_rank.waiting({**row, "spend": 100})
+    assert triage._sales({"reason": None, "result_count": 0.5}) == 0.5
+    scope = learning_rank.scope(ranked, {d: "none" for d in learning_rank.DIMENSIONS}, None)
+    assert learning_rank.parse_scope(scope)["sales"] == 0.5
+    assert outcome.period_bucket([observation(1500, 0.5, purchases=0.5)])["purchases"] == 0.5

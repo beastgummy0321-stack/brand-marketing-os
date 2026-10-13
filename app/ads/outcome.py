@@ -330,12 +330,12 @@ def _bucket(rows: list) -> dict:
     未追蹤就是 `NULL`，不用猜來源是哪個平台）；有追蹤到的列一起加總，完全沒有追蹤到的列讓整包
     回 `None`，未追蹤永遠不是 0。花費／曝光／點擊只加總已知的值。"""
     spend = round(sum(float(r["spend"]) for r in rows if r["spend"] is not None), 2)
-    impressions = sum(int(r["impressions"]) for r in rows if r["impressions"] is not None)
-    clicks = sum(int(r["clicks"]) for r in rows if r["clicks"] is not None)
+    impressions = sum(float(r["impressions"]) for r in rows if r["impressions"] is not None)
+    clicks = sum(float(r["clicks"]) for r in rows if r["clicks"] is not None)
 
     tracked_purchase_rows = [r for r in rows if r["purchases"] is not None]
     purchases = (
-        sum(int(r["purchases"]) for r in tracked_purchase_rows) if tracked_purchase_rows
+        sum(float(r["purchases"]) for r in tracked_purchase_rows) if tracked_purchase_rows
         else None
     )
 

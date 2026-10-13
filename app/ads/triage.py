@@ -378,10 +378,11 @@ def _known_zero(view, spend):
 
 
 def _sales(view):
-    """The window's known result count as a whole number, else `None` (unknown, never 0)."""
+    """Preserve reported fractional attribution counts; unknown is never zero."""
     if view is None or view["reason"] is not None or view["result_count"] is None:
         return None
-    return int(view["result_count"])
+    count = float(view["result_count"])
+    return int(count) if count.is_integer() else count
 
 
 def _sample_view(spend, view, target_value, days):
@@ -396,7 +397,7 @@ def _sample_view(spend, view, target_value, days):
     days_with_events = (view["days_known"] - view["derived_zero_days"]) if view else 0
     return {
         "sales": sales,
-        "few": sales is not None and 1 <= sales < learning_rank.SAMPLE_FEW,
+        "few": sales is not None and 0 < sales < learning_rank.SAMPLE_FEW,
         "too_new": ad_days < WINDOW_STEPS[0] and (sales or 0) < MIN_RESULT_EVENTS,
         "spend_multiple": spend_multiple, "days_with_events": days_with_events,
     }
