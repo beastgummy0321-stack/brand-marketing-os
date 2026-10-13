@@ -2674,3 +2674,114 @@ dependent execution; workers do not invent a replacement UI.
 Machine acceptance covers R1-R7 with real isolated HTTP/Postgres and a real separate worker
 for stop/restart; external platform/model responses are fixtures. Cleanup is bounded and
 verified. This evidence never proves live platform writes, commercial uplift or human usability.
+
+### 6.57 Evidence semantics and atomic closeout (F55, proposed 2026-10-13)
+
+Planning only. This section describes proposed behavior, not the current implementation or
+execution authorization. Baseline: 2e5e961150c78c67c4f6c68d9da7f5557f0d0c32. F54-I13's
+unfinished work and F52/F54 human acceptance remain separate; do not recover or launch them.
+
+#### S1. Result evidence, comparison and action are separate decisions
+Reuse review_evidence's observations/result views and triage's grade_window. Extract their
+shared eligibility/comparison logic into one small ads-private performance_evidence module,
+not a new event store, configurable workflow engine or second aggregate calculator.
+Preserve org/brand/platform/entity/window/action/attribution/currency boundaries. Account-wide
+spend, campaign outcomes and paid/refunded order revenue remain distinct measurement grains.
+
+The common result projection has explicit scope, result_kind, count, spend, cost_per_result,
+comparison state/reasons, target identity, sample context and evidence references. Reuse the
+existing scope/coverage fields rather than introduce parallel clocks. State distinguishes
+known_positive, known_zero, incomplete, incompatible and unconfigured. Count=null means
+unknown; count=0 means observed zero. A cost ratio is null with zero or incomplete results;
+an upper bound derived from a partial denominator is never the complete period's actual CPA.
+Preserve daily availability, failed reads, last complete day and exclusions through every layer.
+
+An explicitly stored result kind wins. For newly created internal campaigns use the existing
+result_kind field for explicit supported intent: purchase/lead/link_click for the corresponding
+catalog objective; awareness or ambiguous intent remains unresolved. For legacy internal null
+values, derive only that explicit catalog intent at read time; never assume purchase merely
+from internal origin. Imported unknown kinds stay unknown. Intent is not proof a platform
+tracked the event: compare it with the actual observation kind/action before grading.
+Do not silently replace a user-selected result kind during sync. Changing an editable goal
+must not leave a contradictory derived kind silently eligible. Preserve unsupported goals.
+
+For the same evidence and scope, triage, month, budget, performance and closeout share the
+eligibility/reason outcome. Different windows may legitimately produce different figures.
+Keep current confirmed grade/sample/risk policies unless a demonstrated contradiction requires
+a bounded correction. No universal new purchase-count, CPA or observation-days threshold.
+Cost-versus-cap, confidence in effectiveness, spend exposure and proposed next action remain
+separate. Known zero can trigger existing spend-risk policy without being called untracked or
+proving commercial failure. Missing data never produces a growth recommendation or unlimited
+continue-spending permission. Models explain hypotheses; code owns arithmetic and eligibility.
+
+#### S2. Additive API and immutable historical learning
+Internal performance responses add result_view using S1; legacy purchases/revenue/cpa retain
+their original purchase meaning. Never rename purchase count as lead count. New verdict_json
+records schema_version=2, metric=cost_per_result, result_kind, evidence state/reasons, comparison,
+scope and sample count/kind/days; actual is null when no complete comparable ratio exists.
+The displayed conclusion states what was compared and what remains unknown. The existing
+three verdict labels may remain; they cannot conceal the explicit result/comparison state.
+Learning sentences and applicability consume that same projection, not recomputed purchase
+totals. Incomplete/incompatible evidence cannot yield a proven winner or qualified visual /
+coordinate carry. Preserve current ownership, learning tracks and human adoption gates.
+Saved legacy verdicts/learnings remain immutable and readable as historical conclusions.
+Versioned readers show their original metric and legacy limitation; no silent backfill/regrade.
+
+#### S3. Atomic closeout and retry identity
+The ads close operation owns one Conn.atomic boundary covering the fresh scoped campaign read,
+existing transaction lock, verdict/learning tracks, closed status and alert/queue resolution.
+Nested repository commit calls must defer inside it. Keep the existing closed-row no-op guard;
+concurrent calls must reread after acquiring the retained lock and cannot both write learning.
+Use existing primitives before proposing a new ledger, migration or uniqueness schema.
+Inject faults after each learning track and before/after status/queue updates in a dedicated
+local PostgreSQL database. A failed operation retains the entire business preimage; retry and
+two concurrent HTTP closes produce exactly one complete closure and one set of learnings.
+Wrong-brand requests cannot touch either tenant. Durable provider-cost/error receipts are
+independent evidence and must not be erased or blindly retried by business rollback.
+
+#### S4. Cost wording and bounded AI verification
+Cost above an own cap means above the chosen cap, never proven loss. Break-even assumptions,
+paid-order totals and platform-attributed results remain separately labeled. Example acceptance:
+cap 100, CPA 150, assumed pre-ad unit contribution 500 shows cap exceeded; it cannot say selling
+more loses more. This example does not establish actual realized profit.
+
+The review gateway already stores task inputs, template version, output, usage/cost and validation.
+Reuse review_id/evidence_hash/llm_task_id rather than create another trace table/service.
+Add a bounded offline replay report of exact evidence -> model input -> saved output -> review
+validator -> final projection, including structured rejection codes. Inspect saved inputs where
+available; current code regeneration is not historical prompt proof. Redact identities/URLs and
+never export credentials/raw private media. Report unavailable historical input explicitly.
+The corpus includes grounded observations, hypothetical unmeasured lead quality, delayed/missing
+results, mixed goals and a proposed observation duration. Existing hypothesis labeling remains.
+Replay measures validator behavior; human adjudication measures usefulness/grounding, neither
+proves a real model/provider run. Do not introduce a general semantic keyword detector or remove
+guards just to accept more output. Production policy/prompt changes beyond structured rejection
+attribution require a demonstrated replay failure and a separate concrete approved contract.
+
+#### S5. End-to-end and workload acceptance
+Use an owned dedicated local database, isolated queue/auth/schema and stub external/platform/model
+responses; refuse before dynamic writes if isolation cannot be confirmed. Reuse existing runtime
+lifecycle helpers, check PID/start time/command/schema ownership before cleanup, and terminate
+within 300 seconds. Do not edit the unfinished F54-I13 worktree or use shared auth/database state.
+One final integrated runtime receipt covers both loops: observations -> advice -> human decision /
+handoff -> close -> qualified learning -> next draft; product/brand demand -> strategy/budget /
+existing asset handoff. Include restart/replay and partial evidence. Manual platform execution
+and final human usability judgment remain explicit. Record which lookup/calculation/reentry the
+system removes, what the operator still does, and the exact surviving limitations. Do not claim
+time savings without observations. Test data does not prove ad lift, profit or live integration.
+
+#### Tool decision (documentation checked 2026-10-13; no installation/runtime trial)
+Prefer local reuse: existing stack, Conn.atomic, Pydantic/type contracts, gateway and Procrastinate.
+No stack migration, new service or paid call is in F55. Candidate adoption must name the old
+mechanism removed, preserved capabilities, added operations/licensing costs and comparison proof.
+
+| Candidate | Current decision and evidence gate |
+| --- | --- |
+| [FastAPI template](https://fastapi.tiangolo.com/project-generation/) | Comparison only; current stack overlaps. Migrating does not resolve S1-S3. |
+| [Pydantic](https://docs.pydantic.dev/latest/concepts/models/) | Reuse installed types/validation where useful. Type validation cannot prove business semantics. |
+| [Langfuse](https://langfuse.com/docs/observability/overview) | Conditional: only if existing task joins/replay cannot support required model inspection; compare a sanitized saved corpus, storage/retention and maintenance first. It is not Harness labor accounting. |
+| [Pydantic AI](https://pydantic.dev/docs/ai/core-concepts/output/) | Conditional: demonstrate removal of meaningful custom Agent code. Preserve explicit paid retry/cost policy; no default framework retry adoption. |
+| [LangGraph](https://docs.langchain.com/oss/python/langgraph/persistence) / [Temporal](https://docs.temporal.io/activity-definition) | Defer until measured long-running recovery requirements exceed current queue; persistence still requires idempotent side effects and storage operations. |
+| [n8n](https://docs.n8n.io/sustainable-use-license/) / [Dify](https://docs.dify.ai/en/home) | Peripheral integrations only after an actual need. No core measurement/tenant/state replacement. n8n's fair-code license needs use-case review; full license/deployment assessment is pending. |
+
+The supplied external Agent response is a design reference, not an independent reproduction.
