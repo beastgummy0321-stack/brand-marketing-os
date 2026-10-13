@@ -15,19 +15,21 @@ Platform-neutral: this file never branches on a Meta objective string — the ob
 mapping lives in the Meta adapter (`app/ads/adapters/meta_read.py`), not here.
 """
 
-from app.ads import budget, result_kinds
+from app.ads import budget, objectives, result_kinds
 from app.brand_intelligence import repository as bi_repo
 
 
 def effective_result_kind(campaign: dict) -> str | None:
-    """What this campaign counts as one result. A stored choice wins; a system-built campaign
-    has always been judged on purchases (`app/ads/brief.py::_OBJECTIVES` — there is no other
-    tracked conversion event, `review_evidence.METRICS` has no add-to-cart/lead column); an
-    imported campaign with no stored kind is unknown, never assumed."""
+    """A stored choice wins; internal legacy rows use explicit catalog intent only.
+
+    Origin alone cannot imply purchase. Imported unmapped kinds remain unknown.
+    """
     result_kind = campaign.get("result_kind")
     if result_kind is not None:
         return result_kind
-    return None if campaign.get("origin") == "imported" else "purchase"
+    return None if campaign.get("origin") == "imported" else objectives.expected_result_kind(
+        campaign.get("objective"),
+    )
 
 
 def own_cap(campaign: dict) -> float | None:

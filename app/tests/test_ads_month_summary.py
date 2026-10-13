@@ -502,6 +502,12 @@ class MonthSummaryGradesTest(unittest.TestCase):
         _obs(conn, org, brand, campaign, good["id"], date(2026, 9, 1), spend=999, count=0,
              key="after")
 
+        # This grade arithmetic scenario declares a complete August source read.
+        external.record_sync(conn, org, brand, campaign, section="observations", state={
+            "last_success_at": db.now_utc().isoformat(),
+            "coverage": {"start": "2026-08-01", "end": "2026-08-31"},
+        })
+        conn.commit()
         grades = month_summary.get_summary(conn, org, brand, "2026-08")["grades"]
         self.assertEqual(grades["spent"], 850)
         by_grade = {b["grade"]: b for b in grades["buckets"]}

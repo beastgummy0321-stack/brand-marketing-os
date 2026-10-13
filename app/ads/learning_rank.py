@@ -53,6 +53,10 @@ def is_keep(verdict: str) -> bool:
 
 
 def _known(row: dict) -> bool:
+    projection = row.get("result_view")
+    if projection and (projection["state"] in {"incomplete", "incompatible"}
+                       or "result_kind_unknown" in projection["reasons"]):
+        return False
     return (
         row.get("results") is not None and row.get("spend") is not None
         and row.get("currency") is not None
@@ -76,7 +80,7 @@ def waiting(row: dict, cap=None) -> bool:
     """A known-zero row the ranking leaves out because its spend has not reached the 沒賣出 line
     yet (triage calls it 剛開始) -- the reason a settle skip names. `cap` defaults to the row's
     own. No cap -> `False` (nothing to wait for: the row is simply not judged)."""
-    if not _known(row) or int(row["results"]) != 0:
+    if not _known(row) or float(row["results"]) != 0:
         return False
     cap = row.get("cap") if cap is None else cap
     if cap is None:
@@ -94,11 +98,12 @@ def rank(rows: list[dict]) -> list[dict]:
     for row in rows:
         if not _known(row):
             continue
-        sales = int(row["results"])
+        count = float(row["results"])
+        sales = int(count) if count.is_integer() else count
         spend = float(row["spend"])
-        if sales >= 1:
+        if sales > 0:
             sold.append({**row, "sales": sales, "spend": spend, "cost_per_sale": spend / sales})
-        elif _is_unsold(spend, cap):
+        elif sales == 0 and _is_unsold(spend, cap):
             unsold.append({**row, "sales": 0, "spend": spend, "cost_per_sale": None})
     sold.sort(key=lambda r: (r["cost_per_sale"], -r["sales"], r.get("name") or ""))
     unsold.sort(key=lambda r: (r["spend"], r.get("name") or ""))
@@ -122,7 +127,7 @@ def rank(rows: list[dict]) -> list[dict]:
     for n, row in enumerate(ranked, start=1):
         row.update({
             "rank": n, "of": len(ranked), "verdict_label": VERDICT_LABELS[row["verdict"]],
-            "few": 1 <= row["sales"] < SAMPLE_FEW, "cap": cap,
+            "few": 0 < row["sales"] < SAMPLE_FEW, "cap": cap,
         })
     return ranked
 
@@ -204,7 +209,9 @@ def parse_scope(text: str | None) -> dict | None:
     if fields.get("v") != SCOPE_VERSION or fields.get("verdict") not in VERDICTS:
         return None
     try:
-        rank_no, of, sales = int(fields["rank"]), int(fields["of"]), int(fields["sales"])
+        rank_no, of = int(fields["rank"]), int(fields["of"])
+        count = float(fields["sales"])
+        sales = int(count) if count.is_integer() else count
     except (KeyError, ValueError):
         return None
     cap = _parse_num(fields.get("cap"))

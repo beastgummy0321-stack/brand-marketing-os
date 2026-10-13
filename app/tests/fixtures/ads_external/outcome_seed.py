@@ -18,6 +18,7 @@ SOURCE_ACCOUNT = "test"
 ATTRIBUTION_KEY = "test"
 _SCOPE = {"group": "adset", "ad": "ad"}
 _TABLE = {"group": "ads_delivery_group", "ad": "ads_ad"}
+_FROM_PURCHASES = object()
 
 
 def _detail(conn, org_id, brand_id, campaign_detail):
@@ -80,7 +81,8 @@ def bind_platform(conn, org_id, brand_id, campaign_detail) -> dict:
 
 def seed_day(conn, org_id, brand_id, campaign_id, kind, local_id, day: date, *, spend,
              impressions=0, clicks=0, purchases=None, revenue=None, source="test",
-             attribution_key=ATTRIBUTION_KEY, currency="TWD") -> dict:
+             attribution_key=ATTRIBUTION_KEY, currency="TWD", result_kind="purchase",
+             result_count=_FROM_PURCHASES) -> dict:
     """One observation of local node `local_id` (`kind` "group"/"ad") on `day`, written the way
     a platform read writes it. A node not yet on the test platform is bound first
     (`bind_platform` over its whole campaign)."""
@@ -112,7 +114,10 @@ def seed_day(conn, org_id, brand_id, campaign_id, kind, local_id, day: date, *, 
         "attribution_key": attribution_key, "currency": currency, "spend": spend,
         "impressions": impressions, "clicks": clicks, "purchases": purchases,
         "revenue": revenue, "source": source,
-    })
+    }, result_kind=result_kind,
+        result_count=purchases if result_count is _FROM_PURCHASES else result_count,
+        result_action="fixture:" + result_kind if result_kind else None,
+        result_attribution="fixture-window" if result_kind else None)
 
 
 def set_coverage(conn, org_id, brand_id, campaign_id, start: date, end: date) -> None:

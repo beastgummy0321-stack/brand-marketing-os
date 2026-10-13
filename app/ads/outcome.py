@@ -330,12 +330,12 @@ def _bucket(rows: list) -> dict:
     未追蹤就是 `NULL`，不用猜來源是哪個平台）；有追蹤到的列一起加總，完全沒有追蹤到的列讓整包
     回 `None`，未追蹤永遠不是 0。花費／曝光／點擊只加總已知的值。"""
     spend = round(sum(float(r["spend"]) for r in rows if r["spend"] is not None), 2)
-    impressions = sum(int(r["impressions"]) for r in rows if r["impressions"] is not None)
-    clicks = sum(int(r["clicks"]) for r in rows if r["clicks"] is not None)
+    impressions = sum(float(r["impressions"]) for r in rows if r["impressions"] is not None)
+    clicks = sum(float(r["clicks"]) for r in rows if r["clicks"] is not None)
 
     tracked_purchase_rows = [r for r in rows if r["purchases"] is not None]
     purchases = (
-        sum(int(r["purchases"]) for r in tracked_purchase_rows) if tracked_purchase_rows
+        sum(float(r["purchases"]) for r in tracked_purchase_rows) if tracked_purchase_rows
         else None
     )
 
@@ -351,7 +351,9 @@ def _bucket(rows: list) -> dict:
         roas_tracked_spend = (revenue / spend_tracked) if spend_tracked else None
         roas_all_spend = (revenue / spend) if spend else None
 
-    cpa = (spend / purchases) if purchases else None
+    complete_purchases = bool(rows) and all(r["purchases"] is not None for r in rows)
+    complete_spend = bool(rows) and all(r["spend"] is not None for r in rows)
+    cpa = spend / purchases if purchases and complete_purchases and complete_spend else None
     ctr = (clicks / impressions) if impressions else None
 
     return {
@@ -428,25 +430,42 @@ def _coverage(conn: _AnyConn, org_id: str, brand_id: str, campaign: dict, window
 
 
 def _period_view(totals: dict, group_rows: list, result_kind: str | None) -> dict | None:
-    """The one result view `triage.grade_window` reads, cut from the SAME `_bucket` totals the
-    tab prints (never a second aggregation): `result_count` = `totals.purchases`,
-    `cost_per_result` = `totals.cpa`. Untracked everywhere (`purchases` `None`) is no view; a
-    period with an untracked day or an unknown spend, or across two currencies, keeps its number
-    but reads as unknown through `reason` -- the same signals `review_evidence.aggregate` and
-    `triage._ad_window` give, so the period grade never outruns a per-ad grade."""
-    if totals["purchases"] is None:
+    """Observed goal results use the same availability-aware reducer as ad reviews.
+
+    Legacy purchase totals and the target kind cannot supply or rename the observation unit.
+    """
+    del totals, result_kind  # A target cannot relabel the observed purchase field.
+    from app.ads import review_evidence
+
+    if not group_rows:
         return None
-    currencies = {r["currency"] for r in group_rows}
-    reason = totals.get("reason")
-    if len(currencies) > 1:
-        reason = "mixed_currency"
-    elif any(r["purchases"] is None or r["spend"] is None for r in group_rows):
-        reason = "result_unknown_days"
-    return {
-        "metric_scope": "group", "currency": next(iter(currencies)) if len(currencies) == 1
-        else None, "result_kind": result_kind, "result_count": totals["purchases"],
-        "cost_per_result": totals["cpa"], "reason": reason,
-    }
+    rows = [{**row, "metric_scope": "adset"} for row in group_rows]
+    aggregated = review_evidence.aggregate(rows, min(r["day"] for r in rows),
+                                          max(r["day"] for r in rows))
+    views = aggregated["result_views"]
+    if len(views) != 1:
+        return {"reason": "mixed_currency", "result_count": None, "result_kind": None,
+                "cost_per_result": None, "currency": None}
+    return views[0]
+
+
+def result_projection(group_rows: list, cap: dict, scope: dict, *, comparison=None,
+                      reason=None) -> dict:
+    """The actual goal result from the original availability-aware observation aggregate."""
+    from app.ads import performance_evidence
+
+    view = _period_view({}, group_rows, None)
+    currencies = {row["currency"] for row in group_rows}
+    spend = None
+    if group_rows and len(currencies) == 1 and None not in currencies and all(
+        row["spend"] is not None and (row.get("availability") or {}).get("spend") == "available"
+        for row in group_rows
+    ):
+        spend = sum(float(row["spend"]) for row in group_rows)
+    return performance_evidence.project(
+        view, spend, cap, scope, comparison=comparison, reason=reason,
+        evidence_refs=[row["observation_id"] for row in group_rows if row.get("observation_id")],
+    )
 
 
 def _period_grade(totals: dict, group_rows: list, cap: dict, days: int) -> dict:
@@ -454,13 +473,20 @@ def _period_grade(totals: dict, group_rows: list, cap: dict, days: int) -> dict:
     whole period -- `{grade, label}`, `grade` in on_target|watch|over|wasted|insufficient|
     no_target. No cap, or a cap with no result kind anywhere (the precondition `triage` and
     `period_grades._grade` share), is `no_target`."""
-    from app.ads import triage  # 延遲 import 避免循環
+    del totals
+    return _result_grade(result_projection(group_rows, cap, {"days": days}), cap, days)
+
+
+def _result_grade(result: dict, cap: dict, days: int) -> dict:
+    """Grade the goal projection; incidental purchase-series gaps cannot replace its spend."""
+    from app.ads import triage
 
     if cap["value"] is not None and cap["result_kind"] is None:
         return {"grade": "no_target", "label": triage.GRADE_LABELS["no_target"]}
+    view = {"result_count": result["count"], "cost_per_result": result["cost_per_result"],
+            "reason": result["reasons"][0] if result["reasons"] else None}
     grade, label, _reason = triage.grade_window(
-        _period_view(totals, group_rows, cap["result_kind"]), totals["spend"], cap["value"],
-        days,
+        view, result["spend"], cap["value"], days,
     )
     return {"grade": grade, "label": label}
 
@@ -484,12 +510,7 @@ def summary(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str) -> dic
     totals = projected["totals"]
     daily = _daily_series(group_rows)
     cap = targets.resolve(conn, org_id, brand_id, detail)
-    totals["grade"] = _period_grade(totals, group_rows, cap, projected["scope"]["days"])
     comparison = cap_comparison(conn, brand_id, cap, totals["currency"], campaign=detail)
-    if comparison["reason"] is not None:
-        from app.ads import triage
-
-        totals["grade"] = {"grade": "insufficient", "label": triage.NO_DATA_LABEL}
 
     group_total_spend = totals["spend"]
     by_group: dict[str, list] = {}
@@ -522,14 +543,20 @@ def summary(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str) -> dic
 
     all_rows = group_rows + ad_rows
     last_data_at = max((r["observed_at"] for r in all_rows), default=None)
+    coverage = _coverage(conn, org_id, brand_id, detail, projected["scope"])
+    goal_view = result_projection(group_rows, cap, projected["scope"], comparison=comparison,
+                                 reason="needs_resync" if coverage["never_synced"]
+                                 or coverage["missing_days"] else None)
+    totals["grade"] = _result_grade(goal_view, cap, projected["scope"]["days"])
 
     return {
         "totals": totals,
         "daily": daily,
         "groups": groups_table,
         "ads": ads_table,
-        "coverage": _coverage(conn, org_id, brand_id, detail, projected["scope"]),
+        "coverage": coverage,
         "last_data_at": last_data_at,
         "scope": projected["scope"],
         "cap_comparison": comparison,
+        "result_view": goal_view,
     }

@@ -28,6 +28,7 @@ def advice(conn, org_id, brand_id, campaign: dict) -> dict:
         lifecycle,
         month_budget,
         outcome,
+        performance_evidence,
         repository,
         targets,
         triage,
@@ -120,13 +121,12 @@ def advice(conn, org_id, brand_id, campaign: dict) -> dict:
                 start, cutoff = selected_start, selected_end
                 break
     view, spend = triage._ad_window(rows, start, cutoff)
+    view = performance_evidence.for_target(view, target)
     currency = view.get("currency") if view else None
     comparison = outcome.compare_cap_unit(unit, currency)
     grade, _, reason = triage.grade_window(view, spend, target["value"], 7)
-    if comparison["reason"] or (view and view["result_kind"] != target["result_kind"]):
-        grade, reason = "insufficient", comparison["reason"] or "result_kind_mismatch"
-    if view and (view.get("result_action") is None or view.get("result_attribution") is None):
-        grade, reason = "insufficient", "result_definition_unverified"
+    if comparison["reason"]:
+        grade, reason = "insufficient", comparison["reason"]
     days_read = max((cutoff - start).days + 1, 0)
     if not covered:
         grade, reason = "insufficient", selection_reason or "coverage_unverified"

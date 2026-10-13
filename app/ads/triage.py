@@ -19,6 +19,7 @@ from app.ads import (
     learning_rank,
     lifecycle,
     month_budget,
+    performance_evidence,
     queue_done,
     repository,
     result_kinds,
@@ -377,10 +378,11 @@ def _known_zero(view, spend):
 
 
 def _sales(view):
-    """The window's known result count as a whole number, else `None` (unknown, never 0)."""
+    """Preserve reported fractional attribution counts; unknown is never zero."""
     if view is None or view["reason"] is not None or view["result_count"] is None:
         return None
-    return int(view["result_count"])
+    count = float(view["result_count"])
+    return int(count) if count.is_integer() else count
 
 
 def _sample_view(spend, view, target_value, days):
@@ -395,7 +397,7 @@ def _sample_view(spend, view, target_value, days):
     days_with_events = (view["days_known"] - view["derived_zero_days"]) if view else 0
     return {
         "sales": sales,
-        "few": sales is not None and 1 <= sales < learning_rank.SAMPLE_FEW,
+        "few": sales is not None and 0 < sales < learning_rank.SAMPLE_FEW,
         "too_new": ad_days < WINDOW_STEPS[0] and (sales or 0) < MIN_RESULT_EVENTS,
         "spend_multiple": spend_multiple, "days_with_events": days_with_events,
     }
@@ -504,6 +506,16 @@ def reasons() -> dict:
             "title": "還不知道要算哪種成果",
             "text": "這個活動還沒設定要看哪種成果（例如購買），平台資料也沒說；設定後才能判斷",
             "fix": "cap",
+        },
+        "result_kind_mismatch": {
+            "title": "成果與上限的種類不同",
+            "text": "成果數和上限使用不同單位，不能拿名單成本與購買成本互相比較。",
+            "fix": "cap",
+        },
+        "result_definition_unverified": {
+            "title": "成果定義尚未核實",
+            "text": "成果的事件或歸因尚未核實，保留花費與原始數字，先不比較成本。",
+            "fix": "resync",
         },
         "target_unresolved": {
             "title": "還沒設定上限",
@@ -671,6 +683,7 @@ def _classify_ad(entity, campaign_name, campaign_objective, target, cutoff, read
         if previous is None:
             previous = _ad_window(entity_rows, previous_start, previous_end)
         prev_view, prev_spend = previous
+        prev_view = performance_evidence.for_target(prev_view, target)
         current_unit, previous_unit = comparison(view), comparison(prev_view)
         # F29-I01 Contract A: the previous equal-length window graded by the same ruler -- null
         # when it isn't fully synced, not graded (剛開始／資料不足), or when this ad isn't judged.
@@ -686,6 +699,13 @@ def _classify_ad(entity, campaign_name, campaign_objective, target, cutoff, read
             "window": _window_view(start, end, days, extended_from),
             "target": {**target, "result_label": result_kinds.label(target["result_kind"])},
             "current": _metrics_view(view, spend), "previous": _metrics_view(prev_view, prev_spend),
+            "result_view": performance_evidence.project(
+                view, spend, target, _window_view(start, end, days, extended_from),
+                comparison=current_unit,
+                reason="needs_resync" if not read.covered(start, end) else None,
+                evidence_refs=[r["id"] for r in entity_rows if r.get("id")
+                               and start <= r["day"] <= end],
+            ),
             "change_pct": change_pct,
             "sample": _sample_view(
                 spend, view, target["value"] if current_unit["reason"] is None else None, days,
@@ -723,6 +743,7 @@ def _classify_ad(entity, campaign_name, campaign_objective, target, cutoff, read
             return finish("insufficient", "needs_resync", _NO_DATA, start, end, days,
                           extended_from, view, spend)
         view, spend = _ad_window(entity_rows, start, end)
+        view = performance_evidence.for_target(view, target)
         if step_idx == 0 and target["result_kind"] is None \
                 and (view is None or view["result_kind"] is None):
             return finish("no_target", "result_kind_unknown", _NOT_JUDGED, start, end, days,
@@ -754,6 +775,7 @@ def _classify_ad(entity, campaign_name, campaign_objective, target, cutoff, read
         return finish("insufficient", "no_previous_window", grade, start, end, days,
                       extended_from, view, spend)
     prev_view, prev_spend = _ad_window(entity_rows, previous_start, previous_end)
+    prev_view = performance_evidence.for_target(prev_view, target)
     previous = (prev_view, prev_spend)
     previous_unit = comparison(prev_view)
     if (prev_view is not None and prev_view["reason"] is None

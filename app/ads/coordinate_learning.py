@@ -35,6 +35,7 @@ from app.ads import (
     live_creative,
     outcome,
     period_grades,
+    result_kinds,
     sell_way,
     targets,
     triage,
@@ -84,12 +85,14 @@ def _text(name: str, row: dict, who: str, keys: dict, labels: dict) -> str:
     〈labels〉」; a 沒賣出 row reads 「沒賣出（花 Y；上限 C）」 in place of the numbers."""
     cap = _cap_text(row["cap"])
     spend = learning_rank.whole(row["spend"])
+    result_label = result_kinds.label(row.get("result_kind"))
+    purchase = row.get("result_kind") in {None, "purchase"}  # Historical rows retain their text.
     if row["cost_per_sale"] is None:
-        numbers = f"沒賣出（花 {spend}；上限 {cap}）"
+        numbers = f"{'沒賣出' if purchase else '零' + result_label}（花 {spend}；上限 {cap}）"
     else:
         numbers = (
             f"每筆 {learning_rank.whole(row['cost_per_sale'])}"
-            f"（賣 {row['sales']} 筆、花 {spend}；上限 {cap}）"
+            f"（{'賣' if purchase else result_label} {row['sales']} 筆、花 {spend}；上限 {cap}）"
         )
     return (
         f"第 {row['rank']}／{row['of']} 名「{name}」{numbers}＝{row['verdict_label']}"

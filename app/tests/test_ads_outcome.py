@@ -325,7 +325,9 @@ class OnlyBoundPlatformRowsReachTheNumbersTest(OutcomeTestBase):
         self.assertEqual(projected["totals"]["cpa"], 200)
         self.assertIsNone(projected["totals"]["revenue"])
         closed = closeout.close(web.conn, self.org_id, self.brand_id, detail["id"], actor=ACTOR)
-        self.assertEqual(closed["verdict_json"]["actual"], 200)
+        # The group fixture retained purchases but omitted its mapped result definition.
+        self.assertIsNone(closed["verdict_json"]["actual"])
+        self.assertEqual(closed["verdict_json"]["evidence_state"], "incomplete")
         self.assertEqual(closed["verdict_json"]["sample"]["purchases"], 2)
         self.assertEqual(len(outcome.rows(
             web.conn, self.org_id, self.brand_id, detail["id"], "ad"
@@ -547,7 +549,8 @@ class RealPurchasesReachCloseoutTest(OutcomeTestBase):
         self.assertEqual(closed["verdict"], "達成")
         self.assertEqual(closed["verdict_json"]["actual"], 100)
         self.assertEqual(closed["verdict_json"]["sample"],
-                         {"purchases": 12, "days": 3, "bucket": "低"})
+                         {"purchases": 12, "count": 12, "result_kind": "purchase",
+                          "days": 3, "bucket": "低"})
 
     def test_bound_campaign_with_real_purchases_below_target_closes_as_missed(self):
         from app.ads import closeout
