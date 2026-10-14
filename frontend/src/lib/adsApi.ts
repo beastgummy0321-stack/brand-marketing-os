@@ -1,5 +1,5 @@
-import type { ResultEvidence } from "@/components/ads/performanceTypes";
-export type { ResultEvidence } from "@/components/ads/performanceTypes";
+import type { ResultEvidence } from "./adsTriageApi";
+export type { ResultEvidence } from "./adsTriageApi";
 import type { AdapterKey, PublishDescribe, PublishGetResponse } from "./adsPublishTypes";
 export type { AdapterKey, AdapterOption, PublishChecklistField, PublishChecklistNode, PublishDescribe, PublishGetResponse } from "./adsPublishTypes";
 /** 投放中心 API 型別與呼叫（F03-I01），對應 `app/ads/routes.py`；後續票在這裡加，不重排既定形狀。
