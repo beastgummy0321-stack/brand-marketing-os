@@ -1088,3 +1088,15 @@ describe("F55 goal evidence, cap comparison and legacy limits", () => {
     expect((screen.getByRole("heading", {name: /結案判定/}))?.textContent).toContain("達成");
   });
 });
+
+it("F55 primary period strip agrees with the advanced goal result, excluding purchase CPA", async () => {
+  vi.mocked(getPerformance).mockResolvedValue({...performance(), result_view: resultEvidence(),
+    totals: {...performance().totals, spend: 1000, purchases: 1, cpa: 1000, grade: {grade: "on_target", label: "划算"}}});
+  render(<MemoryRouter><PeriodStatusRow brandId="brd_1" campaign={campaign()} onCampaignChange={vi.fn()} /></MemoryRouter>);
+  const strip = screen.getByTestId("period-status-row");
+  await within(strip).findByText("每次名單成本");
+  await waitFor(() => expect(strip.textContent).toContain("100 TWD"));
+  expect(strip.textContent).toContain("10 次");
+  expect(strip.textContent).not.toContain("1,000 TWD");
+  expect(strip.textContent).toContain("不代表已證明有效或已付款利潤");
+});

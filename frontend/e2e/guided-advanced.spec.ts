@@ -459,7 +459,7 @@ test("F55 goal evidence: lead, zero, missing, mismatched unit and historical ver
   }
   failure = true;
   await page.reload(); await openPerformanceDetails(page);
-  await expect(page.getByText("隔離測試讀取失敗")).toBeVisible();
+  await expect(page.getByText("隔離測試讀取失敗", {exact: true})).toBeVisible();
   failure = false;
   await page.getByRole("button", {name: "重新載入", exact: true}).click();
   await expect(page.getByText("名單數", {exact: true})).toBeVisible();

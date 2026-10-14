@@ -131,22 +131,26 @@ export function PeriodStatusRow({ brandId, campaign: c, lastSuccessAt = null, on
   const nativeView = data && "external_view" in data ? data.external_view : null;
   const native = nativeView ? nativePerformance(nativeView) : null;
   const totals = imported ? native?.totals : internal?.totals;
+  const result = internal?.result_view;
   const grade: PeriodGrade | null = internal?.totals.grade ?? null;
   const coverage = internal?.coverage;
   const scope = internal?.scope ?? native?.scope;
-  const currency = imported ? nativeMetricScopes(nativeView)[0]?.currency ?? null : scope?.currency;
+  const currency = result ? result.currency : imported ? nativeMetricScopes(nativeView)[0]?.currency ?? null : scope?.currency;
   const missingDays = coverage?.missing_days ?? [];
   const covered = coverage?.start && coverage.end ? coveredRange(coverage.start, coverage.end, missingDays) : null;
   const latest = latestReadAt(c, lastSuccessAt);
   const days = scope?.days ?? null;
-  const cap = c.cap.value;
+  const cap = result ? result.target.value : c.cap.value;
   const capCurrency = internal?.cap_comparison?.currency ?? "幣別未知";
 
   const dash = perf.status === "loading" ? "…" : "—";
   const unit = currency ?? "幣別未知";
-  const spend = totals ? totals.spend === null ? "未知" : formatMoney(totals.spend, unit) : dash;
-  const purchases = totals ? (totals.purchases === null ? "未追蹤" : `${formatAmount(totals.purchases)} 筆`) : dash;
-  const cpa = totals ? (totals.cpa === null ? "算不出來" : `${perSaleAmount(totals.cpa)} ${unit}`) : dash;
+  const spend = result ? result.spend === null ? "未知" : formatMoney(result.spend, unit)
+    : totals ? totals.spend === null ? "未知" : formatMoney(totals.spend, unit) : dash;
+  const purchases = result ? result.count === null ? "未知" : `${formatAmount(result.count)} 次`
+    : totals ? (totals.purchases === null ? "未追蹤" : `${formatAmount(totals.purchases)} 筆`) : dash;
+  const cpa = result ? result.cost_per_result === null ? "算不出來" : `${perSaleAmount(result.cost_per_result)} ${unit}`
+    : totals ? (totals.cpa === null ? "算不出來" : `${perSaleAmount(totals.cpa)} ${unit}`) : dash;
 
   const closeCaption = imported
     ? (c.capabilities?.unavailable.close ?? "既有平台活動不使用內部結案。")
@@ -166,14 +170,14 @@ export function PeriodStatusRow({ brandId, campaign: c, lastSuccessAt = null, on
             value={scope?.start && scope.end ? `${md(scope.start)}～${md(scope.end)}` : "未核實"}
             sub={days === null ? "成效期間未核實" : `${days} 天`} />
           <Cell label="花費" value={spend} sub={imported ? "查詢期間合計" : "整期合計"} />
-          <Cell label="購買" value={purchases} sub="平台回報" />
-          <Cell label="每賣一筆" value={cpa} sub={
+          <Cell label={result ? result.result_label : "購買"} value={purchases} sub="平台回報" />
+          <Cell label={result ? `每次${result.result_label}成本` : "每賣一筆"} value={cpa} sub={
             <>
-              {(grade || imported) && <GradeTermChip grade={grade?.grade ?? null} label={grade?.label} />}
+              {(grade || imported) && <GradeTermChip grade={grade?.grade ?? null} label={result && grade?.grade === "wasted" ? "零成果、支出偏高" : grade?.label} />}
               {cap !== null ? `對上限 ${formatAmount(cap)} ${capCurrency}` : "沒設上限"}
             </>
           } />
-          <Cell label="ROAS" size="text-base" value={<Figure basis="roas_all_spend" value={totals?.roas_all_spend} alt={{basis: "roas_tracked_spend", value: totals?.roas_tracked_spend ?? null}} />} sub="" />
+          <Cell label="ROAS" size="text-base" value={<Figure basis="roas_all_spend" value={totals?.roas_all_spend} alt={{basis: "roas_tracked_spend", value: totals?.roas_tracked_spend ?? null}} />} sub={result ? "次要資料：平台營收／花費" : ""} />
         </div>
         {closed ? (
           <div className="flex flex-wrap items-center justify-end gap-2" data-testid="period-closed-exits">
@@ -211,6 +215,14 @@ export function PeriodStatusRow({ brandId, campaign: c, lastSuccessAt = null, on
       {scope?.caption && <p className="mt-2 text-[11.5px] text-muted-foreground">{scope.caption}</p>}
       {scope?.reason_text && <p className="mt-2 text-[11.5px] text-warning">{scope.reason_text}</p>}
       {internal?.cap_comparison?.message && <p className="mt-2 text-[11.5px] text-warning">{internal.cap_comparison.message}</p>}
+      {result && <p className="mt-2 text-[11.5px] text-muted-foreground">
+        {result.data_state === "known_zero" ? "已追蹤零成果；支出風險另外看。"
+          : result.data_state === "incomplete" ? "成果資料仍有缺漏，未知不算零；先補讀缺漏日期與核實成果定義。"
+          : result.comparison_state === "incompatible" ? "成果或資料單位與上限不一致，先核實後再比對。"
+          : result.comparison_state === "unconfigured" ? "上限或成果目標尚未核實，回到策略確認。"
+          : "這是成本上限比較，不代表已證明有效或已付款利潤。"}
+        樣本：{result.count === null ? "總成果未知" : `${formatAmount(result.count)} 次${result.result_label}`}・{result.sample.days ?? "未知"} 天。
+      </p>}
       <p className="mt-2 text-[11.5px] text-muted-foreground">整期＝活動期間的合計；每月回顧只算當月天數，同一則廣告兩邊數字會不同。</p>
       {closeOpen && (
         <CloseCampaignDialog brandId={brandId} campaign={c} onClose={closeDialog}
