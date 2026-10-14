@@ -446,9 +446,9 @@ describe("v10 kit（F29-I09）", () => {
     expect(Object.keys(gloss)).toHaveLength(9);
     expect(define("break_even", 520)).toContain("這裡是 520");
     expect(define("break_even", 520)).toContain("不能只用平台歸因證明盈虧");
-    expect(define("cap")).toBe(gloss.cap);
-    expect(define("on_target")).toBe(gloss.ok);
-    expect(define("watch")).toBe(gloss.watch);
+    expect(define("cap")).toBe(RULES_FIXTURE.glossary.cap);
+    expect(define("on_target")).toBe(RULES_FIXTURE.glossary.on_target);
+    expect(define("watch")).toBe(RULES_FIXTURE.glossary.watch);
     for (const term of ["over", "wasted", "money", "notebook"] as const) {
       expect(define(term)).toBe(RULES_FIXTURE.glossary[term]);
     }
