@@ -2679,7 +2679,9 @@ verified. This evidence never proves live platform writes, commercial uplift or 
 
 Implemented on codex/marketing-evidence-contracts from baseline
 2e5e961150c78c67c4f6c68d9da7f5557f0d0c32. Issue checks and isolated browser checks passed;
-final combined integration/runtime proof is pending. Human usefulness remains pending.
+Final combined integration/runtime status is read from the source-bound receipt
+`.harness/runtime/integrations/F55.json`; a partial checkpoint is not acceptance.
+Human usefulness remains pending.
 F54-I13 and F52/F54 acceptance remain separate; do not recover or launch them.
 
 #### S1. Result evidence, comparison and action are separate decisions
