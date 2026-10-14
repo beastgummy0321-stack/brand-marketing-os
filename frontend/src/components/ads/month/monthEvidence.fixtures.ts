@@ -2,6 +2,7 @@ import type { AdsRules } from "@/lib/adsTriageApi";
 import type { HomeOverview, CommerceEvidence } from "@/lib/adsHomeApi";
 import type { MonthSummary, PeriodGradeRow } from "@/lib/adsMonthApi";
 import type { SettleView } from "@/lib/adsSettleApi";
+import { addDays, shiftMonth } from "@/lib/orgClock";
 
 export const MONTH = "2026-09";
 export const PREVIOUS = "2026-08";
@@ -17,13 +18,11 @@ export function orderEvidence(month = MONTH, amount: number | null = 1200, days 
     channels: [{channel: "website", source: "orders", source_type: "order_mirror", currency: null, amount: 9999, row_count: 12, unknown_amount_count: 3}]};
 }
 export function monthEvidence(month = MONTH): {summary: MonthSummary; home: HomeOverview; settle: SettleView} {
-  const previous = new Date(`${month}-01T12:00:00Z`); previous.setUTCMonth(previous.getUTCMonth()-1);
-  const priorMonth = previous.toISOString().slice(0,7);
-  const [year, monthNumber] = month.split("-").map(Number);
-  const calendarDays = new Date(Date.UTC(year, monthNumber, 0)).getUTCDate();
+  const priorMonth = shiftMonth(month, -1);
+  const calendarDays = Number(addDays(`${shiftMonth(month, 1)}-01`, -1).slice(-2));
   const dataDays = month === MONTH ? 22 : calendarDays;
   const currentOrders = orderEvidence(month, 1200, dataDays);
-  const previousDays = Math.min(dataDays, new Date(Date.UTC(previous.getUTCFullYear(), previous.getUTCMonth()+1, 0)).getUTCDate());
+  const previousDays = Math.min(dataDays, Number(addDays(`${month}-01`, -1).slice(-2)));
   const previousOrders = orderEvidence(priorMonth, 800, previousDays);
   previousOrders.order_summary.known_paid_net_count = 1;
   const row: PeriodGradeRow = {campaign_id: "cmp_month", campaign_name: "日常商品推廣", origin: "imported",

@@ -39,7 +39,8 @@ describe("csv（F29-I09 Contract K）", () => {
     expect(perSaleAmount(421.4)).toBe("421");
     expect(perSaleAmount(null)).toBeNull();
     expect(perSaleAmount(Number.NaN)).toBeNull();
-    expect(yuan(2014.6)).toBe("2,015 元"); // the settle words use the same rule
+    expect(yuan(2014.6, "TWD")).toBe("2,015 TWD"); // known currency uses the same rule
+    expect(yuan(2014.6)).toBe("2,015 幣別未知");
     expect(yuan(null)).toBe("未知");
   });
 
