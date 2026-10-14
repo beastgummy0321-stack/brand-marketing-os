@@ -893,9 +893,9 @@ class ExecutableDecisionAcceptanceTest(unittest.TestCase):
 
     def test_inputs_changed_during_gateway_io_refuse_before_any_plan_writes(self):
         original = plan.ask_with_one_retry
+        prior, _ = self.previous()
         for changed_input in ("budget", "source_copy"):
             with self.subTest(changed_input=changed_input):
-                prior, _ = self.previous()
                 campaign = self.campaign()
                 decision = self.propose(
                     campaign,
@@ -928,9 +928,13 @@ class ExecutableDecisionAcceptanceTest(unittest.TestCase):
                     conn.commit()
                     return result
 
-                with mock.patch.object(plan, "ask_with_one_retry", side_effect=while_away):
-                    with self.assertRaisesRegex(plan.StrategyConflict, "strategy_changed"):
+                expected = "strategy_changed" if changed_input == "budget" else "strategy_infeasible"
+                with mock.patch.object(plan, "ask_with_one_retry", side_effect=while_away) as gateway:
+                    with self.assertRaisesRegex(plan.StrategyConflict, expected) as failure:
                         self.adopt(campaign, decision)
+                    gateway.assert_called_once()
+                if changed_input == "source_copy":
+                    self.assertIn("carry_unavailable", {r["code"] for r in failure.exception.reasons})
                 self.assert_empty(campaign)
 
     def test_reduced_budget_revises_decision_and_refuses_old_approval(self):
@@ -1030,7 +1034,7 @@ class ExecutableDecisionAcceptanceTest(unittest.TestCase):
         self.assertEqual(sum(int(g["daily_budget"]) for g in detail["groups"]), 600)
 
     def test_two_following_periods_reuse_the_same_original_without_generation(self):
-        from app.tests.test_ads_plan import _ranked_scope
+        from app.tests.test_ads_plan import _ranked_scope, _retained_carry_evidence
 
         prior, asset = self.previous(offer="free_shipping")
         for period in range(2):
@@ -1076,6 +1080,7 @@ class ExecutableDecisionAcceptanceTest(unittest.TestCase):
                 (campaign["id"],),
             )
             web.conn.commit()
+            _retained_carry_evidence(self.org, self.brand, campaign["id"])
             prior = carried
 
     def test_structure_edit_marks_decision_modified_and_preserves_original_receipt(self):

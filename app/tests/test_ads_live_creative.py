@@ -171,8 +171,8 @@ class LiveCreativeTest(unittest.TestCase):
         )
 
     def test_unmapped_awareness_goal_does_not_learn_a_purchase_image_winner(self):
-        campaigns.patch_campaign(self.conn, self.org, self.brand, self.campaign,
-                                 {"objective": "知名度"}, actor=ACTOR)
+        campaigns.update_campaign(self.conn, self.org, self.brand, self.campaign,
+                                  {"objective": "知名度"})
         ad_a, ad_b = self._ad("A"), self._ad("B")
         self._select(ad_a["id"], "wbo-a", "phone_raw")
         self._select(ad_b["id"], "wbo-b", "studio_hero")

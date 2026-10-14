@@ -1367,8 +1367,10 @@ def _retained_carry_evidence(org_id, brand_id, campaign_id):
             conditions = ads_learnings.condition_snapshot(
                 web.conn, org_id, brand_id, campaign, campaign["context_json"]["product_ids"][0],
             )
+            offer = next((o for o in conditions["offers"] if o["key"] == ad["offer_key"]), {})
             evidence["conditions"].update(
                 price_version=conditions["price_version"], target_version=conditions["target_version"],
+                offer_version=offer.get("version"), valid_until=offer.get("valid_until"),
                 material_version=ads_learnings.material_version(
                     {**ad, "material_evidence": ads_learnings.bound_material(web.conn, org_id, brand_id, ad)},
                     {},
