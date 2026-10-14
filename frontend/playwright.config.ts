@@ -18,7 +18,11 @@ import { defineConfig } from "@playwright/test";
  *
  * 設了 `E2E_BASE_URL` 就不自己起 server，也不 build——你起的你自己負責。
  */
-const E2E_PORT = 8720;
+// An explicit isolated port avoids collisions without reusing an unrelated server.
+const E2E_PORT = Number(process.env.E2E_PORT ?? "8720");
+if (!Number.isInteger(E2E_PORT) || E2E_PORT < 1024 || E2E_PORT > 65535) {
+  throw new Error("E2E_PORT must be an integer from 1024 to 65535");
+}
 const externalServer = process.env.E2E_BASE_URL;
 
 export default defineConfig({

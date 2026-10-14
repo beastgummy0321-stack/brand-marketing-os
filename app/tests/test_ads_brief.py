@@ -1091,7 +1091,7 @@ class SellWayDefaultsTest(_SellWayBase):
         self.assertEqual(context["landing_url"], "https://shop.example.test/vest-2")
         self.assertEqual(detail["cap"]["own_value"], 450)  # stored as the campaign's own cap
         self.assertEqual(detail["cap"]["basis"], "own")
-        self.assertEqual(detail["cap"]["break_even"], 1100)  # 1800 − 600 − 100
+        self.assertIsNone(detail["cap"]["break_even"])  # Purchase margin is not a lead cost limit.
         self.assertEqual(detail["objective"], "名單")  # the request's
         sources = context["field_sources"]
         self.assertEqual((sources["audience"], sources["landing_url"], sources["cap"]),
