@@ -649,7 +649,7 @@ describe("TodayDecisions", () => {
     wrap(<TodayDecisions brandId="b" state={{ status: "ready", queue: { ...payload([]).queue, settle: settleRow() } }} syncing={false} recovering={false} sync={null} onRetry={vi.fn()} />);
     const card = screen.getByRole("article", { name: "結算上一期" });
     expect(card.className).toContain("col-span-full");
-    expect(within(card).getByText("08/01–08/31・2 個活動（1 個從 Meta 帶進來）")).toBeTruthy();
+    expect(within(card).getByText("08/01–08/31・2 個活動（1 個既有平台活動）")).toBeTruthy();
     expect(within(card).getByText(byPlain("5 則的成績可以寫進筆記本"))).toBeTruthy();
     expect(card.querySelector('[data-slot="grade-bar"]')).toBeTruthy();
     expect(card.querySelector('[data-slot="grade-rules"]')).toBeNull();

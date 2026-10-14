@@ -111,17 +111,19 @@ const NOT_A_RULER: { file: string; text: string; why: string }[] = [
   ...(pending("notARuler") as { file: string; text: string; why: string }[]),
 ];
 
-/** Exact test-data paths, admitted only while unreachable from the production entry, including re-exports and lazy imports. */
+/** Test data is admitted only while unreachable from production, including re-exports and lazy imports. */
 const TEST_DATA = new Set([
   "components/ads/patterns/rulesFixture.ts",
-  "components/ads/learnings/learningEvidence.fixtures.ts",
-  "components/ads/patterns/LearningReceipt.fixtures.ts",
-  "components/ads/strategy/strategyEvidence.fixtures.ts",
+  ...readdirSync(SRC_DIR, { recursive: true, encoding: "utf8" }).filter((name) => /\.fixtures\.tsx?$/.test(name))
+    .map((name) => name.split("\\").join("/")),
 ]);
 
 const FRONTEND_DIR = join(SRC_DIR, "..");
 const config = ts.readConfigFile(join(FRONTEND_DIR, "tsconfig.app.json"), ts.sys.readFile);
 const options = ts.parseJsonConfigFileContent(config.config, ts.sys, FRONTEND_DIR).options;
+// Repeated falsifiers reuse a parse only for the exact same file contents. Overrides
+// still get a fresh tree; each traversal still resolves and follows its own graph.
+const parsedSources = new Map<string, { text: string; ast: ts.SourceFile }>();
 function productionReachable(overrides: Map<string, string> = new Map()): Set<string> {
   const reached = new Set<string>();
   function visit(full: string) {
@@ -129,7 +131,13 @@ function productionReachable(overrides: Map<string, string> = new Map()): Set<st
     if (reached.has(full)) return;
     reached.add(full);
     const text = overrides.get(full) ?? readFileSync(full, "utf-8");
-    const ast = ts.createSourceFile(full, text, ts.ScriptTarget.Latest, true, full.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+    let parsed = parsedSources.get(full);
+    if (!parsed || parsed.text !== text) {
+      parsed = { text, ast: ts.createSourceFile(full, text, ts.ScriptTarget.Latest, true,
+        full.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS) };
+      parsedSources.set(full, parsed);
+    }
+    const ast = parsed.ast;
     const follow = (specifier: string) => {
       const resolved = ts.resolveModuleName(specifier, full, options, ts.sys).resolvedModule;
       if (resolved && !resolved.isExternalLibraryImport && /\.tsx?$/.test(resolved.resolvedFileName)) visit(resolved.resolvedFileName);
