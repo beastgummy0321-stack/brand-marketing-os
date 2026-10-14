@@ -395,3 +395,74 @@ test("進階草稿真實保存回讀、比較選用與缺漏定位；普通品�
   );
   expect(stored.campaign.groups.some((group) => group.id === groupId)).toBeTruthy();
 });
+
+/** F55: real bundle with controlled performance/close replies; no claim of platform or model success. */
+test("F55 goal evidence: lead, zero, missing, mismatched unit and historical verdict at desktop widths", async ({page}, info) => {
+  test.setTimeout(120_000);
+  const headers = await register(page, "f55-evidence");
+  const brand = await createBrand(page, `成果口徑瀏覽器測試 ${Date.now()}`);
+  const created = await api<{campaign: Campaign}>(page, headers, "POST", `/api/ads/brands/${brand}/campaigns`, {
+    goal_text: "確認名單成果口徑", start_date: dateOffset(-7), end_date: dateOffset(-1),
+  });
+  const id = created.campaign.id;
+  const saved = await api<{campaign: Record<string, unknown>}>(page, headers, "GET", `/api/ads/brands/${brand}/campaigns/${id}`);
+  const workspace = await api<Record<string, unknown>>(page, headers, "GET", `/api/ads/brands/${brand}/campaigns/${id}/workspace`);
+  const current = {...saved.campaign, status: "live", lifecycle: {state: "live", label: "投放中", can_close: true},
+    learning_sentence: null, verdict: null, verdict_json: {}};
+  const result = {result_kind: "lead", result_label: "名單", result_action: "lead", result_attribution: "7d_click",
+    currency: "TWD", spend: 1000, count: 10 as number | null, known_count: 10, cost_per_result: 100 as number | null,
+    state: "known_positive", data_state: "known_positive", comparison_state: "ready", reasons: [] as string[],
+    target: {value: 100, basis: "own", result_kind: "lead", revision: 1},
+    sample: {count: 10, result_kind: "lead", days: 7, days_present: 7, days_known: 7, derived_zero_days: 0},
+    evidence_refs: ["ui-controlled-observation"], evidence_ref_count: 1, evidence_refs_omitted: 0};
+  const performance = {result_view: result, totals: {spend: 1000, purchases: 1, revenue: null, cpa: 1000,
+    impressions: 100, clicks: 10, ctr: 0.1, roas_all_spend: null, roas_tracked_spend: null,
+    grade: {grade: "on_target", label: "划算"}}, daily: [], groups: [], ads: [], last_data_at: null,
+    cap_comparison: {basis: "own", currency: "TWD", reason: null, message: null},
+    coverage: {start: dateOffset(-7), end: dateOffset(-1), expected: 7, missing: 0, missing_days: [], never_synced: false}};
+  await page.route(`**/api/ads/brands/${brand}/campaigns/${id}`, route => route.fulfill({json: {campaign: current}}));
+  await page.route(`**/api/ads/brands/${brand}/campaigns/${id}/workspace`, route => route.fulfill({json: {
+    ...workspace, draft: null, lifecycle: current.lifecycle,
+    stage: {key: current.status === "closed" ? "review" : "read", done: ["plan", "assets", "launch"]},
+  }}));
+  let failure = false;
+  await page.route(`**/api/ads/brands/${brand}/campaigns/${id}/performance`, route => failure
+    ? route.fulfill({status: 503, json: {error: {message: "隔離測試讀取失敗"}}}) : route.fulfill({json: performance}));
+  for (const width of [1024, 1920]) {
+    await page.setViewportSize({width, height: 1080});
+    for (const state of ["known_positive", "known_zero", "incomplete", "incompatible", "legacy"]) {
+      result.state = state === "legacy" ? "known_positive" : state;
+      result.data_state = state === "incompatible" || state === "legacy" ? "known_positive" : state;
+      result.comparison_state = state === "incompatible" ? "incompatible" : state === "incomplete" ? "unknown" : "ready";
+      result.count = state === "incomplete" ? null : state === "known_zero" ? 0 : 10;
+      result.cost_per_result = state === "incomplete" || state === "known_zero" ? null : 100;
+      performance.totals.grade = state === "known_zero" ? {grade: "wasted", label: "沒賣出"}
+        : state === "incomplete" || state === "incompatible" ? {grade: "insufficient", label: "資料不足"}
+        : {grade: "on_target", label: "划算"};
+      current.status = state === "legacy" ? "closed" : "live";
+      current.lifecycle = {state: current.status, label: current.status === "closed" ? "已結案" : "投放中", can_close: current.status !== "closed"};
+      current.verdict = state === "legacy" ? "達成" : null;
+      current.verdict_json = state === "legacy" ? {metric: "cpa", target: 150, actual: 100} : {};
+      await page.goto(`/app/brands/${brand}/ads/campaigns/${id}?tab=performance`);
+      const primaryCost = page.getByTestId("period-status-row").getByText("每次名單成本", {exact: true}).locator("..");
+      await expect(primaryCost).toContainText(result.cost_per_result === null ? "算不出來" : "100 TWD");
+      await openPerformanceDetails(page);
+      const goalKpi = page.locator("article").filter({has: page.getByText("名單數", {exact: true})});
+      await expect(goalKpi).toContainText(state === "incomplete" ? "未知" : String(result.count));
+      if (state === "incompatible") await expect(page.getByText(/下一步：核實平台成果定義/)).toBeVisible();
+      if (state === "legacy") await expect(page.getByText(/歷史判定：未保存當時完整/)).toBeVisible();
+      const fold = page.getByRole("button", {name: "查看每日資料、次要指標與公式", exact: true});
+      await fold.focus(); await page.keyboard.press("Enter");
+      await expect(fold).toHaveAttribute("aria-expanded", "true");
+      await expect(page.getByText("購買數（次要資料）")).toBeVisible();
+      await assertNoHorizontalOverflow(page, `${state} ${width}`);
+      await page.screenshot({path: info.outputPath(`goal-${state}-${width}.png`), fullPage: true});
+    }
+  }
+  failure = true;
+  await page.reload(); await openPerformanceDetails(page);
+  await expect(page.getByText("隔離測試讀取失敗", {exact: true})).toBeVisible();
+  failure = false;
+  await page.getByRole("button", {name: "重新載入", exact: true}).click();
+  await expect(page.getByText("名單數", {exact: true})).toBeVisible();
+});

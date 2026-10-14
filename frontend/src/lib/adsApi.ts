@@ -1,3 +1,5 @@
+import type { ResultEvidence } from "./adsTriageApi";
+export type { ResultEvidence } from "./adsTriageApi";
 import type { AdapterKey, PublishDescribe, PublishGetResponse } from "./adsPublishTypes";
 export type { AdapterKey, AdapterOption, PublishChecklistField, PublishChecklistNode, PublishDescribe, PublishGetResponse } from "./adsPublishTypes";
 /** 投放中心 API 型別與呼叫（F03-I01），對應 `app/ads/routes.py`；後續票在這裡加，不重排既定形狀。
@@ -705,11 +707,14 @@ export interface CampaignPerformance {
   ads: OutcomeAdRow[];
   coverage: OutcomeCoverage;
   last_data_at: string | null;
+  /** Observed goal results; purchase/revenue totals retain their original unit. */
+  result_view?: ResultEvidence;
   /** Optional for historical client fixtures; current responses name their actual period. */
   scope?: PerformanceScope;
   cap_comparison?: { basis: string | null; currency: string | null; reason: string | null;
     message: string | null; source?: string | null; unit_basis?: string | null };
 }
+
 
 export interface PerformanceScope {
   start: string | null;

@@ -257,3 +257,72 @@ def test_fractional_reported_result_is_positive_not_a_zero_sale():
     scope = learning_rank.scope(ranked, {d: "none" for d in learning_rank.DIMENSIONS}, None)
     assert learning_rank.parse_scope(scope)["sales"] == 0.5
     assert outcome.period_bucket([observation(1500, 0.5, purchases=0.5)])["purchases"] == 0.5
+
+
+def test_native_scope_projection_preserves_goal_and_does_not_add_measurement_grains():
+    rows = [{**observation(1000, 10, kind="lead", purchases=1), "id": "adset-row"},
+            {**observation(200, 2, kind="lead", purchases=0), "id": "ad-row", "metric_scope": "ad"}]
+    target = {"value": 100, "basis": "own", "result_kind": "lead"}
+    scope = {"start": "2026-10-01", "end": "2026-10-01", "days": 1}
+    views = outcome.native_result_views(rows, target, scope,
+        {"never_synced": False, "missing_days": []}, {"basis": "own", "currency": "TWD"})
+    assert len(views) == 2
+    assert sorted(v["count"] for v in views) == [2, 10]
+    assert all(v["cost_per_result"] == 100 and v["result_kind"] == "lead" for v in views)
+    assert all(v["state"] == "known_positive" for v in views)
+    assert {v["scope_key"] for v in views} == {
+        '["ad","TWD","purchase-window"]', '["adset","TWD","purchase-window"]'}
+
+
+def test_native_read_gap_or_wrong_goal_keeps_eligibility_unknown():
+    rows = [{**observation(1000, 10, kind="lead", purchases=1), "id": "native-row"}]
+    scope = {"start": "2026-10-01", "end": "2026-10-02", "days": 2}
+    target = {"value": 100, "basis": "own", "result_kind": "lead"}
+    view = outcome.native_result_views(rows, target, scope,
+        {"never_synced": False, "missing_days": ["2026-10-02"]},
+        {"basis": "own", "currency": "TWD"})[0]
+    assert view["count"] is None and view["known_count"] == 10
+    assert view["cost_per_result"] is None and view["state"] == "incomplete"
+    view = outcome.native_result_views(rows, {**target, "result_kind": "purchase"}, scope,
+        {"never_synced": False, "missing_days": []}, {"basis": "own", "currency": "TWD"})[0]
+    assert view["state"] == "incompatible" and "result_kind_mismatch" in view["reasons"]
+
+
+def test_real_http_imported_performance_serves_scoped_lead_results():
+    from fastapi.testclient import TestClient
+
+    import app.main as main
+    from app.ads import coverage, external_repository, repository
+    from app.brand_intelligence import repository as brands
+    from app.core import db, settings
+    from app.tests.fixtures.ads_external import outcome_seed
+
+    conn, org = db.current(), db.DEV_ORG_ID
+    brand = brands.create_brand(conn, org_id=org, name="Native result route",
+                                client_name=None, actor="fixture")["id"]
+    campaign = external_repository.create_imported_campaign(conn, org, brand, name="Native lead")
+    conn.execute("UPDATE ads_campaign SET result_kind='lead',target_cost=100,target_basis='own' "
+                 "WHERE id=%s", (campaign["id"],))
+    campaign = repository.get_campaign(conn, org, brand, campaign["id"])
+    assert campaign is not None
+    day = coverage.last_complete_day(conn, org, brand, campaign["id"])
+    entity = external_repository.upsert_entity(conn, org, brand, campaign["id"], {
+        "platform": "fixture", "source_account": "account", "native_kind": "adset",
+        "native_id": "native-set", "name": "Native set", "native_status": "ACTIVE"})
+    row = observation(1000, 10, kind="lead", purchases=1, day=day)
+    row["entity_id"] = entity["id"]
+    external_repository.upsert_observation(conn, org, brand, campaign["id"],
+        {k: v for k, v in row.items() if not k.startswith("result_")},
+        result_kind="lead", result_count=10, result_action="lead",
+        result_attribution="fixture-window")
+    start = settings.today_for_org(conn, org_id=org) - timedelta(days=29)
+    outcome_seed.set_coverage(conn, org, brand, campaign["id"], start, day)
+    conn.commit()
+    response = TestClient(main.app).get(
+        f"/api/ads/brands/{brand}/campaigns/{campaign['id']}/performance")
+    assert response.status_code == 200, response.text
+    view = response.json()["external_view"]
+    assert view["observations"][0]["purchases"] == 1
+    assert view["result_views"][0]["result_kind"] == "lead"
+    assert view["result_views"][0]["count"] == 10
+    assert view["result_views"][0]["cost_per_result"] == 100
