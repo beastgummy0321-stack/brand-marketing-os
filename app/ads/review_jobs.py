@@ -36,8 +36,8 @@ def settle(conn, org, review_id, task):
     )
 
 
-def apply_saved_task(conn, review, task):
-    """Validate and adopt a durable output against its original evidence, without a provider."""
+def validate_saved_binding(review, task):
+    """The same durable task/evidence/template binding for adoption and offline replay."""
     evidence = review["evidence_json"]
     scope = task.get("context_scope_json") or {}
     if (
@@ -52,7 +52,31 @@ def apply_saved_task(conn, review, task):
         or task.get("provider") != evidence["provider"]
         or task.get("model") != evidence["model"]
     ):
-        raise ValueError("已保存的模型結果與本回證據不符；不自動重送。")
+        raise review_policy.ReviewRejection(
+            "task_binding_mismatch",
+            "已保存的模型結果與本回證據不符；不自動重送。",
+        )
+
+
+def evaluate_saved_output(conn, review, task):
+    """Validate saved bytes only; no provider, queue or persistence action."""
+    validate_saved_binding(review, task)
+    output = task.get("rendered_output") or ""
+    if len(output) > policy.OUTPUT_CHARS:
+        raise review_policy.ReviewRejection("output_too_large", "模型回傳超出接受上限，未採用。")
+    try:
+        reply = gateway.parse_json_reply(output)
+    except ValueError as exc:
+        raise review_policy.ReviewRejection("output_json_invalid", str(exc)) from exc
+    return review_policy.validate(
+        conn, review["org_id"], review["brand_id"], review["evidence_json"], reply
+    )
+
+
+def apply_saved_task(conn, review, task):
+    """Validate and adopt a durable output against its original evidence, without a provider."""
+    evidence = review["evidence_json"]
+    validate_saved_binding(review, task)
     if task["status"] == "running":
         return None
     stale = None
@@ -71,29 +95,24 @@ def apply_saved_task(conn, review, task):
         return None
     if stale:
         error = stale
-        result = {"recommendations": [], "limitations": evidence["limitations"],
-                  "causality": "unavailable", "rejected": {"reason": stale}}
+        result = {
+            "recommendations": [],
+            "limitations": evidence["limitations"],
+            "causality": "unavailable",
+            "rejected": {"code": "learning_context_changed", "reason": stale},
+        }
     elif task["status"] == "succeeded":
         # A delivered reply that fails the fact check is not a failed round: the evidence is
         # still complete, so the round stays usable without an AI recommendation (Contract A).
         status, error = "ready", None
         try:
-            output = task.get("rendered_output") or ""
-            if len(output) > policy.OUTPUT_CHARS:
-                raise ValueError("模型回傳超出接受上限，未採用。")
-            result = review_policy.validate(
-                conn,
-                review["org_id"],
-                review["brand_id"],
-                evidence,
-                gateway.parse_json_reply(output),
-            )
+            result = evaluate_saved_output(conn, review, task)
         except ValueError as exc:
             result = {
                 "recommendations": [],
                 "limitations": evidence["limitations"],
                 "causality": "unavailable",
-                "rejected": {"reason": str(exc)},
+                "rejected": {"code": getattr(exc, "code", "validation_failed"), "reason": str(exc)},
             }
     changed = conn.execute(
         "UPDATE ads_review_round SET status=%s,result_json=%s,llm_task_id=%s,error=%s,"

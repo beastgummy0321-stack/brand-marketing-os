@@ -133,7 +133,10 @@ class ReviewRetryTest(unittest.TestCase):
                 "recommendations": [],
                 "limitations": review["evidence_json"]["limitations"],
                 "causality": "unavailable",
-                "rejected": {"reason": "模型包含未允許的數字或因果斷言；請依原始證據人工判讀。"},
+                "rejected": {
+                    "code": "causal_claim",
+                    "reason": "模型包含未允許的數字或因果斷言；請依原始證據人工判讀。",
+                },
             },
         )
         self.assertEqual(review["reservation_state"], "settled")
