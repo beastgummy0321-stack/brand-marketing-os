@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -269,6 +270,34 @@ class Runtime:
             conn.execute("SET statement_timeout='5s'")
             return conn.execute(sql, args).fetchall()
 
+    def advance_review_due(self, review_id, entity_id):
+        """Move this fixture's due instant without allowing arbitrary evidence writes."""
+        from psycopg import sql
+
+        schema = self.context["schema"]
+        if not re.fullmatch(r"f13_runtime_[a-f0-9]{12}", schema):
+            raise RuntimeError("Unowned runtime schema")
+        with psycopg.connect(self.scoped_dsn, connect_timeout=5) as conn:
+            conn.execute("SET statement_timeout='5s'")
+            database, current = conn.execute(
+                "SELECT current_database(), current_schema()"
+            ).fetchone()
+            if not database.startswith("f15_validation_") or current != schema:
+                raise RuntimeError("Runtime fixture write isolation unverified")
+            for table, where, key in (
+                ("ads_review_round", "id", review_id),
+                ("ads_review_monitor", "entity_id", entity_id),
+            ):
+                column = "revisit_at" if table == "ads_review_round" else "next_check_at"
+                cursor = conn.execute(
+                    sql.SQL("UPDATE {} SET {}=now() WHERE {}=%s AND org_id=%s AND brand_id=%s")
+                    .format(sql.Identifier(schema, table), sql.Identifier(column),
+                            sql.Identifier(where)),
+                    (key, self.context["org_id"], self.context["brand_id"]),
+                )
+                if cursor.rowcount != 1:
+                    raise RuntimeError("Due fixture does not identify one owned row")
+
     def queue_rows(self):
         return self.query(
             "SELECT id,task_name,status,args,queueing_lock FROM "
@@ -408,9 +437,6 @@ def source_recovery(run):
         json={
             "goal_text": "D隔離恢復與兩輪反證",
             "objective": "購買",
-            "success_metric": "roas",
-            "success_target": 2,
-            "success_basis": "隔離證據門檻",
         },
     )
     run.context.update(

@@ -832,6 +832,35 @@ class ReviewCycleTest(unittest.TestCase):
             target[path[-1]] = value
             self.assertNotEqual(review_rounds.evidence_digest(changed), baseline)
 
+    def test_model_projection_preserves_partial_sample_and_stored_evidence(self):
+        evidence = self.request()["evidence_json"]
+        decision = {
+            "count": None, "known_count": 3, "result_kind": "lead",
+            "result_label": "名單", "state": "incomplete", "reasons": ["missing_days"],
+            "sample": {"count": None, "result_kind": "lead", "days_known": 2, "days": 7},
+            "evidence_refs": ["observed-1"], "evidence_ref_count": 1,
+            "scope": {"start": "2026-08-01"},
+        }
+        evidence["current"]["decision_evidence"] = decision
+        stored = deepcopy(evidence)
+        projected = json.loads(review_rounds.model_input(evidence))["current"]["decision_evidence"]
+        self.assertEqual(evidence, stored)
+        self.assertEqual(projected["known_count"], 3)
+        self.assertIsNone(projected["count"])
+        self.assertEqual(projected["state"], "incomplete")
+        self.assertEqual(projected["sample"], {"days_known": 2, "days": 7})
+        self.assertEqual(projected["observation_refs_location"], "stored_snapshot")
+        self.assertEqual(projected["evidence_ref_count"], 1)
+        original_input = review_rounds.model_input(evidence)
+        evidence["current"]["ad_spend"] = {"value": 100, "currency": "TWD"}
+        evidence["current"]["ad_result_view"] = {"result_count": 3}
+        self.assertEqual(review_rounds.model_input(evidence), original_input)
+        decision["scope"] = {"start": evidence["window"]["start"],
+                             "end": evidence["window"]["end"], "days": 7}
+        projected_input = json.loads(review_rounds.model_input(evidence))
+        self.assertNotIn("scope", projected_input["current"]["decision_evidence"])
+        self.assertEqual(str(projected_input["window"]["end"]), str(evidence["window"]["end"]))
+
     def test_limitations_use_human_readable_conditions(self):
         row = self.request()
         limitations = row["evidence_json"]["limitations"]

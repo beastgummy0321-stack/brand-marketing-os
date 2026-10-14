@@ -121,6 +121,7 @@ const TEST_DATA = new Set([
 const FRONTEND_DIR = join(SRC_DIR, "..");
 const config = ts.readConfigFile(join(FRONTEND_DIR, "tsconfig.app.json"), ts.sys.readFile);
 const options = ts.parseJsonConfigFileContent(config.config, ts.sys, FRONTEND_DIR).options;
+const resolutionCache = ts.createModuleResolutionCache(FRONTEND_DIR, (name) => name, options);
 // Repeated falsifiers reuse a parse only for the exact same file contents. Overrides
 // still get a fresh tree; each traversal still resolves and follows its own graph.
 const parsedSources = new Map<string, { text: string; ast: ts.SourceFile }>();
@@ -139,7 +140,7 @@ function productionReachable(overrides: Map<string, string> = new Map()): Set<st
     }
     const ast = parsed.ast;
     const follow = (specifier: string) => {
-      const resolved = ts.resolveModuleName(specifier, full, options, ts.sys).resolvedModule;
+      const resolved = ts.resolveModuleName(specifier, full, options, ts.sys, resolutionCache).resolvedModule;
       if (resolved && !resolved.isExternalLibraryImport && /\.tsx?$/.test(resolved.resolvedFileName)) visit(resolved.resolvedFileName);
       else if (specifier.startsWith(".") || specifier.startsWith("@/")) {
         // Non-code CSS/assets need no traversal; unresolved local code must fail closed.

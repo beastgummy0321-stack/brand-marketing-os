@@ -113,17 +113,13 @@ def monitor_conditions(run, route):
     assert run.count_calls() == before, "Defer must not invoke the provider before its due time"
     # The isolated run moves the due instant to now instead of waiting for the org's tomorrow;
     # `review_monitor.on_decision` copied it into the monitor's `next_check_at`, so both move.
-    run.query(
-        "UPDATE ads_review_round SET revisit_at=now() WHERE id=%s RETURNING id", (deferred["id"],)
-    )
-    run.query(
-        "UPDATE ads_review_monitor SET next_check_at=now() WHERE entity_id=%s RETURNING id",
-        (run.context["ad_entity_id"],),
-    )
+    run.advance_review_due(deferred["id"], run.context["ad_entity_id"])
     run.drain()
     monitor = run.call("GET", monitor_url)["monitor"]
-    due = run.call("GET", route + "/reviews/" + monitor["review_id"])["review"]
-    assert due["status"] == "ready" and due["previous_id"] == deferred["id"]
+    followup = run.call("GET", route + "/reviews/" + monitor["review_id"])["review"]
+    assert monitor["state"] == "ready", monitor
+    assert followup["previous_id"] == deferred["id"]
+    assert followup["window_end"] > deferred["window_end"]
     assert run.count_calls() == before + 1
 
     def check_now(url):
@@ -143,7 +139,7 @@ def monitor_conditions(run, route):
     check_now(monitor_url)
     run.drain()
     assert run.count_calls() == before + 1
-    assert run.call("GET", monitor_url)["monitor"]["review_id"] == due["id"]
+    assert run.call("GET", monitor_url)["monitor"]["review_id"] == followup["id"]
     waiting_url = route + "/review-monitors/" + run.context["b2_entity_id"]
     check_now(waiting_url)
     run.drain()
@@ -162,13 +158,14 @@ def monitor_conditions(run, route):
     run.context.update(
         b2_review_id=waiting["review_id"],
         deferred_review_id=deferred["id"],
-        automatic_followup_id=due["id"],
+        automatic_followup_id=followup["id"],
     )
     fixture.write_json(
         run.directory / "monitor-conditions.json",
         {
             "deferred": deferred["id"],
-            "automatic_followup": due["id"],
+            "automatic_followup": followup["id"],
+            "followup_has_new_complete_day": True,
             "defer_once_provider_delta": 1,
             "unchanged_waiting_provider_delta": 0,
             "fixed_window": waiting["window"],
