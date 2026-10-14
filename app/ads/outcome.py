@@ -248,7 +248,7 @@ def native_period_view(conn: _AnyConn, org_id: str, brand_id: str, campaign: dic
     from app.ads import targets
 
     target = targets.resolve(conn, org_id, brand_id, campaign)
-    gap = coverage.gap(conn, org_id, brand_id, campaign["id"], requested_start, end)
+    gap = coverage.gap(conn, org_id, brand_id, campaign, requested_start, end)
     view["result_views"] = native_result_views(
         view["observations"], target, view["scope"], gap,
         cap_unit(conn, brand_id, target, campaign=campaign),
