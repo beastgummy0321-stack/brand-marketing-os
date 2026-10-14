@@ -1,3 +1,5 @@
+import type { ResultEvidence } from "@/components/ads/performanceTypes";
+export type { ResultEvidence } from "@/components/ads/performanceTypes";
 import type { AdapterKey, PublishDescribe, PublishGetResponse } from "./adsPublishTypes";
 export type { AdapterKey, AdapterOption, PublishChecklistField, PublishChecklistNode, PublishDescribe, PublishGetResponse } from "./adsPublishTypes";
 /** 投放中心 API 型別與呼叫（F03-I01），對應 `app/ads/routes.py`；後續票在這裡加，不重排既定形狀。
@@ -713,27 +715,6 @@ export interface CampaignPerformance {
     message: string | null; source?: string | null; unit_basis?: string | null };
 }
 
-export interface ResultEvidence {
-  result_kind: string | null;
-  result_label: string;
-  result_action: string | null;
-  result_attribution: string | null;
-  currency: string | null;
-  spend: number | null;
-  count: number | null;
-  known_count: number | null;
-  cost_per_result: number | null;
-  state: "known_positive" | "known_zero" | "incomplete" | "incompatible" | "unconfigured";
-  data_state: ResultEvidence["state"];
-  comparison_state: "ready" | "unconfigured" | "incompatible" | "unknown";
-  reasons: string[];
-  target: { value: number | null; basis: string | null; result_kind: string | null; revision: number | null };
-  sample: { count: number | null; result_kind: string | null; days: number | null;
-    days_present: number; days_known: number; derived_zero_days: number };
-  evidence_refs: string[];
-  evidence_ref_count: number;
-  evidence_refs_omitted: number;
-}
 
 export interface PerformanceScope {
   start: string | null;
