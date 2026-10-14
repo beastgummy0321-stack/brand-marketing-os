@@ -313,7 +313,8 @@ def test_real_http_imported_performance_serves_scoped_lead_results():
     row["entity_id"] = entity["id"]
     external_repository.upsert_observation(conn, org, brand, campaign["id"],
         {k: v for k, v in row.items() if not k.startswith("result_")},
-        result_kind="lead", result_count=10, result_action="lead", result_attribution="fixture-window")
+        result_kind="lead", result_count=10, result_action="lead",
+        result_attribution="fixture-window")
     start = settings.today_for_org(conn, org_id=org) - timedelta(days=29)
     outcome_seed.set_coverage(conn, org, brand, campaign["id"], start, day)
     conn.commit()
