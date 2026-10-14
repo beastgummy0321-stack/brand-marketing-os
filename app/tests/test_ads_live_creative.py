@@ -49,7 +49,7 @@ class LiveCreativeTest(unittest.TestCase):
         self.campaign = campaigns.create_campaign(
             self.conn, self.org, self.brand,
             {
-                "name": "秋季上架", "goal_text": "檢驗學習", "objective": "awareness",
+                "name": "秋季上架", "goal_text": "檢驗購買學習", "objective": "購買",
                 "start_date": self.today - timedelta(days=6), "end_date": self.today,
             },
             created_by=ACTOR,
@@ -169,6 +169,18 @@ class LiveCreativeTest(unittest.TestCase):
         self.assertFalse(
             change_control_launch.is_stale(self.conn, self.org, self.brand, self.campaign)
         )
+
+    def test_unmapped_awareness_goal_does_not_learn_a_purchase_image_winner(self):
+        campaigns.patch_campaign(self.conn, self.org, self.brand, self.campaign,
+                                 {"objective": "知名度"}, actor=ACTOR)
+        ad_a, ad_b = self._ad("A"), self._ad("B")
+        self._select(ad_a["id"], "wbo-a", "phone_raw")
+        self._select(ad_b["id"], "wbo-b", "studio_hero")
+        self._launch()
+        self._ad_rows(ad_a["id"], purchases=10)
+        self._ad_rows(ad_b["id"], purchases=5)
+        closeout.close(self.conn, self.org, self.brand, self.campaign, actor=ACTOR)
+        self.assertEqual(brands.list_learnings(self.conn, self.brand, source_track="visual"), [])
 
     def test_visual_learning_reads_the_launched_image_after_the_selection_changed(self):
         ad_a, ad_b = self._ad("A"), self._ad("B")

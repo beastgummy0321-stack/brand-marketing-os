@@ -315,7 +315,7 @@ class ExecutableDecisionAcceptanceTest(unittest.TestCase):
                 "status": "draft",
                 "budget_planned": daily * 10,
                 "budget_scenario": "custom",
-                "context_json": {"product_ids": [self.way["id"]]},
+                "context_json": {"product_ids": [self.way["id"]], "field_sources": {"cap": "user"}},
             },
             created_by="tester",
         )
@@ -478,14 +478,16 @@ class ExecutableDecisionAcceptanceTest(unittest.TestCase):
         self.assertEqual(detail["status"], "draft")
 
     def previous(self, role="explore", offer="none"):
-        from app.tests.test_ads_plan import _seed_previous_with_creatives
+        from app.tests.test_ads_plan import _retained_carry_evidence, _seed_previous_with_creatives
 
         previous, ads, assets = _seed_previous_with_creatives(
-            self.org, self.brand, [("Kept fitness", "kept", "keep_relative", True)]
+            self.org, self.brand, [("Kept fitness", "kept", "keep_relative", True)],
+            product_id=self.way["id"],
         )
         web.conn.execute(
             "UPDATE ads_campaign SET context_json=%s WHERE id=%s",
-            (coredb.jsonb({"product_ids": [self.way["id"]]}), previous["id"]),
+            (coredb.jsonb({"product_ids": [self.way["id"]], "field_sources": {"cap": "user"}}),
+             previous["id"]),
         )
         ads_repo.update_group_fields(
             web.conn, self.org, self.brand, ads[0]["group_id"], {"role": role}
@@ -502,6 +504,7 @@ class ExecutableDecisionAcceptanceTest(unittest.TestCase):
                 (assets[0],),
             )
         web.conn.commit()
+        _retained_carry_evidence(self.org, self.brand, previous["id"])
         return ads[0], assets[0]
 
     def test_ceiling_two_preserves_explore_and_tests_student_with_exact_offer(self):

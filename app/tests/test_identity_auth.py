@@ -95,7 +95,8 @@ class NoAuthorizationSweepTest(unittest.TestCase):
                 passed = False
                 attempts = []
                 for filled in _filled_paths(path):
-                    response = self.client.request(method, filled, json=body)
+                    params = {"month": "2026-10"} if path.endswith("/next-period") else {}
+                    response = self.client.request(method, filled, json=body, params=params)
                     if response.status_code == 401 and set(response.json()) == {"error"}:
                         passed = True  # 有一組填值真的走到 401 信封，這條算過
                         break

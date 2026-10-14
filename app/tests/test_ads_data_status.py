@@ -334,9 +334,10 @@ class HomeCapBreakEvenTest(_Home):
                                         basis="own", value=90, expected_revision=0, actor="test")
         self.conn.commit()
         rows = self.rows(brand)
-        self.assertEqual(rows[own]["cap"], {"value": 250, "basis": "own", "break_even": 300})
-        self.assertEqual(rows[be]["cap"], {"value": 300, "basis": "break_even", "break_even": 300})
-        self.assertEqual(rows[bare]["cap"], {"value": 90, "basis": "own", "break_even": None})
+        for cid, value, basis in ((own, 250, "own"), (be, 300, "break_even"), (bare, 90, "own")):
+            self.assertIsNone(rows[cid]["cap"])  # No observed currency to compare yet.
+            self.assertEqual(rows[cid]["configured_cap"], {"value": value, "basis": basis})
+            self.assertIsNotNone(rows[cid]["cap_comparison"]["reason"])
 
 
 class HomeHandoffTest(_Home):

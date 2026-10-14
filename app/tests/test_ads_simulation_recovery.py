@@ -23,6 +23,21 @@ from .test_ads_publish_simulated import SimulatedPublishTestBase
 
 
 class SimulationRecoveryTest(SimulatedPublishTestBase):
+    def test_synthetic_purchase_counts_cannot_be_relabelled_as_leads(self):
+        self.start()
+        for i in range(7):
+            self.save([self.row(), self.row(1)], day=self.today - timedelta(days=i))
+        repository.save_campaign_target(
+            *self.args, result_kind="lead", basis="own", value=300,
+            expected_revision=0, actor="tester",
+        )
+        result = outcome.summary(*self.args)["result_view"]
+        self.assertEqual((result["result_kind"], result["count"]), ("purchase", 140))
+        closed = closeout.close(*self.args, actor="tester")
+        self.assertEqual(closed["verdict"], "看不出")
+        self.assertIsNone(closed["verdict_json"]["actual"])
+        self.assertEqual(bi_repo.list_learnings(web.conn, self.brand_id, source_track="coordinate"), [])
+
     def setUp(self):
         super().setUp()
         self.c = self._campaign(
