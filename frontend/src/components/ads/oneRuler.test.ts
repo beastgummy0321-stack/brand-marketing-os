@@ -111,14 +111,11 @@ const NOT_A_RULER: { file: string; text: string; why: string }[] = [
   ...(pending("notARuler") as { file: string; text: string; why: string }[]),
 ];
 
-/** Exact test-data paths, admitted only while unreachable from the production entry, including re-exports and lazy imports. */
+/** Test data is admitted only while unreachable from production, including re-exports and lazy imports. */
 const TEST_DATA = new Set([
-  "components/ads/home/homeEvidence.fixtures.ts",
-  "components/ads/month/monthEvidence.fixtures.ts",
   "components/ads/patterns/rulesFixture.ts",
-  "components/ads/learnings/learningEvidence.fixtures.ts",
-  "components/ads/patterns/LearningReceipt.fixtures.ts",
-  "components/ads/strategy/strategyEvidence.fixtures.ts",
+  ...readdirSync(SRC_DIR, { recursive: true }).filter((name) => /\.fixtures\.tsx?$/.test(name))
+    .map((name) => name.split("\\").join("/")),
 ]);
 
 const FRONTEND_DIR = join(SRC_DIR, "..");

@@ -42,7 +42,8 @@ function listFiles(dir: string): string[] {
       out.push(...listFiles(full));
       continue;
     }
-    if (!/\.tsx?$/.test(name) || /\.(test|stories)\.tsx?$/.test(name)) continue;
+    // oneRuler's reachability falsifiers prohibit every .fixtures file in production.
+    if (!/\.tsx?$/.test(name) || /\.(test|stories|fixtures)\.tsx?$/.test(name)) continue;
     out.push(full);
   }
   return out;
