@@ -75,6 +75,8 @@ class RouteTableTenantTest(unittest.TestCase):
                 path = path.replace("{brand_id}", self.brand_b)
             path = _PATH_PARAM.sub(filler, path)
             kwargs = {"headers": {"Authorization": f"Bearer {self.a_token}"}}
+            if path_template == "/api/ads/brands/{brand_id}/next-period" and method == "GET":
+                kwargs["params"] = {"month": "2026-10"}
             if method in ("POST", "PUT", "PATCH", "DELETE"):
                 kwargs["json"] = {}
             response = self.client.request(method, path, **kwargs)
