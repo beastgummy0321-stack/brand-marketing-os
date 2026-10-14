@@ -38,7 +38,8 @@ class SimulationRecoveryTest(SimulatedPublishTestBase):
         closed = closeout.close(*self.args, actor="tester")
         self.assertEqual(closed["verdict"], "看不出")
         self.assertIsNone(closed["verdict_json"]["actual"])
-        self.assertEqual(bi_repo.list_learnings(web.conn, self.brand_id, source_track="coordinate"), [])
+        self.assertEqual(bi_repo.list_learnings(
+            web.conn, self.brand_id, source_track="coordinate"), [])
 
     def setUp(self):
         super().setUp()

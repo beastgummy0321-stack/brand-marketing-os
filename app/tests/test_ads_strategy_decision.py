@@ -928,13 +928,17 @@ class ExecutableDecisionAcceptanceTest(unittest.TestCase):
                     conn.commit()
                     return result
 
-                expected = "strategy_changed" if changed_input == "budget" else "strategy_infeasible"
-                with mock.patch.object(plan, "ask_with_one_retry", side_effect=while_away) as gateway:
+                expected = ("strategy_changed" if changed_input == "budget"
+                            else "strategy_infeasible")
+                with mock.patch.object(
+                    plan, "ask_with_one_retry", side_effect=while_away
+                ) as gateway:
                     with self.assertRaisesRegex(plan.StrategyConflict, expected) as failure:
                         self.adopt(campaign, decision)
                     gateway.assert_called_once()
                 if changed_input == "source_copy":
-                    self.assertIn("carry_unavailable", {r["code"] for r in failure.exception.reasons})
+                    self.assertIn("carry_unavailable",
+                                  {r["code"] for r in failure.exception.reasons})
                 self.assert_empty(campaign)
 
     def test_reduced_budget_revises_decision_and_refuses_old_approval(self):

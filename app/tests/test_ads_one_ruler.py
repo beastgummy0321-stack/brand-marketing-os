@@ -1197,7 +1197,8 @@ class RulesEndpointTest(unittest.TestCase):
         glossary = triage.rules()["glossary"]
         # Today's `patterns/glossary.ts` wording, numbers built from the constants.
         self.assertEqual(glossary["watch"], "每次成果成本超過上限，但超過不到 2 成")
-        self.assertEqual(glossary["over"], "每次成果成本超過上限 2 成以上；這是成本比較，不能單憑此判定盈虧")
+        self.assertEqual(glossary["over"],
+                         "每次成果成本超過上限 2 成以上；這是成本比較，不能單憑此判定盈虧")
         self.assertEqual(glossary["wasted"], "花到上限 3 倍的錢，已追蹤成果仍為零；提示支出風險")
         self.assertEqual(
             glossary["money"],

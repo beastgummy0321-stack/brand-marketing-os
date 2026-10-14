@@ -1352,11 +1352,13 @@ def _retained_carry_evidence(org_id, brand_id, campaign_id):
                 spend=1200 if offset == 0 else 0, purchases=10 if offset == 0 else 0,
             )
         ledger = web.conn.execute(
-            "SELECT * FROM learning_ledger WHERE source_cycle_id=%s", (f"{campaign_id}:{ad['id']}",),
+            "SELECT * FROM learning_ledger WHERE source_cycle_id=%s",
+            (f"{campaign_id}:{ad['id']}",),
         ).fetchone()
         if ledger:
             ranked = learning_rank.parse_scope(ledger["applicability_scope"])
-            ranked.update(sales=10, spend=1200, cost_per_sale=120, cap=300, few=False, currency="TWD")
+            ranked.update(sales=10, spend=1200, cost_per_sale=120,
+                          cap=300, few=False, currency="TWD")
             evidence = ads_learnings.source_evidence(
                 web.conn, org_id, brand_id, campaign, kind="coordinate", ad=ad,
                 window={"start": start, "end": end}, claim_key=ads_learnings.message_claim(ad),
@@ -1369,10 +1371,12 @@ def _retained_carry_evidence(org_id, brand_id, campaign_id):
             )
             offer = next((o for o in conditions["offers"] if o["key"] == ad["offer_key"]), {})
             evidence["conditions"].update(
-                price_version=conditions["price_version"], target_version=conditions["target_version"],
+                price_version=conditions["price_version"],
+                target_version=conditions["target_version"],
                 offer_version=offer.get("version"), valid_until=offer.get("valid_until"),
                 material_version=ads_learnings.material_version(
-                    {**ad, "material_evidence": ads_learnings.bound_material(web.conn, org_id, brand_id, ad)},
+                    {**ad, "material_evidence": ads_learnings.bound_material(
+                        web.conn, org_id, brand_id, ad)},
                     {},
                 ),
             )
@@ -1394,9 +1398,9 @@ def _seed_previous_with_creatives(org_id: str, brand_id: str, rows: list, *, pro
     with_creative)`; an ad with a creative gets its own ready original with `_KEEP_COPY`,
     confirmed and assigned; every ad gets its ranked `coordinate` learning row. Returns
     (campaign, ads, asset id or None per ad)."""
+    from app import storage
     from app.ads import handoff_assignment
     from app.ads import user_assets_repository as user_assets
-    from app import storage
 
     previous = ads_repo.create_campaign(web.conn, org_id, brand_id, {
         "name": "上一期 Campaign", "goal_text": "上一期衝購買", "objective": "購買",
