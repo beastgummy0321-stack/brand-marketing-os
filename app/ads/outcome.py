@@ -468,7 +468,7 @@ def _period_view(totals: dict, group_rows: list, result_kind: str | None) -> dic
 
     if not group_rows:
         return None
-    rows = [{**row, "metric_scope": row.get("metric_scope", "adset")} for row in group_rows]
+    rows = [{**row, "metric_scope": row.get("metric_scope", "group")} for row in group_rows]
     aggregated = review_evidence.aggregate(rows, min(r["day"] for r in rows),
                                           max(r["day"] for r in rows))
     views = aggregated["result_views"]

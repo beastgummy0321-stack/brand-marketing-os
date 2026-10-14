@@ -51,6 +51,9 @@ IDENTITY_READERS: dict[str, str] = {
     "ads/repository.py": "brand-owns-id checks of a campaign's product_ids",
 }
 
+# Content invalidation includes unfinished products; it never selects a ready product.
+SNAPSHOT_READERS = {("ads/next_period.py", "_revision")}
+
 _STEP_SQL = re.compile(r"onboarding_step\s+IS\s+(NOT\s+)?NULL", re.IGNORECASE)
 
 
@@ -138,7 +141,8 @@ def _violations(hits) -> list[str]:
         if rule == "list_products" and rel.startswith("brand_intelligence/"):
             continue
         if rule == "all_product_rows" and (rel.startswith("brand_intelligence/")
-                                           or rel in IDENTITY_READERS):
+                                           or rel in IDENTITY_READERS
+                                           or (rel, function) in SNAPSHOT_READERS):
             continue
         bad.append(f"app/{rel}:{line} [{rule}] in {function}(): {text}")
     return bad
@@ -159,6 +163,9 @@ class ReadinessGateTest(unittest.TestCase):
         identity = {rel for rel, rule, _f, _l, _t in hits if rule == "all_product_rows"}
         stale = [f"STEP_MACHINERY {k}" for k in STEP_MACHINERY if k not in steps]
         stale += [f"IDENTITY_READERS {k}" for k in IDENTITY_READERS if k not in identity]
+        snapshots = {(rel, function) for rel, rule, function, _l, _t in hits
+                     if rule == "all_product_rows"}
+        stale += [f"SNAPSHOT_READERS {k}" for k in SNAPSHOT_READERS if k not in snapshots]
         self.assertEqual(stale, [], "these allowlist entries no longer match a hit; delete them")
 
     def test_readiness_functions_exist_in_the_facade(self):
@@ -188,6 +195,14 @@ class ScannerGoesRedTest(unittest.TestCase):
                                  "onboarding_step", "list_products", "all_product_rows"])
         bad = _violations([("ads/sample.py", *h) for h in _hits("ads/sample.py", self.SAMPLE)])
         self.assertEqual(len(bad), 6)
+
+    def test_snapshot_permission_does_not_allow_a_picker_in_the_same_file(self):
+        source = "def _revision(c,b):\n    repo.all_product_rows(c,b)\n" \
+                 "def picker(c,b):\n    repo.all_product_rows(c,b)\n"
+        bad = _violations([("ads/next_period.py", *h)
+                           for h in _hits("ads/next_period.py", source)])
+        self.assertEqual(len(bad), 1)
+        self.assertIn("in picker()", bad[0])
 
 
 if __name__ == "__main__":
