@@ -406,6 +406,7 @@ test("F55 goal evidence: lead, zero, missing, mismatched unit and historical ver
   });
   const id = created.campaign.id;
   const saved = await api<{campaign: Record<string, unknown>}>(page, headers, "GET", `/api/ads/brands/${brand}/campaigns/${id}`);
+  const workspace = await api<Record<string, unknown>>(page, headers, "GET", `/api/ads/brands/${brand}/campaigns/${id}/workspace`);
   const current = {...saved.campaign, status: "live", lifecycle: {state: "live", label: "投放中", can_close: true},
     learning_sentence: null, verdict: null, verdict_json: {}};
   const result = {result_kind: "lead", result_label: "名單", result_action: "lead", result_attribution: "7d_click",
@@ -417,8 +418,13 @@ test("F55 goal evidence: lead, zero, missing, mismatched unit and historical ver
   const performance = {result_view: result, totals: {spend: 1000, purchases: 1, revenue: null, cpa: 1000,
     impressions: 100, clicks: 10, ctr: 0.1, roas_all_spend: null, roas_tracked_spend: null,
     grade: {grade: "on_target", label: "划算"}}, daily: [], groups: [], ads: [], last_data_at: null,
+    cap_comparison: {basis: "own", currency: "TWD", reason: null, message: null},
     coverage: {start: dateOffset(-7), end: dateOffset(-1), expected: 7, missing: 0, missing_days: [], never_synced: false}};
   await page.route(`**/api/ads/brands/${brand}/campaigns/${id}`, route => route.fulfill({json: {campaign: current}}));
+  await page.route(`**/api/ads/brands/${brand}/campaigns/${id}/workspace`, route => route.fulfill({json: {
+    ...workspace, draft: null, lifecycle: current.lifecycle,
+    stage: {key: current.status === "closed" ? "review" : "read", done: ["plan", "assets", "launch"]},
+  }}));
   let failure = false;
   await page.route(`**/api/ads/brands/${brand}/campaigns/${id}/performance`, route => failure
     ? route.fulfill({status: 503, json: {error: {message: "隔離測試讀取失敗"}}}) : route.fulfill({json: performance}));
@@ -430,6 +436,9 @@ test("F55 goal evidence: lead, zero, missing, mismatched unit and historical ver
       result.comparison_state = state === "incompatible" ? "incompatible" : state === "incomplete" ? "unknown" : "ready";
       result.count = state === "incomplete" ? null : state === "known_zero" ? 0 : 10;
       result.cost_per_result = state === "incomplete" || state === "known_zero" ? null : 100;
+      performance.totals.grade = state === "known_zero" ? {grade: "wasted", label: "沒賣出"}
+        : state === "incomplete" || state === "incompatible" ? {grade: "insufficient", label: "資料不足"}
+        : {grade: "on_target", label: "划算"};
       current.status = state === "legacy" ? "closed" : "live";
       current.lifecycle = {state: current.status, label: current.status === "closed" ? "已結案" : "投放中", can_close: current.status !== "closed"};
       current.verdict = state === "legacy" ? "達成" : null;

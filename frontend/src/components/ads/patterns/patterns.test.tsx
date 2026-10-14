@@ -479,7 +479,7 @@ describe("v10 kit（F29-I09）", () => {
     expect(term.tabIndex).toBe(0);
     expect(term.className).toContain("border-dotted");
     const tip = screen.getByRole("tooltip", { hidden: true });
-    expect(tip.textContent).toBe("你願意為一筆訂單付的廣告費，每個活動自己設");
+    expect(tip.textContent).toBe(RULES_FIXTURE.glossary.cap);
     expect(term.getAttribute("aria-describedby")).toBe(tip.id);
     expect(container.querySelectorAll("[data-slot='term']")).toHaveLength(1);
     expect(container.textContent).toContain("有賺");
