@@ -435,7 +435,7 @@ describe("v10 kit（F29-I09）", () => {
   /** Text as shown: a term's hidden tooltip sentence is not part of the line. */
   const shown = (el: Element) => { const copy = el.cloneNode(true) as Element; copy.querySelectorAll("[role='tooltip']").forEach((t) => t.remove()); return copy.textContent; };
 
-  it("glossary 是後端給的句子（F48）：除了剛開始那句都逐字等於原型 GLOSS；打平線帶自己的數字；還沒載入就是空的", async () => {
+  it("glossary follows served cost/evidence wording; retained terms match the prototype and unloaded terms stay empty", async () => {
     const { readFileSync } = await import("node:fs");
     const { join } = await import("node:path");
     const { define } = await import("./glossary");
@@ -444,14 +444,15 @@ describe("v10 kit（F29-I09）", () => {
     const block = html.slice(start, html.indexOf("};", start));
     const gloss = Object.fromEntries([...block.matchAll(/^\s+(\w+): "([^"]*)",?\r?$/gm)].map((m) => [m[1], m[2]]));
     expect(Object.keys(gloss)).toHaveLength(9);
-    expect(define("break_even", 520)).toBe(gloss.be);
+    expect(define("break_even", 520)).toContain("這裡是 520");
+    expect(define("break_even", 520)).toContain("不能只用平台歸因證明盈虧");
     expect(define("cap")).toBe(gloss.cap);
     expect(define("on_target")).toBe(gloss.ok);
     expect(define("watch")).toBe(gloss.watch);
-    expect(define("over")).toBe(gloss.over);
-    expect(define("wasted")).toBe(gloss.stop);
-    expect(define("money")).toBe(gloss.money);
-    expect(define("notebook")).toBe(gloss.note);
+    for (const term of ["over", "wasted", "money", "notebook"] as const) {
+      expect(define(term)).toBe(RULES_FIXTURE.glossary[term]);
+    }
+    expect(define("over")).toContain("不能單憑此判定盈虧");
     expect(define("break_even", null)).not.toContain("這裡是");
     expect(define("break_even", null)).toBe(RULES_FIXTURE.glossary.break_even);
     // `thin` is the served sentence (F48 Contract R: sample size is shown, never a gate), built from the rules.

@@ -524,7 +524,7 @@ def reasons() -> dict:
         },
         "spend_over_target_no_result": {
             "title": GRADE_LABELS["wasted"],
-            "text": f"花到上限 {unsold} 倍的錢，還一筆都沒賣出",
+            "text": f"花到上限 {unsold} 倍的錢，已追蹤成果仍為零；提示支出風險",
             "fix": None,
         },
         "cost_per_result_up": {
@@ -603,19 +603,19 @@ def rules() -> dict:
             "cap": "你願意為一筆訂單付的廣告費，每個活動自己設",
             "on_target": "每筆廣告費沒超過這個活動的上限",
             "watch": f"每筆廣告費超過上限，但超過不到 {watch_tenths} 成",
-            "over": f"每筆廣告費超過上限 {watch_tenths} 成以上，賣越多虧越多",
-            "wasted": f"花到上限 {unsold} 倍的錢，還一筆都沒賣出",
+            "over": f"每次成果成本超過上限 {watch_tenths} 成以上；這是成本比較，不能單憑此判定盈虧",
+            "wasted": f"花到上限 {unsold} 倍的錢，已追蹤成果仍為零；提示支出風險",
             "thin": (
                 f"賣出的廣告都有分數；還沒賣出且花不到上限 {unsold} 倍的先標「剛開始」；"
                 f"成交少於 {_figure(learning_rank.SAMPLE_FEW)} 筆標「{learning_rank.FLAG_FEW}」"
             ),
             "money": (
-                "拿每筆廣告費跟打平線比：比它低是有賺，比它高是在虧，"
+                "以商品貢獻假設比較廣告成本；這是估算，不能當作已付款利潤，"
                 f"差不到 {band_pct}% 算剛好打平"
             ),
-            "notebook": "系統記住哪些主打有效；下次開新活動，AI 會先讀這些，避開沒效的主打",
+            "notebook": "系統保留主打的觀察與適用條件；下次先核實是否適用，不代表已證明主打有效",
             # The value part 「（這裡是 X）」 is the frontend's: it knows the campaign's number.
-            "break_even": "賣一筆扣掉商品成本和運費後剩下的錢；每筆廣告費超過它，就是在虧",
+            "break_even": "賣一筆扣掉商品成本和運費後剩下的錢；須核實來源、退款與其他成本，不能只用平台歸因證明盈虧",
         },
     }
 

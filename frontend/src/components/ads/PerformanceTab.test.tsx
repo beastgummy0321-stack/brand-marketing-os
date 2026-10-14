@@ -28,7 +28,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 
-import type { AdRow, CampaignCard, CampaignDetail, CampaignPerformance, DeliveryGroupRow } from "@/lib/adsApi";
+import type { AdRow, CampaignCard, CampaignDetail, CampaignPerformance, DeliveryGroupRow, ResultEvidence } from "@/lib/adsApi";
 import type { ExternalView, NativeObservation } from "@/lib/adsExternalApi";
 import { closeCampaign, coverageGapOf, getPerformance, listCampaigns } from "@/lib/adsApi";
 import { ApiResponseError } from "@/lib/http";
@@ -143,6 +143,15 @@ function performance(): CampaignPerformance {
     coverage: { start: null, end: null, expected: 0, missing: 0, missing_days: [], never_synced: false },
     last_data_at: null,
   };
+}
+
+function resultEvidence(overrides: Partial<ResultEvidence> = {}): ResultEvidence {
+  return {result_kind: "lead", result_label: "名單", result_action: "lead", result_attribution: "7d_click",
+    currency: "TWD", spend: 1000, count: 10, known_count: 10, cost_per_result: 100,
+    state: "known_positive", data_state: "known_positive", comparison_state: "ready", reasons: [],
+    target: {value: 100, basis: "own", result_kind: "lead", revision: 1},
+    sample: {count: 10, result_kind: "lead", days: 7, days_present: 7, days_known: 7, derived_zero_days: 0},
+    evidence_refs: ["observation"], evidence_ref_count: 1, evidence_refs_omitted: 0, ...overrides};
 }
 
 function group(overrides: Partial<DeliveryGroupRow> = {}): DeliveryGroupRow {
@@ -1024,5 +1033,58 @@ describe("F52 current performance request generation", () => {
     expect(screen.getByText("1,200 TWD")).toBeTruthy();
     expect(screen.queryByText("dismissed owner error")).toBeNull();
     expect(screen.queryByText("900 TWD")).toBeNull();
+  });
+});
+
+describe("F55 goal evidence, cap comparison and legacy limits", () => {
+  it("uses the served lead result and keeps incidental purchases in secondary data", async () => {
+    const data = performance();
+    data.result_view = resultEvidence();
+    data.totals = {...data.totals, spend: 1000, purchases: 1, cpa: 1000};
+    vi.mocked(getPerformance).mockResolvedValue(data);
+    renderTab(campaign());
+    await screen.findByText("名單數");
+    expect((screen.getByText("名單數").closest("article"))?.textContent).toContain("10");
+    expect((screen.getByText("每次名單成本").closest("article"))?.textContent).toContain("100 TWD");
+    expect((screen.getByText("樣本範圍").closest("article"))?.textContent).toContain("7 天");
+    await userEvent.click(screen.getByRole("button", {name: "查看每日資料、次要指標與公式"}));
+    expect((screen.getByText("購買數（次要資料）").closest("article"))?.textContent).toContain("1");
+  });
+
+  it.each([
+    ["known_zero", "known_zero", "ready", "已追蹤到零成果", 0, null],
+    ["incomplete", "incomplete", "unknown", "成果資料仍有缺漏", null, null],
+    ["incompatible", "known_positive", "incompatible", "核實平台成果定義", 10, 100],
+    ["unconfigured", "known_positive", "unconfigured", "回到策略", 10, 100],
+  ] as const)("keeps %s distinct from missing and from cap eligibility", async (state, data_state, comparison_state, text, count, cost_per_result) => {
+    const data = performance();
+    data.result_view = resultEvidence({state, data_state, comparison_state, count, cost_per_result});
+    data.totals.grade = {grade: "wasted", label: "沒賣出"};
+    vi.mocked(getPerformance).mockResolvedValue(data);
+    renderTab(campaign());
+    await screen.findByText(new RegExp(text));
+    expect((screen.getByText("名單數").closest("article"))?.textContent).toContain(count === null ? "未知" : String(count));
+    expect((screen.getByText(/成本與支出提示/))?.textContent).toContain("零成果且支出達到風險門檻");
+    expect(screen.queryByText(/賣越多虧越多/)).toBeNull();
+  });
+
+  it("reads a saved goal-specific verdict and its learning without client recalculation", async () => {
+    const result = resultEvidence({cost_per_result: 150});
+    vi.mocked(getPerformance).mockResolvedValue({...performance(), result_view: result});
+    renderTab(campaign({status: "closed", verdict: "未達成", learning_sentence: "後端保存：每次名單成本150，超過上限100；樣本有限。",
+      verdict_json: {schema_version: 2, metric: "cost_per_result", target: 100, actual: 150,
+        result_view: result, scope: {currency: "TWD"}, cap_comparison: {currency: "TWD"},
+        risk: {grade: "over", label: "太貴"}}}));
+    const heading = await screen.findByRole("heading", {name: /結案判定/});
+    expect((heading.closest(".surface"))?.textContent).toContain("每次名單成本");
+    expect((heading.closest(".surface"))?.textContent).toContain("後端保存：每次名單成本150");
+    expect(screen.queryByText(/歷史判定：/)).toBeNull();
+  });
+
+  it("preserves a historical verdict while displaying its missing evidence limit", async () => {
+    vi.mocked(getPerformance).mockResolvedValue(performance());
+    renderTab(campaign({status: "closed", verdict: "達成", verdict_json: {metric: "cpa", actual: 100, target: 150}}));
+    await screen.findByText(/歷史判定：未保存當時完整/);
+    expect((screen.getByRole("heading", {name: /結案判定/}))?.textContent).toContain("達成");
   });
 });

@@ -12,6 +12,7 @@ from app.brand_intelligence import repository as brands
 from app.core import db
 from app.core import settings as coresettings
 from app.orders import repository as order_repository
+from app.tests.fixtures.ads_external import outcome_seed
 from app.tests.test_ads_home_overview import _ad, _imported, _obs
 
 
@@ -264,6 +265,8 @@ def test_home_and_month_use_the_canonical_cap_and_economics_units(
     for i, currency in enumerate(observed):
         _obs(conn, org, brand, campaign, ad, date(2026, 9, 5 + i), spend=100,
              count=2, currency=currency)
+    # Unit arithmetic assumes a completed read; missing-period eligibility has separate falsifiers.
+    outcome_seed.set_coverage(conn, org, brand, campaign, date(2026, 9, 1), date(2026, 9, 9))
     with (
         mock.patch.object(coresettings, "today_for_org", return_value=date(2026, 9, 10)),
         mock.patch.object(coverage, "last_complete_day", return_value=date(2026, 9, 9)),
@@ -297,3 +300,13 @@ def test_home_and_month_use_the_canonical_cap_and_economics_units(
     for container in (home["money"], home["campaigns"][0], row):
         assert container["configured_cap"]["value"] == resolved["value"]
         assert container["configured_cap"]["basis"] == resolved["basis"]
+
+def test_cost_glossary_does_not_infer_loss_from_an_own_cap():
+    from app.ads import triage
+
+    glossary = triage.rules()["glossary"]
+    assert "賣越多虧越多" not in glossary["over"]
+    assert "不能單憑此判定盈虧" in glossary["over"]
+    assert "已付款利潤" in glossary["money"]
+    assert "來源" in glossary["break_even"]
+    assert "支出風險" in glossary["wasted"]
