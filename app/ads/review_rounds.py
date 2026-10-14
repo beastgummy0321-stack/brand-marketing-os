@@ -34,6 +34,10 @@ def model_input(evidence):
     periods = [(value.get("current"), window.get("start"), window.get("end")),
                (value.get("previous"), window.get("previous_start"), window.get("previous_end"))]
     prior = value.get("previous_review") or {}
+    for owner in (value, prior.get("evidence") or {}):
+        conditions = owner.get("conditions")
+        if isinstance(conditions, dict):
+            conditions.pop("copy_editable", None)  # UI-only capability rechecked on adoption.
     periods.append(((prior.get("evidence") or {}).get("current"),
                     prior.get("window_start"), prior.get("window_end")))
     for period, start, end in periods:

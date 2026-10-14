@@ -65,7 +65,7 @@ def next_round(run, route):
     )["review"]
     run.drain()
     current = run.call("GET", route + "/reviews/" + created["id"])["review"]
-    assert current["status"] == "ready"
+    assert current["status"] == "ready", current
     evidence = current["evidence_json"]
     assert current["previous_id"] == previous["id"]
     assert (

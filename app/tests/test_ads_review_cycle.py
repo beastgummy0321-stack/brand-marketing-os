@@ -854,6 +854,7 @@ class ReviewCycleTest(unittest.TestCase):
         original_input = review_rounds.model_input(evidence)
         evidence["current"]["ad_spend"] = {"value": 100, "currency": "TWD"}
         evidence["current"]["ad_result_view"] = {"result_count": 3}
+        evidence["conditions"]["copy_editable"] = {"ok": True, "mode": "copy", "reason": None}
         self.assertEqual(review_rounds.model_input(evidence), original_input)
         decision["scope"] = {"start": evidence["window"]["start"],
                              "end": evidence["window"]["end"], "days": 7}
