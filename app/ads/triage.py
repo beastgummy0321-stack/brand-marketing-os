@@ -615,7 +615,8 @@ def rules() -> dict:
             ),
             "notebook": "系統保留主打的觀察與適用條件；下次先核實是否適用，不代表已證明主打有效",
             # The value part 「（這裡是 X）」 is the frontend's: it knows the campaign's number.
-            "break_even": "賣一筆扣掉商品成本和運費後剩下的錢；須核實來源、退款與其他成本，不能只用平台歸因證明盈虧",
+            "break_even": ("賣一筆扣掉商品成本和運費後剩下的錢；須核實來源、退款與其他成本，"
+                           "不能只用平台歸因證明盈虧"),
         },
     }
 
