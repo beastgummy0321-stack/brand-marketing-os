@@ -56,6 +56,7 @@ export interface ExistingPage {
   outcome?: SyncOutcome | null;
 }
 export interface ExternalView {
+  result_views?: (import("./adsTriageApi").ResultEvidence & {scope_key: string})[];
   entities: NativeEntity[]; observations: NativeObservation[];
   next_entity_cursor: string | null; next_observation_cursor: string | null;
   window: { start: string; end: string };

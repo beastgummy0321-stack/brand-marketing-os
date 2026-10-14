@@ -1097,6 +1097,28 @@ it("F55 primary period strip agrees with the advanced goal result, excluding pur
   await within(strip).findByText("每次名單成本");
   await waitFor(() => expect(strip.textContent).toContain("100 TWD"));
   expect(strip.textContent).toContain("10 次");
-  expect(strip.textContent).not.toContain("1,000 TWD");
+  const costCell = within(strip).getByText("每次名單成本").parentElement;
+  expect(costCell?.textContent).toContain("100 TWD");
+  expect(costCell?.textContent).not.toContain("1,000 TWD");
   expect(strip.textContent).toContain("不代表已證明有效或已付款利潤");
+});
+
+it("F55 imported performance selects served goal projections without adding ad and adset grains", async () => {
+  const key = (scope: string) => JSON.stringify([scope, "TWD", "7d"]);
+  const base: NativeObservation = {id: "set", entity_id: "set", day: "2026-10-01", metric_scope: "adset", attribution_key: "7d",
+    currency: "TWD", spend: 1000, impressions: 100, clicks: 10, purchases: 1, revenue: null,
+    result_kind: "lead", result_count: 10, result_action: "lead", result_attribution: "7d_click", availability: {}};
+  const raw: ExternalView = {entities: [], observations: [base, {...base, id: "ad", entity_id: "ad", metric_scope: "ad", spend: 400, result_count: 2}],
+    next_entity_cursor: null, next_observation_cursor: null, window: {start: "2026-10-01", end: "2026-10-07"}, connections: [], sync: {}, coverage: {},
+    result_views: [{...resultEvidence(), scope_key: key("adset")},
+      {...resultEvidence({spend: 400, count: 2, known_count: 2, cost_per_result: 200}), scope_key: key("ad")}]};
+  vi.mocked(getPerformance).mockResolvedValue({origin: "imported", external_view: raw});
+  renderTab(campaign({origin: "imported", external_view: raw}));
+  await screen.findByText("名單數");
+  expect(screen.getByText("名單數").closest("article")?.textContent).toContain("10");
+  expect(screen.getByText("每次名單成本").closest("article")?.textContent).toContain("100 TWD");
+  await userEvent.click(screen.getByRole("button", {name: "查看每日資料、次要指標與公式"}));
+  await userEvent.selectOptions(screen.getByLabelText("資料範圍"), key("ad"));
+  expect(screen.getByText("名單數").closest("article")?.textContent).toContain("2");
+  expect(screen.getByText("每次名單成本").closest("article")?.textContent).toContain("200 TWD");
 });

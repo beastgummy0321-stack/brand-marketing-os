@@ -600,6 +600,7 @@ export async function putTarget(brand: string, campaign: string, body: TargetReq
 
 /** Shared availability-aware result/cap projection from the ads evidence owner. */
 export interface ResultEvidence {
+  comparison?: {currency: string | null; reason: string | null; message: string | null} | null;
   result_kind: string | null;
   result_label: string;
   result_action: string | null;

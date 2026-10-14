@@ -444,6 +444,8 @@ test("F55 goal evidence: lead, zero, missing, mismatched unit and historical ver
       current.verdict = state === "legacy" ? "達成" : null;
       current.verdict_json = state === "legacy" ? {metric: "cpa", target: 150, actual: 100} : {};
       await page.goto(`/app/brands/${brand}/ads/campaigns/${id}?tab=performance`);
+      const primaryCost = page.getByTestId("period-status-row").getByText("每次名單成本", {exact: true}).locator("..");
+      await expect(primaryCost).toContainText(result.cost_per_result === null ? "算不出來" : "100 TWD");
       await openPerformanceDetails(page);
       const goalKpi = page.locator("article").filter({has: page.getByText("名單數", {exact: true})});
       await expect(goalKpi).toContainText(state === "incomplete" ? "未知" : String(result.count));

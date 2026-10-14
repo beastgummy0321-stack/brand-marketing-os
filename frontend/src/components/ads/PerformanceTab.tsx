@@ -290,6 +290,7 @@ export function PerformanceTab({
       {state.status === "loading" && performanceData && <p role="status" className="text-sm text-muted-foreground">正在更新成效…</p>}
       {imported && nativeView ? (
         <PerformanceReady simulated={false} native data={nativeData} labels={labels} refreshing={syncing}
+          goal={nativeView.result_views?.find(result => result.scope_key === selectedScope?.key)}
           onRefresh={() => onSync?.()} refreshDisabled={!onSync} currency={selectedScope?.currency ?? null} note={syncNote}
           scopeCaption={`${selectedScope?.label ?? "尚無資料範圍"} · ${nativeView.window.start ?? "未知"} ～ ${nativeView.window.end ?? "未知"}`}
           scopeControl={scopes.length > 0 ? <label className="flex flex-col gap-1 text-sm">資料範圍<select className="input-field" value={selectedScope?.key} onChange={event => setScopeKey(event.target.value)}>{scopes.map(scope => <option key={scope.key} value={scope.key}>{scope.label}</option>)}</select></label> : null}
@@ -382,7 +383,7 @@ function PerformanceReady({
     : fmtCpa(value);
   const percent = (value: number | null) => (native || scoped) && value === null ? "未知" : formatPercent(value);
   const source = simulated ? "模擬回收" : "平台回報";
-  const purchaseLabels = goal ? DEFAULT_LABELS : labels;
+  const purchaseLabels = goal || native ? DEFAULT_LABELS : labels;
   const latestDay = data.daily[data.daily.length - 1]?.day ?? null;
   // F37 Contract P: the internal campaign's platform-read coverage (the native view has its own caption).
   const coverage = native ? null : data.coverage;
@@ -451,12 +452,12 @@ function PerformanceReady({
         {goal ? <>
           <Kpi label="花費" value={nativeMoney(goal.spend, goal.currency)} caption={`資料已知的花費・${source}`} />
           <Kpi label={`${goal.result_label}數`} value={goal.count === null ? "未知" : formatCount(goal.count)} caption="活動目標的成果；缺漏不補零" />
-          <Kpi label={`每次${goal.result_label}成本`} value={goal.cost_per_result === null ? "算不出來" : nativeMoney(goal.cost_per_result, goal.currency)} caption={`上限：${goal.target.value === null ? "未設定" : nativeMoney(goal.target.value, data.cap_comparison?.currency ?? null)}`} />
+          <Kpi label={`每次${goal.result_label}成本`} value={goal.cost_per_result === null ? "算不出來" : nativeMoney(goal.cost_per_result, goal.currency)} caption={`上限：${goal.target.value === null ? "未設定" : nativeMoney(goal.target.value, goal.comparison?.currency ?? data.cap_comparison?.currency ?? null)}`} />
           <Kpi label="樣本範圍" value={`${goal.sample.days ?? "未知"} 天`} caption={`${goal.sample.days_known} 天成果已知；${goal.count === null ? "總成果未知" : `${formatCount(goal.count)} 次${goal.result_label}`}；樣本量不是有效性的證明`} />
         </> : <>
         <Kpi label="花費" value={money(t.spend)} caption={`累計花費・${source}`} />
-        <Kpi label={labels.count} value={count(t.purchases)} caption={`累計${labels.conversion}・${source}`} />
-        <Kpi label="CPA" value={cpa(t.cpa)} caption={`花費 ÷ ${labels.conversion}`} />
+        <Kpi label={purchaseLabels.count} value={count(t.purchases)} caption={`累計${purchaseLabels.conversion}・${source}`} />
+        <Kpi label="CPA" value={cpa(t.cpa)} caption={`花費 ÷ ${purchaseLabels.conversion}`} />
         <Kpi label="ROAS" value={<Figure basis="roas_all_spend" value={t.roas_all_spend} />} caption={native ? null : <Figure basis="roas_tracked_spend" value={t.roas_tracked_spend} />} />
         </>}
       </div>

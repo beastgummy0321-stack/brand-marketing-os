@@ -257,3 +257,32 @@ def test_fractional_reported_result_is_positive_not_a_zero_sale():
     scope = learning_rank.scope(ranked, {d: "none" for d in learning_rank.DIMENSIONS}, None)
     assert learning_rank.parse_scope(scope)["sales"] == 0.5
     assert outcome.period_bucket([observation(1500, 0.5, purchases=0.5)])["purchases"] == 0.5
+
+
+def test_native_scope_projection_preserves_goal_and_does_not_add_measurement_grains():
+    rows = [{**observation(1000, 10, kind="lead", purchases=1), "id": "adset-row"},
+            {**observation(200, 2, kind="lead", purchases=0), "id": "ad-row", "metric_scope": "ad"}]
+    target = {"value": 100, "basis": "own", "result_kind": "lead"}
+    scope = {"start": "2026-10-01", "end": "2026-10-01", "days": 1}
+    views = outcome.native_result_views(rows, target, scope,
+        {"never_synced": False, "missing_days": []}, {"basis": "own", "currency": "TWD"})
+    assert len(views) == 2
+    assert sorted(v["count"] for v in views) == [2, 10]
+    assert all(v["cost_per_result"] == 100 and v["result_kind"] == "lead" for v in views)
+    assert all(v["state"] == "known_positive" for v in views)
+    assert {v["scope_key"] for v in views} == {
+        '["ad","TWD","purchase-window"]', '["adset","TWD","purchase-window"]'}
+
+
+def test_native_read_gap_or_wrong_goal_keeps_eligibility_unknown():
+    rows = [{**observation(1000, 10, kind="lead", purchases=1), "id": "native-row"}]
+    scope = {"start": "2026-10-01", "end": "2026-10-02", "days": 2}
+    target = {"value": 100, "basis": "own", "result_kind": "lead"}
+    view = outcome.native_result_views(rows, target, scope,
+        {"never_synced": False, "missing_days": ["2026-10-02"]},
+        {"basis": "own", "currency": "TWD"})[0]
+    assert view["count"] is None and view["known_count"] == 10
+    assert view["cost_per_result"] is None and view["state"] == "incomplete"
+    view = outcome.native_result_views(rows, {**target, "result_kind": "purchase"}, scope,
+        {"never_synced": False, "missing_days": []}, {"basis": "own", "currency": "TWD"})[0]
+    assert view["state"] == "incompatible" and "result_kind_mismatch" in view["reasons"]

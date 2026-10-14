@@ -22,6 +22,7 @@ Coverage (Contract P/Q, F49 Contract V): `coverage` names the campaign-window da
 nothing was read.
 """
 
+import json
 from datetime import date, timedelta
 
 from app.core import settings as coresettings
@@ -244,7 +245,35 @@ def native_period_view(conn: _AnyConn, org_id: str, brand_id: str, campaign: dic
         **basis,
     }
     view["scope"]["caption"] = _scope_caption(view["scope"])
+    from app.ads import targets
+
+    target = targets.resolve(conn, org_id, brand_id, campaign)
+    gap = coverage.gap(conn, org_id, brand_id, campaign["id"], requested_start, end)
+    view["result_views"] = native_result_views(
+        view["observations"], target, view["scope"], gap,
+        cap_unit(conn, brand_id, target, campaign=campaign),
+    )
     return view
+
+
+def native_result_views(observations: list, target: dict, scope: dict, gap: dict,
+                        unit: dict) -> list[dict]:
+    """Project each native scope/currency/attribution independently through the same reducer."""
+    from app.ads import review_evidence
+
+    groups: dict[tuple, list] = {}
+    for row in observations:
+        if review_evidence.is_monthly_budget_row(row["attribution_key"]):
+            continue
+        key = (row["metric_scope"], row["currency"], row["attribution_key"])
+        groups.setdefault(key, []).append({**row, "observation_id": row.get("id")})
+    reason = "needs_resync" if gap["never_synced"] or gap["missing_days"] else None
+    return [
+        {**result_projection(rows, target, {**scope, "metric_scope": key[0]},
+                             comparison=compare_cap_unit(unit, key[1]), reason=reason),
+         "scope_key": json.dumps(key, ensure_ascii=False, separators=(",", ":"))}
+        for key, rows in sorted(groups.items(), key=lambda entry: str(entry[0]))
+    ]
 
 
 def cap_unit(conn: _AnyConn, brand_id: str, cap: dict, *, campaign: dict) -> dict:
@@ -439,7 +468,7 @@ def _period_view(totals: dict, group_rows: list, result_kind: str | None) -> dic
 
     if not group_rows:
         return None
-    rows = [{**row, "metric_scope": "adset"} for row in group_rows]
+    rows = [{**row, "metric_scope": row.get("metric_scope", "adset")} for row in group_rows]
     aggregated = review_evidence.aggregate(rows, min(r["day"] for r in rows),
                                           max(r["day"] for r in rows))
     views = aggregated["result_views"]

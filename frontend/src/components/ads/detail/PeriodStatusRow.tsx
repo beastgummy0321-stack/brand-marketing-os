@@ -131,7 +131,8 @@ export function PeriodStatusRow({ brandId, campaign: c, lastSuccessAt = null, on
   const nativeView = data && "external_view" in data ? data.external_view : null;
   const native = nativeView ? nativePerformance(nativeView) : null;
   const totals = imported ? native?.totals : internal?.totals;
-  const result = internal?.result_view;
+  const nativeScope = nativeMetricScopes(nativeView)[0];
+  const result = internal?.result_view ?? nativeView?.result_views?.find(view => view.scope_key === nativeScope?.key);
   const grade: PeriodGrade | null = internal?.totals.grade ?? null;
   const coverage = internal?.coverage;
   const scope = internal?.scope ?? native?.scope;
@@ -141,7 +142,7 @@ export function PeriodStatusRow({ brandId, campaign: c, lastSuccessAt = null, on
   const latest = latestReadAt(c, lastSuccessAt);
   const days = scope?.days ?? null;
   const cap = result ? result.target.value : c.cap.value;
-  const capCurrency = internal?.cap_comparison?.currency ?? "幣別未知";
+  const capCurrency = result?.comparison?.currency ?? internal?.cap_comparison?.currency ?? "幣別未知";
 
   const dash = perf.status === "loading" ? "…" : "—";
   const unit = currency ?? "幣別未知";
@@ -215,6 +216,7 @@ export function PeriodStatusRow({ brandId, campaign: c, lastSuccessAt = null, on
       {scope?.caption && <p className="mt-2 text-[11.5px] text-muted-foreground">{scope.caption}</p>}
       {scope?.reason_text && <p className="mt-2 text-[11.5px] text-warning">{scope.reason_text}</p>}
       {internal?.cap_comparison?.message && <p className="mt-2 text-[11.5px] text-warning">{internal.cap_comparison.message}</p>}
+      {imported && result?.comparison?.message && <p className="mt-2 text-[11.5px] text-warning">{result.comparison.message}</p>}
       {result && <p className="mt-2 text-[11.5px] text-muted-foreground">
         {result.data_state === "known_zero" ? "已追蹤零成果；支出風險另外看。"
           : result.data_state === "incomplete" ? "成果資料仍有缺漏，未知不算零；先補讀缺漏日期與核實成果定義。"
