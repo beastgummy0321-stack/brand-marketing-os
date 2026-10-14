@@ -114,7 +114,7 @@ const NOT_A_RULER: { file: string; text: string; why: string }[] = [
 /** Test data is admitted only while unreachable from production, including re-exports and lazy imports. */
 const TEST_DATA = new Set([
   "components/ads/patterns/rulesFixture.ts",
-  ...readdirSync(SRC_DIR, { recursive: true }).filter((name) => /\.fixtures\.tsx?$/.test(name))
+  ...readdirSync(SRC_DIR, { recursive: true, encoding: "utf8" }).filter((name) => /\.fixtures\.tsx?$/.test(name))
     .map((name) => name.split("\\").join("/")),
 ]);
 
