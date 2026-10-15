@@ -2,6 +2,7 @@ import { apiFetch, readJson } from "./http";
 import { BASE } from "./adsApi";
 import type { NativeEntity } from "./adsExternalApi";
 import type { ReviewMonitor } from "./adsRuntimeApi";
+import type { CapView, ResultEvidence } from "./adsTriageApi";
 
 export type ReviewStatus = "waiting" | "queued" | "running" | "ready" | "completed" | "deferred" | "unjudgeable" | "failed" | "unknown";
 export interface ReviewSeries {
@@ -27,6 +28,8 @@ export interface ReviewPeriod {
    * day or two currencies) and its one result view (`triage._ad_view`). */
   ad_spend?: { value: number | null; currency: string | null };
   ad_result_view?: (Omit<ReviewResultView, "reason"> & { reason: ReviewResultView["reason"] | "needs_resync" | "mixed_currency" }) | null;
+  /** Canonical result evidence captured with this round; absent in legacy snapshots. */
+  decision_evidence?: ResultEvidence;
 }
 export interface CommerceEvidence {
   scope: string; start: string; end: string;
@@ -53,6 +56,8 @@ export interface ReviewRound {
   // on its evidence alone and can be re-run through `retryReview`.
   result_json: { recommendations?: Recommendation[]; limitations?: string[]; rejected?: { reason: string } | null };
   evidence_json: {
+    /** Read the saved cap, never the current decision queue's later settings. */
+    campaign?: { goal_text?: string | null; objective?: string | null; target?: Partial<CapView> | null };
     target: Pick<NativeEntity, "id" | "name" | "platform" | "source_account" | "native_id">;
     window: { start: string; end: string; previous_start: string; previous_end: string; timezone: string | null; missing_days: string[] };
     current: ReviewPeriod; previous: ReviewPeriod;

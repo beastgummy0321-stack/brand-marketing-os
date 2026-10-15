@@ -2730,6 +2730,10 @@ totals. Incomplete/incompatible evidence cannot yield a proven winner or qualifi
 coordinate carry. Preserve current ownership, learning tracks and human adoption gates.
 Saved legacy verdicts/learnings remain immutable and readable as historical conclusions.
 Versioned readers show their original metric and legacy limitation; no silent backfill/regrade.
+The review evidence screen reads result labels, sales intent and the cost cap from that round's
+stored decision_evidence/campaign.target, independently of today's transient triage queue.
+Queue absence or read failure cannot remove those captured facts; later queue settings cannot
+replace them. Legacy snapshots without a captured cap show unknown rather than current settings.
 
 #### S3. Atomic closeout and retry identity
 The ads close operation owns one Conn.atomic boundary covering the fresh scoped campaign read,
