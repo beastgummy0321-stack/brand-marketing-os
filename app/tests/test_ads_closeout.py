@@ -50,7 +50,8 @@ class CloseoutTestBase(unittest.TestCase):
         """
         context = dict(context or {})
         campaign = ads_repo.create_campaign(self.conn, self.org_id, self.brand_id, {
-            "name": f"測試 Campaign {cap}", "goal_text": "衝一波", "objective": "購買",
+            "name": f"測試 Campaign {cap}", "goal_text": "衝一波",
+            "objective": getattr(self, "campaign_objective", "購買"),
             "target_cost": None, "context_json": context,
             "start_date": start_date, "end_date": end_date, "status": status,
         }, created_by=ACTOR)
@@ -80,7 +81,8 @@ class CloseoutTestBase(unittest.TestCase):
         outcome_seed.seed_day(
             self.conn, self.org_id, self.brand_id, campaign_id, "group", group_id, day,
             spend=spend, impressions=100, clicks=10, purchases=purchases, revenue=revenue,
-            source=source,
+            source=source, result_kind=("lead" if getattr(self, "campaign_objective", "購買")
+                                      == "名單" else "purchase"), result_count=purchases,
         )
         self.conn.commit()
 
@@ -115,7 +117,8 @@ class BeatTargetClosesAchievedTest(CloseoutTestBase):
 
         self.assertEqual(closed["status"], "closed")
         self.assertEqual(closed["verdict"], "達成")
-        self.assertEqual(closed["verdict_json"]["metric"], "cpa")
+        self.assertEqual(closed["verdict_json"]["metric"], "cost_per_result")
+        self.assertEqual(closed["verdict_json"]["schema_version"], 2)
         self.assertEqual(closed["verdict_json"]["target"], 300)
         self.assertEqual(closed["verdict_json"]["basis"], "own")
         self.assertAlmostEqual(closed["verdict_json"]["actual"], 200.0)  # 3000/15
@@ -127,7 +130,7 @@ class BeatTargetClosesAchievedTest(CloseoutTestBase):
         self.assertEqual(source["source_kind"], "campaign")
         self.assertEqual(source["period"], {"start": start.isoformat(),
                                          "end": self.complete_day.isoformat()})
-        self.assertIn("每筆成本上限 300", learnings[0]["learning_text"])
+        self.assertIn("每次購買成本上限 300", learnings[0]["learning_text"])
         self._facts_and_rules_untouched()
 
     def test_campaign_read_serves_the_ledger_sentence_after_closeout_only(self):
@@ -218,7 +221,8 @@ class LowSampleIsShownNeverAVerdictSwitchTest(CloseoutTestBase):
 
         self.assertEqual(closed["verdict"], "達成")  # 100 a sale against a cap of 300
         self.assertEqual(closed["verdict_json"]["sample"],
-                         {"purchases": 2, "days": 1, "bucket": "低"})
+                         {"purchases": 2, "count": 2, "result_kind": "purchase",
+                          "days": 1, "bucket": "低"})
         self.assertEqual(closed["verdict_json"]["sample_bucket"], "低")
         self.assertNotIn("missing", closed["verdict_json"])
         learnings = bi_repo.list_learnings(self.conn, self.brand_id)
@@ -233,7 +237,8 @@ class LowSampleIsShownNeverAVerdictSwitchTest(CloseoutTestBase):
         closed = closeout.close(self.conn, self.org_id, self.brand_id, met["id"], actor=ACTOR)
         self.assertEqual(closed["verdict"], "達成")
         self.assertEqual(closed["verdict_json"]["sample"],
-                         {"purchases": 9, "days": 7, "bucket": "低"})
+                         {"purchases": 9, "count": 9, "result_kind": "purchase",
+                          "days": 7, "bucket": "低"})
 
         missed = self._week(cap=200, purchases_per_day=nine)
         closed = closeout.close(self.conn, self.org_id, self.brand_id, missed["id"], actor=ACTOR)
@@ -293,6 +298,7 @@ class LeadGoalPrintsLeadLabelsTest(CloseoutTestBase):
     speaks the brand's own vocabulary (「每筆名單成本」)."""
 
     def _lead_brand(self):
+        self.campaign_objective = "名單"
         bi_repo.set_brand_switches(
             self.conn, self.brand_id, market_region=None, conversion_goal="lead", actor=ACTOR,
         )
@@ -307,7 +313,7 @@ class LeadGoalPrintsLeadLabelsTest(CloseoutTestBase):
 
         self.assertEqual(closed["verdict"], "未達成")
         learnings = bi_repo.list_learnings(self.conn, self.brand_id)
-        self.assertIn("每筆成本上限", learnings[0]["learning_text"])
+        self.assertIn("每次名單成本上限", learnings[0]["learning_text"])
         self.assertNotIn("購買", learnings[0]["learning_text"])
 
     def test_lead_brand_untracked_metric_names_lead_cost_untracked(self):
@@ -324,7 +330,7 @@ class LeadGoalPrintsLeadLabelsTest(CloseoutTestBase):
         closed = closeout.close(self.conn, self.org_id, self.brand_id, campaign["id"], actor=ACTOR)
 
         self.assertEqual(closed["verdict"], "看不出")
-        self.assertIn("每筆名單成本未追蹤", closed["verdict_json"]["missing"])
+        self.assertIn("每次名單成本未追蹤", closed["verdict_json"]["missing"])
 
 
 class PurchaseGoalKeepsExistingStringsTest(CloseoutTestBase):
@@ -338,7 +344,7 @@ class PurchaseGoalKeepsExistingStringsTest(CloseoutTestBase):
         closeout.close(self.conn, self.org_id, self.brand_id, campaign["id"], actor=ACTOR)
 
         learnings = bi_repo.list_learnings(self.conn, self.brand_id)
-        self.assertIn("每筆成本上限 300，實際 400", learnings[0]["learning_text"])
+        self.assertIn("每次購買成本上限 300，實際 400", learnings[0]["learning_text"])
 
 
 class SecondCampaignSameDirectionUpgradesLearningTest(CloseoutTestBase):

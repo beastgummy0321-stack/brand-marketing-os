@@ -67,6 +67,7 @@ function review(overrides: Partial<ReviewRound> = {}): ReviewRound {
       limitations: [],
     },
     evidence_json: {
+      campaign: { objective: "購買", target: { value: 450, basis: "own", result_kind: "purchase", result_label: "購買", missing: [], break_even: null, cap_unit: { basis: "own", currency: "TWD" } } },
       target: { id: "aex_1", name: "撞車1150724", platform: "meta", source_account: "acc_1", native_id: "native_1" },
       window: { start: "2026-09-08", end: "2026-09-21", previous_start: "2026-08-25", previous_end: "2026-09-07", timezone: "Asia/Taipei", missing_days: [] },
       current: period(), previous: period({ ad_spend: { value: 2000, currency: "TWD" }, ad_result_view: { metric_scope: "ad", currency: "TWD", result_kind: "purchase", result_action: "omni_purchase", result_attribution: "7d_click", result_count: 8, cost_per_result: 250, days_present: 14, days_known: 14, reason: null }, series: [{ metric_scope: "ad", attribution_key: "7d_click:omni_purchase", currency: "TWD", source: "graph", row_count: 14, days_present: 14, metrics: { spend: 2000, impressions: 80, clicks: 8, purchases: 8, revenue: 5000, ctr: 1, cpc: 1, cpa: 250, roas_platform: 2.5 }, known_counts: {} }], result_views: [{ metric_scope: "ad", currency: "TWD", result_kind: "purchase", result_action: "omni_purchase", result_attribution: "7d_click", result_count: 8, cost_per_result: 250, days_present: 14, days_known: 14, reason: null }] }),
@@ -219,7 +220,9 @@ describe("ReviewEvidencePage（F23-I02）各狀態的卡片與 bar", () => {
         }],
       }),
     })]));
-    vi.mocked(reviewApi.getReview).mockResolvedValue(review());
+    const saved = review();
+    saved.evidence_json.campaign = { objective: "名單", target: { value: 300, basis: "own", result_kind: "lead", result_label: "名單", missing: [] } };
+    vi.mocked(reviewApi.getReview).mockResolvedValue(saved);
     renderAt(roundPath());
     expect(await screen.findByText("這條素材的紀錄")).toBeTruthy();
     expect(screen.queryByText("商城訂單")).toBeNull();
@@ -367,8 +370,10 @@ describe("ReviewEvidencePage（F29-I10）佇列讀取失敗與出口", () => {
 });
 
 describe("ReviewEvidencePage（F29-I10）讀取失敗與已關閉的決定", () => {
-  it("round 模式佇列讀取失敗：素材紀錄說讀取失敗，不說「還沒有處理紀錄」", async () => {
-    vi.mocked(reviewApi.getReview).mockResolvedValue(review());
+  it("round 模式佇列讀取失敗：非銷售的素材紀錄說讀取失敗，不說「還沒有處理紀錄」", async () => {
+    const saved = review();
+    saved.evidence_json.campaign = { target: { result_kind: "lead", result_label: "名單", value: 300, basis: "own" } };
+    vi.mocked(reviewApi.getReview).mockResolvedValue(saved);
     vi.mocked(triageApi.getQueue).mockRejectedValue(new Error("queue down"));
     renderAt(roundPath());
     expect(await screen.findByText("讀取失敗，按上方重試後再看。")).toBeTruthy();
@@ -406,7 +411,9 @@ describe("ReviewEvidencePage（F29-I14）變貴的標題與上限", () => {
         target: { value: 450, basis: "own", result_kind: "purchase", result_label: "購買", missing: [], break_even: 520 },
       }),
     })]));
-    vi.mocked(reviewApi.getReview).mockResolvedValue(review());
+    const saved = review();
+    saved.evidence_json.campaign!.target!.break_even = 520;
+    vi.mocked(reviewApi.getReview).mockResolvedValue(saved);
     renderAt(roundPath());
     expect(await screen.findByRole("heading", { name: "這則從划算變偏貴" })).toBeTruthy();
     expect(screen.getByText("跟日常商品推廣的上限比，先看數字，再決定")).toBeTruthy();
@@ -515,4 +522,66 @@ it("uses served unknowns for mixed currencies, without deriving totals from raw 
   expect(adResultView(mixed)).toBeNull();
   expect(adSpend(period({ ad_spend: { value: 17, currency: "USD" } }))).toBe(17);
   expect(adSpend(period({ ad_spend: undefined }))).toBeNull();
+});
+
+describe("saved review result and cap context", () => {
+  it("shows the ended purchase round's unit, saved cap and commerce with no queue item", async () => {
+    const saved = review();
+    saved.evidence_json.campaign!.target!.value = 100;
+    const before = JSON.stringify(saved);
+    vi.mocked(reviewApi.getReview).mockResolvedValue(saved);
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([]));
+    renderAt(roundPath());
+    expect(await screen.findByText("每次購買成本")).toBeTruthy();
+    expect(screen.getByLabelText("本回合成本上限").textContent).toContain("100 TWD／購買");
+    expect(screen.getByText("商城訂單")).toBeTruthy();
+    expect(screen.queryByText(/不看商城訂單/)).toBeNull();
+    expect(JSON.stringify(saved)).toBe(before);
+  });
+
+  it("queue failure does not hide the saved purchase unit, cap or commerce evidence", async () => {
+    vi.mocked(reviewApi.getReview).mockResolvedValue(review());
+    vi.mocked(triageApi.getQueue).mockRejectedValue(new Error("queue down"));
+    renderAt(roundPath());
+    expect(await screen.findByText(/待決定清單讀不到/)).toBeTruthy();
+    expect(screen.getByText("每次購買成本")).toBeTruthy();
+    expect(screen.getByLabelText("本回合成本上限").textContent).toContain("450 TWD／購買");
+    expect(screen.getByText("商城訂單")).toBeTruthy();
+  });
+
+  it("a later queue goal, cap and break-even never replace the saved round", async () => {
+    vi.mocked(reviewApi.getReview).mockResolvedValue(review());
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([queueItem({ triage: triage({
+      target: { value: 900, basis: "own", result_kind: "lead", result_label: "名單", missing: [], break_even: 1000 },
+    }) })]));
+    renderAt(roundPath());
+    expect(await screen.findByText("每次購買成本")).toBeTruthy();
+    expect(screen.getByLabelText("本回合成本上限").textContent).toContain("450 TWD／購買");
+    expect(screen.queryByText("每次名單成本")).toBeNull();
+    expect(screen.getByText("商城訂單")).toBeTruthy();
+    expect(document.querySelector("[data-slot=money-tag]")).toBeNull();
+  });
+
+  it("legacy missing target stays unknown instead of borrowing today's queue settings", async () => {
+    const saved = review();
+    delete saved.evidence_json.campaign;
+    vi.mocked(reviewApi.getReview).mockResolvedValue(saved);
+    renderAt(roundPath());
+    expect(await screen.findByText("本回合未保存成本上限")).toBeTruthy();
+    expect(screen.queryByText(/本回合上限 450/)).toBeNull();
+    expect(screen.getByText("本回合未保存結果單位，商城訂單是否適用仍未知")).toBeTruthy();
+  });
+
+  it("known zero and missing results retain their served counts and null costs", async () => {
+    const saved = review();
+    saved.evidence_json.current = period({ ad_result_view: { ...period().ad_result_view!, result_count: 0, cost_per_result: null } });
+    saved.evidence_json.previous = period({ ad_result_view: { ...period().ad_result_view!, result_count: null, cost_per_result: null } });
+    vi.mocked(reviewApi.getReview).mockResolvedValue(saved);
+    vi.mocked(triageApi.getQueue).mockResolvedValue(queue([]));
+    renderAt(roundPath());
+    expect(await screen.findByText("每次購買成本")).toBeTruthy();
+    expect(screen.getByText("0")).toBeTruthy();
+    expect(adResultView(saved.evidence_json.previous)?.result_count).toBeNull();
+    expect(adResultView(saved.evidence_json.current)?.cost_per_result).toBeNull();
+  });
 });

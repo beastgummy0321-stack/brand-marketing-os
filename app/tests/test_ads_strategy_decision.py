@@ -315,7 +315,7 @@ class ExecutableDecisionAcceptanceTest(unittest.TestCase):
                 "status": "draft",
                 "budget_planned": daily * 10,
                 "budget_scenario": "custom",
-                "context_json": {"product_ids": [self.way["id"]]},
+                "context_json": {"product_ids": [self.way["id"]], "field_sources": {"cap": "user"}},
             },
             created_by="tester",
         )
@@ -478,14 +478,16 @@ class ExecutableDecisionAcceptanceTest(unittest.TestCase):
         self.assertEqual(detail["status"], "draft")
 
     def previous(self, role="explore", offer="none"):
-        from app.tests.test_ads_plan import _seed_previous_with_creatives
+        from app.tests.test_ads_plan import _retained_carry_evidence, _seed_previous_with_creatives
 
         previous, ads, assets = _seed_previous_with_creatives(
-            self.org, self.brand, [("Kept fitness", "kept", "keep_relative", True)]
+            self.org, self.brand, [("Kept fitness", "kept", "keep_relative", True)],
+            product_id=self.way["id"],
         )
         web.conn.execute(
             "UPDATE ads_campaign SET context_json=%s WHERE id=%s",
-            (coredb.jsonb({"product_ids": [self.way["id"]]}), previous["id"]),
+            (coredb.jsonb({"product_ids": [self.way["id"]], "field_sources": {"cap": "user"}}),
+             previous["id"]),
         )
         ads_repo.update_group_fields(
             web.conn, self.org, self.brand, ads[0]["group_id"], {"role": role}
@@ -502,6 +504,7 @@ class ExecutableDecisionAcceptanceTest(unittest.TestCase):
                 (assets[0],),
             )
         web.conn.commit()
+        _retained_carry_evidence(self.org, self.brand, previous["id"])
         return ads[0], assets[0]
 
     def test_ceiling_two_preserves_explore_and_tests_student_with_exact_offer(self):
@@ -890,9 +893,9 @@ class ExecutableDecisionAcceptanceTest(unittest.TestCase):
 
     def test_inputs_changed_during_gateway_io_refuse_before_any_plan_writes(self):
         original = plan.ask_with_one_retry
+        prior, _ = self.previous()
         for changed_input in ("budget", "source_copy"):
             with self.subTest(changed_input=changed_input):
-                prior, _ = self.previous()
                 campaign = self.campaign()
                 decision = self.propose(
                     campaign,
@@ -925,9 +928,17 @@ class ExecutableDecisionAcceptanceTest(unittest.TestCase):
                     conn.commit()
                     return result
 
-                with mock.patch.object(plan, "ask_with_one_retry", side_effect=while_away):
-                    with self.assertRaisesRegex(plan.StrategyConflict, "strategy_changed"):
+                expected = ("strategy_changed" if changed_input == "budget"
+                            else "strategy_infeasible")
+                with mock.patch.object(
+                    plan, "ask_with_one_retry", side_effect=while_away
+                ) as gateway:
+                    with self.assertRaisesRegex(plan.StrategyConflict, expected) as failure:
                         self.adopt(campaign, decision)
+                    gateway.assert_called_once()
+                if changed_input == "source_copy":
+                    self.assertIn("carry_unavailable",
+                                  {r["code"] for r in failure.exception.reasons})
                 self.assert_empty(campaign)
 
     def test_reduced_budget_revises_decision_and_refuses_old_approval(self):
@@ -1027,7 +1038,7 @@ class ExecutableDecisionAcceptanceTest(unittest.TestCase):
         self.assertEqual(sum(int(g["daily_budget"]) for g in detail["groups"]), 600)
 
     def test_two_following_periods_reuse_the_same_original_without_generation(self):
-        from app.tests.test_ads_plan import _ranked_scope
+        from app.tests.test_ads_plan import _ranked_scope, _retained_carry_evidence
 
         prior, asset = self.previous(offer="free_shipping")
         for period in range(2):
@@ -1073,6 +1084,7 @@ class ExecutableDecisionAcceptanceTest(unittest.TestCase):
                 (campaign["id"],),
             )
             web.conn.commit()
+            _retained_carry_evidence(self.org, self.brand, campaign["id"])
             prior = carried
 
     def test_structure_edit_marks_decision_modified_and_preserves_original_receipt(self):

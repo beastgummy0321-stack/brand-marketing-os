@@ -9,6 +9,7 @@ approved `max_daily_amount` is refused before anything is written.
 """
 
 import datetime
+import hashlib
 import json
 import unittest
 from unittest import mock
@@ -1314,17 +1315,97 @@ def _two_role_reply(*, names=("再行銷-補位", "探索-補位"), roles=("reta
     ]}, ensure_ascii=False)
 
 
-def _seed_previous_with_creatives(org_id: str, brand_id: str, rows: list) -> tuple:
-    """A closed campaign (no sell-way) with one `new` group and one ad per `(name, tag, verdict,
+def _carry_product(brand_id):
+    product = bi_repo.create_product(web.conn, brand_id, name="Carry fixture product", actor=ACTOR)
+    bi_repo.save_product_economics(
+        web.conn, brand_id, product["id"], selling_price=1000, currency="TWD",
+        unit_variable_cost=100, shipping_cost=0, actor=ACTOR, confirmed_by=ACTOR,
+    )
+    return product["id"]
+
+
+def _retained_carry_evidence(org_id, brand_id, campaign_id):
+    """Complete synthetic observations for carry mechanism tests; no live-platform proof."""
+    from app.ads import ads_learnings, learning_rank
+    from app.tests.fixtures.ads_external import outcome_seed
+    from app.workbench import encode_learning_scope
+
+    campaign = ads_repo.get_campaign(web.conn, org_id, brand_id, campaign_id)
+    start, end = campaign["start_date"], campaign["end_date"]
+    ads = web.conn.execute("SELECT * FROM ads_ad WHERE campaign_id=%s", (campaign_id,)).fetchall()
+    for ad in ads:
+        for dimension in learning_rank.DIMENSIONS:
+            key = ad[f"{dimension}_key"]
+            if key and not web.conn.execute(
+                "SELECT 1 FROM brand_coordinate WHERE brand_id=%s AND dimension=%s AND key=%s",
+                (brand_id, dimension, key),
+            ).fetchone():
+                web.conn.execute(
+                    "INSERT INTO brand_coordinate(id,org_id,brand_id,dimension,key,label)"
+                    " VALUES(%s,%s,%s,%s,%s,%s)",
+                    (coredb.new_id("crd"), org_id, brand_id, dimension, key, key),
+                )
+        for offset in range((end - start).days + 1):
+            outcome_seed.seed_day(
+                web.conn, org_id, brand_id, campaign_id, "ad", ad["id"],
+                start + datetime.timedelta(days=offset), source="graph",
+                spend=1200 if offset == 0 else 0, purchases=10 if offset == 0 else 0,
+            )
+        ledger = web.conn.execute(
+            "SELECT * FROM learning_ledger WHERE source_cycle_id=%s",
+            (f"{campaign_id}:{ad['id']}",),
+        ).fetchone()
+        if ledger:
+            ranked = learning_rank.parse_scope(ledger["applicability_scope"])
+            ranked.update(sales=10, spend=1200, cost_per_sale=120,
+                          cap=300, few=False, currency="TWD")
+            evidence = ads_learnings.source_evidence(
+                web.conn, org_id, brand_id, campaign, kind="coordinate", ad=ad,
+                window={"start": start, "end": end}, claim_key=ads_learnings.message_claim(ad),
+                direction="support",
+            )
+            # The fixture explicitly retains its launch-time conditions. Production readers
+            # must not reconstruct a missing historical snapshot from today's values.
+            conditions = ads_learnings.condition_snapshot(
+                web.conn, org_id, brand_id, campaign, campaign["context_json"]["product_ids"][0],
+            )
+            offer = next((o for o in conditions["offers"] if o["key"] == ad["offer_key"]), {})
+            evidence["conditions"].update(
+                price_version=conditions["price_version"],
+                target_version=conditions["target_version"],
+                offer_version=offer.get("version"), valid_until=offer.get("valid_until"),
+                material_version=ads_learnings.material_version(
+                    {**ad, "material_evidence": ads_learnings.bound_material(
+                        web.conn, org_id, brand_id, ad)},
+                    {},
+                ),
+            )
+            if conditions["price_version"] and conditions["target_version"]:
+                evidence["limits"] = [r for r in evidence["limits"] if r != "conditions_unknown"]
+            keys = {d: ad[f"{d}_key"] for d in learning_rank.DIMENSIONS}
+            scope = learning_rank.scope(ranked, keys, ad.get("customer_group_id"))
+            web.conn.execute(
+                "UPDATE learning_ledger SET product_id=%s,applicability_scope=%s WHERE id=%s",
+                ((campaign["context_json"].get("product_ids") or [None])[0],
+                 encode_learning_scope(scope, evidence), ledger["id"]),
+            )
+    outcome_seed.set_coverage(web.conn, org_id, brand_id, campaign_id, start, end)
+    web.conn.commit()
+
+
+def _seed_previous_with_creatives(org_id: str, brand_id: str, rows: list, *, product_id) -> tuple:
+    """A closed campaign with one `new` group and one ad per `(name, tag, verdict,
     with_creative)`; an ad with a creative gets its own ready original with `_KEEP_COPY`,
     confirmed and assigned; every ad gets its ranked `coordinate` learning row. Returns
     (campaign, ads, asset id or None per ad)."""
+    from app import storage
     from app.ads import handoff_assignment
     from app.ads import user_assets_repository as user_assets
 
     previous = ads_repo.create_campaign(web.conn, org_id, brand_id, {
         "name": "上一期 Campaign", "goal_text": "上一期衝購買", "objective": "購買",
         "target_cost": 300, "start_date": "2026-09-01", "end_date": "2026-09-14",
+        "context_json": {"product_ids": [product_id], "field_sources": {"cap": "user"}},
         "status": "ready",
     }, created_by=ACTOR)
     group = plan.create_group(web.conn, org_id, brand_id, previous["id"],
@@ -1337,11 +1418,19 @@ def _seed_previous_with_creatives(org_id: str, brand_id: str, rows: list) -> tup
         asset = None
         if with_creative:
             asset = coredb.new_id("aua")
+            content = (
+                b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+                b"\x08\x00\x00\x00\x00:~\x9bU\x00\x00\x00\nIDATx\x9cc`\x00\x00\x00\x02\x00\x01"
+                b"H\xaf\xa4q\x00\x00\x00\x00IEND\xaeB`\x82" + asset.encode()
+            )
+            key = f"{org_id}/brands/{brand_id}/assets/{asset}/keep.png"
+            storage.put(org_id=org_id, key=key, filename="keep.png", content=content,
+                        content_type="image/png")
             web.conn.execute(
                 "INSERT INTO ads_user_asset(id,org_id,brand_id,sha256,storage_key,filename,"
-                "mime_type,byte_size,status) VALUES(%s,%s,%s,%s,%s,'keep.png','image/png',1,"
+                "mime_type,byte_size,status) VALUES(%s,%s,%s,%s,%s,'keep.png','image/png',%s,"
                 "'ready')",
-                (asset, org_id, brand_id, asset, f"{org_id}/{asset}"),
+                (asset, org_id, brand_id, hashlib.sha256(content).hexdigest(), key, len(content)),
             )
             placement = user_assets.attach(web.conn, org_id, brand_id, previous["id"], asset,
                                            _KEEP_COPY, ACTOR)
@@ -1367,6 +1456,7 @@ def _seed_previous_with_creatives(org_id: str, brand_id: str, rows: list) -> tup
         (previous["id"],),
     )
     web.conn.commit()
+    _retained_carry_evidence(org_id, brand_id, previous["id"])
     return previous, ads, assets
 
 
@@ -1380,15 +1470,20 @@ class CarriedKeepAdsTest(PlanTestBase):
 
     def setUp(self):
         super().setUp()
+        self.carry_product = _carry_product(self.brand_id)
         self.previous, ads, assets = _seed_previous_with_creatives(
             self.org_id, self.brand_id,
             [("留下-有素材", "keep1", "keep", True),
              ("留下-沒素材", "keep2", "keep_relative", False),
-             ("換掉-這則", "cut", "replace", False)],
+             ("換掉-這則", "cut", "replace", False)], product_id=self.carry_product,
         )
         self.kept, self.bare, self.cut = ads
         self.asset = assets[0]
         self.campaign = self._create_adopted_campaign()  # 2142 a day at cap 300 -> ceiling 4
+        web.conn.execute("UPDATE ads_campaign SET context_json=%s WHERE id=%s",
+                         (coredb.jsonb({"product_ids": [self.carry_product],
+                                       "field_sources": {"cap": "user"}}), self.campaign["id"]))
+        web.conn.commit()
 
     def _adopt_reply(self, reply: str) -> tuple[dict, str]:
         provider = _fake(reply)
@@ -1514,11 +1609,13 @@ class EveryAdCarriedTest(PlanTestBase):
         from app import main, workbench
         from app.ads import assets, slots
 
+        product_id = _carry_product(self.brand_id)
         _seed_previous_with_creatives(self.org_id, self.brand_id, [
             ("留下-甲", "keep1", "keep", True), ("留下-乙", "keep2", "keep_relative", True),
-        ])
+        ], product_id=product_id)
         campaign = ads_repo.create_campaign(web.conn, self.org_id, self.brand_id, {
             "name": "這一期", "goal_text": "續投留下的", "objective": "購買", "target_cost": 300,
+            "context_json": {"product_ids": [product_id], "field_sources": {"cap": "user"}},
             "start_date": "2026-10-01", "end_date": "2026-10-14", "status": "draft",
             "budget_planned": 8400, "budget_scenario": "recommended",
             "budget_basis_json": {"strategy": {"allocation": [

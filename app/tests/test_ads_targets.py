@@ -106,7 +106,7 @@ class ResolveTargetTest(unittest.TestCase):
     def test_sales_with_cost_resolves_break_even(self):
         product_id = self._product(unit_variable_cost=150)
         campaign = {
-            "id": "nonexistent", "origin": "internal", "result_kind": None,
+            "id": "nonexistent", "origin": "internal", "objective": "購買", "result_kind": None,
             "context_json": {"product_ids": [product_id]},
         }
         result = targets.resolve(web.conn, self.org_id, self.brand_id, campaign)
@@ -118,7 +118,7 @@ class ResolveTargetTest(unittest.TestCase):
     def test_sales_without_cost_never_guesses_falls_to_missing(self):
         product_id = self._product(unit_variable_cost=None)
         campaign = {
-            "id": "nonexistent", "origin": "internal", "result_kind": None,
+            "id": "nonexistent", "origin": "internal", "objective": "購買", "result_kind": None,
             "context_json": {"product_ids": [product_id]},
         }
         result = targets.resolve(web.conn, self.org_id, self.brand_id, campaign)
@@ -150,7 +150,7 @@ class ResolveTargetTest(unittest.TestCase):
         )["id"]
         for sell_way, knowledge in ((single, gummy), (bundle, tea)):
             result = targets.resolve(web.conn, self.org_id, self.brand_id, {
-                "id": "nonexistent", "origin": "internal", "result_kind": None,
+                "id": "nonexistent", "origin": "internal", "objective": "購買", "result_kind": None,
                 "context_json": {"product_ids": [sell_way]},
             })
             # No cost anywhere: the 「去填商品成本」 link opens the knowledge product.
@@ -158,7 +158,7 @@ class ResolveTargetTest(unittest.TestCase):
                              (sell_way, knowledge))
             self.assertIn("product_cost", result["missing"])
         none = targets.resolve(web.conn, self.org_id, self.brand_id, {
-            "id": "nonexistent", "origin": "internal", "result_kind": None,
+            "id": "nonexistent", "origin": "internal", "objective": "購買", "result_kind": None,
             "context_json": {"product_ids": []},
         })
         self.assertIsNone(none["knowledge_product_id"])
@@ -221,7 +221,7 @@ class ResolveTargetTest(unittest.TestCase):
         # The ruler's 打平 mark and ROAS 參考 (price / cap) read these even when an own cap wins.
         product_id = self._product(unit_variable_cost=150)
         campaign = {
-            "id": "nonexistent", "origin": "internal", "result_kind": None,
+            "id": "nonexistent", "origin": "internal", "objective": "購買", "result_kind": None,
             "target_basis": "own", "target_cost": 250, "target_revision": 3,
             "context_json": {"product_ids": [product_id]},
         }
@@ -240,7 +240,7 @@ class ResolveTargetTest(unittest.TestCase):
     def test_cost_is_unit_cost_plus_shipping_from_the_break_even_row(self):
         product_id = self._product(unit_variable_cost=150)
         campaign = {
-            "id": "nonexistent", "origin": "internal", "result_kind": None,
+            "id": "nonexistent", "origin": "internal", "objective": "購買", "result_kind": None,
             "context_json": {"product_ids": [product_id]},
         }
         result = targets.resolve(web.conn, self.org_id, self.brand_id, campaign)
@@ -250,7 +250,7 @@ class ResolveTargetTest(unittest.TestCase):
     def test_cost_rides_along_with_an_own_cap(self):
         product_id = self._product(unit_variable_cost=150)
         campaign = {
-            "id": "nonexistent", "origin": "internal", "result_kind": None,
+            "id": "nonexistent", "origin": "internal", "objective": "購買", "result_kind": None,
             "target_basis": "own", "target_cost": 250,
             "context_json": {"product_ids": [product_id]},
         }
@@ -260,7 +260,7 @@ class ResolveTargetTest(unittest.TestCase):
     def test_price_without_cost_has_no_cost(self):
         product_id = self._product(unit_variable_cost=None)
         campaign = {
-            "id": "nonexistent", "origin": "internal", "result_kind": None,
+            "id": "nonexistent", "origin": "internal", "objective": "購買", "result_kind": None,
             "context_json": {"product_ids": [product_id]},
         }
         result = targets.resolve(web.conn, self.org_id, self.brand_id, campaign)

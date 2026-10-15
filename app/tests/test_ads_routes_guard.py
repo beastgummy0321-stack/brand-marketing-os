@@ -59,7 +59,8 @@ class AdsRoutesNoAuthTest(unittest.TestCase):
                 passed = False
                 attempts = []
                 for filled in _filled_paths(route.path):
-                    response = self.client.request(method, filled, json={})
+                    params = {"month": "2026-10"} if route.path.endswith("/next-period") else {}
+                    response = self.client.request(method, filled, json={}, params=params)
                     if response.status_code == 401 and set(response.json()) == {"error"}:
                         passed = True
                         break
@@ -105,8 +106,10 @@ class AdsRoutesWrongTenantTest(unittest.TestCase):
                 passed = False
                 attempts = []
                 for filled in _filled_paths(path_template):
+                    params = {"month": "2026-10"} if path_template.endswith("/next-period") else {}
                     response = self.client.request(
                         method, filled, json={},
+                        params=params,
                         headers={"Authorization": f"Bearer {self.a_token}"},
                     )
                     if response.status_code == 404:

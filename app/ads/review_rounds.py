@@ -27,7 +27,47 @@ def evidence_digest(evidence):
 
 def model_input(evidence):
     """What the model reads: `retry_of` only separates a re-run's digest, it is not evidence."""
-    value = {k: v for k, v in evidence.items() if k != "retry_of"}
+    value = deepcopy({k: v for k, v in evidence.items() if k != "retry_of"})
+    # The full canonical projection remains in the immutable snapshot. Its display label and
+    # repeated sample coordinates add no evidence to the model's already labelled period.
+    window = value.get("window") or {}
+    periods = [(value.get("current"), window.get("start"), window.get("end")),
+               (value.get("previous"), window.get("previous_start"), window.get("previous_end"))]
+    prior = value.get("previous_review") or {}
+    for owner in (value, prior.get("evidence") or {}):
+        conditions = owner.get("conditions")
+        if isinstance(conditions, dict):
+            conditions.pop("copy_editable", None)  # UI-only capability rechecked on adoption.
+    periods.append(((prior.get("evidence") or {}).get("current"),
+                    prior.get("window_start"), prior.get("window_end")))
+    for period, start, end in periods:
+        if isinstance(period, dict):
+            # `get()` adds these UI figures after persistence; submission and worker must
+            # encode the same source snapshot, not send a larger read-time payload.
+            period.pop("ad_spend", None)
+            period.pop("ad_result_view", None)
+        decision = (period or {}).get("decision_evidence")
+        if not isinstance(decision, dict):
+            continue
+        decision.pop("result_label", None)
+        # Model citations use period/source keys (the prompt's contract), not observation
+        # row IDs. Those lookup IDs remain in the stored snapshot with their total count.
+        refs = decision.pop("evidence_refs", None)
+        if refs is not None:
+            decision["observation_refs_location"] = "stored_snapshot"
+        sample = decision.get("sample") or {}
+        scope = decision.get("scope") or {}
+        if (start is not None and end is not None
+                and str(scope.get("start")) == str(start) and str(scope.get("end")) == str(end)
+                and scope.get("days") == sample.get("days")):
+            decision.pop("scope", None)  # The named period/window carries the same dates.
+        if sample.get("days") == (period or {}).get("days_expected"):
+            sample.pop("days", None)
+        for key in ("count", "result_kind"):
+            if sample.get(key) == decision.get(key):
+                sample.pop(key, None)
+        if decision.get("known_count") == decision.get("count"):
+            decision.pop("known_count", None)
     return policy.encode(policy.bounded_learning_input(
         value, policy.INPUT_CHARS - len(PROMPT.read_text(encoding="utf-8")) - 32,
     ))

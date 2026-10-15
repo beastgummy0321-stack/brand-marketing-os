@@ -166,7 +166,7 @@ def retained_ad():
 
 
 def observation(**changes):
-    return {
+    value = {
         "observation_id": "observation",
         "entity_id": "ad",
         "day": date(2026, 8, 1),
@@ -184,6 +184,10 @@ def observation(**changes):
         "clicks": 10,
         **changes,
     }
+    value.setdefault("availability", {key: "available" if value.get(key) is not None else "unknown"
+                                      for key in ("spend", "impressions", "clicks", "purchases",
+                                                  "revenue", "result_count")})
+    return value
 
 
 def metadata(
@@ -505,6 +509,8 @@ def test_visual_swap_retires_comparable_winners_but_keeps_inspectable_history():
 
     with (
         patch.object(visual_learning.ads_repo, "campaign_detail", return_value=detail),
+        patch("app.ads.targets.resolve", return_value={"result_kind": "purchase", "value": 200,
+                                                      "basis": "own"}),
         patch.object(visual_learning.ads_repo, "campaign_objective_family", return_value="sales"),
         patch.object(live_creative, "with_learning_coordinates", side_effect=lambda *args: detail),
         patch.object(outcome, "period_window", return_value=window),

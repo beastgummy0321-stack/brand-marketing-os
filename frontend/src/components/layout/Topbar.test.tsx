@@ -21,11 +21,11 @@ vi.mock("@/lib/adsStatusApi", () => ({
   getStatusSummary: vi.fn(),
 }));
 
-vi.mock("@/lib/jobsApi", () => ({
+vi.mock("@/lib/jobsApi", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/lib/jobsApi")>(),
   fetchActiveJobs: vi.fn().mockResolvedValue({
     data: [], total: 0, other_count: 0, done_today: 0, failed_today: 0, generated_at: "2026-09-23T02:40:00Z",
   }),
-  ACTIVE_JOB_KIND_LABELS: {},
 }));
 
 const IDENTITY: Identity = {

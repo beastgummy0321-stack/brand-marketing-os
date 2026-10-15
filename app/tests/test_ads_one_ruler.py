@@ -735,7 +735,7 @@ NOT_THE_READ_RANGE = {
         "the monthly task's own account-month proof (`account_campaign_day`)",
     ("asset_binding.py", "_eligible", "coverage"):
         "an asset-binding interval's own `continuous` flag",
-    ("closeout.py", "close", "coverage"): "the `coverage` block `outcome.summary` serves",
+    ("closeout.py", "_close", "coverage"): "the `coverage` block `outcome.summary` serves",
     ("triage.py", "_insufficient_candidates", "coverage"):
         "the triage `data.coverage` read span this call serves",
 }
@@ -1196,12 +1196,13 @@ class RulesEndpointTest(unittest.TestCase):
     def test_glossary_sentences_carry_todays_numbers(self):
         glossary = triage.rules()["glossary"]
         # Today's `patterns/glossary.ts` wording, numbers built from the constants.
-        self.assertEqual(glossary["watch"], "每筆廣告費超過上限，但超過不到 2 成")
-        self.assertEqual(glossary["over"], "每筆廣告費超過上限 2 成以上，賣越多虧越多")
-        self.assertEqual(glossary["wasted"], "花到上限 3 倍的錢，還一筆都沒賣出")
+        self.assertEqual(glossary["watch"], "每次成果成本超過上限，但超過不到 2 成")
+        self.assertEqual(glossary["over"],
+                         "每次成果成本超過上限 2 成以上；這是成本比較，不能單憑此判定盈虧")
+        self.assertEqual(glossary["wasted"], "花到上限 3 倍的錢，已追蹤成果仍為零；提示支出風險")
         self.assertEqual(
             glossary["money"],
-            "拿每筆廣告費跟打平線比：比它低是有賺，比它高是在虧，差不到 2% 算剛好打平",
+            "以商品貢獻假設比較廣告成本；這是估算，不能當作已付款利潤，差不到 2% 算剛好打平",
         )
         self.assertEqual(
             glossary["thin"],

@@ -106,6 +106,11 @@ def write_visual_learnings(conn: _AnyConn, org_id: str, brand_id: str, campaign_
     detail = ads_repo.campaign_detail(conn, org_id, brand_id, campaign_id)
     if detail is None:
         raise ValueError("campaign_unknown")
+    # This existing comparison uses purchase counts; never apply its winners to another goal.
+    from app.ads import targets
+
+    if targets.effective_result_kind(detail) != "purchase":
+        return []
     # F31-I05 Contract O: strata group ads by the coordinates their images were made for (the
     # dispatched set's snapshot), not by coordinates edited after dispatch.
     detail = live_creative.with_learning_coordinates(conn, org_id, brand_id, detail)
@@ -127,6 +132,13 @@ def write_visual_learnings(conn: _AnyConn, org_id: str, brand_id: str, campaign_
     rows_by_entity: dict[str, list] = {}
     for row in outcome_rows:
         rows_by_entity.setdefault(row["entity_id"], []).append(row)
+    cap = targets.resolve(conn, org_id, brand_id, detail)
+    # Ineligible ad evidence cannot become a visual winner merely because purchases exist.
+    ineligible = set()
+    for entity_id, node_rows in rows_by_entity.items():
+        projection = outcome.result_projection(node_rows, cap, window)
+        if projection["state"] in {"incomplete", "incompatible"}:
+            ineligible.add(entity_id)
 
     audience_labels = _label_lookup(conn, org_id, brand_id, "audience")
     needs_revalidation = ads_learning._needs_revalidation(conn, brand_id, detail)  # noqa: SLF001
@@ -150,7 +162,8 @@ def write_visual_learnings(conn: _AnyConn, org_id: str, brand_id: str, campaign_
                 buckets[value_key] = {
                     "label": fingerprints[ad_ids[0]][dimension].get("label", value_key),
                     "metric_value": (_metric_value(metric, bucket)
-                                     if comparison["reason"] is None else None),
+                                     if comparison["reason"] is None
+                                     and not ineligible.intersection(ad_ids) else None),
                     "purchases": bucket["purchases"],
                     "sample_bucket": outcome.sample_bucket(bucket["purchases"], days),
                     "ad_count": len(ad_ids),

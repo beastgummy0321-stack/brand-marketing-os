@@ -74,21 +74,27 @@ def create_campaign(conn: _AnyConn, org_id: str, brand_id: str, campaign: dict, 
         raise ValueError("target_value_unknown")
 
     campaign_id = new_id("adc")
+    result_kind = campaign.get("result_kind") or objectives.expected_result_kind(
+        campaign["objective"],
+    )
+    context_json = dict(campaign.get("context_json") or {})
+    if result_kind and not campaign.get("result_kind"):
+        context_json["result_kind_intent"] = campaign["objective"]
     conn.execute(
         "INSERT INTO ads_campaign (id, org_id, brand_id, name, goal_text, objective,"
         " target_cost, target_basis, start_date, end_date, status,"
         " budget_planned, budget_scenario, budget_basis_json, context_json, constraints_json,"
-        " created_by)"
-        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        " created_by, result_kind)"
+        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
         (
             campaign_id, org_id, brand_id, campaign["name"], campaign["goal_text"],
             campaign["objective"], cap, "own" if cap is not None else None,
             campaign.get("start_date"), campaign.get("end_date"),
             campaign.get("status", "draft"), campaign.get("budget_planned"),
             campaign.get("budget_scenario"), jsonb(campaign.get("budget_basis_json") or {}),
-            jsonb(campaign.get("context_json") or {}),
+            jsonb(context_json),
             jsonb(campaign.get("constraints_json") or {}),
-            created_by,
+            created_by, result_kind,
         ),
     )
     row = get_campaign(conn, org_id, brand_id, campaign_id)
@@ -221,6 +227,11 @@ def update_campaign(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str
         params.append(jsonb(updates["constraints_json"] or {}))
     context_json = dict(campaign.get("context_json") or {})
     context_json_changed = False
+    if "objective" in updates and context_json.get("result_kind_intent") == campaign["objective"]:
+        set_clauses.append("result_kind = %s")
+        params.append(objectives.expected_result_kind(updates["objective"]))
+        context_json["result_kind_intent"] = updates["objective"]
+        context_json_changed = True
     if "product_ids" in updates:
         product_ids = updates["product_ids"] or []
         # Identity only (F50 Contract R): any product row of the brand is a known id.
@@ -430,6 +441,9 @@ def save_campaign_target(
 
     set_clauses = ["target_revision = target_revision + 1", "updated_at = now()"]
     params: list = []
+    strip_intent = result_kind is not None and bool(
+        (campaign.get("context_json") or {}).get("result_kind_intent"),
+    )
     if result_kind is not None:
         set_clauses.append("result_kind = %s")
         params.append(result_kind)
@@ -450,10 +464,14 @@ def save_campaign_target(
     ):
         # F47-I06: a cap this writer changes is the user's -- `field_sources.cap` stops naming the
         # create's rule (沿用上一期／打平), so the confirm page reads the stored source as is.
+        context_base = ("(COALESCE(context_json, '{}'::jsonb) - 'result_kind_intent')"
+                        if strip_intent else "COALESCE(context_json, '{}'::jsonb)")
         set_clauses.append(
-            "context_json = jsonb_set(COALESCE(context_json, '{}'::jsonb), '{field_sources}', "
+            f"context_json = jsonb_set({context_base}, '{{field_sources}}', "
             "COALESCE(context_json->'field_sources', '{}'::jsonb) || '{\"cap\": \"user\"}'::jsonb)"
         )
+    elif strip_intent:
+        set_clauses.append("context_json = context_json - 'result_kind_intent'")
     params += [org_id, brand_id, campaign_id]
     conn.execute(
         f"UPDATE ads_campaign SET {', '.join(set_clauses)} "
@@ -799,7 +817,7 @@ def performance_rows(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: st
         "SELECT n.id AS entity_id, d.day, d.spend, d.impressions, d.clicks, d.purchases,"
         " d.revenue, d.currency, d.attribution_key, d.source, d.observed_at,"
         " d.id AS observation_id,"
-        " d.result_kind, d.result_count, d.result_attribution, d.result_action"
+        " d.result_kind, d.result_count, d.result_attribution, d.result_action, d.availability"
         + _perf_join(kind)
         + " AND d.org_id = %s AND d.brand_id = %s AND d.campaign_id = %s"
         " ORDER BY d.day, n.id",

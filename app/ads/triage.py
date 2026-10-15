@@ -19,6 +19,7 @@ from app.ads import (
     learning_rank,
     lifecycle,
     month_budget,
+    performance_evidence,
     queue_done,
     repository,
     result_kinds,
@@ -377,10 +378,11 @@ def _known_zero(view, spend):
 
 
 def _sales(view):
-    """The window's known result count as a whole number, else `None` (unknown, never 0)."""
+    """Preserve reported fractional attribution counts; unknown is never zero."""
     if view is None or view["reason"] is not None or view["result_count"] is None:
         return None
-    return int(view["result_count"])
+    count = float(view["result_count"])
+    return int(count) if count.is_integer() else count
 
 
 def _sample_view(spend, view, target_value, days):
@@ -395,7 +397,7 @@ def _sample_view(spend, view, target_value, days):
     days_with_events = (view["days_known"] - view["derived_zero_days"]) if view else 0
     return {
         "sales": sales,
-        "few": sales is not None and 1 <= sales < learning_rank.SAMPLE_FEW,
+        "few": sales is not None and 0 < sales < learning_rank.SAMPLE_FEW,
         "too_new": ad_days < WINDOW_STEPS[0] and (sales or 0) < MIN_RESULT_EVENTS,
         "spend_multiple": spend_multiple, "days_with_events": days_with_events,
     }
@@ -505,6 +507,16 @@ def reasons() -> dict:
             "text": "這個活動還沒設定要看哪種成果（例如購買），平台資料也沒說；設定後才能判斷",
             "fix": "cap",
         },
+        "result_kind_mismatch": {
+            "title": "成果與上限的種類不同",
+            "text": "成果數和上限使用不同單位，不能拿名單成本與購買成本互相比較。",
+            "fix": "cap",
+        },
+        "result_definition_unverified": {
+            "title": "成果定義尚未核實",
+            "text": "成果的事件或歸因尚未核實，保留花費與原始數字，先不比較成本。",
+            "fix": "resync",
+        },
         "target_unresolved": {
             "title": "還沒設定上限",
             "text": "這個活動還沒設定一筆訂單願意付多少廣告費，沒有尺可以量；設定上限後就會判斷",
@@ -512,7 +524,7 @@ def reasons() -> dict:
         },
         "spend_over_target_no_result": {
             "title": GRADE_LABELS["wasted"],
-            "text": f"花到上限 {unsold} 倍的錢，還一筆都沒賣出",
+            "text": f"花到上限 {unsold} 倍的錢，已追蹤成果仍為零；提示支出風險",
             "fix": None,
         },
         "cost_per_result_up": {
@@ -588,22 +600,23 @@ def rules() -> dict:
             },
         },
         "glossary": {
-            "cap": "你願意為一筆訂單付的廣告費，每個活動自己設",
-            "on_target": "每筆廣告費沒超過這個活動的上限",
-            "watch": f"每筆廣告費超過上限，但超過不到 {watch_tenths} 成",
-            "over": f"每筆廣告費超過上限 {watch_tenths} 成以上，賣越多虧越多",
-            "wasted": f"花到上限 {unsold} 倍的錢，還一筆都沒賣出",
+            "cap": "你願意為一次活動成果付出的廣告費，每個活動自己設",
+            "on_target": "每次成果成本沒超過這個活動的上限",
+            "watch": f"每次成果成本超過上限，但超過不到 {watch_tenths} 成",
+            "over": f"每次成果成本超過上限 {watch_tenths} 成以上；這是成本比較，不能單憑此判定盈虧",
+            "wasted": f"花到上限 {unsold} 倍的錢，已追蹤成果仍為零；提示支出風險",
             "thin": (
                 f"賣出的廣告都有分數；還沒賣出且花不到上限 {unsold} 倍的先標「剛開始」；"
                 f"成交少於 {_figure(learning_rank.SAMPLE_FEW)} 筆標「{learning_rank.FLAG_FEW}」"
             ),
             "money": (
-                "拿每筆廣告費跟打平線比：比它低是有賺，比它高是在虧，"
+                "以商品貢獻假設比較廣告成本；這是估算，不能當作已付款利潤，"
                 f"差不到 {band_pct}% 算剛好打平"
             ),
-            "notebook": "系統記住哪些主打有效；下次開新活動，AI 會先讀這些，避開沒效的主打",
+            "notebook": "系統保留主打的觀察與適用條件；下次先核實是否適用，不代表已證明主打有效",
             # The value part 「（這裡是 X）」 is the frontend's: it knows the campaign's number.
-            "break_even": "賣一筆扣掉商品成本和運費後剩下的錢；每筆廣告費超過它，就是在虧",
+            "break_even": ("賣一筆扣掉商品成本和運費後剩下的錢；須核實來源、退款與其他成本，"
+                           "不能只用平台歸因證明盈虧"),
         },
     }
 
@@ -671,6 +684,7 @@ def _classify_ad(entity, campaign_name, campaign_objective, target, cutoff, read
         if previous is None:
             previous = _ad_window(entity_rows, previous_start, previous_end)
         prev_view, prev_spend = previous
+        prev_view = performance_evidence.for_target(prev_view, target)
         current_unit, previous_unit = comparison(view), comparison(prev_view)
         # F29-I01 Contract A: the previous equal-length window graded by the same ruler -- null
         # when it isn't fully synced, not graded (剛開始／資料不足), or when this ad isn't judged.
@@ -686,6 +700,13 @@ def _classify_ad(entity, campaign_name, campaign_objective, target, cutoff, read
             "window": _window_view(start, end, days, extended_from),
             "target": {**target, "result_label": result_kinds.label(target["result_kind"])},
             "current": _metrics_view(view, spend), "previous": _metrics_view(prev_view, prev_spend),
+            "result_view": performance_evidence.project(
+                view, spend, target, _window_view(start, end, days, extended_from),
+                comparison=current_unit,
+                reason="needs_resync" if not read.covered(start, end) else None,
+                evidence_refs=[r["id"] for r in entity_rows if r.get("id")
+                               and start <= r["day"] <= end],
+            ),
             "change_pct": change_pct,
             "sample": _sample_view(
                 spend, view, target["value"] if current_unit["reason"] is None else None, days,
@@ -723,6 +744,7 @@ def _classify_ad(entity, campaign_name, campaign_objective, target, cutoff, read
             return finish("insufficient", "needs_resync", _NO_DATA, start, end, days,
                           extended_from, view, spend)
         view, spend = _ad_window(entity_rows, start, end)
+        view = performance_evidence.for_target(view, target)
         if step_idx == 0 and target["result_kind"] is None \
                 and (view is None or view["result_kind"] is None):
             return finish("no_target", "result_kind_unknown", _NOT_JUDGED, start, end, days,
@@ -754,6 +776,7 @@ def _classify_ad(entity, campaign_name, campaign_objective, target, cutoff, read
         return finish("insufficient", "no_previous_window", grade, start, end, days,
                       extended_from, view, spend)
     prev_view, prev_spend = _ad_window(entity_rows, previous_start, previous_end)
+    prev_view = performance_evidence.for_target(prev_view, target)
     previous = (prev_view, prev_spend)
     previous_unit = comparison(prev_view)
     if (prev_view is not None and prev_view["reason"] is None

@@ -19,6 +19,7 @@ import {
   type CampaignLabels,
   type CampaignPerformance,
   type ImportedCampaignPerformance,
+  type ResultEvidence,
 } from "@/lib/adsApi";
 import { CloseCampaignDialog, DayChips, EARLY_CLOSE_SENTENCE, coveredRange, shortDay } from "./CloseCampaignDialog";
 import { ExperimentPlan } from "./ExperimentPlan";
@@ -35,9 +36,10 @@ const DEFAULT_LABELS: CampaignLabels = { conversion: "購買", count: "購買數
 
 /** F28-I01: new close-outs always judge cost per result (`"cpa"`) against the one cap; the other
  * two only remain on verdicts written before it, read back from `verdict_json.metric`. */
-type VerdictMetric = "cpa" | "roas" | "purchases";
+type VerdictMetric = "cpa" | "roas" | "purchases" | "cost_per_result";
 
-function metricLabel(metric: VerdictMetric, labels: CampaignLabels): string {
+function metricLabel(metric: VerdictMetric, labels: CampaignLabels, resultLabel?: string): string {
+  if (metric === "cost_per_result") return `每次${resultLabel ?? "成果"}成本`;
   if (metric === "cpa") return labels.cpa;
   if (metric === "purchases") return labels.count;
   return "ROAS";
@@ -53,12 +55,15 @@ function fmtCpa(v: number | null): string {
   return v === null ? "算不出來" : formatMoney(v, "TWD");
 }
 function fmtMetricValue(metric: VerdictMetric, v: number | null, currency: string | null): ReactNode {
-  if (metric === "cpa") return v === null ? "算不出來" : formatMoney(v, currency ?? "幣別未知");
+  if (metric === "cpa" || metric === "cost_per_result") return v === null ? "算不出來" : formatMoney(v, currency ?? "幣別未知");
   if (metric === "purchases") return fmtPurchases(v);
   return <Figure basis="roas_all_spend" value={v} />;
 }
 
 interface AdsVerdictJson {
+  schema_version?: number;
+  result_view?: ResultEvidence;
+  risk?: {grade: string; label: string};
   metric?: VerdictMetric;
   target?: number | null;
   actual?: number | null;
@@ -68,6 +73,20 @@ interface AdsVerdictJson {
   close_reason?: string;
   scope?: {currency?: string | null};
   cap_comparison?: {currency?: string | null};
+}
+
+function resultOutcome(result: ResultEvidence): string {
+  if (result.data_state === "known_zero") return "已追蹤到零成果；每次成果成本算不出來，支出風險須另外看。";
+  if (result.data_state === "incomplete") return "成果資料仍有缺漏，未知不算零，也不用部分成果判定達成與否。";
+  if (result.data_state === "incompatible") return "成果定義或資料單位不一致，暫不合併判讀。";
+  return "已整理活動目標的成果與成本；上限比較、樣本與支出風險分開看。";
+}
+
+function resultNextStep(result: ResultEvidence): string {
+  if (result.comparison_state === "incompatible") return "下一步：核實平台成果定義、幣別與活動目標，再比較成本。";
+  if (result.data_state === "incomplete" || result.data_state === "incompatible") return "下一步：重新讀取平台，確認缺漏日期與成果定義。";
+  if (result.comparison_state === "unconfigured") return "下一步：回到策略，確認活動目標與同一種成果的成本上限。";
+  return "下一步：對照樣本與支出提示，人工決定續觀察、調整或結案；成本在上限內仍不代表已證明有效。";
 }
 
 const VERDICT_TONE: Record<string, "default" | "destructive" | "outline"> = {
@@ -271,6 +290,7 @@ export function PerformanceTab({
       {state.status === "loading" && performanceData && <p role="status" className="text-sm text-muted-foreground">正在更新成效…</p>}
       {imported && nativeView ? (
         <PerformanceReady simulated={false} native data={nativeData} labels={labels} refreshing={syncing}
+          goal={nativeView.result_views?.find(result => result.scope_key === selectedScope?.key)}
           onRefresh={() => onSync?.()} refreshDisabled={!onSync} currency={selectedScope?.currency ?? null} note={syncNote}
           scopeCaption={`${selectedScope?.label ?? "尚無資料範圍"} · ${nativeView.window.start ?? "未知"} ～ ${nativeView.window.end ?? "未知"}`}
           scopeControl={scopes.length > 0 ? <label className="flex flex-col gap-1 text-sm">資料範圍<select className="input-field" value={selectedScope?.key} onChange={event => setScopeKey(event.target.value)}>{scopes.map(scope => <option key={scope.key} value={scope.key}>{scope.label}</option>)}</select></label> : null}
@@ -284,6 +304,7 @@ export function PerformanceTab({
       ) : performanceData && "totals" in performanceData ? (
         <PerformanceReady simulated={!!c.simulation_mode || c.external_id?.startsWith("sim_") === true}
           data={performanceData} labels={labels} refreshing={syncing} onRefresh={() => onSync?.()} refreshDisabled={!onSync} note={syncNote}
+          goal={performanceData.result_view}
           highlightAd={highlightAd} />
       ) : <EmptyState title="讀取失敗" description="成效資料範圍不符，請重新載入。" onAction={load} actionLabel="重新載入" />}
 
@@ -336,9 +357,10 @@ function PerformanceReady({
   refreshDisabled = false,
   highlightAd = null,
   note = null,
+  goal,
 }: {
   simulated: boolean;
-  data: PerformanceView;
+  data: PerformanceView & {totals: PerformanceView["totals"] & {grade?: CampaignPerformance["totals"]["grade"]}};
   labels: CampaignLabels;
   refreshing: boolean;
   onRefresh: () => void;
@@ -349,6 +371,7 @@ function PerformanceReady({
   refreshDisabled?: boolean;
   highlightAd?: string | null;
   note?: SyncNote | null;
+  goal?: ResultEvidence;
 }) {
   const t = data.totals;
   const scoped = data.scope !== undefined;
@@ -360,6 +383,7 @@ function PerformanceReady({
     : fmtCpa(value);
   const percent = (value: number | null) => (native || scoped) && value === null ? "未知" : formatPercent(value);
   const source = simulated ? "模擬回收" : "平台回報";
+  const purchaseLabels = goal || native ? DEFAULT_LABELS : labels;
   const latestDay = data.daily[data.daily.length - 1]?.day ?? null;
   // F37 Contract P: the internal campaign's platform-read coverage (the native view has its own caption).
   const coverage = native ? null : data.coverage;
@@ -382,7 +406,7 @@ function PerformanceReady({
     highlightRowRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
     scrolledToRef.current = matchedAd.ad_id;
   }, [matchedAd]);
-  const outcome = t.spend === null ? "尚無完整花費資料，暫時無法判讀成效。" : t.spend <= 0
+  const outcome = goal ? resultOutcome(goal) : t.spend === null ? "尚無完整花費資料，暫時無法判讀成效。" : t.spend <= 0
     ? (native ? "已讀回花費為 0，暫時無法判讀 CPA 或 ROAS。" : "尚無花費資料，暫時無法判讀成效。")
     : t.purchases === null || t.revenue === null
       ? (native ? "已有花費資料；轉換或營收資料不完整，暫時不能判定 CPA 或 ROAS。" : "已有花費資料；轉換或營收未追蹤，暫時不能判定 CPA 或 ROAS。")
@@ -400,6 +424,11 @@ function PerformanceReady({
         <div className="surface-body flex flex-col gap-2">
           {note && !refreshing && <p role="status" data-state={note.state} className={`text-xs ${syncNoteTone(note)}`}>{note.text}</p>}
           <p className="text-sm font-medium">{outcome}</p>
+          {goal && <>
+            <p className="text-xs text-muted-foreground break-words">成果定義：{goal.result_label} · {goal.result_action ?? "尚未核實"} · {goal.result_attribution ?? "歸因尚未核實"}</p>
+            <p className="text-xs text-muted-foreground">成本與支出提示：{t.grade?.grade === "wasted" ? "零成果且支出達到風險門檻" : t.grade?.label ?? "未判斷"}；這是上限比較，不代表實際盈虧、增量效果或素材因果。</p>
+            <p className="text-sm">{resultNextStep(goal)}</p>
+          </>}
           {data.scope && <p className="text-xs text-muted-foreground">{data.scope.caption}</p>}
           {data.scope?.reason_text && <p className="text-xs text-warning">{data.scope.reason_text}</p>}
           {data.cap_comparison?.message && <p className="text-xs text-warning">{data.cap_comparison.message}</p>}
@@ -413,23 +442,34 @@ function PerformanceReady({
               這幾天不算 0，按「重新讀取平台」補讀。
             </div>
           )}
-          {(t.purchases === null || t.revenue === null) && <p className="text-xs text-warning">
+          {!goal && (t.purchases === null || t.revenue === null) && <p className="text-xs text-warning">
             {native ? "轉換或營收未知時，CPA 與 ROAS 不能當成 0，也不能據此判定成效。" : "轉換或營收未追蹤時，CPA 與 ROAS 不能當成 0，也不能據此判定成效。"}
           </p>}
         </div>
       </div>
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        {goal ? <>
+          <Kpi label="花費" value={nativeMoney(goal.spend, goal.currency)} caption={`資料已知的花費・${source}`} />
+          <Kpi label={`${goal.result_label}數`} value={goal.count === null ? "未知" : formatCount(goal.count)} caption="活動目標的成果；缺漏不補零" />
+          <Kpi label={`每次${goal.result_label}成本`} value={goal.cost_per_result === null ? "算不出來" : nativeMoney(goal.cost_per_result, goal.currency)} caption={`上限：${goal.target.value === null ? "未設定" : nativeMoney(goal.target.value, goal.comparison?.currency ?? data.cap_comparison?.currency ?? null)}`} />
+          <Kpi label="樣本範圍" value={`${goal.sample.days ?? "未知"} 天`} caption={`${goal.sample.days_known} 天成果已知；${goal.count === null ? "總成果未知" : `${formatCount(goal.count)} 次${goal.result_label}`}；樣本量不是有效性的證明`} />
+        </> : <>
         <Kpi label="花費" value={money(t.spend)} caption={`累計花費・${source}`} />
-        <Kpi label={labels.count} value={count(t.purchases)} caption={`累計${labels.conversion}・${source}`} />
-        <Kpi label="CPA" value={cpa(t.cpa)} caption={`花費 ÷ ${labels.conversion}`} />
+        <Kpi label={purchaseLabels.count} value={count(t.purchases)} caption={`累計${purchaseLabels.conversion}・${source}`} />
+        <Kpi label="CPA" value={cpa(t.cpa)} caption={`花費 ÷ ${purchaseLabels.conversion}`} />
         <Kpi label="ROAS" value={<Figure basis="roas_all_spend" value={t.roas_all_spend} />} caption={native ? null : <Figure basis="roas_tracked_spend" value={t.roas_tracked_spend} />} />
+        </>}
       </div>
 
       {adNotFound && <p className="text-sm text-muted-foreground">這則廣告沒有成效資料</p>}
 
       <Disclosure label="查看每日資料、次要指標與公式" defaultOpen={matchedAd !== null}>
         <div className="flex flex-col gap-4">
+          {goal && <div className="grid grid-cols-2 gap-3">
+            <Kpi label="購買數（次要資料）" value={count(t.purchases)} caption="購買保留原意，不改名為名單或點擊" />
+            <Kpi label="ROAS（次要資料）" value={<Figure basis="roas_all_spend" value={t.roas_all_spend} />} caption="平台營收與花費；不是已付款利潤" />
+          </div>}
           {scopeControl}
           {native && <p className="text-xs text-muted-foreground">目前指標只計算所選層級、幣別與歸因；不同層級不相加。缺少資料顯示未知，不推算缺漏天數。</p>}
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -464,7 +504,7 @@ function PerformanceReady({
           <table className="w-full text-left text-sm">
             <thead className="bg-muted text-muted-foreground"><tr>
               <th className="px-3 py-2 font-medium">日期</th><th className="px-3 py-2 font-medium">花費</th>
-              <th className="px-3 py-2 font-medium">{labels.count}</th><th className="px-3 py-2 font-medium">CPA</th>
+              <th className="px-3 py-2 font-medium">{purchaseLabels.count}</th><th className="px-3 py-2 font-medium">購買 CPA</th>
               <th className="px-3 py-2 font-medium">{native ? "ROAS" : "ROAS（保守／樂觀）"}</th>
             </tr></thead>
             <tbody>{data.daily.length ? data.daily.map((day) => <tr key={day.day} className="border-t border-border">
@@ -486,7 +526,7 @@ function PerformanceReady({
               <tr>
                 <th className="px-3 py-2 font-medium">投放組</th>
                 <th className="px-3 py-2 font-medium">花費</th>
-                <th className="px-3 py-2 font-medium">{labels.count}</th>
+                <th className="px-3 py-2 font-medium">{purchaseLabels.count}</th>
                 <th className="px-3 py-2 font-medium">CPA</th>
                 <th className="px-3 py-2 font-medium">{native ? "ROAS" : "ROAS（保守／樂觀）"}</th>
                 <th className="px-3 py-2 font-medium">點擊率</th>
@@ -562,7 +602,7 @@ function PerformanceReady({
         </div>
       </div>
           <div className="rounded-md bg-muted p-3 text-xs text-muted-foreground">
-            <p>{native ? "CPA＝花費 ÷ 轉換數；缺少資料時顯示「未知」。" : "CPA＝花費 ÷ 轉換數；沒有追蹤到轉換時顯示「算不出來」。"}</p>
+            <p>{goal ? "次要資料的購買 CPA＝花費 ÷ 購買數；不代替活動目標的每次成果成本。" : native ? "CPA＝花費 ÷ 轉換數；缺少資料時顯示「未知」。" : "CPA＝花費 ÷ 轉換數；沒有追蹤到轉換時顯示「算不出來」。"}</p>
             <p>{native ? "ROAS＝所選資料範圍的營收 ÷ 花費；任一筆營收未知時，不推算 ROAS。" : "ROAS 保守值用全部花費作分母；樂觀值只使用有追蹤營收的花費。兩者須一起看。"}</p>
             <p>{native ? "花費占比＝項目花費 ÷ 所選資料範圍總花費。投放組與廣告明細只顯示所選層級。" : "花費占比＝該投放組或廣告花費 ÷ Campaign 總花費。"}</p>
           </div>
@@ -589,7 +629,7 @@ function VerdictCard({ brandId, campaign: c }: { brandId: string; campaign: Camp
         <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
           <div className="field-card">
             <div className="text-xs text-muted-foreground">判定指標</div>
-            <div className="text-sm font-semibold">{metricLabel(metric, c.labels ?? DEFAULT_LABELS)}</div>
+            <div className="text-sm font-semibold">{metricLabel(metric, c.labels ?? DEFAULT_LABELS, vj.result_view?.result_label)}</div>
           </div>
           <div className="field-card">
             <div className="text-xs text-muted-foreground">上限</div>
@@ -610,6 +650,8 @@ function VerdictCard({ brandId, campaign: c }: { brandId: string; campaign: Camp
           期間：{vj.window?.start ?? "－"} ~ {vj.window?.end ?? "－"}
         </p>
         {verdict === "看不出" && vj.missing && <p className="text-sm text-muted-foreground">{vj.missing}</p>}
+        {vj.schema_version === 2 ? <p className="text-xs text-muted-foreground">成本上限比較保留當時的資料狀態；支出提示：{vj.risk?.grade === "wasted" ? "零成果且支出達到風險門檻" : vj.risk?.label ?? "未判斷"}。不代表已證明成效或盈虧。</p>
+          : <p className="text-xs text-warning">歷史判定：未保存當時完整的成果定義與資料狀態，保留原判定，不能當作已核實的成效。</p>}
         {sentence && (
           <div className="field-card">
             <div className="text-xs text-muted-foreground">學習</div>

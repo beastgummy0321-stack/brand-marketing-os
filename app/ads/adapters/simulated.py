@@ -207,8 +207,12 @@ def write_rows(conn: _AnyConn, org_id: str, brand_id: str, campaign_id: str, row
         if entity_id is None:
             continue
         fields = {k: v for k, v in row.items() if k not in ("native_kind", "native_id")}
+        # This generator measures synthetic purchases, never the campaign's requested goal.
+        # Keep the definition so a lead campaign cannot relabel those purchases as leads.
         external_repository.upsert_observation(
             conn, org_id, brand_id, campaign_id, {**fields, "entity_id": entity_id},
+            result_kind="purchase", result_count=fields.get("purchases"),
+            result_action="synthetic_purchase", result_attribution=ATTRIBUTION_KEY,
         )
 
 

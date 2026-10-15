@@ -26,6 +26,10 @@
 
 ## e2e 的能力邊界
 
+`E2E_PORT` may select an isolated test port (integer 1024-65535; default 8720).
+It changes both Playwright's base URL and its owned backend listener. Server reuse stays disabled;
+an unrelated process on the default port must be preserved, not terminated or adopted as the test server.
+
 `npm run e2e` 會 build，再由 Playwright 啟動 8720 後端。若本次 Harness integration 已成功 build，`verify.smoke_after_build` 使用同一 checkout 的 `npx playwright test`，避免第二次 build；不能跨樹或沿用未知的 dist。
 [playwright.config.ts](../frontend/playwright.config.ts) 用 `scripted` 供應商與 `memory` queue，僅允許 local。未知 task type 會失敗；背景工作不執行。需背景結果的測試應選擇可覆蓋該行為的整合測試或授權的獨立測試環境，不能把等待逾時當驗收。`ads-cold-start.spec.ts` 需要素材預覽，改在測試裡直接呼叫 worker 的 `process_preview`（CI 已有 FFmpeg）。
 新的 scripted reply 必須由所屬模組測試約束形狀；涉及 legacy seam 的票仍需 `legacy_migration` 與邊界審查。保留租戶隔離、憑證保護與費用限制。

@@ -2675,18 +2675,14 @@ Machine acceptance covers R1-R7 with real isolated HTTP/Postgres and a real sepa
 for stop/restart; external platform/model responses are fixtures. Cleanup is bounded and
 verified. This evidence never proves live platform writes, commercial uplift or human usability.
 
-### 6.57 Evidence semantics and atomic closeout (F55, proposed 2026-10-13)
+### 6.57 Evidence semantics and atomic closeout (F55, implemented 2026-10-14)
 
-Execution pointer: the authorized implementation and F55 queue live in the independent lead
-`D:/0UserProfile/Desktop/marketing-F55`, branch `codex/marketing-evidence-contracts`, verified
-HEAD `5a9f6db9c4865b342d6e0fefb1645ede7abe8eb7`. This checkout still runs its earlier code.
-The six duplicate planning files were retained under `.harness/scratch/F55/superseded-plan`,
-outside the runnable queue. Do not redispatch them or treat source checks as human acceptance.
-F54-I13's existing lease, queue state and four changed files remain untouched.
-
-Planning only. This section describes proposed behavior, not the current implementation or
-execution authorization. Baseline: 2e5e961150c78c67c4f6c68d9da7f5557f0d0c32. F54-I13's
-unfinished work and F52/F54 human acceptance remain separate; do not recover or launch them.
+Implemented on codex/marketing-evidence-contracts from baseline
+2e5e961150c78c67c4f6c68d9da7f5557f0d0c32. Issue checks and isolated browser checks passed;
+Final combined integration/runtime status is read from the source-bound receipt
+`.harness/runtime/integrations/F55.json`; a partial checkpoint is not acceptance.
+Human usefulness remains pending.
+F54-I13 and F52/F54 acceptance remain separate; do not recover or launch them.
 
 #### S1. Result evidence, comparison and action are separate decisions
 Reuse review_evidence's observations/result views and triage's grade_window. Extract their
@@ -2722,7 +2718,8 @@ proving commercial failure. Missing data never produces a growth recommendation 
 continue-spending permission. Models explain hypotheses; code owns arithmetic and eligibility.
 
 #### S2. Additive API and immutable historical learning
-Internal performance responses add result_view using S1; legacy purchases/revenue/cpa retain
+Internal performance responses add result_view using S1; native performance adds result_views
+keyed by scope/currency/attribution, consumed by both the primary period strip and advanced view; legacy purchases/revenue/cpa retain
 their original purchase meaning. Never rename purchase count as lead count. New verdict_json
 records schema_version=2, metric=cost_per_result, result_kind, evidence state/reasons, comparison,
 scope and sample count/kind/days; actual is null when no complete comparable ratio exists.
@@ -2733,6 +2730,10 @@ totals. Incomplete/incompatible evidence cannot yield a proven winner or qualifi
 coordinate carry. Preserve current ownership, learning tracks and human adoption gates.
 Saved legacy verdicts/learnings remain immutable and readable as historical conclusions.
 Versioned readers show their original metric and legacy limitation; no silent backfill/regrade.
+The review evidence screen reads result labels, sales intent and the cost cap from that round's
+stored decision_evidence/campaign.target, independently of today's transient triage queue.
+Queue absence or read failure cannot remove those captured facts; later queue settings cannot
+replace them. Legacy snapshots without a captured cap show unknown rather than current settings.
 
 #### S3. Atomic closeout and retry identity
 The ads close operation owns one Conn.atomic boundary covering the fresh scoped campaign read,
@@ -2752,7 +2753,10 @@ paid-order totals and platform-attributed results remain separately labeled. Exa
 cap 100, CPA 150, assumed pre-ad unit contribution 500 shows cap exceeded; it cannot say selling
 more loses more. This example does not establish actual realized profit.
 
-The review gateway already stores task inputs, template version, output, usage/cost and validation.
+The gateway stores task/context identities and hashes, template version, output and usage/cost.
+Review rows store evidence and validation. Full historical model messages are not guaranteed to
+exist: only an explicitly supplied hash-bound capture can be labeled exact_saved; delivery stays
+unknown. A current reconstruction is labeled regenerated, and missing input stays unknown.
 Reuse review_id/evidence_hash/llm_task_id rather than create another trace table/service.
 Add a bounded offline replay report of exact evidence -> model input -> saved output -> review
 validator -> final projection, including structured rejection codes. Inspect saved inputs where

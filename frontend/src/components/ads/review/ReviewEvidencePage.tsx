@@ -314,8 +314,14 @@ export function ReviewEvidencePage({ brandId, campaignId, entityId, reviewId }: 
       : { label: "選擇處理方向", href: reviewRoundPath(brandId, campaignId, review.id, "prepare"), done: false })
     : null;
 
-  const resultLabel = triageItem?.triage.target.result_label ?? "成果";
-  const targetValue = triageItem?.triage.target.value ?? null;
+  // Queue membership is transient; the round's stored evidence owns its unit and cap.
+  const savedTarget = evidence.campaign?.target;
+  const decisionEvidence = evidence.current.decision_evidence;
+  const resultLabel = decisionEvidence?.result_label ?? savedTarget?.result_label ?? "成果";
+  const targetKind = savedTarget ? savedTarget.result_kind ?? null : decisionEvidence?.target.result_kind ?? null;
+  const targetValue = savedTarget ? savedTarget.value ?? null : decisionEvidence?.target.value ?? null;
+  const targetLabel = savedTarget?.result_label ?? resultLabel;
+  const targetCurrency = decisionEvidence?.comparison?.currency ?? savedTarget?.cap_unit?.currency ?? null;
   const recommendations = review.result_json.recommendations ?? [];
   const first = recommendations[0];
   const commerceCurrent = evidence.commerce?.current ?? null;
@@ -324,7 +330,7 @@ export function ReviewEvidencePage({ brandId, campaignId, entityId, reviewId }: 
   // campaigns, replacing the always-on commerce card the placeholder ladder shipped with.
   const ladder = triageItem?.triage.ladder ?? null;
   const history = triageItem?.triage.history ?? [];
-  const isSales = isSalesResultKind(triageItem?.triage.target.result_kind ?? null);
+  const isSales = isSalesResultKind(targetKind);
 
   const closedChip = review.decision === "deferred"
     ? `${review.revisit_at ? formatRevisitLabel(review.revisit_at, clock.timezone) : "已暫緩"}・${review.reason ?? ""}`
@@ -359,7 +365,7 @@ export function ReviewEvidencePage({ brandId, campaignId, entityId, reviewId }: 
       />
 
       {queueRead.status === "error" && (
-        <ReadFailed what="待決定清單讀不到：活動名稱、「第幾件」、處理階梯與上限暫時看不到；下面的證據照舊" onRetry={queueRead.reload} />
+        <ReadFailed what="待決定清單讀不到：活動名稱、「第幾件」與處理階梯暫時看不到；本回合保存的結果單位、上限與證據照舊" onRetry={queueRead.reload} />
       )}
 
       {waiting && (
@@ -457,16 +463,21 @@ export function ReviewEvidencePage({ brandId, campaignId, entityId, reviewId }: 
             />
             {/* v10 `mt(a)`: the cost against break-even, beside the grade's own ruler (the cap). */}
             <div className="numeric text-right">
-              <MoneyTag cost={adResultView(evidence.current)?.cost_per_result ?? null} breakEven={triageItem?.triage.target.break_even ?? null} />
+              <MoneyTag cost={adResultView(evidence.current)?.cost_per_result ?? null} breakEven={isSales && decisionEvidence?.comparison_state !== "incompatible" ? savedTarget?.break_even ?? null : null} />
             </div>
             <div className="mt-2.5 flex flex-wrap gap-2">
               <Chip>{evidence.current.days_present}/{evidence.current.days_expected} 天有資料</Chip>
-              {targetValue !== null && <Chip><Term k="cap">上限</Term> {formatTargetAmount(targetValue)}</Chip>}
+              {targetValue !== null ? (
+                <Chip aria-label="本回合成本上限">本回合<Term k="cap">上限</Term> {formatTargetAmount(targetValue)} {targetCurrency ?? "（幣別未核實）"}／{targetLabel}</Chip>
+              ) : <Chip aria-label="本回合成本上限">本回合未保存成本上限</Chip>}
             </div>
+            {decisionEvidence?.comparison_state === "incompatible" && (
+              <p className="mt-2 text-xs text-muted-foreground">本回合的成果與上限口徑不相容，不能直接比較。</p>
+            )}
           </div>
 
-          {queueRead.status === "error" ? (
-            // The history and the sales/non-sales split both come from the queue row: unknown, not "no history".
+          {queueRead.status === "error" && !isSales ? (
+            // Current handling history still needs the queue; saved sales intent does not.
             <div className="rounded-xl border border-border bg-card p-5">
               <h2 className="mb-1.5 font-semibold">這條素材的紀錄</h2>
               <p className="py-3 text-sm text-muted-foreground">讀取失敗，按上方重試後再看。</p>
@@ -507,7 +518,7 @@ export function ReviewEvidencePage({ brandId, campaignId, entityId, reviewId }: 
                   </TodoRow>
                 ))
               )}
-              <div className="mt-2.5"><Chip>這個活動看{resultLabel}，不看商城訂單</Chip></div>
+              <div className="mt-2.5"><Chip>{targetKind ? `這個活動看${targetLabel}，不看商城訂單` : "本回合未保存結果單位，商城訂單是否適用仍未知"}</Chip></div>
             </div>
           )}
 
