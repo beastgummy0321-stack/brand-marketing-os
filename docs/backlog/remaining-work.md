@@ -223,7 +223,10 @@ All 18 items fixed at their causes (rules in `docs/architecture/ads.md` §6.35 a
   derived cost); move `CapView.knowledge_product_id` into `adsTriageApi.ts`.
 - Personas (人物誌) vs product customer groups — onboarding no longer generates personas; decide after drill 9.
 - Kit `PickCard` export + compact size (F42 #/b5 uses a local copy).
-- `keep/F16-I04` branch (2 unmerged commits from 2026-09-20) and the `marketing-f08-validation` worktree are left untouched.
+- `keep/F16-I04` branch (2 unmerged commits from 2026-09-20) remains untouched.
+- The user authorized retirement of `marketing-f08-validation` on 2026-10-15. Its five pending files,
+  local Harness evidence and eight unique commits are preserved under
+  `D:/0UserProfile/Archives/MarketingOS/20261015-193642`; see README.md and the per-folder manifests. Recreate a registered worktree before restoring files.
 
 
 ### Drill 9 carried candidates
