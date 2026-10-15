@@ -1,6 +1,6 @@
 # frontend-ads audit
 
-Cluster: `frontend/src/components/ads/**` (all 150 non-test files read fully; backend counterparts opened where a row depends on what the API returns). R1–R7 from `docs/backlog/handoff-after-drill-11.md` are not repeated; their siblings are in §2. Rows are "defect generators" — each one makes a whole class of drill symptoms inevitable.
+Cluster: `frontend/src/components/ads/**` (all 150 non-test files read fully; backend counterparts opened where a row depends on what the API returns). R1–R7 from `docs/backlog/remaining-work.md` are not repeated; their siblings are in §2. Rows are "defect generators" — each one makes a whole class of drill symptoms inevitable.
 
 The one existing falsifier worth copying is `frontend/src/components/ads/oneRuler.test.ts`: a static scan of every non-test source under `components/ads` that fails on a forbidden pattern and names file:line. Every "machine check" below is phrased as another rule for that same scanner (or its backend twin `app/tests/test_ads_one_ruler.py`).
 

@@ -7,7 +7,7 @@ ads_learnings, visual_learning, triage grade/coverage/cutoff, triage_capacity, r
 channels, ad_status, calendar_tw header, judgment, sell_way) + brand_intelligence.repository (offers / proof /
 claims / economics / learnings), app/llm/context_compiler, the three department prompt files.
 
-R1–R7 from `handoff-after-drill-11.md` are NOT repeated below; their siblings are in §Siblings.
+R1–R7 from `remaining-work.md` are NOT repeated below; their siblings are in §Siblings.
 
 ## Answers to the brief's five questions (evidence in the tables)
 

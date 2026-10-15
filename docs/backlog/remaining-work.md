@@ -1,27 +1,33 @@
-# Handoff after drill 11 (2026-10-03)
+# Remaining work and historical audit seeds
 
-Start here in the next session. A board, not an implementation authorization. Replaces `handoff-after-drill-10.md`'s pointer.
+This is the single backlog carrier for candidates formerly scattered across seven dated handoffs.
+Current feature files, domain decisions and the latest user instruction take precedence. Historical
+code locations and candidate claims below require current-source rechecking; they are not a fresh
+bug audit or authorization to repeat completed fixes. Git preserves the retired handoffs in full.
 
-## Resume here
-- **2026-10-08: F48-F51 and F53 are explicitly accepted and closed.** Current stop/resume boundary: [first-release Handoff](../drills/drill-12/first-release/Handoff.md). F52 remains open and paused; wait for a new instruction. Historical drill scores below remain unchanged.
-- **2026-10-04 whole-program audit** (user order: this round is the final fix, end the simulate→find→fix loop):
-  `audit-2026-10-04/README.md` groups R1–R7 plus ~110 new verified findings into 19 generator workstreams W1–W19 with the
-  machine check each must install; decisions 10–14 there extend §2 below. Carve from that README, not from §1 here.
-  R1, R2 (E1/B13/E7/B6) and R5 (B2/N1) are built: `../architecture/ads.md` §6.50 (F48); R3, R4 (incl. C1) and R2 B5/P4: §6.51 (F49).
-- Drill 11 ran 2026-10-03 03:40–07:45. **Bar not met**: blocking 0 (drill 10's three all gone) but no B dimension reached 7.
-  B 5 / 6 / 4 (drill-10 measure 6) / 5 / 6 / 6 / 6 / 6 / 5 (drill 10: 5 / 5 / 2 / 3 / 6 / 4 / 6 / 4 / 3). Result: `../drills/drill-11/report.md`.
-- **User ruling 2026-10-03**: review 「換一張圖」 dead end on system-built campaigns (report §4.1 C1) = 要繞路, not blocking. Blocking count final at 0.
-- **User instruction 2026-10-03: next session fixes everything below completely** (one feature or a short chain; root-cause fixes, not per-symptom patches).
-  Start with `/dig` only on the decisions in §2 (each has a recommendation), then carve. Every claim here was mapped read-only to code during
-  the drill; re-verify a line before relying on it (`board-causes-need-reverifying`).
-- Not committed: `docs/drills/drill-11/`, this file, the pointer line in `handoff-after-drill-10.md`, and the drill-tool fix
-  `scripts/drill/clock.py` (swap the drill date in +08:00 local time; before 08:00 Taipei it ran one day ahead). No product code changed. Push stays manual.
-- Nothing running. Dev DB keeps drill-11 test orgs (`beast.drill11@example.com`, `beast.drill11f@example.com`, `ctl.a.drill11`, `ctl.a2.drill11`).
-  Clock file 2026-10-28; `.scratch/drill/meta_fail` empty. Before drill 12: `fake_meta reset`, `clock set`, start in daytime or keep the fixed clock tool.
-- Evidence with full file:line tables: `../drills/drill-11/operator-notes.md` (sections "P1/P2/P3 defects mapped", "丙3", "Last mapping",
-  "Post-drill mapping B"; mapping A is folded into §1 R6/R7 below). Screenshots local in `.harness/scratch/drill11/`.
+## Current work
+- F52 remains open and paused. Its feature and 24 done issues are retained.
+- F54 remains open; I13's lease, pinned base, independent worktree and four unfinished files are retained.
+- F55 code and the ended-review repair are integrated locally. The verified application source is
+  27fd21b721483fc2ac2eb9a5487f878f7ea3bd74. Human usability remains unverified; merging is not acceptance.
+- F48-F51 and F53 retain their earlier explicit acceptance. Do not infer F52/F54 acceptance from them.
+- The current queue carriers are `.work/features/F52.md`, `F54.md` and `F55.md` from the repository root.
+  The audit workstream map remains [audit README](audit-2026-10-04/README.md).
+- Keep historical evidence in `docs/drills/`, the owned preview receipts and the separate Harness
+  native-acceptance directory. Cleanup does not authorize database, installation or platform changes.
 
-## 1. Root causes (condition first; symptoms are evidence). IDs = report §4 / operator-notes.
+## Historical evidence
+- [Drill 9 report](../drills/drill-9/report.md), [drill 10 report](../drills/drill-10/report.md),
+  [drill 11 report](../drills/drill-11/report.md), and [drill 12 entry](../drills/README.md).
+- The older F30-F43 next-session pointers and old process/commit/push status are retired.
+  Workflow and design authority remain CLAUDE.md, the loaded Harness and docs/design-system.md.
+
+
+## 1. Historical audit seeds (R1-R7)
+
+Preserved from drill 11 for audit-source lineage. F48-F51 implement the scoped repairs; consult the
+current domain pages and feature status before treating a historical symptom as an open defect.
+IDs refer to the original report and operator notes.
 
 ### R1 Learning and judgement use two rulers, and 「留下」 keeps coordinates, not the thing that won
 Causal chain: closeout ranking (`app/ads/learning_rank.py:8-15,59-98`) has no sample gate (1–4 sales can be 留下) → triage grading
@@ -134,7 +140,10 @@ Built in F51 where scoped: `../architecture/ads.md` §6.53, `../architecture/int
 - B8 raw 「Failed to fetch」: `apiFetch` doesn't translate fetch TypeError; ~8 API files each copy a translation (`lib/http.ts:85`; `lib/useApiRead.ts:24-25`).
 - F14 action pressed before the login redirect is silently lost.
 
-## 2. Decisions for `/dig` (each with a recommendation; everything else above is a straight fix)
+## 2. Historical decision proposals
+
+These are the original nine proposals used by the audit workstream map, not renewed decisions or
+execution permission. Later feature/domain rulings control where they supersede this text.
 1. One grading ruler — **recommend**: cleanup and closeout share learning_rank's ordering with sample size shown; drop the 3×cap gate as a hidden blocker for small ad sets (keep "too early" as a label, not as protection).
 2. 「留下」 keeps the approved creative — **recommend**: reuse the placement and copy as is; only 換掉 regenerates.
 3. Strategy claims — **recommend**: generate the strategy's group/offer/number sentences from the structure and closeout rows (program), LLM writes only the connecting prose.
@@ -146,6 +155,124 @@ Built in F51 where scoped: `../architecture/ads.md` §6.53, `../architecture/int
 9. Margin scale — **recommend**: store 0–100 like step_rate.
 Still open from drill 10 (unchanged): carousel in planning while a slot holds one file, calendar audience field, F47 left-outs (channel revenue / 口徑紀錄 / bundle edit-delete).
 
-## 3. After the fixes
-Drill 12 with the same ruler (`../drills/drill-10/plan.md` anchors, `../drills/drill-11/plan.md` setup). Reuse `.harness/scratch/drill11/` dispatch files
-(they now carry the "never delete files", spare-object and custom-date rules). Report beside drill 10 and 11. Measured time drill 11 ≈ 4 h.
+
+## Older candidates requiring current-source recheck
+
+These candidates are retained to avoid silently losing unresolved scope. Their old wording and
+file names are discovery hints, not proof that the current implementation still has each issue.
+
+
+### F30 follow-ups and deferred scope
+
+All 18 items fixed at their causes (rules in `docs/architecture/ads.md` §6.35 and `docs/architecture/intake.md` "F31"); the absorbed backlog files were deleted. Follow-ups F31 surfaced, not fixed:
+1. `WorkspaceHead` 打平線 pill squeezes to one character per line beside a long campaign name at 1024 (same class as the TreeRows fix).
+2. Brand-home 判讀: a failed round reads 「這一輪判讀沒有給出建議」, not as a failure (the diagnosis response has no failure message).
+3. `GET …/campaigns/{c}` returns the internal `live_creative_json` on each ad (payload only; frontend ignores it).
+4. `test_workbench.py::VideoScriptRoundTripTest::test_short_reply_stays_red_after_a_fix_round_that_does_not_add_one` fails under xdist without `--dist loadfile` (order/queue dependence).
+5. The two cross-org lookup functions are callable by any signed-in user through PostgREST RPC as a yes/no oracle on a platform id; wait page `missing_days` only cover the connections window (this month or last 28 days).
+6. `issue-image-validation-does-not-gate-selection.md`: the prose-drift check is still undecided.
+
+### P2 — ad-loop features, one /dig each, in this order
+1. **Platform writes** (the system creates ads, changes budgets and pauses on Meta after approval) — next /dig (§6.4 ruling needed).
+2. In-app image generation — pick a provider first.
+3. Notification channels beyond the inbox: a per-user 「通知」 section in `/settings`, then LINE OA and email.
+4. Past-month suggestion history in the month review (not stored today).
+5. Reserved objectives 互動, App 推廣, 來店 (§6.34).
+
+### Archived — later session
+- Two parallel performance-reading systems (brand-home 判讀 vs Ads Center review/learnings): discuss moving the four unique capabilities into the Ads Center, then retire the old panel (`app/schedule/diagnosis.py` helpers `breakeven_roas` etc. must stay).
+- 「第 V 版有改」 chip (accepted missing); objective catalog keys keyed by id (`channels.py`); F29 review evidence page vs v10 (three columns, no 「在活動裡的位置」); kit pieces for the workspace four-number strip and publish summary tiles.
+- `issue-no-export-anywhere.md` (remaining scope), free-job reference image and scene field (need a product decision).
+- Before deploy / charging: `issue-07-2-*`, `issue-07-4-*`, `issue-delete-seed-debug-account.md`, `issue-ai-cost-reconciliation.md`, `issue-key-source-switch.md`, `issue-intake-error-shape-diverges.md`, `issue-intake-pending-photos-dict.md`, `issue-u1-banned-words-gate.md`.
+- Not planned / decided-deferred: `issue-variant-level-learning.md`, `issue-organic-post-visual-learning.md`, `issue-intake-scan-per-photo-progress.md`.
+- Discussion material: `discovery-*.md`, `roadmap-autonomous-marketing-major-updates.md`, `issue-drill-4-root-causes-pending-rulings.md` (all eight ruled). `engineering-existing-campaigns-user-assets.md` is superseded by ads.md §6.9 except the unverified-platform list and the pending usability sign-off: fold those into §6.9, repoint `CLAUDE.md`, `ads.md` and the roadmap link, then delete.
+- Resolved and deleted 2026-09-26: `candidate-multiplatform-campaign-assets.md` (redirect stub), `issue-test-schema-ddl-deadlock.md` (bounded retry in `app/tests/conftest.py` `_ddl`).
+
+
+### F37 carried unknowns and choices
+
+
+- `test_ads_launch_view::test_an_audience_key_without_a_vocabulary_row_prints_itself` failed once under `-n 4` (F37-I03),
+  passed 3/3 alone; suspected order dependence on shared vocabulary rows.
+  F38-I03 saw a sibling flake: `test_the_group_row_shows_the_plans_role_and_audience_labels_read_only` got the two audience
+  labels in reverse order once (passed on rerun) — `audience_hints` keeps ad iteration order, which is not stable for ads
+  created in the same instant. Likely one root cause for both.
+- Readback 「讀不到」 26/27 items may be only the drill stand-in (no creative fields mirrored).
+- Judge leniency (Haiku scored A 1.3–1.35) — ranking holds, multipliers soft.
+- `ads_action.sync_state='confirmed_manual'`: column exists, no writer, read once in `judgment.py:196` (dead path, left).
+- F33 agent choices open to reversal: retarget rule uses 90-day external purchases; starting-point facts are prompt-only;
+  期中／期末／開學 rows are `kind: "exam"`.
+- F34 agent choices open to reversal: conditional 改善／預防 fires only within 6 chars before a symptom word; the seed
+  pattern list in `statutory_tw.py` is curated.
+
+
+### F40 candidates
+
+
+- Slots payload `role` counts so the assets tab can show 主力 N・探索 M (F40 skipped the chip).
+- Per-part generation status in the set payload (regenerate label after a reload says 「另一個部分」).
+- `campaignDraft.ts` persisting the four new-campaign fields between tabs; glossary Term for 整期合計; fold
+  `LandingUrlField` into `WizardPieces`.
+- Drill-7 #13b/#13c (conversion-goal radio / completion page) were not reproducible from code — probe at runtime in drill 8.
+
+
+### F43 candidates
+
+
+- Retire the old product detail page's AI research / rescan / external handoff and its economics editor (it can freeze a bundle's
+  derived cost); move `CapView.knowledge_product_id` into `adsTriageApi.ts`.
+- Personas (人物誌) vs product customer groups — onboarding no longer generates personas; decide after drill 9.
+- Kit `PickCard` export + compact size (F42 #/b5 uses a local copy).
+- `keep/F16-I04` branch (2 unmerged commits from 2026-09-20) and the `marketing-f08-validation` worktree are left untouched.
+
+
+### Drill 9 carried candidates
+
+- #3 one owner for "period window and whether today counts" (perf page all rows vs overview rolling 14 days vs month incl. today).
+- ~~#4 「在投」 counts unclosed platform objects~~ — fixed by F47 (ads §6.49.2 Contract E: delivery waiting / live; a closed
+  campaign never says 在投).
+- ~~#5 no manual re-read when a day's data failed~~ — fixed by F47 (connections 「重新讀取」, ads §6.49.2 Contract H). Launch
+  approval blocking on 「餘額尚不確定」 not re-checked here.
+- #6 calendar data gaps: Oct exam rows fixed by F46; still open: no audience field, no look-ahead past end date; P2 had 國慶 but
+  copy never used it.
+- #7/#8 prefill content not checked against the page (refund policy read as 滿意保證; EU caffeine warning as expert_endorsement).
+- ~~#9 per-sell-way free shipping not expressible~~ — fixed by F45 (intake.md 「F45」 `free_shipping`).
+- ~~#10 platform and per-sale cap re-entered every new campaign~~ — fixed by F46 (ads §6.49.1 Contract D).
+- ~~#12 closeout's learning not findable in 品牌智庫~~ — fixed by F46 (品牌智庫 tab 「投放學到的」, ads §6.49.1 Contract L).
+- Found during F44 acceptance — fixed by F47 (commit before enqueue, workbench.md §5.14): `app/workbench/repository.py` enqueued
+  `workbench_generate` before `conn.commit()`; the worker can read the job first → `RuntimeError: 找不到工單` and that set's copy
+  stays 未生成 (1 of 5 sets in the acceptance run, campaign `adc_01M3VG0J8SZR80E7D74RQFXSN1`).
+- F44 known limit (removed by F46 Contract O, exact-term backing): the bare word 「優惠」 is backed by any remaining offer row, so another offer's price sentence under a
+  different offer key is not caught (`app/workbench/claims.py` `_OFFER_FAMILIES`).
+
+
+### Drill 10 intentionally deferred scope
+
+- Recheck planning carousel formats while a slot holds one file; calendar audience fields and look-ahead past the period end.
+- Strategy prose content validation was an open candidate; current F48/F55 contracts govern implemented checks.
+- F47 intentionally excluded channel-revenue, measurement-basis, bundle and saved-sell-way edit/delete controls.
+- Campaign-start missing-day behavior was suspected to be drill-clock related; reproduce before repair.
+- Home end-of-month budget projection wording needs its own product decision if still applicable.
+- F46 did not implement a per-ad provenance card on the strategy tab, a monthly-budget default amount or daily budget on create.
+
+
+## Historical drill scoring contract
+
+Preserved as the source of the drill-10 plan. This does not authorize another drill.
+
+A full run from scratch (new account, brand and product onboarding, three periods), judging whether marketing OS can be used for
+real. Not only code and runtime: every control on the frontend must work and mean something.
+Nine dimensions, each 0–10:
+- Both sides (A agency vs B system): 1 strategy and plan fit · 2 copy and material quality (fit, no invention, offers right,
+  食安法) · 3 simulated results (ROAS, cost per sale vs cap, three periods) · 4 learning across periods (period 2/3 change with the
+  previous result, reasons match the numbers).
+- System only: 5 completes end to end (signup → three closeouts, no outside help; count detours and stalls) · 6 every control works
+  (a separate agent inventories every clickable control per screen and clicks each once in a seeded state: it reacts, the reaction
+  means something, no error; output = total / passed / each defect with a screenshot — apart from the persona walk) · 7 readable
+  (design-system §1.7 five questions, persona score per station) · 8 numbers can be trusted (same period equal across screens,
+  unknown said as unknown, prefill invents nothing) · 9 failures recover (reason + exit, reload keeps data, no silent background
+  failure; provoke failures on purpose).
+- Defect levels: blocking (flow cannot continue, wrong money, invented fact) / needs a detour / cosmetic.
+- Bar (user chose A): every dimension ≥ 7 and zero blocking defects. An average alone does not pass.
+- Dimension 3 is simulated: it compares two schedules, it does not prove a real campaign earns; the report says so beside the score.
+- "No bugs" is reported as "every control clicked once, defects found: N", never as a proof.

@@ -4,7 +4,7 @@ Why: drills 6–11 each found 40–60 UI symptoms; fixes landed; the next drill 
 one final round that ends the loop. Six read-only agents read all product code (~64k backend, ~54k frontend lines)
 hunting the **conditions** that make a class of symptoms inevitable (classes G1–G10 in `BRIEF.md`). ~110 verified
 findings with file:line on both sides are in the six cluster files beside this one; drill-11's R1–R7
-(`../handoff-after-drill-11.md` §1) are the seed set and are not repeated there.
+(`../remaining-work.md` §1) are the seed set and are not repeated there.
 
 Exit rule for every workstream below: **one shared rule + one machine check that goes red if the pattern returns.**
 A ticket that fixes a symptom without the check is not done. Evidence tables stay in the cluster files; workers get
@@ -43,7 +43,7 @@ the file:line rows for their ticket only.
 | W19 | Platform literals in shared core: `ad_status` vocabulary is Meta's raw strings, `adset`/`PAUSED` literals, `channels.py == "meta"`, `app/ads/__init__.py` imports `app.meta`; gate scans only substring "meta" | ratchet gate first (allowlist of today's violations that may only shrink); W7 moves status vocabulary into the adapter; rest later | `test_ads_no_platform_literal.py` extended to `ACTIVE/PAUSED/adset/meta_repo` with allowlist | planning #9; triage #11; slots #7 |
 
 ## Decisions already taken (2026-10-03 dig on handoff §2, user to confirm)
-1–9 of `../handoff-after-drill-11.md` §2 as recommended, with two amendments: (1) keep the 30% near-best band
+1–9 of `../remaining-work.md` §2 as recommended, with two amendments: (1) keep the 30% near-best band
 as noise protection when the 3×cap gate goes; (4) explore slots = 1.
 
 ## Decisions this audit adds (each with recommendation)

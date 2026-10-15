@@ -7,7 +7,7 @@ on paper. Your job is different: find the **defect generators** — structural c
 a whole class of symptoms inevitable — so each can be removed once (one shared rule + one machine check that
 fails if the pattern comes back).
 
-Read `docs/backlog/handoff-after-drill-11.md` §1 (R1–R7) first. Those are the generators already known, with
+Read `docs/backlog/remaining-work.md` §1 (R1–R7) first. Those are the generators already known, with
 file:line evidence. Do **not** re-report them. Do report their **siblings**: other code paths that share the same
 generator and would produce the next drill's symptoms.
 

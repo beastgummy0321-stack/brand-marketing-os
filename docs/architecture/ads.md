@@ -1710,7 +1710,7 @@ parent + sell-way pair). Prototype `.harness/scratch/prototype/f36-yellow/index.
   Simulated campaigns published before F37 have no entity chain and get no new rows (re-publish; test data).
 
 ### 6.42 Drill-6 closeout（ruled 2026-09-29；F38）
-Five program rules, no LLM judgment (dig of `docs/backlog/handoff-after-f37.md` Remaining 1–5).
+Five program rules, no LLM judgment (F38 decisions in this section).
 - **Proof is derived from confirmed brand facts** (ruling 1). A 「證據」 brand fact (`fact_type='proof'`, `fact_key` = one of the
   six `proof` coordinate keys) is the only thing that makes that proof kind available; an active customer-voice row makes
   `customer_review` available. `app.brand_intelligence.repository.available_proof_keys(conn, brand_id)` is the one reader. The

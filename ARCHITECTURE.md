@@ -703,6 +703,8 @@ lands in it.
 
 只在涉及投放中心：Campaign、策略、投放與結案時讀 [領域決策](docs/architecture/ads.md)。原 §6 子節保留於該頁；本頁不重複全文。
 
+Unscheduled candidates and historical audit seeds live in [remaining work](docs/backlog/remaining-work.md); current feature and domain decisions take precedence.
+
 ## 7. Verification
 
 命令定義在本檔 frontmatter；執行時機、測試環境與 UI 驗證見 [驗證規則](docs/verification.md)。

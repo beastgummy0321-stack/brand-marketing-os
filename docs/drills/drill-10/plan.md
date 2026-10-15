@@ -1,7 +1,7 @@
 # Drill 10 — 實戰最終演練：廣告公司（A）vs marketingOS（B），九面向評分（2026-10-01，使用者點頭「開跑」；結果見 report.md）
 
 目的：判斷 marketingOS 能不能實戰。完整從頭（新帳號 → 品牌建檔 → 商品建檔 → 三期），加上按鈕全檢與刻意製造失敗。
-評分方式是使用者 2026-10-01 的裁決（`../../backlog/handoff-after-drill-9.md`「Next: drill 10」）。**演練中不修產品程式**；缺陷只記錄並對回檔案行號。
+評分方式是使用者 2026-10-01 的裁決（`../../backlog/remaining-work.md`「Historical drill scoring contract」）。**演練中不修產品程式**；缺陷只記錄並對回檔案行號。
 
 門檻：**九項每一項 ≥ 7 分，而且擋路級缺陷 0 個。** 只看平均不算過。
 
