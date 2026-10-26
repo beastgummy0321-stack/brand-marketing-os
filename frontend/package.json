@@ -45,7 +45,7 @@
     "dependency-cruiser": "^18.2.0",
     "jsdom": "^30.0.1",
     "oxlint": "^1.75.0",
-    "storybook": "^10.5.7",
+    "storybook": "^10.6.4",
     "typescript": "~6.0.2",
     "vite": "^8.2.0",
     "vitest": "^4.1.11"
